@@ -121,7 +121,10 @@ WorkVCS does not use Git as its core database. Work-State data may enter Git or
 remain independent under separate control. V1 must support reviewable drift
 inspection so an Agent can identify whether associated source state changed
 and state the exact comparison basis without tightly coupling every
-WorkStateCommit to a Git commit.
+WorkStateCommit to a Git commit. A drift result identifies the observed source
+state, its comparison baseline, and the resulting difference. When source
+state supports a Verification, retained provenance identifies the source
+observation used, including the Git SHA when Git is applicable.
 
 The concrete entity model and captured fields for source-state evidence are
 not fixed by this baseline.

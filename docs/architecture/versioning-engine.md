@@ -224,8 +224,12 @@ current state.
 
 WorkStateCommit and external source history are related but not lock-stepped.
 V1 must provide an exact review basis for source-state drift without making Git
-the Work-State database. The concrete evidence model and capture points are not
-fixed by this baseline.
+the Work-State database. Drift reporting distinguishes the current source
+observation, its comparison baseline, and the resulting difference. When
+source state supports a Verification, the retained provenance identifies the
+source observation used, including the Git SHA when Git is applicable. The
+concrete evidence entity model and capture points are not fixed by this
+baseline.
 
 ## Failure guarantees
 

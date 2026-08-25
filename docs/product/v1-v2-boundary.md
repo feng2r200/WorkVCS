@@ -127,8 +127,11 @@ V1 includes:
 
 V1 includes:
 
-- low-coupling source-state traceability that can identify drift and provide an
-  exact review basis without making Git the Work-State database;
+- low-coupling source-state traceability that reports the observed source
+  state, its comparison baseline, and the resulting difference without making
+  Git the Work-State database; when source state supports a Verification, its
+  provenance identifies the source observation, including the Git SHA when
+  Git is applicable;
 - independently controlled inclusion or exclusion of WorkVCS data from Git;
 - portable export/bundle behavior suitable for moving a Store without a live
   distributed synchronization protocol;

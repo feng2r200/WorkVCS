@@ -26,12 +26,19 @@ Chat transcripts, exploration notes, implementation sketches, historical Plans,
 and generated summaries are evidence or proposals, not project truth by
 themselves.
 
-A statement is eligible for confirmed documentation only when the user
-directly confirms that statement, accepts the exact option that contains it,
-or explicitly states the requirement in their own words. An assistant
-recommendation, example, consolidation, or surrounding implementation detail
-does not become confirmed merely because the user accepted a nearby numbered
-choice.
+A statement is eligible for confirmed documentation only when the discussion
+of that specific issue has reached a final, consistent conclusion and the user
+has explicitly confirmed, selected, approved, or stated that final conclusion.
+An interim user confirmation is necessary evidence, but it is not sufficient
+when the broader discussion remains open, later clarification changes its
+meaning, or no final conclusion is reached. Later explicit corrections or
+superseding decisions take precedence.
+
+Assistant recommendations, examples, consolidations, and surrounding
+implementation details do not become confirmed merely because the user
+accepted a nearby numbered choice. When the available context cannot establish
+that a conclusion is both final and still current, classify it as Open or
+Unclear rather than promoting it to Confirmed.
 
 ## Changing Confirmed Design
 

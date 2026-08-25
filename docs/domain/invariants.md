@@ -224,3 +224,21 @@ Knowledge, and newly discovered Task links may still be attached with history.
 
 Acceptance Criteria are optional. When they exist, WorkVCS may automatically
 mark a Task done only after every mandatory criterion has Verification.
+
+### INV-037 — `next` resolution is deterministic
+
+Runnable Task resolution evaluates, in order:
+
+1. active Workspace and Work Branch;
+2. active scope and Plan path;
+3. executable Task descendants;
+4. dependency readiness;
+5. Task lifecycle eligibility;
+6. priority;
+7. explicit manual order;
+8. Session and Claim coordination.
+
+Priority and manual order are distinct, with priority evaluated first. Manual
+order never overrides dependency readiness or lifecycle eligibility. The final
+stable tie-breaker among otherwise equal candidates is not fixed by this
+baseline.

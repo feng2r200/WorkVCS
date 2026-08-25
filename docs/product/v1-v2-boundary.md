@@ -137,6 +137,11 @@ V1 includes:
 - path-sensitive resolution for scoped Knowledge and Decisions;
 - exclusion of superseded or invalidated content by default, with a causal
   exception when it explains current state;
+- deterministic `next` resolution across active Workspace and Work Branch,
+  active scope and Plan path, executable Task descendants, dependency
+  readiness, lifecycle eligibility, priority, explicit manual order, and
+  Session/Claim coordination, in that order; priority precedes manual order,
+  and manual order cannot override readiness or eligibility;
 - a lightweight Attempt lifecycle with `running`, `succeeded`, `failed`, and
   `inconclusive` states plus a one-shot shortcut;
 - a Verification command wrapper that, for a command-based Verification,
@@ -181,6 +186,24 @@ V1 includes:
 Large Evidence may later receive configurable retention policies, but critical
 metadata, digests, and provenance remain preserved. Derived caches, indexes,
 and projections may be regenerated and garbage-collected.
+
+## Open for Product and Architecture Specification
+
+The following boundaries are deliberately unresolved by the confirmed
+baseline and require an explicit later decision:
+
+- **Verification representation:** Verification semantic state and relations
+  are versioned, and Evidence is immutable provenance. Whether a changed
+  judgment updates one logical Verification through Work-State history or
+  creates a new Verification that supersedes an earlier judgment remains Open.
+- **Cross-Workspace Session Handoff ownership:** when a Session reads or works
+  across multiple Workspaces, the Workspace ownership and cardinality of its
+  optional semantic Handoff Record or Records remain Open. Every Handoff that
+  is recorded as Versioned Work State must still target exactly one Workspace
+  and Work Branch per mutation.
+
+These questions do not weaken the current Verification/Evidence boundary or
+move Handoff into Runtime Coordination or immutable Session provenance.
 
 ## Scope-control rule
 

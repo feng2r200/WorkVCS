@@ -167,10 +167,26 @@ The versioning and relation graphs support four distinct queries:
 - `context`: which current, relevant, path-sensitive items are needed to
   continue work within a profile and budget.
 
-`diff` compares Work State at commits or Branch heads. `next` derives runnable
-Tasks from state, dependency, order, priority, and Claims. An atomic
-“claim next” operation selects, claims, focuses, and returns context without a
-race between separate read and claim steps.
+`diff` compares Work State at commits or Branch heads. `next` resolves runnable
+Tasks through this deterministic precedence:
+
+```text
+active Workspace and Work Branch
+  -> active scope and Plan path
+  -> executable Task descendants
+  -> dependency readiness
+  -> Task lifecycle eligibility
+  -> priority
+  -> explicit manual order
+  -> Session and Claim coordination
+```
+
+Priority and explicit manual order are separate scheduling dimensions;
+priority is evaluated first. Manual order cannot make a dependency-blocked or
+lifecycle-ineligible Task runnable. The stable tie-breaker among otherwise
+equal candidates is not fixed by this baseline. An atomic “claim next”
+operation selects, claims, focuses, and returns context without a race between
+separate read and claim steps.
 
 ## Context projection
 

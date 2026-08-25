@@ -62,8 +62,9 @@ Space. Goal, Plan, and Task graphs never cross Workspace boundaries in V1.
 **Version behavior:** Publication preserves the originating Workspace,
 Decision, Verification, and WorkStateCommit lineage. It does not transfer
 execution ownership. V1 requires publish/read semantics, but no independent
-Knowledge Space DAG or concurrency model is confirmed yet; that mechanism must
-be fixed by an ADR before implementation.
+Knowledge Space DAG or concurrency model is confirmed yet; that mechanism
+requires an explicit confirmed decision before implementation and may then be
+recorded as an ADR under current repository policy.
 
 ## Versioned Work State
 
@@ -98,8 +99,9 @@ mixed order, evolve in place for ordinary edits, and be superseded when its
 core strategy changes. A Goal may have multiple active Plans on one Work
 Branch. Completion is explicit.
 
-**Owned state:** Description, status, ordered children, strategy, and optional
-completion rationale.
+**Owned state:** Description, constraints, strategy, Plan-scoped Assumptions,
+status, ordered children, Task-graph references, and optional completion
+rationale.
 
 **Relations:** May be contained by a Goal or another Plan; may contain or
 reference Plans and Tasks. A Task may be referenced by multiple Plans.
@@ -123,9 +125,9 @@ Decisions, Knowledge, or links to newly discovered Tasks.
 **Owned state:** Description, execution status, open-semantic outcome,
 priority, stable local Acceptance Criteria, and optional child ordering.
 
-**Relations:** Has one home scope in a Plan or Workspace, may be referenced by
-other Plans, may contain SubTasks, and may carry dependency, order, evolution,
-causal, and verification relations.
+**Relations:** Its home scope defaults to a Plan but may explicitly be the
+Workspace. It may be referenced by other Plans, may contain SubTasks, and may
+carry dependency, order, evolution, causal, and verification relations.
 
 **Version behavior:** Versioned Task state participates in branch and merge.
 Current Claims and Focus do not. A completed evaluation whose outcome rejects
@@ -206,10 +208,16 @@ multi-process workload.
 **Purpose:** Represents explicit semantic observations and cognition that do
 not need separate top-level behavior.
 
-**Lifecycle:** Record kinds include Finding, Assumption, Question, Attempt,
-ordinary decision, Risk, and Handoff. V1 records are created explicitly by an
-Agent semantic operation, not inferred from a transcript. An important
-ordinary decision can be promoted to a Decision without erasing its origin.
+**Lifecycle:** Confirmed Record kinds include Finding, Assumption, Attempt,
+ordinary decision, and Handoff. An Attempt may be `running`, `succeeded`,
+`failed`, or `inconclusive`, and may also be recorded in one operation with its
+approach and result. V1 records are created explicitly by an Agent semantic
+operation, not inferred from a transcript. An important ordinary decision can
+be promoted to a Decision without erasing its origin.
+
+Whether `Question`, `Risk`, `Blocker`, `Review`, or `Note` should be distinct
+V1 Record kinds is Open; no current confirmed requirement makes them distinct
+V1 kinds.
 
 **Owned state:** Kind, statement, scope, lifecycle fields appropriate to the
 kind, and provenance.
@@ -233,8 +241,10 @@ coordination state.
 
 **Lifecycle:** Starts, changes focus or active Workspace/Branch explicitly,
 and ends with a deterministic Session diff plus an optional semantic Handoff.
-Normal end releases claims. After abnormal exit the Session is marked
-`potentially_stale` and its claims remain until explicit release or takeover.
+When claimed or in-progress work remains, Session end recommends a Handoff but
+does not require one. Normal end releases claims. After abnormal exit the
+Session is marked `potentially_stale` and its claims remain until explicit
+release or takeover.
 
 **Owned state:** Context Set, active Workspace, active Branch, primary Focus,
 current Claims, Agent identity, and activity metadata.
@@ -273,9 +283,13 @@ activity and emits provenance.
 
 **Owned state:** Session, Task, Work Branch, mode, and activity metadata.
 
-**Relations:** Branch-scoped. Multiple shared claimants may add evidence or
-findings; a terminal or structural mutation requires a unique claimant or an
-explicit force decision.
+**Relations:** Branch-scoped. A Session without the claim may still read, add
+Findings or Evidence, and link Decisions. Under an active exclusive claim,
+terminal or structural mutation by another Session is rejected unless the
+claim is explicitly transferred or the mutation carries force provenance.
+Multiple shared claimants may add Findings, Evidence, Verification, and other
+non-destructive updates; a terminal or structural mutation requires a unique
+claimant or explicit force provenance.
 
 **Version behavior:** Runtime-only. Claim creation, release, and takeover are
 immutable Events.

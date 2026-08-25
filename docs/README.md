@@ -26,14 +26,19 @@ ChatGPT conversation `WorkVCS需求沟通`
 establish the repository's confirmed design state. The conversation is
 supporting provenance; the files linked above are the durable normative state.
 
-The complete two-page `read_thread` response is recorded as governance
-evidence
+The two-page `read_thread` response captured for the initial baseline is
+recorded as governance evidence
 `5e9a4c2b3ce2df194f0d1f9fc015575577e5d870bdb2b6c1eca58688d8dd8338`
 with source digest
 `af47a2995530909d6043e48de3921cb9ebc2f51144795981c80aba56cc79d946`.
-It contains all 17 source turns, including the original assistant questions
-and options needed to reconstruct the numbered confirmation ranges. The
-smaller promotion extract remains recorded as evidence
+It contains the 17-turn core-decision and repository-handoff snapshot,
+including the original assistant questions and options needed to reconstruct
+the numbered confirmation ranges. The conversation now also contains two later
+delivery-instruction turns: `c8e010b0-03f9-407a-894c-a4a22bb07cae` and
+`03c09f68-d18f-4728-9563-09b74b087810`. Those turns request generation and
+continuation; they do not make every surrounding assistant-generated statement
+a confirmed product decision. The smaller promotion extract remains recorded
+as evidence
 `5272d95afd881f20ecbcd3cc33b7eeb90aa725a5084c9325450cb314677e2c1e`
 with source digest
 `9e1e7bbf9d18b93734093d4c8429a57466ba9681663a1c3b1327dcfe5e0958e1`.
@@ -57,6 +62,7 @@ turn IDs; quoted response fragments are the user's confirmations.
 | Decision range | Confirmed subject | User confirmation turn and response |
 |---|---|---|
 | Initial intent | Agent-facing Plan/Task/Decision-log CLI with Git-like branch and merge | `3c324463-d1ed-4091-b3f5-6544d07c3276` |
+| Product boundary A–D | Work-State version control rather than a Todo CLI; Work Branch semantics independent of Git; structured Decision history rather than model chain of thought; the Agent calls the CLI and the CLI does not launch or orchestrate the Agent | `0e19656b-5e34-4cb1-b2ed-fecd9859550c`: `ABC对;D对，同时我基本不打算往另一个方向走` |
 | 1–8 | Work Branch, history, merge, Session, AC, Decision granularity | `ce1af243-5bb0-45c9-96ff-311934a0e47b`: `1C 2D 3C 4C 5是 6是 7... 8V1是A` |
 | 9–14 | Knowledge, Assumption, Attempt, optional/recommended AC with a Verification gate for automatic completion, Verification/Evidence, automatic WorkStateCommit | `00fd0410-9f92-469a-8a53-9609b4e15172`: `9是 10是 11是 12B且同意你的说法 13是 14自动commit`; the accepted item 12 requires Verification for every mandatory AC before automatic `done` when AC exists |
 | 15–24 | Goal/Plan/Task structure, scoped Knowledge, merge semantics, Session/Branch, context | `d5cc8c37-9c38-47a6-9f91-0720c4901c22`: `15A; 16A; ... 23 V1支持显式session switch ... 24认同` |
@@ -70,7 +76,7 @@ turn IDs; quoted response fragments are the user's confirmations.
 | Engineering boundary | Monorepo/multi-Workspace and non-Git support, Agent adapters, Agent-readable storage, delegated identity choice, independent Git inclusion, low Git coupling with accurate drift basis, single-machine V1, and scale/history working-set concerns | `f037d3f7-c798-4d2f-99d0-8c54f523255c`: `human-readable并非必须...Agent工具可以准确读取并准确理解`; `不要高度耦合...知道是否漂移并提供准确的依据`; `ID模型...选择最合适的方式` |
 | 76–80 | Store, Knowledge Space, Session Context Set, SQLite/object-store direction, non-destructive core history | `2d6194c5-e7a0-4f0f-83ef-26d6790169b7`: `五项判断的推荐选项均同意` |
 | Product name | `WorkVCS` | `d3b05fb2-32ba-4ee8-9e39-503ed7a82f41`: `确认产品名为"WorkVCS"` |
-| Baseline delivery | Promote confirmed state into this repository; do not implement runtime code | Current user request, 2026-08-24 |
+| Baseline delivery | Generate a confirmed state for Codex, then establish the repository documentation baseline without runtime implementation | `c8e010b0-03f9-407a-894c-a4a22bb07cae`: `先生成当前阶段的"confirmed state"...`; `03c09f68-d18f-4728-9563-09b74b087810`: `继续上面的工作`; reaffirmed by the current synchronization request |
 
 The detailed meanings consolidated from those confirmed ranges are the linked
 product, domain, and architecture documents. The ledger records promotion
@@ -92,31 +98,40 @@ not against every statement in the assistant response that contained them.
 
 ## Authority and conflict handling
 
-For repository work, follow the authority order in [`AGENTS.md`](../AGENTS.md).
-Within the documentation set, accepted ADRs explain and override earlier
-architectural choices; domain invariants constrain architecture; architecture
-specifies how the confirmed domain is realized; product documents define value
-and release scope. Implementation notes must conform to all of them.
+For repository work, follow [`AGENTS.md`](../AGENTS.md). Its workflow and ADR
+requirements are repository-governance policy; they are not retroactively
+classified as product decisions confirmed in the source conversation.
 
-If two confirmed documents appear to conflict, stop treating either
-interpretation as settled. Record the conflict, trace it to its confirming
-evidence, and resolve it through an ADR or an explicit user decision before
-implementation.
+Within the confirmed documentation set, later explicit user confirmation
+supersedes an older decision in the affected scope. Domain invariants constrain
+architecture, architecture realizes the confirmed domain, and product documents
+define value and release scope. An ADR is a recording and explanation vehicle:
+it becomes product authority only when the exact decision it contains has been
+accepted. Writing an ADR does not promote an unconfirmed proposal by itself.
+
+If two documents appear to conflict, classify the disputed point as Open or
+Unclear, trace both interpretations to their evidence, and obtain an explicit
+decision before implementation chooses between them.
 
 ## State classification
 
-- **Confirmed:** accepted product, domain, and architecture statements in this
-  baseline.
-- **Proposed:** alternatives or implementation candidates that still require a
-  decision. Proposals are not allowed to redefine confirmed state.
-- **Historical:** superseded decisions and prior baselines retained for
-  provenance.
-- **Derived:** indexes, summaries, generated views, and runtime projections.
-  They may be regenerated and are not independent authority.
+- **Confirmed:** directly stated by the user or contained in an exact option
+  the user explicitly accepted.
+- **Open:** a current decision is still required. Open material cannot redefine
+  confirmed behavior.
+- **Rejected/Superseded:** explicitly rejected or replaced by a later confirmed
+  decision. It is retained only as provenance, not current state.
+- **Unclear:** the available evidence cannot determine the current answer. Do
+  not infer one for implementation convenience.
+
+Generated indexes, summaries, and runtime projections are derived artifacts,
+not an additional decision state or an independent authority.
 
 ## Updating the baseline
 
 A change to confirmed design must identify its source, update every affected
 document, check the invariants, and receive validation at the same impact level.
-Material architecture choices require an accepted ADR. Conversation history is
-supporting evidence, not a substitute for this repository baseline.
+Current repository policy may require a material architecture decision to be
+recorded as an ADR, but the ADR is accepted only after its exact decision is
+confirmed. Conversation history is supporting evidence, not a substitute for
+this repository baseline.

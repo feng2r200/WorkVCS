@@ -47,6 +47,9 @@ do and why its current state should be believed.
 
 WorkVCS provides:
 
+- semantic operations to create and update work objects, change Task status,
+  adjust ordering, and query current or historical work state without fixing
+  the final command spelling;
 - a versioned Work-State DAG with commit, branch, diff, merge, restore, and
   lineage semantics;
 - a structured Work Graph for Goal, Plan, Task, Decision, Knowledge, and
@@ -90,7 +93,7 @@ provenance Events without creating empty WorkStateCommits. The system
 automatically records facts it can observe mechanically, such as a
 Session start, branch switch, claim, status change, or commit. The Agent must
 explicitly record meaning only it knows, such as a Finding, Assumption,
-Decision, Risk, or Knowledge statement. V1 does not infer these records from a
+Decision, or Knowledge statement. V1 does not infer these records from a
 transcript.
 
 ## Design principles

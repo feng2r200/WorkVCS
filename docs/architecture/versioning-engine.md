@@ -146,17 +146,20 @@ Merge distinguishes execution facts from current choices:
 Restore reconstructs a selected historical Versioned Work State without
 restoring old Claims, Focus, active Sessions, or merge-in-progress state. It
 never mutates the selected historical commit. The restore action is auditable
-and requires rationale/provenance.
-
-The final command-level choice between moving a new Branch reference and
-creating a restorative commit is implementation planning; either form must
-preserve the immutable DAG and the action's provenance.
+and requires rationale/provenance. It creates a new single-parent
+WorkStateCommit from the current Branch head whose resulting Work State matches
+the selected historical state. It does not move the current Branch reference
+backward or delete the intervening history. Creating a new Branch at a
+historical WorkStateCommit is the separately confirmed historical-branching
+operation, not restore.
 
 ## Query semantics
 
-The versioning and relation graphs support three distinct queries:
+The versioning and relation graphs support four distinct queries:
 
 - `history`: which mutations and commits actually occurred;
+- `show-at`: which Work State existed at a selected historical commit, without
+  mutating the current Branch;
 - `why`: which structural, evolution, epistemic, and verification paths explain
   the current object;
 - `context`: which current, relevant, path-sensitive items are needed to

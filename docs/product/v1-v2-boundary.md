@@ -22,13 +22,15 @@ implemented.
 
 V1 requires publish/read behavior with traceable source provenance. The
 Knowledge Space's own publication versioning and concurrency mechanism is not
-yet confirmed and must be resolved by an ADR before implementation; no mutable
-global Knowledge DAG is implied by this baseline.
+yet confirmed and requires an explicit decision before implementation. Current
+repository policy may record that decision as an ADR; no mutable global
+Knowledge DAG is implied by this baseline.
 
 The confirmed V1 storage direction is SQLite metadata plus a content-addressed
 object store. This is an implementation direction, not a domain invariant;
-replacing it requires an accepted ADR. The exact schema, object layout, and
-implementation language are not fixed by this baseline.
+replacing it requires a later explicit confirmed decision, which current
+repository policy may record as an accepted ADR. The exact schema, object
+layout, and implementation language are not fixed by this baseline.
 
 ### Versioned work and cognition
 
@@ -36,12 +38,18 @@ V1 versions:
 
 - Goal, Plan, Task, Decision, Knowledge, Record, Acceptance Criterion, and
   typed relations;
-- Finding, Assumption, Question, Attempt, Risk, Handoff, Verification, and
-  Evidence semantics;
+- Finding, Assumption, Attempt, ordinary decision, and Handoff semantics as
+  Records;
+- references from Work State to immutable Verification and Evidence
+  provenance;
 - top-down Goal -> Plan -> SubPlan -> Task decomposition and bottom-up
   Task -> Finding -> Plan -> Goal discovery;
-- Plan and Task hierarchy, mixed Plan/Task siblings, references, explicit
-  order, dependency, and priority;
+- Plan descriptions, constraints, scoped Assumptions, Task-graph references,
+  and Plan hierarchy;
+- Task hierarchy, mixed Plan/Task siblings, references, explicit order,
+  dependency, and priority;
+- Tasks whose home scope defaults to a Plan but may explicitly be
+  Workspace-level and may be referenced by multiple Plans;
 - multiple active Plans for the same Goal in one Work Branch;
 - a parent Task that remains independently executable after SubTasks are
   introduced;
@@ -68,7 +76,11 @@ V1 includes:
 - automatic commits for successful semantic mutations;
 - atomic ChangeSets and a batch/transaction interface;
 - branches from any historical WorkStateCommit;
-- diff, history, why, restore, and lineage queries;
+- diff, history, why, lineage, and read-only historical-state inspection
+  (`show-at` semantics without fixing command spelling);
+- restore as a new WorkStateCommit that makes selected historical Work State
+  current without moving a Branch reference backward or deleting later
+  history;
 - persistent three-way merge with `start`, `resolve`, `continue`, and `abort`;
 - two-parent merge commits and `ours`, `theirs`, and `custom` resolution;
 - deterministic merge classification as `AUTO`, `CONFLICT`, or `REVIEW`;
@@ -83,18 +95,27 @@ V1 includes:
 V1 includes:
 
 - Session provenance independent of Work Branch state;
+- deterministic Session-end diff plus an optional semantic Handoff; when
+  claimed or in-progress work remains, Session end recommends but does not
+  require a Handoff;
 - multiple Sessions on the same Work Branch without a branch-wide lock;
 - optimistic concurrency using an expected base and deterministic
   reconciliation when safe;
 - exclusive Task claims by default, with explicit shared claims;
+- unclaimed Sessions may read and add non-terminal semantic facts such as
+  Findings and Evidence or link Decisions, while terminal and structural Task
+  mutations respect the active exclusive claim;
 - one primary focus per Session, expressed as entity plus context path;
 - abnormal exit retains claims and marks the Session potentially stale;
 - explicit takeover of a stale claim, with prior claimant and last-activity
   information, instead of silent TTL release;
 - release of old-Branch claims on Session Branch switch by default, with an
   explicit keep option;
-- unique-claimant or explicit-force requirements for terminal or structural
-  changes under a shared claim;
+- explicit claim transfer or force provenance when another Session must take
+  terminal or structural action under an active exclusive claim;
+- shared claimants may add Verification and other non-destructive updates, but
+  terminal or structural changes require a unique claimant or explicit force
+  provenance;
 - atomic “select next runnable Task and claim it” behavior.
 
 ### Deterministic Agent interface
@@ -105,8 +126,8 @@ V1 includes:
   ChangeSets, and WorkStateCommits without asking the Agent to manage those
   primitives, plus runtime-only operations that create runtime transitions and
   provenance Events without empty WorkStateCommits;
-- a canonical typed relation vocabulary plus `related_to` with a labeled,
-  reasoned escape hatch;
+- a canonical typed relation vocabulary plus `related_to` with a custom label
+  and an optional explanation;
 - distinct `context`, `why`, and `history` query semantics;
 - deterministic Context Resolver profiles `brief`, `normal`, and `full`;
 - fixed profile contents and the confirmed `P0` through `P9` priority order;
@@ -115,7 +136,8 @@ V1 includes:
 - path-sensitive resolution for scoped Knowledge and Decisions;
 - exclusion of superseded or invalidated content by default, with a causal
   exception when it explains current state;
-- a lightweight Attempt lifecycle plus one-shot shortcut;
+- a lightweight Attempt lifecycle with `running`, `succeeded`, `failed`, and
+  `inconclusive` states plus a one-shot shortcut;
 - a Verification command wrapper that captures command, working directory,
   start/end, exit status, duration, output artifact/digest, Git SHA when
   applicable, and result;
@@ -163,4 +185,9 @@ A concept appearing in the V1 model does not authorize an unconfirmed
 implementation choice. Detailed database schema, programming language,
 identity scheme, protocol encoding, source-state evidence data model, specific
 CLI spelling, sync transport, UI, and deployment model require later planning
-or an accepted ADR.
+and explicit confirmation when they become material decisions. Current
+repository policy may record such a decision as an ADR.
+
+The broader Record taxonomy remains Open. No current confirmed requirement
+makes `Question`, `Risk`, `Blocker`, `Review`, or `Note` distinct V1 Record
+kinds.

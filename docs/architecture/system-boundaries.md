@@ -44,8 +44,10 @@ Store
 `-- content-addressed object store
 ```
 
-This direction is revisable only through an accepted ADR; it is not a domain
-invariant. It does not freeze a SQL schema, object layout, implementation
+Changing this direction requires a later explicit confirmed decision. Current
+repository policy may record that decision as an accepted ADR, but the ADR
+format does not supply the confirmation. The direction is not a domain
+invariant and does not freeze a SQL schema, object layout, implementation
 language, or project-marker format.
 
 ## Workspace
@@ -89,9 +91,11 @@ Workspace A's Tasks, Plans, Claims, or current execution state.
 
 The confirmed boundary requires publish/read and origin provenance. Whether a
 Knowledge Space uses its own DAG, an append-only publication log, or another
-concurrency mechanism is still open and must be settled by an ADR before
-implementation. This baseline does not authorize mutable global Knowledge
-state with unspecified conflict behavior.
+concurrency mechanism is still Open and requires an explicit confirmed
+decision before implementation. Current repository policy may record that
+decision as an ADR, but the ADR does not make an unconfirmed choice
+authoritative. This baseline does not authorize mutable global Knowledge state
+with unspecified conflict behavior.
 
 ## Session and Context Set
 

@@ -1,8 +1,9 @@
 # Domain Invariants
 
 These invariants are mandatory design constraints and future test sources. An
-implementation or ADR that violates one must first revise the confirmed design
-under explicit authority.
+implementation that violates one must first revise the confirmed design under
+explicit authority. An ADR may record that revision under current repository
+policy, but does not create the authority by itself.
 
 ## State and ownership
 
@@ -40,7 +41,9 @@ provenance.
 ### INV-006 — WorkStateCommit is immutable
 
 A committed Work-State node, its parent references, and its ChangeSet identity
-never change. A correction creates a new commit.
+never change. A correction creates a new commit. Restore likewise creates a new
+WorkStateCommit from the current Branch head rather than moving the Branch
+reference backward or erasing later history.
 
 ### INV-007 — Semantic operations are atomic
 
@@ -109,8 +112,9 @@ WorkStateCommit.
 
 ### INV-018 — Custom relations do not alter core algorithms
 
-`related_to` plus label and reason is preserved but cannot affect readiness,
-merge, or context rules until promoted to a confirmed canonical semantic.
+`related_to` plus a custom label, and an optional explanation, is preserved but
+cannot affect readiness, merge, or context rules until promoted to a confirmed
+canonical semantic.
 
 ### INV-019 — Knowledge conflict is explicit
 
@@ -151,16 +155,19 @@ real conflicts are rejected for refresh and explicit resolution.
 
 Claims are Branch-scoped Runtime Coordination. Exclusive is the default,
 shared is explicit, stale ownership changes through explicit takeover, and
-terminal or structural shared work requires a unique claimant or explicit
-force provenance.
+terminal or structural work protected by another Session's claim requires an
+explicit transfer, a unique claimant where applicable, or force provenance.
+Unclaimed Sessions may still add non-terminal semantic facts; shared claimants
+may add Verification and other non-destructive updates.
 
 ## Context and provenance
 
 ### INV-026 — V1 semantic records are explicit
 
-Finding, Assumption, Question, Attempt result, Decision, Knowledge promotion,
-Risk, and Handoff are created by explicit Agent semantic operations. V1 never
-infers them from transcript text.
+Finding, Assumption, Attempt result, Decision, Knowledge promotion, and Handoff
+are created by explicit Agent semantic operations. V1 never infers them from
+transcript text. Additional Record kinds remain Open unless separately
+confirmed.
 
 ### INV-027 — Context resolution is deterministic and path-sensitive
 

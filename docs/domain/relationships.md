@@ -56,10 +56,11 @@ V1 provides:
 ```text
 related_to
 label: <custom meaning>
-reason: <required explanation>
+reason: <optional explanation>
 ```
 
-Custom relationships are preserved and queryable but do not affect
+Custom relationships require a label and may carry an explanation. They are
+preserved and queryable but do not affect
 deterministic readiness, merge, context ranking, or other core algorithms until
 their semantics become a separately confirmed canonical relation.
 

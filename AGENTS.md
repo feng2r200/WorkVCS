@@ -26,6 +26,13 @@ Chat transcripts, exploration notes, implementation sketches, historical Plans,
 and generated summaries are evidence or proposals, not project truth by
 themselves.
 
+A statement is eligible for confirmed documentation only when the user
+directly confirms that statement, accepts the exact option that contains it,
+or explicitly states the requirement in their own words. An assistant
+recommendation, example, consolidation, or surrounding implementation detail
+does not become confirmed merely because the user accepted a nearby numbered
+choice.
+
 ## Changing Confirmed Design
 
 - Read the affected domain invariants and accepted ADRs before changing
@@ -36,6 +43,9 @@ themselves.
   as settled. Keep unresolved alternatives outside confirmed documents.
 - Label deferred or unknown behavior explicitly; do not infer support from an
   example, future direction, or named concept.
+- Trace every promoted statement to the narrowest user confirmation. If the
+  evidence confirms a requirement but not its implementation mechanism,
+  preserve the requirement and leave the mechanism outside confirmed docs.
 
 ## Delivery Boundary
 

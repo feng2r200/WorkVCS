@@ -2,11 +2,11 @@
 
 ## Boundary model
 
-WorkVCS separates physical storage, versioned work, reusable knowledge,
-execution provenance, and external resources.
+WorkVCS separates data storage, versioned work, reusable knowledge, execution
+provenance, and associated source state.
 
 ```text
-Store (portable physical boundary)
+Store (portable data boundary)
 |
 |-- Workspace A (Work-State versioning boundary)
 |   |-- Versioned Work State
@@ -18,11 +18,6 @@ Store (portable physical boundary)
 |
 |-- Sessions and immutable provenance
 `-- Evidence object storage
-
-External Resources
-|-- Git repository
-|-- directory
-`-- other anchored material
 ```
 
 The following inequalities are architectural constraints:
@@ -30,7 +25,6 @@ The following inequalities are architectural constraints:
 ```text
 Store != Workspace
 Workspace != Repository
-Workspace != Resource
 Session != Workspace
 Knowledge Space != Work Graph
 Work Branch != Git branch
@@ -42,22 +36,17 @@ A Store is the self-contained data and portability boundary. One Store may
 contain multiple Workspaces and Knowledge Spaces plus Sessions, provenance,
 evidence, and projections.
 
-The confirmed default for V1 implementation planning is:
+The confirmed V1 implementation direction is:
 
 ```text
 Store
-|-- structured metadata, transactions, indexes, projections (SQLite)
-`-- immutable or large content (content-addressed object store)
+|-- metadata (SQLite)
+`-- content-addressed object store
 ```
 
-This default is revisable only through an accepted ADR; it is not a domain
-invariant. It does not yet freeze a SQL schema, object layout, checkpoint
-interval, implementation language, or project-marker format.
-
-A project-local hidden directory may be one initialization/deployment mode, and
-a global Store with a small project locator may be another. Neither deployment
-form changes the domain boundary: the Store, not the current directory, owns
-the data.
+This direction is revisable only through an accepted ADR; it is not a domain
+invariant. It does not freeze a SQL schema, object layout, implementation
+language, or project-marker format.
 
 ## Workspace
 
@@ -71,8 +60,8 @@ layout. Valid configurations include:
 
 - multiple Workspaces for different parts of one monorepo;
 - one Workspace referencing multiple repositories and directories;
-- multiple Workspaces referencing the same Resource;
-- a Workspace with no Git Resource.
+- multiple Workspaces associated with the same repository or directory;
+- a Workspace with no Git repository.
 
 Every versioned mutation has exactly one active Workspace and Work Branch.
 Cross-Workspace Task containment and dependency are not allowed in V1 because
@@ -126,20 +115,16 @@ it does not permanently relate the Workspaces. Current Focus and Claims are
 runtime state. The Session timeline and automatic end diff are immutable
 provenance.
 
-## Resource and Resource Anchor
+## Source-state traceability
 
-A Resource represents external material such as a Git repository or directory.
-Workspace and Resource are N:M. WorkVCS does not use Git as its core database.
+WorkVCS does not use Git as its core database. Work-State data may enter Git or
+remain independent under separate control. V1 must support reviewable drift
+inspection so an Agent can identify whether associated source state changed
+and state the exact comparison basis without tightly coupling every
+WorkStateCommit to a Git commit.
 
-A Resource Anchor captures reviewable external state at meaningful points such
-as Session start, Verification, Task completion, an important Decision, merge,
-or explicit snapshot. A Git anchor may include HEAD, branch, dirty state, and a
-working-tree digest. A multi-resource source snapshot may group anchors.
-
-Not every WorkStateCommit captures a fresh Resource Anchor. This keeps code
-state and work-state history associated but not lock-stepped. Drift inspection
-compares current Resource observations with an anchor relevant to the claim
-being reviewed.
+The concrete entity model and captured fields for source-state evidence are
+not fixed by this baseline.
 
 ## State ownership matrix
 
@@ -151,7 +136,7 @@ being reviewed.
 | active Session / Focus / Claim | Runtime Coordination | No | Changes emit Events | No |
 | merge-in-progress | Runtime Coordination | No | Attempt and resolution Events | No |
 | Event / Session timeline / ChangeSet / WorkStateCommit | Provenance and version history | No | Yes | Historical Work State only |
-| Verification / Evidence / Resource Anchor | Provenance/object storage | No | Yes | No |
+| Verification / Evidence | Provenance/object storage | No | Yes | No |
 | context / next / why / ready / progress | Derived Projection | No | Recomputable | No |
 
 ## Working set and retention boundary
@@ -161,7 +146,7 @@ The Store distinguishes relevance from existence:
 - **HOT:** active and relevant state used by default projections;
 - **WARM:** terminal or superseded state indexed for `why` and `history` but
   omitted from ordinary context;
-- **COLD:** old raw Events, Evidence, and checkpoints loaded only for explicit
+- **COLD:** old raw Events and Evidence loaded only for explicit
   trace or restoration.
 
 This is a projection and access policy, not destructive revision of history.
@@ -172,10 +157,11 @@ not destructively compacted by default.
 
 ## Integration boundary
 
-The WorkVCS engine exposes one semantic operation contract and one stable JSON
-protocol. Codex, Claude, OpenCode, and other harnesses receive adapter-specific
-instructions or skills that translate the same canonical workflow. The engine
-does not launch, select, or orchestrate Agents.
+The WorkVCS engine exposes one semantic operation contract through an
+Agent-readable protocol. Codex, Claude, OpenCode, and other harnesses receive
+adapter-specific instructions or skills that translate the same canonical
+workflow. The engine does not launch, select, or orchestrate Agents.
 
 Human-friendly presentation may be added above the protocol. It cannot weaken
-stable schemas, exit codes, actionable errors, or machine-readable provenance.
+accurate Agent interpretation, actionable errors, or machine-readable
+provenance. The concrete protocol encoding is not fixed by this baseline.

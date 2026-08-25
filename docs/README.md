@@ -61,7 +61,7 @@ turn IDs; quoted response fragments are the user's confirmations.
 | 9–14 | Knowledge, Assumption, Attempt, AC, Verification/Evidence, automatic WorkStateCommit | `00fd0410-9f92-469a-8a53-9609b4e15172`: `9是 10是 11是 12B ... 13是 14自动commit` |
 | 15–24 | Goal/Plan/Task structure, scoped Knowledge, merge semantics, Session/Branch, context | `d5cc8c37-9c38-47a6-9f91-0720c4901c22`: `15A; 16A; ... 23 V1支持显式session switch ... 24认同` |
 | 25–28 | Multiple active Plans, recursive Plan/Task refinement, Plan revision, post-completion cognition | `36375b08-aff4-40e3-9ae9-caa0d15cbc23`: `25B；26需要Plan hierarchy ... 27 十分认可；28 十分认可` |
-| 29–33 | Workspace-level Plan, composite Task, Plan order, mixed children, terminal states | `82c25da7-98a2-423c-a07c-6dc789a56910`: `29是；30B; 31需要；32 允许混排；33必须区分` |
+| 29–33 | Workspace-level Plan, independently executable parent Task after decomposition, Plan order, mixed children, terminal states | `82c25da7-98a2-423c-a07c-6dc789a56910`: `29是；30B; 31需要；32 允许混排；33必须区分` |
 | 34–38 | Task status/outcome, late Goal discovery, explicit Plan/Goal completion, next semantics | `baa1221c-6e50-4c8a-a1c9-00338b340f73`: `34同意 35认可 36认可 37显式 38同意` |
 | 39–46 | Persistent three-way merge, two parents, custom resolution, retained learning, Decision subject/scope, Branch isolation | `7feaebf8-ee24-4b6f-966a-dbac9946b6c9`: `39是 40是 41是 42C 43是 44认可 45认可 46认可` |
 | 47–55 | Same-Branch concurrency, claims, takeover, focus, deterministic budgeted context, atomic claim-next | `7e04735b-fd94-4ebc-b29d-39adb326196a`: `47A 48是 ... 53是 54V1支持 55必须` |
@@ -75,6 +75,15 @@ The detailed meanings consolidated from those confirmed ranges are the linked
 product, domain, and architecture documents. The ledger records promotion
 provenance subject to the degraded source-authenticity limitation above; it
 does not create a parallel contract to maintain.
+
+### Confirmed-only promotion rule
+
+Only a direct user requirement or the exact content of an explicitly accepted
+option is eligible for this baseline. Assistant recommendations, examples,
+candidate implementations, and details surrounding an accepted numbered item
+remain proposals unless the user separately confirms them. A confirmation of
+a numbered range is therefore interpreted against the corresponding questions,
+not against every statement in the assistant response that contained them.
 
 ## Authority and conflict handling
 

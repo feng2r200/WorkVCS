@@ -3,14 +3,13 @@
 ## Product identity
 
 - **Name:** WorkVCS
-- **Formal definition:** Version Control for Agent Work & Knowledge State
+- **Role:** Agent-facing version control for explicit work and knowledge state
 - **Category:** a local-first, CLI-first, Agent-first versioned work and
   knowledge state system
 
 WorkVCS manages the explicit state an Agent needs to continue, explain, review,
-branch, merge, and restore work. Git manages source state; WorkVCS manages
-Agent work state. It does not claim to manage model internals or chain of
-thought.
+branch, merge, and restore work independently of source-code version control.
+It does not claim to manage model internals or chain of thought.
 
 ## Canonical terminology
 
@@ -37,7 +36,8 @@ state is lost or becomes difficult to distinguish from stale discussion:
   context;
 - concurrent Sessions lack explicit focus and claim coordination;
 - work-state alternatives cannot be branched and semantically merged;
-- source changes and work-state claims can drift without an auditable anchor.
+- source changes and work-state claims can drift without an auditable
+  comparison basis.
 
 Task tracking alone does not solve this problem. The managed object is the
 evolving **Work & Knowledge State**, including both what the project intends to
@@ -54,16 +54,15 @@ WorkVCS provides:
 - immutable provenance for Sessions, ChangeSets, Events, and Evidence;
 - explicit coordination state for focus, claims, and merge-in-progress;
 - a deterministic Context Resolver for `context`, `next`, and `why`;
-- resource anchors that connect work-state evidence to Git repositories,
-  directories, and other external resources without making Git the database;
+- low-coupling source-state drift evidence without making Git the database;
 - portable Stores and cross-Workspace Knowledge Spaces.
 
 ## Primary user and interaction model
 
 The primary user is an Agent such as Codex, Claude, OpenCode, or another coding
-harness. The stable CLI protocol and semantic operation contract are the core
-interface. Agent-specific instruction files and skills are adapters; the engine
-does not depend on a particular Agent product.
+harness. The CLI and semantic operation contract are the core interface.
+Agent-specific instruction files and skills are adapters; the engine does not
+depend on a particular Agent product.
 
 Humans may inspect or operate the system through an Agent. Human-readable
 storage is not a product requirement, but every command must remain

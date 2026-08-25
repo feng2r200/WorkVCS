@@ -42,8 +42,7 @@ A WorkStateCommit is immutable and records:
   mutation, or two parents for a completed merge;
 - its ChangeSet and semantic operation metadata;
 - authoring Session and active Workspace/Branch;
-- a state fingerprint and time;
-- optional references to relevant Resource Anchors.
+- time and provenance needed to identify the mutation.
 
 ```text
 C1 -- C2 -- C3 -- C4  main
@@ -57,30 +56,15 @@ C4 --------- C9
   C6 -------
 ```
 
-The exact hash algorithm and serialization format remain implementation
-choices. Commit identity is content-based; mutable entity identity is stable
-and independent of content changes.
-
-## Deltas, projections, and checkpoints
-
-The engine does not snapshot the complete Store or Workspace on every
-mutation. It stores ChangeSet deltas and maintains a materialized current
-projection for ordinary reads. Periodic internal checkpoints bound historical
-replay cost.
-
-```text
-historical state = nearest checkpoint + ordered delta replay
-current state    = validated materialized projection
-```
-
-Checkpoint creation and derived indexes never create new semantic truth. They
-must be reproducible from immutable history.
+The exact commit identity, serialization, and state-reconstruction strategy
+are not fixed by this baseline.
 
 ## Branch semantics
 
 A Work Branch may start at any historical WorkStateCommit. It represents a
 divergent work or cognition route and may exist without a Git Branch. Git
-branch, commit, or worktree associations are optional Resource Anchors.
+branch, commit, or worktree associations are optional and do not define Work
+Branch identity.
 
 Multiple Sessions may work on one Work Branch. Agent concurrency alone is not
 a reason to create branches. Unmerged sibling Branch state is isolated from
@@ -203,18 +187,45 @@ Without explicit focus, the anchor is the only claimed Task when unique;
 otherwise the resolver returns a current Branch overview. It never silently
 turns `context` into “select next work.”
 
-Profiles `brief`, `normal`, and `full` define eligible categories. Budget
-removes complete low-priority items, never arbitrary text fragments. Inactive
-cognition is omitted unless a direct causal path requires a concise summary to
-explain current state.
+If a focused entity has multiple valid context paths, the resolver requires an
+explicit path or returns candidate paths; it never guesses.
 
-## Resource drift
+Profiles define eligible categories:
+
+- `brief`: Goal/Plan path, Task, Acceptance Criteria, blocker, dependency,
+  active Decision, and critical previous failure;
+- `normal`: `brief` plus Finding, Assumption, Attempt, Knowledge, and relevant
+  Session/Handoff;
+- `full`: `normal` plus deeper causal ancestry, inactive related cognition,
+  and more provenance.
+
+Budget controls the amount retained within the profile. The confirmed trimming
+priority is:
+
+```text
+P0 current Task / Acceptance Criteria / blocker
+P1 current Goal / Plan path
+P2 dependencies / readiness
+P3 direct causal chain
+P4 active Decisions / Assumptions
+P5 failed Attempts
+P6 Findings
+P7 scoped Knowledge
+P8 relevant Handoff
+P9 older provenance
+```
+
+The resolver removes complete low-priority items, never arbitrary text
+fragments, and reports omitted categories and counts. Inactive cognition is
+omitted unless a direct causal path requires a concise summary to explain
+current state.
+
+## Source-state drift
 
 WorkStateCommit and external source history are related but not lock-stepped.
-A claim such as Verification or Task completion references the Resource Anchor
-that makes it reviewable. Drift compares the current Resource observation with
-that anchor and reports the exact basis. Changing a Task title does not require
-an unnecessary Git snapshot.
+V1 must provide an exact review basis for source-state drift without making Git
+the Work-State database. The concrete evidence model and capture points are not
+fixed by this baseline.
 
 ## Failure guarantees
 
@@ -224,5 +235,5 @@ an unnecessary Git snapshot.
 - A merge cannot continue with unresolved `CONFLICT` or `REVIEW` items.
 - A restore cannot resurrect Runtime Coordination.
 - A derived projection cannot certify history if its provenance is missing.
-- Errors use stable machine-readable codes and include the relevant current
-  state and safe next action.
+- Errors are concise and actionable, exposing the relevant current state and a
+  safe next action in an Agent-readable form.

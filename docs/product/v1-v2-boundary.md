@@ -8,13 +8,13 @@ implemented.
 
 ### Store and scope model
 
-- A self-contained, portable **Store** is the physical data boundary.
+- A self-contained, portable **Store** is the data boundary.
 - A Store may contain multiple Workspaces, Knowledge Spaces, Sessions,
   provenance, and evidence objects.
 - A **Workspace** is the versioning boundary for one Work State; it is not
   equal to a directory or Git repository.
-- Workspace and Resource have an N:M relationship, supporting monorepo,
-  cross-repository, and non-Git work.
+- A Workspace may span repositories or directories, multiple Workspaces may
+  refer to different parts of one monorepo, and a Workspace may be non-Git.
 - A Session has a multi-Workspace Context Set and one active Workspace plus
   active Branch for mutation.
 - Cross-Workspace reuse occurs through Knowledge Spaces. Cross-Workspace Task
@@ -25,12 +25,10 @@ Knowledge Space's own publication versioning and concurrency mechanism is not
 yet confirmed and must be resolved by an ADR before implementation; no mutable
 global Knowledge DAG is implied by this baseline.
 
-The confirmed default for V1 implementation planning is SQLite for structured
-metadata, transactions, indexes, and materialized projections plus a
-content-addressed object store for Evidence and large immutable content. This
-is a default architecture decision, not a domain invariant; replacing it
-requires an accepted ADR. The exact SQL schema, checkpoint interval, and
-implementation language are not yet frozen.
+The confirmed V1 storage direction is SQLite metadata plus a content-addressed
+object store. This is an implementation direction, not a domain invariant;
+replacing it requires an accepted ADR. The exact schema, object layout, and
+implementation language are not fixed by this baseline.
 
 ### Versioned work and cognition
 
@@ -44,16 +42,23 @@ V1 versions:
   Task -> Finding -> Plan -> Goal discovery;
 - Plan and Task hierarchy, mixed Plan/Task siblings, references, explicit
   order, dependency, and priority;
+- multiple active Plans for the same Goal in one Work Branch;
+- a parent Task that remains independently executable after SubTasks are
+  introduced;
 - stable object identity when later attaching an existing object to a newly
   discovered Plan or Goal;
 - separate Task execution status and open-semantic outcome;
-- explicit Plan completion and Goal achievement.
+- explicit Plan completion and Goal achievement;
+- later Findings, Decisions, Knowledge, and new Task links on a terminal Task;
+- ordinary `Record(kind=decision)` entries that can be promoted to a Decision
+  with context, options, choice, rationale, and consequences, with later
+  change represented by supersession;
+- optional Acceptance Criteria, with all mandatory criteria verified before
+  automatic Task completion when criteria exist.
 
-Mutable logical entities require globally unique stable identities and short
-typed display aliases such as `T-8af3`. UUIDv7 is the current default candidate
-selected under the user's best-fit delegation, not a domain invariant; the
-implementation ADR may replace it if it proves a better identity with the same
-properties. Immutable commits, evidence objects, and blobs use content hashes.
+The exact persistent identity scheme is not fixed by this baseline. Stable
+Task-local Acceptance Criterion identities are required so references survive
+wording changes.
 
 ### Work-State versioning
 
@@ -73,9 +78,6 @@ V1 includes:
   completed evaluation work from unselected branches;
 - preservation of the source Branch after merge.
 
-Core history is delta-based with materialized current projections and internal
-checkpoints; it is not a full database snapshot per mutation.
-
 ### Sessions and concurrency
 
 V1 includes:
@@ -86,7 +88,9 @@ V1 includes:
   reconciliation when safe;
 - exclusive Task claims by default, with explicit shared claims;
 - one primary focus per Session, expressed as entity plus context path;
-- explicit takeover of a stale claim instead of silent TTL release;
+- abnormal exit retains claims and marks the Session potentially stale;
+- explicit takeover of a stale claim, with prior claimant and last-activity
+  information, instead of silent TTL release;
 - release of old-Branch claims on Session Branch switch by default, with an
   explicit keep option;
 - unique-claimant or explicit-force requirements for terminal or structural
@@ -105,6 +109,7 @@ V1 includes:
   reasoned escape hatch;
 - distinct `context`, `why`, and `history` query semantics;
 - deterministic Context Resolver profiles `brief`, `normal`, and `full`;
+- fixed profile contents and the confirmed `P0` through `P9` priority order;
 - a hard context budget with item-priority omission rather than string
   truncation, including an omission summary;
 - path-sensitive resolution for scoped Knowledge and Decisions;
@@ -112,21 +117,19 @@ V1 includes:
   exception when it explains current state;
 - a lightweight Attempt lifecycle plus one-shot shortcut;
 - a Verification command wrapper that captures command, working directory,
-  exit status, duration, output artifact/digest, resource anchor, and result;
-- JSON as the stable formal protocol, with a schema version, stable error
-  codes and exit codes, actionable error details, and optional presentation
-  layers;
+  start/end, exit status, duration, output artifact/digest, Git SHA when
+  applicable, and result;
+- an Agent-readable operation protocol and concise, actionable errors; the
+  concrete encoding and command spelling are not fixed by this baseline;
 - Agent adapters based on the same CLI and semantic operation contract.
 
-### Resource anchoring and portability
+### Source-state traceability and portability
 
 V1 includes:
 
-- optional Resource Anchors for Git repositories, directories, and multiple
-  resources within one Workspace;
-- drift inspection between current resources and the resource state captured
-  for a Session, Verification, Decision, merge, or explicit snapshot;
-- low coupling: not every WorkStateCommit must capture a Git snapshot;
+- low-coupling source-state traceability that can identify drift and provide an
+  exact review basis without making Git the Work-State database;
+- independently controlled inclusion or exclusion of WorkVCS data from Git;
 - portable export/bundle behavior suitable for moving a Store without a live
   distributed synchronization protocol;
 - HOT/WARM/COLD projections that remove terminal history from default working
@@ -155,5 +158,6 @@ and projections may be regenerated and garbage-collected.
 
 A concept appearing in the V1 model does not authorize an unconfirmed
 implementation choice. Detailed database schema, programming language,
-specific CLI spelling, sync transport, UI, and deployment model require later
-planning or an accepted ADR.
+identity scheme, protocol encoding, source-state evidence data model, specific
+CLI spelling, sync transport, UI, and deployment model require later planning
+or an accepted ADR.

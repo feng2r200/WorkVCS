@@ -3,7 +3,7 @@
 ## State layers
 
 WorkVCS separates four state layers. These layers classify mutable and
-immutable state surfaces; scope containers, external Resources, and
+immutable state surfaces; scope containers, source-state associations, and
 version-control refs surround those surfaces and follow the detailed boundary
 rules below.
 
@@ -11,10 +11,10 @@ rules below.
 |---|---|---|
 | Versioned Work State | Goal, Plan, Task, Decision, Knowledge, Record, Acceptance Criterion, typed relations | Participates |
 | Runtime Coordination | active Session state, Claim, Focus, merge-in-progress | Does not participate |
-| Immutable Provenance and Version History | Event, Session timeline, Verification, Evidence, Resource Anchor, ChangeSet, WorkStateCommit | Is retained, not restored as Runtime Coordination |
+| Immutable Provenance and Version History | Event, Session timeline, Verification, Evidence, ChangeSet, WorkStateCommit | Is retained, not restored as Runtime Coordination |
 | Derived Projection | context, next, why, ready, progress, diff | Recomputed |
 
-Store, Workspace, Knowledge Space, and Resource define scope or ownership.
+Store, Workspace, and Knowledge Space define scope or ownership.
 Work Branch refs select heads in immutable version history. They are not
 versioned entities inside their own Work State.
 
@@ -22,7 +22,7 @@ versioned entities inside their own Work State.
 
 ### Store
 
-**Purpose:** A self-contained physical and portability boundary for WorkVCS
+**Purpose:** A self-contained data and portability boundary for WorkVCS
 data.
 
 **Owned state:** Workspaces, Knowledge Spaces, Session provenance, structured
@@ -42,26 +42,12 @@ diffed, merged, and restored as one unit.
 **Owned state:** Workspace-local Goal, Plan, Task, Decision, Knowledge, Record,
 Acceptance Criterion, and typed relation state.
 
-**Relations:** References zero or more Resources. One Resource may be used by
-multiple Workspaces.
+**Relations:** May be associated with multiple repositories or directories;
+multiple Workspaces may refer to different parts of one monorepo. A Workspace
+may also be non-Git.
 
 **Version behavior:** Every versioned mutation targets exactly one Workspace
 and Work Branch. A Workspace is not a directory, repository, Store, or Session.
-
-### Resource and Resource Anchor
-
-**Purpose:** A Resource identifies external material used by a Workspace; a
-Resource Anchor captures its state at a meaningful point.
-
-**Owned state:** A Resource owns type and locator metadata. An anchor owns a
-captured state such as Git HEAD, branch, dirty state, directory digest,
-capture time, and Session reference.
-
-**Relations:** Workspace and Resource are N:M. A Verification, Decision,
-Session, merge, or WorkStateCommit may reference an anchor.
-
-**Version behavior:** Anchors are immutable provenance. Resources are not
-copied into the Work-State DAG merely because they are referenced.
 
 ### Knowledge Space
 
@@ -109,7 +95,8 @@ Goal or solving a Workspace-level problem.
 
 **Lifecycle:** A Plan may exist without a Goal, contain SubPlans and Tasks in
 mixed order, evolve in place for ordinary edits, and be superseded when its
-core strategy changes. Completion is explicit.
+core strategy changes. A Goal may have multiple active Plans on one Work
+Branch. Completion is explicit.
 
 **Owned state:** Description, status, ordered children, strategy, and optional
 completion rationale.
@@ -129,7 +116,9 @@ and a compatibility Task as mixed siblings.
 
 **Lifecycle:** `pending`, `in_progress`, `blocked`, `done`, `failed`,
 `cancelled`, or `superseded`. Execution status and outcome are separate. A Task
-may be decomposed into SubTasks and may remain queryable after terminal state.
+may be decomposed into SubTasks while remaining independently executable.
+After terminal state it remains queryable and may receive later Findings,
+Decisions, Knowledge, or links to newly discovered Tasks.
 
 **Owned state:** Description, execution status, open-semantic outcome,
 priority, stable local Acceptance Criteria, and optional child ordering.
@@ -160,19 +149,25 @@ classification, and current verification projection.
 **Version behavior:** It is versioned with its owning Task but uses a stable
 local reference such as `T-18/AC-2`.
 
+**Completion rule:** Criteria are optional. If they exist, every mandatory
+criterion must have Verification before WorkVCS may automatically mark the
+Task done.
+
 **Example:** Editing the wording of `T-18/AC-2` does not break an existing
 Verification reference.
 
 ### Decision
 
-**Purpose:** Records a material choice, its rationale, and what evidence
-supports the current choice.
+**Purpose:** Records a promoted material choice, its rationale, and what
+evidence supports the current choice.
 
-**Lifecycle:** A Decision may be active, superseded, or otherwise explicitly
-retired. Ordinary implementation narration is not promoted to a Decision.
+**Lifecycle:** An ordinary decision begins as `Record(kind=decision)`. An
+important one may be explicitly promoted to a Decision. A Decision may be
+active, superseded, or otherwise explicitly retired; later choices supersede
+rather than rewrite it.
 
-**Owned state:** Choice, rationale, optional exclusive `scope` and `subject`,
-status, and provenance references.
+**Owned state:** Context, options, choice, rationale, consequences, optional
+exclusive `scope` and `subject`, status, and provenance references.
 
 **Relations:** Commonly based on Findings or Evidence, may supersede another
 Decision, and may cause new Plans or Tasks.
@@ -194,7 +189,7 @@ to a Knowledge Space. Natural-language topic similarity alone does not change
 its state.
 
 **Owned state:** Statement, scope, state, provenance, and optional publication
-targets.
+targets. V1 scopes include Workspace, Goal, Plan, Task, and path/module/tag.
 
 **Relations:** May be supported, contradicted, validated, invalidated, derived
 from, or superseded. It may be published across Workspaces; Tasks are not.
@@ -212,8 +207,9 @@ multi-process workload.
 not need separate top-level behavior.
 
 **Lifecycle:** Record kinds include Finding, Assumption, Question, Attempt,
-Risk, and Handoff. V1 records are created explicitly by an Agent semantic
-operation, not inferred from a transcript.
+ordinary decision, Risk, and Handoff. V1 records are created explicitly by an
+Agent semantic operation, not inferred from a transcript. An important
+ordinary decision can be promoted to a Decision without erasing its origin.
 
 **Owned state:** Kind, statement, scope, lifecycle fields appropriate to the
 kind, and provenance.
@@ -237,6 +233,8 @@ coordination state.
 
 **Lifecycle:** Starts, changes focus or active Workspace/Branch explicitly,
 and ends with a deterministic Session diff plus an optional semantic Handoff.
+Normal end releases claims. After abnormal exit the Session is marked
+`potentially_stale` and its claims remain until explicit release or takeover.
 
 **Owned state:** Context Set, active Workspace, active Branch, primary Focus,
 current Claims, Agent identity, and activity metadata.
@@ -269,7 +267,9 @@ provenance.
 lock or a Work-State version.
 
 **Lifecycle:** Exclusive by default, optionally shared, released on Branch
-switch by default, and explicitly taken over when a prior Session is stale.
+switch by default, released on normal Session end, and explicitly taken over
+when a prior Session is stale. A takeover exposes the prior claimant and last
+activity and emits provenance.
 
 **Owned state:** Session, Task, Work Branch, mode, and activity metadata.
 
@@ -291,9 +291,8 @@ remained inconclusive.
 **Lifecycle:** Evidence is captured or referenced, hashed, and retained under
 its policy. Verification records a result and the Evidence it used.
 
-**Owned state:** Evidence owns digest, locator/object reference, capture
-metadata, and optional Resource Anchor. Verification owns target, result,
-method, time, and evidence links.
+**Owned state:** Evidence owns digest, locator/object reference, and capture
+metadata. Verification owns target, result, method, time, and evidence links.
 
 **Relations:** Verification `verifies` an Acceptance Criterion and is
 `evidenced_by` immutable Evidence. A Finding or other semantic claim may
@@ -303,8 +302,9 @@ independently `support` a Decision or Knowledge statement.
 provenance. Their references are versioned relations; the current verification
 view shown on an Acceptance Criterion is a derived projection.
 
-**Example:** A command wrapper captures command, cwd, duration, exit status,
-output digest, Git anchor, and result for `T-18/AC-2`.
+**Example:** A command wrapper captures command, cwd, start/end, duration, exit
+status, output artifact or digest, applicable Git SHA, and result for
+`T-18/AC-2`.
 
 ### ChangeSet, Event, and WorkStateCommit
 
@@ -317,12 +317,11 @@ complete ChangeSet. A pure Runtime Coordination operation updates runtime state
 atomically and emits provenance Events without creating a WorkStateCommit.
 
 **Owned state:** ChangeSet metadata and semantic intent; Event type and
-payload; commit parent(s), ChangeSet reference, state fingerprint, authoring
-Session, and time.
+payload; commit parent(s), ChangeSet reference, authoring Session, and time.
 
 **Relations:** A Workspace genesis commit has zero parents, a normal commit has
-one parent, and a merge commit has two. The commit may reference the latest
-relevant Resource Anchor without requiring a new anchor for every mutation.
+one parent, and a merge commit has two.
 
 **Version behavior:** All three are immutable provenance/version primitives.
-Current projections are derived from commits, deltas, and checkpoints.
+The exact persistent representation and reconstruction strategy are not fixed
+by this baseline.

@@ -19,8 +19,9 @@ even when its Session reads multiple Workspaces.
 
 ### INV-003 — Workspace is not infrastructure
 
-`Store != Workspace`, `Workspace != Repository`, `Workspace != Resource`, and
-`Session != Workspace`. Workspace and Resource form an N:M relationship.
+`Store != Workspace`, `Workspace != Repository`, and `Session != Workspace`.
+A Workspace may span repositories or directories, may be non-Git, and is not
+identified by any one physical source location.
 
 ### INV-004 — Cross-Workspace sharing is knowledge-only in V1
 
@@ -54,11 +55,10 @@ same all-or-nothing rule to its declared state surfaces.
 Attaching an existing Task or Plan to a later-discovered Plan or Goal preserves
 the object's identity and prior history.
 
-### INV-009 — Mutable entities and immutable content use different identity
+### INV-009 — Logical references survive mutation
 
-Mutable logical entities use globally unique stable IDs; immutable commits,
-evidence objects, and blobs use content hashes. Short typed IDs are display
-aliases, not the sole persistent identity.
+A logical entity keeps referential identity across ordinary mutation and
+reorganization. This baseline does not select the persistent ID scheme.
 
 ### INV-010 — Terminal does not mean deleted
 
@@ -188,3 +188,31 @@ is optional and supplementary.
 Decision, Finding, Knowledge, ChangeSet, Event, and WorkStateCommit history is
 retained. HOT/WARM/COLD projections and configurable large-Evidence retention
 may reduce the active footprint without falsifying lineage.
+
+## Confirmed lifecycle details
+
+### INV-032 — Decision promotion is explicit
+
+An ordinary decision is recorded as `Record(kind=decision)`. Promotion creates
+a Decision carrying context, options, choice, rationale, and consequences;
+later change supersedes rather than rewrites the promoted Decision.
+
+### INV-033 — A Goal may have multiple active Plans
+
+One Work Branch may carry multiple active Plans for the same Goal. WorkVCS does
+not force complementary strategies into one oversized Plan.
+
+### INV-034 — Task decomposition preserves parent executability
+
+Adding SubTasks does not automatically turn the parent Task into a non-
+executable composite. The parent remains independently executable.
+
+### INV-035 — Terminal Tasks remain open to later cognition
+
+A terminal Task's execution target is closed, but later Findings, Decisions,
+Knowledge, and newly discovered Task links may still be attached with history.
+
+### INV-036 — Mandatory criteria gate automatic completion
+
+Acceptance Criteria are optional. When they exist, WorkVCS may automatically
+mark a Task done only after every mandatory criterion has Verification.

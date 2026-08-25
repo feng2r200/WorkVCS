@@ -9,9 +9,9 @@ rules below.
 
 | Layer | Contents | Branch / restore / merge behavior |
 |---|---|---|
-| Versioned Work State | Goal, Plan, Task, Decision, Knowledge, Record, Acceptance Criterion, typed relations | Participates |
+| Versioned Work State | Goal, Plan, Task, Decision, Knowledge, Record, Verification, Acceptance Criterion, typed relations | Participates |
 | Runtime Coordination | active Session state, Claim, Focus, merge-in-progress | Does not participate |
-| Immutable Provenance and Version History | Event, Session timeline, Verification, Evidence, ChangeSet, WorkStateCommit | Is retained, not restored as Runtime Coordination |
+| Immutable Provenance and Version History | Event, Session timeline, Evidence, ChangeSet, WorkStateCommit | Is retained, not restored as Runtime Coordination |
 | Derived Projection | context, next, why, ready, progress, diff | Recomputed |
 
 Store, Workspace, and Knowledge Space define scope or ownership.
@@ -40,7 +40,7 @@ Branch.
 diffed, merged, and restored as one unit.
 
 **Owned state:** Workspace-local Goal, Plan, Task, Decision, Knowledge, Record,
-Acceptance Criterion, and typed relation state.
+Verification, Acceptance Criterion, and typed relation state.
 
 **Relations:** May be associated with multiple repositories or directories;
 multiple Workspaces may refer to different parts of one monorepo. A Workspace
@@ -54,17 +54,19 @@ and Work Branch. A Workspace is not a directory, repository, Store, or Session.
 **Purpose:** A long-lived knowledge-sharing boundary above individual
 Workspaces.
 
-**Owned state:** Published Knowledge statements and their provenance.
+**Owned state:** Shared Knowledge statements and their provenance.
 
-**Relations:** Workspaces publish Knowledge to and subscribe to a Knowledge
-Space. Goal, Plan, and Task graphs never cross Workspace boundaries in V1.
+**Relations:** A Workspace may make Knowledge available through a Knowledge
+Space, and another Workspace may read or use it. Goal, Plan, and Task graphs
+never cross Workspace boundaries in V1. Publication, reference, subscription,
+copying, and live-binding semantics are not fixed by this statement.
 
-**Version behavior:** Publication preserves the originating Workspace,
-Decision, Verification, and WorkStateCommit lineage. It does not transfer
-execution ownership. V1 requires publish/read semantics, but no independent
-Knowledge Space DAG or concurrency model is confirmed yet; that mechanism
-requires an explicit confirmed decision before implementation and may then be
-recorded as an ADR under current repository policy.
+**Version behavior:** Cross-Workspace reuse preserves the originating
+Workspace, Decision, Verification, and WorkStateCommit lineage. It does not
+transfer execution ownership. No independent Knowledge Space DAG, access
+protocol, or concurrency model is confirmed yet; those mechanisms require an
+explicit confirmed decision before implementation and may then be recorded as
+an ADR under current repository policy.
 
 ## Versioned Work State
 
@@ -186,18 +188,21 @@ deterministic merge review even when their IDs differ.
 **Purpose:** Preserves a reusable statement learned through work, independently
 of whether the originating strategy was selected.
 
-**Lifecycle:** Knowledge may be active, superseded, invalidated, or published
-to a Knowledge Space. Natural-language topic similarity alone does not change
-its state.
+**Lifecycle:** Knowledge may be active, superseded, invalidated, or made
+available for cross-Workspace reuse through a Knowledge Space. Natural-language
+topic similarity alone does not change its state.
 
-**Owned state:** Statement, scope, state, provenance, and optional publication
-targets. V1 scopes include Workspace, Goal, Plan, Task, and path/module/tag.
+**Owned state:** Statement, scope, state, and provenance. V1 scopes include
+Workspace, Goal, Plan, Task, and path/module/tag. The representation of
+cross-Workspace availability is not fixed.
 
 **Relations:** May be supported, contradicted, validated, invalidated, derived
-from, or superseded. It may be published across Workspaces; Tasks are not.
+from, or superseded. It may be reused across Workspaces through a Knowledge
+Space; Tasks are not.
 
 **Version behavior:** Workspace-scoped Knowledge participates in that
-Workspace's Work-State DAG. Published Knowledge preserves source lineage.
+Workspace's Work-State DAG. Knowledge reused through a Knowledge Space
+preserves source lineage.
 
 **Example:** “SQLite is sufficient under serialized writes” may remain valid
 knowledge even when a separate Decision selects PostgreSQL for a
@@ -208,16 +213,15 @@ multi-process workload.
 **Purpose:** Represents explicit semantic observations and cognition that do
 not need separate top-level behavior.
 
-**Lifecycle:** Confirmed Record kinds include Finding, Assumption, Attempt,
-ordinary decision, and Handoff. An Attempt may be `running`, `succeeded`,
-`failed`, or `inconclusive`, and may also be recorded in one operation with its
-approach and result. V1 records are created explicitly by an Agent semantic
-operation, not inferred from a transcript. An important ordinary decision can
-be promoted to a Decision without erasing its origin.
+**Lifecycle:** Confirmed Record kinds include Finding, Assumption, Question,
+Attempt, ordinary decision, Risk, and Handoff. An Attempt may be `running`,
+`succeeded`, `failed`, or `inconclusive`, and may also be recorded in one
+operation with its approach and result. V1 records are created explicitly by
+an Agent semantic operation, not inferred from a transcript. An important
+ordinary decision can be promoted to a Decision without erasing its origin.
 
-Whether `Question`, `Risk`, `Blocker`, `Review`, or `Note` should be distinct
-V1 Record kinds is Open; no current confirmed requirement makes them distinct
-V1 kinds.
+Whether `Blocker`, `Review`, or `Note` should be distinct V1 Record kinds is
+Open; no current confirmed requirement makes them distinct V1 kinds.
 
 **Owned state:** Kind, statement, scope, lifecycle fields appropriate to the
 kind, and provenance.
@@ -231,6 +235,33 @@ creation and changes also leave immutable Events.
 
 **Example:** A long Attempt moves from `running` to `failed`; a small Attempt
 may be recorded once with its approach and result.
+
+### Verification
+
+**Purpose:** Represents the structured judgment that an Acceptance Criterion
+or another claim passed, failed, or remained inconclusive, using explicit
+Evidence references.
+
+**Lifecycle:** A Verification is created explicitly or by a deterministic
+command wrapper. Its current semantic result and relationships belong to
+Versioned Work State. V1 does not infer a Verification from transcript text.
+
+**Owned state:** Target, result, method, Evidence references, and provenance
+sufficient to explain the judgment. This baseline does not fix the final
+persistence representation or require every Verification method to capture the
+same fields.
+
+**Relations:** A Verification `verifies` an Acceptance Criterion or claim and
+is `evidenced_by` immutable Evidence.
+
+**Version behavior:** Verification state and its relations participate in
+branch, diff, merge, and restore. Evidence remains immutable provenance; a Work
+Branch versions whether and how that Evidence supports the current
+Verification state.
+
+**Example:** Branch A may record `T-18/AC-2` as passed while Branch B records it
+as failed using different immutable Evidence; merge must preserve or resolve
+the semantic difference.
 
 ## Runtime Coordination
 
@@ -296,28 +327,26 @@ immutable Events.
 
 ## Provenance and version primitives
 
-### Evidence and Verification
+### Evidence
 
-**Purpose:** Evidence is the immutable support material; Verification is the
-structured judgment that an Acceptance Criterion or claim passed, failed, or
-remained inconclusive.
+**Purpose:** Evidence is immutable support material captured or referenced by
+a Verification or another semantic object.
 
 **Lifecycle:** Evidence is captured or referenced, hashed, and retained under
-its policy. Verification records a result and the Evidence it used.
+its policy.
 
-**Owned state:** Evidence owns digest, locator/object reference, and capture
-metadata. Verification owns target, result, method, time, and evidence links.
+**Owned state:** Digest, locator/object reference, and capture metadata.
 
-**Relations:** Verification `verifies` an Acceptance Criterion and is
-`evidenced_by` immutable Evidence. A Finding or other semantic claim may
-independently `support` a Decision or Knowledge statement.
+**Relations:** A Verification or another semantic object may be `evidenced_by`
+Evidence. A Finding or other semantic claim may independently `support` a
+Decision or Knowledge statement.
 
-**Version behavior:** Evidence and Verification objects are immutable
-provenance. Their references are versioned relations; the current verification
-view shown on an Acceptance Criterion is a derived projection.
+**Version behavior:** Evidence is immutable provenance and does not branch.
+References to it and the semantic interpretation expressed by Verification
+belong to Versioned Work State.
 
-**Example:** A command wrapper captures command, cwd, start/end, duration, exit
-status, output artifact or digest, applicable Git SHA, and result for
+**Example:** A command wrapper may capture command, cwd, start/end, duration,
+exit status, output artifact or digest, and applicable Git SHA as Evidence for
 `T-18/AC-2`.
 
 ### ChangeSet, Event, and WorkStateCommit
@@ -331,7 +360,10 @@ complete ChangeSet. A pure Runtime Coordination operation updates runtime state
 atomically and emits provenance Events without creating a WorkStateCommit.
 
 **Owned state:** ChangeSet metadata and semantic intent; Event type and
-payload; commit parent(s), ChangeSet reference, authoring Session, and time.
+payload; commit parent(s), ChangeSet reference, time, and provenance sufficient
+to identify the originating operation. When the operation occurs within a
+Session, that Session is recorded; this baseline does not require every
+WorkStateCommit source to be a Session.
 
 **Relations:** A Workspace genesis commit has zero parents, a normal commit has
 one parent, and a merge commit has two.

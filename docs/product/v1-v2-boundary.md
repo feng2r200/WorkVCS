@@ -20,9 +20,10 @@ implemented.
 - Cross-Workspace reuse occurs through Knowledge Spaces. Cross-Workspace Task
   dependency or containment is outside V1.
 
-V1 requires publish/read behavior with traceable source provenance. The
-Knowledge Space's own publication versioning and concurrency mechanism is not
-yet confirmed and requires an explicit decision before implementation. Current
+V1 requires cross-Workspace Knowledge exposure and reuse with traceable source
+provenance. Whether this uses publication, references, subscriptions, copies,
+or another access model—and how it versions concurrent changes—is not yet
+confirmed and requires an explicit decision before implementation. Current
 repository policy may record that decision as an ADR; no mutable global
 Knowledge DAG is implied by this baseline.
 
@@ -38,10 +39,10 @@ V1 versions:
 
 - Goal, Plan, Task, Decision, Knowledge, Record, Acceptance Criterion, and
   typed relations;
-- Finding, Assumption, Attempt, ordinary decision, and Handoff semantics as
-  Records;
-- references from Work State to immutable Verification and Evidence
-  provenance;
+- Finding, Assumption, Question, Attempt, ordinary decision, Risk, and Handoff
+  semantics as Records;
+- versioned Verification state and relations, with references to immutable
+  Evidence provenance;
 - top-down Goal -> Plan -> SubPlan -> Task decomposition and bottom-up
   Task -> Finding -> Plan -> Goal discovery;
 - Plan descriptions, constraints, scoped Assumptions, Task-graph references,
@@ -138,9 +139,11 @@ V1 includes:
   exception when it explains current state;
 - a lightweight Attempt lifecycle with `running`, `succeeded`, `failed`, and
   `inconclusive` states plus a one-shot shortcut;
-- a Verification command wrapper that captures command, working directory,
-  start/end, exit status, duration, output artifact/digest, Git SHA when
-  applicable, and result;
+- a Verification command wrapper that, for a command-based Verification,
+  captures applicable execution Evidence such as command, working directory,
+  start/end, exit status, duration, output artifact/digest, and Git SHA, plus
+  the Verification result; this does not require every Verification method to
+  expose the same fields;
 - an Agent-readable operation protocol and concise, actionable errors; the
   concrete encoding and command spelling are not fixed by this baseline;
 - Agent adapters based on the same CLI and semantic operation contract.
@@ -188,6 +191,5 @@ CLI spelling, sync transport, UI, and deployment model require later planning
 and explicit confirmation when they become material decisions. Current
 repository policy may record such a decision as an ADR.
 
-The broader Record taxonomy remains Open. No current confirmed requirement
-makes `Question`, `Risk`, `Blocker`, `Review`, or `Note` distinct V1 Record
-kinds.
+The broader Record taxonomy remains Open only for `Blocker`, `Review`, and
+`Note`; no current confirmed requirement makes them distinct V1 Record kinds.

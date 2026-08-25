@@ -17,8 +17,8 @@ It does not claim to manage model internals or chain of thought.
   cognition, Workspace-scoped Knowledge, Acceptance Criteria, and typed
   relations.
 - **Work & Knowledge State:** the product-level phrase emphasizing that
-  reusable Knowledge is managed alongside work and may also be published to a
-  Knowledge Space.
+  reusable Knowledge is managed alongside work and may also be made available
+  through a Knowledge Space.
 - **Work-State:** an adjective, as in Work-State DAG or Work-State versioning.
 
 These forms are related but not interchangeable: a Knowledge Space is outside
@@ -52,8 +52,8 @@ WorkVCS provides:
   the final command spelling;
 - a versioned Work-State DAG with commit, branch, diff, merge, restore, and
   lineage semantics;
-- a structured Work Graph for Goal, Plan, Task, Decision, Knowledge, and
-  semantic records;
+- a structured Work Graph for Goal, Plan, Task, Decision, Knowledge,
+  Verification, and semantic records;
 - immutable provenance for Sessions, ChangeSets, Events, and Evidence;
 - explicit coordination state for focus, claims, and merge-in-progress;
 - a deterministic Context Resolver for `context`, `next`, and `why`;
@@ -93,8 +93,8 @@ provenance Events without creating empty WorkStateCommits. The system
 automatically records facts it can observe mechanically, such as a
 Session start, branch switch, claim, status change, or commit. The Agent must
 explicitly record meaning only it knows, such as a Finding, Assumption,
-Decision, or Knowledge statement. V1 does not infer these records from a
-transcript.
+Question, Decision, Risk, or Knowledge statement. V1 does not infer these
+records from a transcript.
 
 ## Design principles
 
@@ -106,8 +106,8 @@ transcript.
    Plan or Goal is discovered; later organization must preserve identity and
    history.
 4. **Cross-Workspace sharing transfers knowledge, not execution graphs.** Work
-   Graphs remain Workspace-local; Knowledge may be published to a Knowledge
-   Space.
+   Graphs remain Workspace-local; Knowledge may be exposed and reused through
+   a Knowledge Space. The exchange mechanism is not fixed here.
 5. **Semantic intent is the Agent API.** WorkVCS derives low-level relations,
    events, and commits from an atomic high-level versioned operation; a
    runtime-only operation produces runtime state and Events without a commit.

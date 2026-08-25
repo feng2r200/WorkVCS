@@ -27,8 +27,8 @@ identified by any one physical source location.
 ### INV-004 — Cross-Workspace sharing is knowledge-only in V1
 
 Goal, Plan, Task, and their execution relations remain Workspace-local.
-Cross-Workspace reuse publishes Knowledge with provenance; it does not share a
-Work Graph.
+Cross-Workspace reuse exposes Knowledge with provenance through a Knowledge
+Space; it does not share a Work Graph or fix an exchange mechanism.
 
 ### INV-005 — Runtime state is not restored or merged
 
@@ -164,10 +164,10 @@ may add Verification and other non-destructive updates.
 
 ### INV-026 — V1 semantic records are explicit
 
-Finding, Assumption, Attempt result, Decision, Knowledge promotion, and Handoff
-are created by explicit Agent semantic operations. V1 never infers them from
-transcript text. Additional Record kinds remain Open unless separately
-confirmed.
+Finding, Assumption, Question, Attempt result, Decision, Risk, Verification,
+Knowledge promotion, and Handoff are created by explicit Agent semantic
+operations. V1 never infers them from transcript text. `Blocker`, `Review`, and
+`Note` remain Open as distinct Record kinds unless separately confirmed.
 
 ### INV-027 — Context resolution is deterministic and path-sensitive
 
@@ -192,9 +192,10 @@ is optional and supplementary.
 
 ### INV-031 — Core provenance is not destructively compacted by default
 
-Decision, Finding, Knowledge, ChangeSet, Event, and WorkStateCommit history is
-retained. HOT/WARM/COLD projections and configurable large-Evidence retention
-may reduce the active footprint without falsifying lineage.
+Decision, Finding, Verification, Knowledge, ChangeSet, Event, and
+WorkStateCommit history is retained. HOT/WARM/COLD projections and
+configurable large-Evidence retention may reduce the active footprint without
+falsifying lineage.
 
 ## Confirmed lifecycle details
 

@@ -98,10 +98,11 @@ be mixed within one ordered container.
 ## Cross-Workspace boundary
 
 Canonical Work Graph relations never connect Goal, Plan, or Task entities
-across Workspaces in V1. Cross-Workspace reuse publishes Knowledge to a
-Knowledge Space with source provenance. A Session Context Set may consult
-multiple Workspaces temporarily, but that does not create a permanent Work
-Graph relation.
+across Workspaces in V1. Cross-Workspace reuse exposes Knowledge through a
+Knowledge Space with source provenance; the exact publication, reference, or
+subscription mechanism remains Open. A Session Context Set may consult multiple
+Workspaces temporarily, but that does not create a permanent Work Graph
+relation.
 
 ## Merge and context participation
 

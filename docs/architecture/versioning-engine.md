@@ -41,8 +41,10 @@ A WorkStateCommit is immutable and records:
 - zero parents for a Workspace genesis commit, one parent for an ordinary
   mutation, or two parents for a completed merge;
 - its ChangeSet and semantic operation metadata;
-- authoring Session and active Workspace/Branch;
-- time and provenance needed to identify the mutation.
+- active Workspace/Branch plus time and provenance sufficient to identify the
+  originating operation;
+- the originating Session when the operation occurs within one, without
+  requiring every valid WorkStateCommit source to be a Session.
 
 ```text
 C1 -- C2 -- C3 -- C4  main

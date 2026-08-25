@@ -54,8 +54,8 @@ language, or project-marker format.
 
 A Workspace answers one question:
 
-> Which Goal, Plan, Task, Decision, Knowledge, and Record state evolves in one
-> branch/diff/merge/restore history?
+> Which Goal, Plan, Task, Decision, Knowledge, Record, and Verification state
+> evolves in one branch/diff/merge/restore history?
 
 Workspace is a logical versioning boundary, not an assumption about filesystem
 layout. Valid configurations include:
@@ -72,30 +72,30 @@ they would couple independent branch and restore histories.
 ## Knowledge Space
 
 A Knowledge Space is the long-term reuse boundary above Workspace. It carries
-published Knowledge statements and source provenance, not the originating
+Knowledge made available for reuse plus source provenance, not the originating
 execution graph.
 
 ```text
 Workspace A Finding/Decision/Verification
                  |
-                 `-- publish Knowledge K-17
+                 `-- expose Knowledge K-17
                               |
                               v
                     Knowledge Space agent-tooling
                               |
-                              `-- readable by Workspace B
+                              `-- usable by Workspace B
 ```
 
 Workspace B may use K-17 in context and trace its origin. It does not inherit
 Workspace A's Tasks, Plans, Claims, or current execution state.
 
-The confirmed boundary requires publish/read and origin provenance. Whether a
-Knowledge Space uses its own DAG, an append-only publication log, or another
-concurrency mechanism is still Open and requires an explicit confirmed
-decision before implementation. Current repository policy may record that
-decision as an ADR, but the ADR does not make an unconfirmed choice
-authoritative. This baseline does not authorize mutable global Knowledge state
-with unspecified conflict behavior.
+The confirmed boundary requires cross-Workspace reuse and origin provenance.
+Publication, reference, subscription, copy, live binding, and the Knowledge
+Space's own versioning or concurrency mechanism are still Open and require an
+explicit confirmed decision before implementation. Current repository policy
+may record that decision as an ADR, but the ADR does not make an unconfirmed
+choice authoritative. This baseline does not authorize mutable global
+Knowledge state with unspecified conflict behavior.
 
 ## Session and Context Set
 
@@ -139,11 +139,12 @@ not fixed by this baseline.
 |---|---|---:|---:|---:|
 | Goal / Plan / Task | Workspace Work State | Yes | Yes | Yes |
 | Decision / Knowledge / Record | Workspace Work State | Yes | Yes | Yes |
+| Verification | Workspace Work State | Yes | Yes | Yes |
 | Acceptance Criterion / typed relation | Workspace Work State | Yes | Yes | Yes |
 | active Session / Focus / Claim | Runtime Coordination | No | Changes emit Events | No |
 | merge-in-progress | Runtime Coordination | No | Attempt and resolution Events | No |
 | Event / Session timeline / ChangeSet / WorkStateCommit | Provenance and version history | No | Yes | Historical Work State only |
-| Verification / Evidence | Provenance/object storage | No | Yes | No |
+| Evidence | Provenance/object storage | No | Yes | No |
 | context / next / why / ready / progress | Derived Projection | No | Recomputable | No |
 
 ## Working set and retention boundary
@@ -159,8 +160,8 @@ The Store distinguishes relevance from existence:
 This is a projection and access policy, not destructive revision of history.
 Derived caches and indexes are always regenerable. Configurable retention may
 archive large Evidence while preserving critical metadata and digests. Core
-Decision, Finding, Knowledge, ChangeSet, Event, and WorkStateCommit lineage is
-not destructively compacted by default.
+Decision, Finding, Verification, Knowledge, ChangeSet, Event, and
+WorkStateCommit lineage is not destructively compacted by default.
 
 ## Integration boundary
 

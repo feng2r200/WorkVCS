@@ -8,6 +8,12 @@
   `63f90d5b-99e4-4ba1-97a1-e07301098abc`, and
   `cb525af6-57cf-4bc0-9a28-40340885c81b`
 
+**Subsequent resolution:**
+[ADR-0006](0006-sqlite-physical-schema-v0.1.md) later closes the Physical DDL,
+ID/digest, payload-storage, Adapter/scope-version, fingerprint, and
+Applicability-stamp constraints that were deliberately Open when this ADR was
+accepted. The Open list below is historical for ADR-0001.
+
 ## Context
 
 The initial baseline made Verification part of Versioned Work State and

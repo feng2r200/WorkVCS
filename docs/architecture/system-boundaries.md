@@ -107,12 +107,13 @@ and trace its origin without creating Work-State mutation. Explicit adoption
 creates B-local Knowledge with Exposure/source-version provenance; B does not
 inherit A's Tasks, Plans, Claims, or current execution state.
 
-Knowledge Space uses append-only Exposure history plus a current availability
-projection and has no independent V1 branch/merge/restore DAG. Source drift
-creates a derived source-stale warning rather than silently withdrawing an
-Exposure. Exact lifecycle labels, source-stale Context policy, access control,
-physical schema, and exchange API remain Open. Cross-Store live federation is
-outside V1.
+Knowledge Space uses an immutable linear Exposure-transition history plus a
+current availability projection and has no independent V1 branch/merge/restore
+DAG. V1 semantic state is `active`/`withdrawn`; source drift creates a derived
+`current`/`stale`/`unknown`/`unresolved` source status rather than silently
+withdrawing an Exposure. Source-stale Context policy, access control, the
+complete executable schema, and exchange API remain Open. Cross-Store live
+federation is outside V1.
 
 ## Session and Context Set
 
@@ -203,5 +204,7 @@ accurate Agent interpretation, actionable errors, or machine-readable
 provenance. The concrete protocol encoding is not fixed by this baseline.
 
 The complete logical ownership matrix is
-[Logical Schema Boundaries](logical-schema-boundaries.md). It confirms family
-responsibilities without choosing final SQLite DDL.
+[Logical Schema Boundaries](logical-schema-boundaries.md). Confirmed SQLite
+physical boundaries are defined separately in
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md); its executable schema
+assembly remains a later stage.

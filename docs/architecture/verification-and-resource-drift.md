@@ -164,10 +164,14 @@ If an Agent decides the drift matters semantically, it explicitly records a
 Finding, re-verifies, reopens a Task, or changes a Decision. Only that semantic
 operation creates a WorkStateCommit.
 
-## Open implementation boundary
+## Current implementation boundary
 
-The following remain unfixed: final CLI names, adapter implementations shipped
-first, exact path normalization, non-Verification observation capture policy,
-final DDL/column/index/FK mechanism, ID and digest formats, canonical
-serialization, and a possible future AC waiver operation. The logical family
-split is confirmed in [Logical Schema Boundaries](logical-schema-boundaries.md).
+Adapter and scope contract versions are persisted, while WorkVCS hashes their
+canonical normalized bytes with the Store digest algorithm (BLAKE3-256 in V1).
+Verification target/Evidence keep one Relation authority and Applicability
+uses the confirmed physical constraints in
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md). Final CLI names,
+adapter implementations shipped first, exact path normalization,
+non-Verification observation capture policy, the complete executable schema,
+performance indexes, exact canonical JSON profile rules, and a possible future
+AC waiver operation remain unfixed.

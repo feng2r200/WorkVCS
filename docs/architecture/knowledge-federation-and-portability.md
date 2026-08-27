@@ -21,8 +21,8 @@ Knowledge Space KS-1
 
 `KE-9` is neither a copy of the Knowledge statement nor an alias that follows
 `latest`. If `K-17` later has `KV-40`, publishing it creates another Exposure.
-The new Exposure may coexist with or supersede `KE-9`; the old binding remains
-immutable history.
+The new Exposure may coexist with `KE-9`; replacement uses a new Exposure plus
+explicit withdrawal of `KE-9`. The old binding remains immutable history.
 
 V1 Knowledge Space evolution consists of append-only Exposure history and a
 current availability projection. It does not introduce an independent
@@ -48,9 +48,9 @@ its worldview.
 
 ## Availability, withdrawal, and source drift
 
-An Exposure can leave the current available set while its history remains.
-The exact lifecycle labels are not fixed, but the model must represent at
-least current availability, explicit withdrawal, and supersession semantics.
+An Exposure can leave the current available set while its history remains. V1
+semantic state is the closed vocabulary `active`/`withdrawn`; it does not add a
+federation-level `superseded` state or relation.
 
 A relevant source change or source invalidation does not silently withdraw an
 Exposure. It changes a derived source-status/applicability projection and
@@ -59,10 +59,13 @@ explicit because it has cross-Workspace consequences.
 
 Knowledge Space queries distinguish:
 
-- **current:** active, non-superseded Exposures eligible for default use;
-- **historical:** withdrawn or superseded Exposure history;
+- **current:** active Exposures eligible for default use;
+- **historical:** withdrawn Exposure history;
 - **source-stale:** an otherwise available Exposure whose source has relevant
   drift or invalidation.
+
+The source-status projection uses `current`, `stale`, `unknown`, and
+`unresolved`.
 
 The exact default-context suppression or ranking policy for source-stale
 Exposure remains Open.
@@ -116,8 +119,8 @@ V1 need not implement automatic distributed merge or live synchronization.
 ### Content-addressed objects
 
 Imported objects are deduplicated by declared content hash and accepted only
-when the bytes match that hash. The hash algorithm and archive encoding remain
-Open.
+when the bytes match that hash. V1 Store content/state digest uses BLAKE3-256;
+Bundle container/archive encoding remains Open.
 
 ### Resource bindings
 
@@ -148,9 +151,16 @@ provenance carry knowledge across Store boundaries. A global Knowledge Space,
 remote subscriptions, cross-Store live references, and distributed federation
 are deferred beyond V1.
 
-## Open implementation boundary
+## Current implementation boundary
 
-The final DDL/columns/indexes/FK mechanism, exchange/access API, authorization model, exact lifecycle
-and source-status enum, source-stale Context policy, Bundle container and
-profile details, streaming/compression protocol, runtime recovery states, hash
-algorithm, encoding, and cross-Store live protocol remain unfixed.
+The V1 Exposure lifecycle is `active`/`withdrawn`, source-status projection is
+`current`/`stale`/`unknown`/`unresolved`, full canonical import is same-Store
+only. A different Store is opened separately, explicitly forked, or selectively
+adopted through Knowledge/Evidence and ExternalObjectRef provenance; its
+canonical DAG is never merged directly into the local namespace. The physical
+identity/digest/FK boundaries are fixed by
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md). The complete
+executable schema, performance indexes, exchange/access API, authorization
+model, source-stale Context policy, Bundle container/profile,
+streaming/compression, runtime recovery vocabulary, exact canonical JSON
+profile, and cross-Store live protocol remain unfixed.

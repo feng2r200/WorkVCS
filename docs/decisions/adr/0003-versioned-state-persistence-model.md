@@ -6,6 +6,12 @@
   `ab97fe13-6ca6-40a4-8949-69ca6065d119`, and
   `52a93d6f-26b7-4bfb-940c-11dde28cd526`
 
+**Subsequent resolution:**
+[ADR-0006](0006-sqlite-physical-schema-v0.1.md) later closes UUIDv7/BLOB IDs,
+BLAKE3-256 digests, canonical JSON text storage, SQLite integrity allocation,
+and the controlled writer-transaction baseline. The remaining Open items and
+the historical list below must be read through that later ADR.
+
 ## Context
 
 The baseline selected SQLite metadata plus content-addressed immutable objects

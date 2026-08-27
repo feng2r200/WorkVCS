@@ -1,5 +1,11 @@
 # Confirmed State v0.3 Provenance
 
+Later decisions 443–513 close several items listed as Open at this historical
+baseline. Their current provenance and authority are recorded in
+[Confirmed State v0.4](confirmed-state-v0.4.md) and
+[ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md); the Open list
+below records only the state at v0.3 promotion time.
+
 This document records promotion evidence for WorkVCS decisions 189–318:
 SQLite Logical Schema Rounds 1–6 and the closing Consolidation Review. It is an
 audit ledger, not a parallel normative specification. Normative authority is

@@ -4,6 +4,14 @@
 - **Accepted by:** explicit user confirmation for decisions 171–188
 - **Confirmation turn:** `804bc570-7f67-4c43-a6ef-e9140320d697`
 
+**Subsequent resolution:**
+[ADR-0006](0006-sqlite-physical-schema-v0.1.md) later fixes the V1 Exposure
+lifecycle to `active`/`withdrawn`, replacement to new Exposure plus old
+withdrawal, source status to `current`/`stale`/`unknown`/`unresolved`, and
+bounded ExternalObjectRef/Store-lineage physical constraints. Earlier
+`supersede` and Open-enum wording below records the state when ADR-0004 was
+accepted and is superseded in those exact scopes.
+
 ## Context
 
 The baseline required cross-Workspace Knowledge reuse and portable Stores but

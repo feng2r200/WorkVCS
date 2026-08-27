@@ -140,7 +140,11 @@ and checkpoint validation compare against it. Commit identity remains distinct:
 two commits with different histories may legitimately have the same state
 digest.
 
-The exact digest algorithm and canonical encoding remain Open.
+V1 uses BLAKE3-256 for state/content digests and canonical Resource
+fingerprints. Canonical structured payload is UTF-8 JSON text whose canonical
+bytes are produced by the WorkVCS serializer under the Store Manifest profile.
+The exact profile rules and serializer implementation remain part of the next
+schema/implementation specification.
 
 ## Relation graph constraints
 
@@ -174,11 +178,13 @@ read or migrated. This does not decide whether the manifest is a file, SQLite
 metadata, or both. The current manifest may change through migration while each
 migration remains immutable provenance.
 
-## Open implementation boundary
+## Current implementation boundary
 
 Logical table-family responsibilities are confirmed in
-[Logical Schema Boundaries](logical-schema-boundaries.md). Final table and
-column spelling, column types, concrete indexes, DDL, foreign-key enforcement,
-transaction SQL, programming language, ID encoding, payload serialization,
-hash algorithm, object layout, ordering representation, checkpoint strategy,
-and typed-projection count remain Open.
+[Logical Schema Boundaries](logical-schema-boundaries.md). The later
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md) closes UUIDv7/BLOB ID
+encoding, BLAKE3-256 digests, JSON/timestamp/vocabulary storage, core SQLite
+foreign-key policy, and the writer-transaction baseline. The complete
+executable schema and creation order, performance indexes, exact canonical JSON
+profile rules, programming language/binding, object layout, ordering
+representation, checkpoint policy, and typed-projection count remain Open.

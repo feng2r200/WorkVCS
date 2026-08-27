@@ -79,8 +79,9 @@ Knowledge. Goal, Plan, and Task graphs never cross Workspace boundaries in V1.
 
 **Version behavior:** An Exposure binds a source Knowledge identity and one
 specific immutable KnowledgeVersion; it never follows `latest`. New source
-versions use new Exposures that may coexist or explicitly supersede older
-ones. Exposure may leave current availability, but its history is not deleted.
+versions use new Exposures that may coexist with older ones; replacement is a
+new Exposure plus explicit withdrawal of the old. Exposure may leave current
+availability, but its history is not deleted.
 Source drift changes a derived warning/status rather than silently mutating
 Exposure semantic state. V1 has no independent Knowledge Space DAG and no live
 cross-Store federation.
@@ -94,11 +95,11 @@ Store-local Knowledge Space without copying or replacing the Knowledge.
 Workspace identity, source Knowledge identity, source immutable version, and
 publication provenance.
 
-**Lifecycle:** The source binding is immutable. Current availability may be
-explicitly withdrawn or superseded while history remains. Relevant source
-change produces a derived source-stale status; it does not automatically
-transition Exposure semantic state. Exact lifecycle/source-status enum names
-remain Open.
+**Lifecycle:** The source binding is immutable. V1 semantic state is `active`
+or `withdrawn`; replacement creates a new Exposure and explicitly withdraws
+the old one while history remains. Relevant source change produces a derived
+`current`, `stale`, `unknown`, or `unresolved` source status; it does not
+automatically transition Exposure semantic state.
 
 **Version behavior:** V1 uses append-only Exposure history and a current
 availability projection, not a Knowledge Space DAG. Consulting creates no
@@ -333,8 +334,8 @@ include Resource scope/observation/fingerprint plus the verifying
 WorkStateCommit and explicit semantic dependencies.
 
 **Relations:** A Verification `verifies` a Verification Requirement when one
-exists, otherwise its Acceptance Criterion or another supported claim, and is
-`evidenced_by` immutable Evidence.
+exists, otherwise its Acceptance Criterion, and is `evidenced_by` immutable
+Evidence. No other target kind is valid.
 
 **Version behavior:** Judgment instances are immutable Versioned Work-State
 facts and their relations participate in branch, diff, merge, and restore.
@@ -550,5 +551,6 @@ one parent, and a merge commit has two.
 **Version behavior:** All are immutable provenance/version primitives.
 Commit + ChangeSet + Change Operations reconstruct canonical Work State;
 Events are not replay truth. Commit identity and state digest remain distinct.
-The complete physical schema, ID format, digest algorithm, and encoding are not
-fixed.
+The V1 ID, digest, JSON, timestamp, and SQLite integrity boundaries are fixed
+by [Physical Schema v0.1 Contract](../architecture/physical-schema-v0.1.md);
+the complete executable schema remains the next assembly stage.

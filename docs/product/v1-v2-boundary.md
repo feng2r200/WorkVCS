@@ -30,8 +30,10 @@ an independent Knowledge Space branch/merge/restore DAG.
 The confirmed V1 storage direction is SQLite metadata plus a content-addressed
 object store. This is an implementation direction, not a domain invariant;
 replacing it requires a later explicit confirmed decision, which current
-repository policy may record as an accepted ADR. The exact schema, object
-layout, and implementation language are not fixed by this baseline.
+repository policy may record as an accepted ADR. The Physical DDL contract is
+now fixed by [ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md),
+while the complete executable schema, object layout, and implementation
+language are not yet fixed.
 
 The confirmed logical persistence model is commit/delta-based: immutable
 EntityVersion and RelationVersion state; canonical WorkStateCommit + ChangeSet
@@ -75,9 +77,9 @@ V1 versions:
   `verified` before Task completion when criteria exist; an ordinary
   coordination force cannot bypass this gate.
 
-The exact persistent identity scheme is not fixed by this baseline. Stable
-Task-local Acceptance Criterion identities are required so references survive
-wording changes.
+V1 stable logical identity uses UUIDv7 stored as a 16-byte BLOB. Stable
+Task-local Acceptance Criterion identities remain owner-scoped so references
+survive wording changes and sibling reordering.
 
 Task, Plan, Goal, Assumption, Attempt, and Decision follow the state machines
 defined in [Semantic Operations and State Machines](../architecture/semantic-operations-and-state-machines.md).
@@ -227,14 +229,15 @@ unresolved:
 - final equal-candidate tie-breaker for `next`;
 - final CLI spelling, protocol encoding, complete operation/error catalogue,
   and any future semantic AC-waiver operation;
-- final SQLite DDL, table/column spelling and types, concrete indexes, exact FK
-  enforcement, programming language, identity/UUID encoding, hash algorithm,
-  canonical serialization, object layout, physical sibling-order
-  representation, checkpoint strategy, and typed-projection count/shape;
+- complete executable `schema-v0.1.sql`, creation order, concrete performance
+  indexes, programming language/SQLite binding, exact canonical JSON profile,
+  object layout, physical sibling-order representation, checkpoint strategy,
+  and typed-projection count/shape; UUIDv7/BLOB IDs, BLAKE3-256 digests,
+  JSON/timestamp storage, and core FK/transaction policy are closed by
+  [ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md);
 - exact Resource path/glob normalization and persisted observation capture
   policy outside Verification/explicit snapshots;
-- exact KnowledgeExposure lifecycle/source-status enum, source-stale Context
-  policy, access/security model, exchange API,
+- source-stale Context policy, access/security model, exchange API,
   Bundle container/profile details, and import recovery-state vocabulary;
 - any cross-Store live federation or distributed synchronization protocol.
 

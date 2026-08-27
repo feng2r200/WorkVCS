@@ -19,6 +19,7 @@ The confirmed baseline contains:
 - [Versioned-state persistence model](architecture/persistence-model.md)
 - [Knowledge federation and Store portability](architecture/knowledge-federation-and-portability.md)
 - [Logical schema boundaries](architecture/logical-schema-boundaries.md)
+- [Physical Schema v0.1 contract](architecture/physical-schema-v0.1.md)
 
 Material architecture decisions promoted after the initial baseline are
 recorded as Accepted ADRs:
@@ -28,6 +29,7 @@ recorded as Accepted ADRs:
 - [ADR-0003: Versioned-State Persistence Model](decisions/adr/0003-versioned-state-persistence-model.md)
 - [ADR-0004: Knowledge Federation and Store Portability](decisions/adr/0004-knowledge-federation-and-store-portability.md)
 - [ADR-0005: Logical Schema Family Boundaries](decisions/adr/0005-logical-schema-family-boundaries.md)
+- [ADR-0006: SQLite Physical Schema v0.1 Contract](decisions/adr/0006-sqlite-physical-schema-v0.1.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.
@@ -35,7 +37,8 @@ the described runtime has been implemented.
 Detailed promotion evidence and the confirmation ledger are retained in
 [Confirmed State v0.1 Provenance](provenance/confirmed-state-v0.1.md) and
 [Confirmed State v0.2 Provenance](provenance/confirmed-state-v0.2.md), and
-[Confirmed State v0.3 Provenance](provenance/confirmed-state-v0.3.md). These
+[Confirmed State v0.3 Provenance](provenance/confirmed-state-v0.3.md), and
+[Confirmed State v0.4 Provenance](provenance/confirmed-state-v0.4.md). These
 documents support audit and reconstruction but are not parallel normative
 specifications.
 

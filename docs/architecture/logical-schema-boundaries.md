@@ -4,10 +4,11 @@ This document defines the confirmed logical schema families and authority
 boundaries for WorkVCS. It realizes
 [ADR-0005](../decisions/adr/0005-logical-schema-family-boundaries.md).
 
-It is intentionally one level above Logical DDL. Names in this document name
-logical roles and families; they do not freeze SQLite table or column spelling,
-column types, indexes, foreign-key enforcement, canonical serialization, hash
-algorithm, or persistent ID encoding.
+It is intentionally the logical layer. Names in this document name logical
+roles and families; later physical choices are defined by
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md) and
+[ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md). This document
+does not independently redefine those physical choices.
 
 ## Authority layers
 
@@ -375,23 +376,26 @@ Immutable import is idempotent: an existing immutable identity with equal
 content is a no-op; the same identity with unequal content is an integrity
 conflict and is never updated in place.
 
-## Deliberately Open implementation boundary
+## Current implementation boundary
 
-The logical-family model above is Confirmed. The following remain Open:
+The logical-family model above is Confirmed. Decisions 443–513 subsequently
+closed the V1 ID/digest encodings, core SQLite type and foreign-key policy,
+canonical JSON storage boundary, writer-transaction baseline, and bounded
+Physical DDL constraints. The following remain Open:
 
 - the final equal-candidate stable tie-breaker for `next`;
-- final persistent ID encoding or UUID choice;
-- hash algorithm and canonical serialization;
 - final CLI spelling and protocol encoding;
 - implementation language;
-- final SQLite column types and complete DDL;
-- concrete indexes and the foreign-key enforcement mechanism;
+- the complete executable `schema-v0.1.sql`, creation order, and Engine
+  invariant matrix;
+- concrete performance indexes and query plans;
+- the exact canonical JSON profile rules and serializer implementation;
 - checkpoint creation, retention, selection, and eviction strategy;
 - the exact number and shape of typed projection tables;
 - Knowledge exchange/access API and authorization protocol;
 - cross-Store live federation, subscriptions, and distributed synchronization;
-- physical transaction SQL and storage-layout tuning not fixed by the logical
-  atomicity contracts above.
+- storage-layout tuning beyond the confirmed `BEGIN IMMEDIATE`, WAL-policy,
+  and controlled-writer baseline.
 
-These questions belong to later Logical DDL, implementation specification, or
-post-V1 architecture work. This document does not begin those stages.
+The closed physical contract and its remaining boundary are authoritative in
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md).

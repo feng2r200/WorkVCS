@@ -61,12 +61,15 @@ C4 --------- C9
   C6 -------
 ```
 
-Commit identity remains distinct from the resulting-state digest. The exact ID,
-digest algorithm, and serialization are not fixed. Canonical reconstruction is
-fixed at the logical level: Commit + ChangeSet + schema-versioned deterministic
-Change Operations are replay truth; Events are provenance. Detailed storage is
-defined in [Versioned-State Persistence Model](persistence-model.md) and the
-later [Logical Schema Boundaries](logical-schema-boundaries.md).
+Commit identity remains distinct from the resulting-state digest. V1 logical
+IDs use UUIDv7/16-byte BLOB, digests use BLAKE3-256/32-byte BLOB, and canonical
+structured payload is JSON text produced by the WorkVCS serializer. Canonical
+reconstruction is fixed at the logical level: Commit + ChangeSet +
+schema-versioned deterministic Change Operations are replay truth; Events are
+provenance. Detailed storage is defined in
+[Versioned-State Persistence Model](persistence-model.md),
+[Logical Schema Boundaries](logical-schema-boundaries.md), and
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md).
 
 ## Branch semantics
 

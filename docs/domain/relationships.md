@@ -18,15 +18,14 @@ behavior without parsing natural language.
 | Epistemic | `contradicts` | claim -> target | Explicitly identifies incompatible knowledge or evidence |
 | Epistemic | `validates` | finding/evidence -> assumption/knowledge | Confirms the target under the recorded scope |
 | Epistemic | `invalidates` | finding/evidence -> assumption/knowledge | Rejects the target under the recorded scope |
-| Verification | `verifies` | verification -> requirement/criterion/claim | Records a structured verification result for the target |
+| Verification | `verifies` | verification -> verification requirement / acceptance criterion | Records a structured verification result for the target |
 | Verification | `evidenced_by` | semantic object -> evidence | Attaches immutable source material without duplicating an epistemic edge |
 
 `supports` relates two semantic assertions; `evidenced_by` attaches an
 immutable Evidence object to a semantic object. They are not inverse forms of
 one edge. A Verification therefore `verifies` one Verification Requirement
-when present, otherwise its Acceptance Criterion or another supported claim,
-and is `evidenced_by` captured Evidence; a Finding may independently `support`
-a Decision.
+when present, otherwise its Acceptance Criterion, and is `evidenced_by`
+captured Evidence; a Finding may independently `support` a Decision.
 
 Only the canonical direction is stored. Reverse views such as `blocks`,
 `contained_by`, or `superseded_by` are projections and must not be stored as a

@@ -61,7 +61,8 @@ the object's identity and prior history.
 ### INV-009 — Logical references survive mutation
 
 A logical entity keeps referential identity across ordinary mutation and
-reorganization. This baseline does not select the persistent ID scheme.
+reorganization. V1 persistent logical IDs use UUIDv7 encoded as 16-byte BLOBs;
+the encoding does not replace semantic identity or causal ordering.
 
 ### INV-010 — Terminal does not mean deleted
 
@@ -374,9 +375,11 @@ later source changes never silently rewrite the adopted Knowledge.
 
 ### INV-059 — Exposure history survives availability changes
 
-Withdrawal or supersession removes an Exposure from the appropriate current
-set but never deletes its history. Source drift creates a derived warning/status
-and does not silently change Exposure semantic state.
+Withdrawal removes an Exposure from the current set but never deletes its
+history. V1 replacement uses a new Exposure plus explicit withdrawal of the
+old Exposure rather than a federation-level `superseded` state or relation.
+Source drift creates a derived warning/status and does not silently change
+Exposure semantic state.
 
 ### INV-060 — Ordinary portability preserves Store identity
 
@@ -388,6 +391,8 @@ explicit Store fork creates a new identity, with source-store lineage.
 Import preserves Session/Claim/merge provenance but never blindly restores
 active Runtime Coordination. Same-Store import detects ref ancestry and
 divergence; last-write-wins is forbidden and recoverable states are preserved.
+Full canonical-history import is same-Store only; content from a different
+Store cannot be inserted into the local canonical namespace.
 
 ### INV-062 — Bundle integrity covers canonical history
 
@@ -483,10 +488,11 @@ latter three becomes Branch Work State merely because it changes.
 
 ### INV-076 — Verification defining closure is immutable
 
-A Verification's result, target, Basis, Evidence set, method, semantic state,
-and defining `verifies`/`evidenced_by` edges form one immutable judgment
-closure. Changing any member creates a new Verification. Applicability remains
-derived and branch-sensitive.
+A Verification has exactly one target, of kind Acceptance Criterion or
+Verification Requirement. Its result, target, Basis, Evidence set, method,
+semantic state, and defining `verifies`/`evidenced_by` edges form one immutable
+judgment closure. Changing any member creates a new Verification. Applicability
+remains derived and branch-sensitive.
 
 ### INV-077 — ExternalObjectRef cannot escape canonical endpoint rules
 

@@ -10,6 +10,13 @@
   `94203023-df0c-4c6a-aa38-254aa0659059`, and
   `f7ee9ed5-77cb-45d5-a4ab-5cb12bc751bf`
 
+**Subsequent resolution:**
+[ADR-0006](0006-sqlite-physical-schema-v0.1.md) later closes the V1 Physical
+DDL choices for ID/digest encodings, JSON/timestamps/vocabularies, SQLite
+foreign-key and writer policy, and bounded runtime/projection/federation
+constraints. The `Deliberately not decided` list below is historical for
+ADR-0005 and remains Open only where ADR-0006 explicitly leaves it Open.
+
 ## Context
 
 ADR-0001 through ADR-0004 confirmed WorkVCS semantic behavior, canonical

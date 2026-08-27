@@ -3,12 +3,16 @@
 This document defines the confirmed logical persistence architecture without
 freezing a complete SQLite schema. It realizes
 [ADR-0003](../decisions/adr/0003-versioned-state-persistence-model.md).
+The later confirmed logical-family split, ownership rules, and projection
+contracts are defined in
+[Logical Schema Boundaries](logical-schema-boundaries.md), which realizes
+[ADR-0005](../decisions/adr/0005-logical-schema-family-boundaries.md).
 
 ## Data layers
 
 ```text
 Logical identity
-  Entity, Relation, Resource, Store, Workspace, Branch
+  Store, Workspace, Branch, ObjectIdentity and matching typed families
 
 Immutable semantic-state versions
   EntityVersion, RelationVersion
@@ -20,7 +24,7 @@ Immutable semantic provenance
   Events, Session timeline, Evidence, ResourceObservations
 
 Current coordination
-  Session, Claim, Merge Runtime projections
+  SessionRuntime, ClaimRuntime, MergeRuntime and their structured children
 
 Derived/rebuildable acceleration
   Branch current projections, typed projections, indexes, checkpoints
@@ -33,7 +37,10 @@ format, or specific columns.
 
 ## Canonical history and replay
 
-Each WorkStateCommit references exactly one ChangeSet. A ChangeSet contains:
+Each WorkStateCommit belongs to a Workspace rather than a Branch and references
+exactly one non-reusable ChangeSet. Each Workspace has one zero-parent Genesis
+Commit for empty Work State; normal and V1 merge Commits have one and two
+explicitly role-identified parents respectively. A ChangeSet contains:
 
 - schema-versioned Change Operations that deterministically transform state;
 - semantic Events that explain the accepted operation and its provenance.
@@ -80,6 +87,15 @@ EntityVersion and RelationVersion are not Branch-owned. Multiple Branches may
 select the same immutable version until they diverge. Change Operations bind
 the before/after versions and may also carry a structured field delta.
 
+Entity and Relation are ObjectIdentity-backed typed families; ObjectIdentity
+itself is only the Store-local addressable registry. Every committed registry
+entry has exactly one kind-matching family owner. Store and Workspace identities
+remain above/outside the registry.
+
+EntityVersion does not carry a single previous-version chain. Relation
+identity uses immutable Workspace/type/source/target/discriminator properties;
+remove/re-add of the same logical key reuses the Relation identity.
+
 Removing an Entity or Relation from current Work State is logical absence or a
 retired state; canonical identity and history are not physically deleted.
 Physical deletion is limited to safely regenerable or policy-eligible data.
@@ -104,7 +120,10 @@ Branch + Relation -> RelationVersion
 
 Typed current projections may expose frequently queried deterministic fields
 such as Task status or priority. Current projections carry no history and are
-not canonical truth. They may be rebuilt from checkpoint plus Change Operations.
+not canonical truth. Each complete projection binds its projected Commit and
+validates its state digest against HEAD; without that proof, a missing row does
+not establish absence. Projections may be rebuilt from checkpoint plus Change
+Operations.
 
 Only HOT Branches must remain materialized. WARM/COLD Branch projections may be
 evicted and reconstructed lazily. The eviction and checkpoint schedule remain
@@ -152,11 +171,14 @@ objects:
 A Store describes its own Store identity, format version, schema version,
 capabilities, and object-format version sufficiently to determine how it is
 read or migrated. This does not decide whether the manifest is a file, SQLite
-metadata, or both.
+metadata, or both. The current manifest may change through migration while each
+migration remains immutable provenance.
 
 ## Open implementation boundary
 
-No table family, column, index, DDL, foreign-key mechanism, transaction SQL,
-programming language, ID scheme, payload encoding, hash algorithm, object
-layout, ordering representation, checkpoint frequency, or eviction algorithm
-is confirmed by this document.
+Logical table-family responsibilities are confirmed in
+[Logical Schema Boundaries](logical-schema-boundaries.md). Final table and
+column spelling, column types, concrete indexes, DDL, foreign-key enforcement,
+transaction SQL, programming language, ID encoding, payload serialization,
+hash algorithm, object layout, ordering representation, checkpoint strategy,
+and typed-projection count remain Open.

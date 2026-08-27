@@ -405,3 +405,110 @@ reference; source lineage cannot be erased merely because the source is absent.
 
 Knowledge Spaces do not provide cross-Store live references, remote
 subscriptions, or a global federation service in V1.
+
+## Logical Schema invariants
+
+### INV-065 — Object identity has one typed owner
+
+Every committed ObjectIdentity belongs to exactly one kind-matching typed
+family. Orphan identities, missing owners, kind mismatch, and multiple family
+owners are invalid committed state. ObjectIdentity is an address registry, not
+a polymorphic semantic-state table, and Object is not Entity.
+
+### INV-066 — Identity and version ownership do not drift
+
+Entity Workspace/kind and Relation Workspace/type/source/target/discriminator
+are immutable identity properties. EntityVersion and RelationVersion are
+complete immutable semantic states and are not Branch-owned or linked through
+a single previous-version chain.
+
+### INV-067 — Relation logical identity is reused
+
+Within one Workspace, one relation logical key has one Relation identity. The
+key is canonical type, source, target, and immutable discriminator; removal
+changes membership, and later re-addition reuses the identity.
+
+### INV-068 — Work State is membership/version selection
+
+Canonical Work State is the Entity-to-EntityVersion and
+Relation-to-RelationVersion mapping selected through Branch HEAD. Presence,
+absence, and selected version are mapping facts; semantic terminal status is a
+different Entity/Relation-state fact.
+
+### INV-069 — Branch HEAD is the sole current-state pointer
+
+No current table competes with Branch HEAD. A complete current projection must
+bind the same Commit as HEAD and validate its state digest before a missing row
+can mean absence.
+
+### INV-070 — ChangeSet transition semantics are normalized and set-based
+
+One ChangeSet has at most one final before-to-after transition per Entity or
+Relation membership key. All before conditions are checked against the parent
+state and all resulting-state invariants are checked before commit; operation
+ordinal does not supply correctness.
+
+### INV-071 — Commit, ChangeSet, and Event responsibilities remain distinct
+
+Every WorkStateCommit has exactly one non-reusable ChangeSet. Events are
+immutable provenance and may exist without a ChangeSet for Runtime or
+infrastructure operations; they are never canonical replay input.
+
+### INV-072 — Branch ref movement is guarded and auditable
+
+Branch HEAD points only to a Commit in the same Workspace, moves by
+expected-head compare-and-swap, and leaves immutable old/new provenance.
+Branch creation and fast-forward import do not invent empty Commits.
+
+### INV-073 — Stable occurrences outlive runtime projections
+
+Session, Claim ownership/mode periods, and MergeAttempt are stable occurrences.
+Their mutable current coordination is kept in separate runtime projections.
+Release, takeover, mode change, completion, or abort never rewrites or deletes
+the historical occurrence.
+
+### INV-074 — Evidence identity is not content identity
+
+Evidence is immutable logical provenance and may reference zero or more
+digest-identified ContentObjects. ContentObject metadata is retained
+independently of storage location and may be reused by multiple Evidence
+objects.
+
+### INV-075 — Resource identity, association, binding, and observation differ
+
+Resource kind is stable identity state; Workspace-to-Resource association is
+many-to-many infrastructure configuration; ResourceBinding is environment-
+local current config; ResourceObservation is immutable provenance. None of the
+latter three becomes Branch Work State merely because it changes.
+
+### INV-076 — Verification defining closure is immutable
+
+A Verification's result, target, Basis, Evidence set, method, semantic state,
+and defining `verifies`/`evidenced_by` edges form one immutable judgment
+closure. Changing any member creates a new Verification. Applicability remains
+derived and branch-sensitive.
+
+### INV-077 — ExternalObjectRef cannot escape canonical endpoint rules
+
+ExternalObjectRef is permitted only in explicitly allowed federation,
+lineage, and imported provenance metadata. Canonical Relation endpoints remain
+local ObjectIdentities; Bundle export includes the required local Relation
+endpoint closure.
+
+### INV-078 — Store infrastructure history is auditable
+
+StoreManifest may reflect the current migrated format, while each migration is
+immutable provenance. BundleManifest is separate from StoreManifest, and every
+ImportAttempt is immutable infrastructure provenance.
+
+### INV-079 — Import cannot partially activate canonical refs
+
+Import ingests and validates immutable candidates before accepted refs move
+atomically. Equal immutable identity and content is idempotent; equal identity
+with unequal content is an integrity conflict and is never updated in place.
+
+### INV-080 — Portable identity is Store-namespaced
+
+Cross-Store complete reference semantics are `(store_id, local_id)`. Ordinary
+movement preserves Store identity; explicit Store fork creates a new Store
+namespace while retaining internal local IDs by default and recording lineage.

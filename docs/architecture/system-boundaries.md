@@ -57,6 +57,8 @@ identity with source lineage. Bundle interchange is self-contained and is not
 defined by copying the physical SQLite file. See
 [Versioned-State Persistence Model](persistence-model.md) and
 [Knowledge Federation and Store Portability](knowledge-federation-and-portability.md).
+The current Store manifest may be migration-updated while each migration
+remains immutable provenance.
 
 ## Workspace
 
@@ -76,6 +78,11 @@ layout. Valid configurations include:
 Every versioned mutation has exactly one active Workspace and Work Branch.
 Cross-Workspace Task containment and dependency are not allowed in V1 because
 they would couple independent branch and restore histories.
+
+Workspace identity is independent of mutable name and filesystem path.
+Workspace and portable Resource identity have a many-to-many infrastructure
+association outside Branch Work State. Association and binding changes emit
+provenance but do not create WorkStateCommits.
 
 ## Knowledge Space
 
@@ -154,14 +161,18 @@ and non-Verification capture policy remain Open.
 | Verification Requirement | Owning AC / Workspace Work State | Yes | Yes | Yes |
 | Acceptance Criterion / typed relation | Workspace Work State | Yes | Yes | Yes |
 | EntityVersion / RelationVersion | Canonical version history | Selected by Branch | Yes | Historical state |
+| ObjectIdentity + typed owner | Store-local addressable registry | No | Yes | No |
 | KnowledgeExposure source binding | Store-local Knowledge Space | No independent DAG | Yes | Availability projection only |
-| Resource | Store / Workspace association | No | Identity/binding history | Rebind, not restore |
+| Resource | Store / Workspace association | No | Identity history | Rebind, not restore |
+| ResourceBinding | Store environment current config | No | Changes emit Events | Rebind, not restore |
 | ResourceObservation | Immutable provenance/object storage | No | Yes | No |
 | active Session / Focus / Claim | Runtime Coordination | No | Changes emit Events | No |
 | merge-in-progress | Runtime Coordination | No | Attempt and resolution Events | No |
 | Event / Session timeline / ChangeSet / WorkStateCommit | Provenance and version history | No | Yes | Historical Work State only |
 | Evidence | Provenance/object storage | No | Yes | No |
 | checkpoint | Derived acceleration/object storage | No | Rebuildable | No |
+| StoreManifest / migration history | Store infrastructure | No | Migration history yes | Current manifest only |
+| BundleManifest / ImportAttempt | Transport / infrastructure provenance | No | Import attempt yes | No |
 | context / next / why / ready / progress | Derived Projection | No | Recomputable | No |
 
 ## Working set and retention boundary
@@ -190,3 +201,7 @@ workflow. The engine does not launch, select, or orchestrate Agents.
 Human-friendly presentation may be added above the protocol. It cannot weaken
 accurate Agent interpretation, actionable errors, or machine-readable
 provenance. The concrete protocol encoding is not fixed by this baseline.
+
+The complete logical ownership matrix is
+[Logical Schema Boundaries](logical-schema-boundaries.md). It confirms family
+responsibilities without choosing final SQLite DDL.

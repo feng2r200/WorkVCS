@@ -67,6 +67,11 @@ Claim, and merge-in-progress state machines.
    either head moved. Abort never changes target Work State and retains the
    attempt provenance.
 
+The later accepted [ADR-0005](0005-logical-schema-family-boundaries.md)
+specifies that Session, each Claim ownership/mode period, and MergeAttempt are
+stable occurrences separate from their mutable runtime projections. That
+logical persistence refinement does not change these state machines.
+
 ## Consequences
 
 - Coordination force cannot become a generic bypass for semantic invariants.
@@ -80,7 +85,6 @@ Claim, and merge-in-progress state machines.
 ## Deliberately not decided
 
 - final CLI spelling and wire format;
-- persistence identities for Claim replacement/mode change;
 - a complete operation catalogue or full error-code enumeration;
 - the exact source-head recomputation/rebase feature beyond V1;
 - the exact AC waiver/exception operation.

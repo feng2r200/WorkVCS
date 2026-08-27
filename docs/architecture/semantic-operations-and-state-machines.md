@@ -145,6 +145,10 @@ takeover are explicit atomic operations with provenance. A stale takeover and
 a forced takeover are distinct; forced takeover requires rationale and records
 the prior claimant, last activity, and Session state.
 
+Each ownership/mode period is a stable immutable Claim occurrence. Active
+ClaimRuntime is separate current state. Release ends the occurrence; mode
+change or takeover ends the old occurrence and creates a new one.
+
 Claiming a Task never changes its Work-State status. Atomic claim-next may
 select, claim, focus, and return Context, but it does not imply TaskStart.
 
@@ -172,7 +176,8 @@ Branch; it freezes the input snapshot for optimistic validation.
 Abort marks the runtime attempt aborted, creates no WorkStateCommit, and retains
 the base, heads, classification, attempted resolutions, rationale, and Events.
 Completed or aborted runtime state may leave the active projection while its
-provenance remains immutable.
+stable MergeAttempt, captured inputs, items, resolutions, and Events remain
+immutable provenance.
 
 ## Open implementation boundary
 

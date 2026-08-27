@@ -65,7 +65,8 @@ Commit identity remains distinct from the resulting-state digest. The exact ID,
 digest algorithm, and serialization are not fixed. Canonical reconstruction is
 fixed at the logical level: Commit + ChangeSet + schema-versioned deterministic
 Change Operations are replay truth; Events are provenance. Detailed storage is
-defined in [Versioned-State Persistence Model](persistence-model.md).
+defined in [Versioned-State Persistence Model](persistence-model.md) and the
+later [Logical Schema Boundaries](logical-schema-boundaries.md).
 
 ## Branch semantics
 
@@ -77,6 +78,11 @@ Branch identity.
 Branch creation is an O(1) ref operation and does not copy current Entity or
 Relation state. Materialized current projections are rebuildable caches; only
 HOT Branches need remain materialized.
+
+Branch HEAD is the only canonical current-state pointer. A current projection
+is complete only when it names HEAD as its projected Commit and its state digest
+has been validated. Ordinary HOT-Branch mutation advances immutable history,
+HEAD by expected-head compare-and-swap, and the complete projection atomically.
 
 Multiple Sessions may work on one Work Branch. Agent concurrency alone is not
 a reason to create branches. Unmerged sibling Branch state is isolated from

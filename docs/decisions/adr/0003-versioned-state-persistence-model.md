@@ -64,6 +64,10 @@ merge, restore, repair, and portable verification.
     and object-format metadata sufficient to determine how it can be read or
     migrated.
 
+The later accepted [ADR-0005](0005-logical-schema-family-boundaries.md)
+confirms the logical table-family responsibilities and constraints that refine
+this model. Final DDL and physical enforcement remain deliberately undecided.
+
 ## Consequences
 
 - The architecture is commit/delta-based versioned state with provenance

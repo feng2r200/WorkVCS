@@ -24,6 +24,12 @@ the method was repeated or time advanced. If one execution supports judgments
 with different targets or results, it creates separate single-target
 Verifications that may share one immutable Evidence object.
 
+The immutable defining closure includes result, target, Verification Basis,
+Evidence set, method, judgment-owned semantic state, and the defining
+`verifies`/`evidenced_by` edges. Those edges use the common Relation
+infrastructure but cannot be removed or redirected while retaining the same
+Verification identity. Any closure change creates a new Verification.
+
 The immutable historical result and current applicability are different:
 
 ```text
@@ -112,7 +118,9 @@ judgment stale.
 ## Resource and ResourceObservation
 
 A Resource has stable logical identity, kind, and an environment-specific
-locator binding. Moving a Store or rebinding the locator preserves logical
+locator binding. Logical Resource and immutable kind are ObjectIdentity-backed;
+the current locator belongs to a separate environment-local ResourceBinding.
+Moving a Store or rebinding the locator preserves logical
 identity but does not prove that the new binding contains continuous content.
 Continuity still requires a matching fingerprint or another adapter-proven
 source/content relationship.
@@ -160,5 +168,6 @@ operation creates a WorkStateCommit.
 
 The following remain unfixed: final CLI names, adapter implementations shipped
 first, exact path normalization, non-Verification observation capture policy,
-physical persistence schema, ID and digest formats, and a possible future AC
-waiver operation.
+final DDL/column/index/FK mechanism, ID and digest formats, canonical
+serialization, and a possible future AC waiver operation. The logical family
+split is confirmed in [Logical Schema Boundaries](logical-schema-boundaries.md).

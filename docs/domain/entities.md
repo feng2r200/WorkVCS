@@ -9,14 +9,18 @@ rules below.
 
 | Layer | Contents | Branch / restore / merge behavior |
 |---|---|---|
-| Versioned Work State | Goal, Plan, Task, Decision, Knowledge, Record, Verification, Acceptance Criterion, typed relations | Participates |
-| Runtime Coordination | active Session state, Claim, Focus, merge-in-progress | Does not participate |
-| Immutable Provenance and Version History | Event, Session timeline, Evidence, ChangeSet, WorkStateCommit | Is retained, not restored as Runtime Coordination |
+| Versioned Work State | Goal, Plan, Task, Decision, Knowledge, Record, Verification, Acceptance Criterion, Verification Requirement, typed relations | Participates |
+| Runtime Coordination | SessionRuntime, ClaimRuntime, Focus, MergeRuntime | Does not participate |
+| Immutable Provenance and Version History | Event, Session/Claim/Merge occurrences, Evidence, ResourceObservation, ChangeSet, WorkStateCommit | Is retained, not restored as Runtime Coordination |
 | Derived Projection | context, next, why, ready, progress, diff | Recomputed |
 
 Store, Workspace, and Knowledge Space define scope or ownership.
 Work Branch refs select heads in immutable version history. They are not
 versioned entities inside their own Work State.
+
+`ObjectIdentity` is a lower Store-local registry shared by addressable typed
+families. It does not make every registered object an Entity. Store and
+Workspace use their own container identities above that registry.
 
 KnowledgeExposure history is an additional Store-local federation surface
 outside any Workspace Work State: Exposure source bindings are immutable,
@@ -41,7 +45,8 @@ Branch.
 
 **Portability behavior:** Copy, move, export/import, backup, and restore retain
 Store identity. An explicit fork creates a new Store identity with source-store
-lineage. Import never blindly restores active Runtime Coordination.
+lineage. A fork preserves internal local IDs by default under the new Store
+namespace. Import never blindly restores active Runtime Coordination.
 
 ### Workspace
 
@@ -53,7 +58,8 @@ Verification, Acceptance Criterion, and typed relation state.
 
 **Relations:** May be associated with multiple repositories or directories;
 multiple Workspaces may refer to different parts of one monorepo. A Workspace
-may also be non-Git.
+may also be non-Git. Workspace-to-Resource association is many-to-many
+infrastructure state, not Work-State membership.
 
 **Version behavior:** Every versioned mutation targets exactly one Workspace
 and Work Branch. A Workspace is not a directory, repository, Store, or Session.
@@ -356,14 +362,20 @@ does not require one. Normal end releases claims. After abnormal exit the
 Session is marked `potentially_stale` and its claims remain until explicit
 release or takeover.
 
-**Owned state:** Context Set, active Workspace, active Branch, primary Focus,
-current Claims, Agent identity, and activity metadata.
+**Occurrence state:** Stable Session identity, creation fact, Agent/adapter
+metadata, and immutable provenance links.
+
+**Runtime state:** Context Set, active Workspace, active Branch, primary Focus,
+current Claims, lifecycle state, and activity metadata.
 
 **Relations:** May read multiple Workspaces and Knowledge Spaces. Every
 mutation still targets one active Workspace and Branch.
 
 **Version behavior:** Current Session state does not branch, merge, or restore.
 Its timeline is immutable provenance and remains readable by later Sessions.
+The stable ObjectIdentity-backed Session occurrence is separate from mutable
+SessionRuntime. Context Set membership and structured Focus path are runtime
+children; a final SessionDiff is immutable provenance.
 
 **Example:** A Session consults Workspaces A and B but mutates only A/main until
 an explicit Workspace switch event.
@@ -404,11 +416,44 @@ non-destructive updates; a terminal or structural mutation requires a unique
 claimant or explicit force provenance.
 
 **Version behavior:** Runtime-only. Claim creation, release, and takeover are
-immutable Events.
+immutable Events. Each ownership/mode period is also a stable immutable Claim
+occurrence; active ClaimRuntime is a separate current projection. Mode change
+or takeover ends one occurrence and creates another rather than rewriting its
+owner or mode.
 
 Claiming or claim-next does not change Task status or imply TaskStart.
 
+### MergeAttempt
+
+**Purpose:** Identifies one persistent merge attempt independently of whether
+it remains active, completes, or aborts.
+
+**Occurrence state:** ObjectIdentity-backed merge identity, Workspace, target
+and source Branches, merge base, captured target/source heads, creation fact,
+and immutable provenance.
+
+**Runtime state:** Active status, structured MergeItems, and provisional
+resolutions live in separate MergeRuntime children. Successful continue writes
+canonical Commit/ChangeSet history atomically; completion or abort removes the
+attempt from active runtime without deleting its occurrence, items,
+resolutions, or Events.
+
 ## Provenance and version primitives
+
+### ObjectIdentity
+
+**Purpose:** Provides one Store-local stable addressable identity namespace
+across Entity, Relation, Session/SessionDiff, Claim/MergeAttempt, Evidence,
+Resource/ResourceObservation, and KnowledgeSpace/KnowledgeExposure families.
+
+**Owned state:** Stable object ID and controlled object kind only. Semantic
+state, Branch selection, runtime status, and relation endpoints belong to typed
+families or other authority layers.
+
+**Invariant:** Every committed ObjectIdentity has exactly one kind-matching
+typed family owner. Store, Workspace, version infrastructure, ContentObject,
+VerificationBasis, runtime projections, Checkpoint, and transport bookkeeping
+use their own typed identities outside this registry.
 
 ### EntityVersion and RelationVersion
 
@@ -417,21 +462,23 @@ state. An Entity or Relation may have many versions, and multiple Branches may
 select the same version.
 
 **Owned state:** Logical identity, state-schema version, complete canonical
-semantic state, state digest where applicable, creating ChangeSet, and optional
-structured field delta on the transition.
+semantic state, and semantic-state digest where applicable. Transition
+provenance and optional field delta belong to ChangeOperation/ChangeSet rather
+than creating a second version chain inside the Version.
 
 **Version behavior:** Versions do not belong to a Branch. Branch heads and
 rebuildable current projections select active versions. Historical readers
 upcast old schema versions without rewriting them. Logical removal preserves
-identity and history.
+identity and history. Equal state digests do not require equal Version IDs.
 
 ### Resource
 
 **Purpose:** Gives an associated external source or artifact set stable logical
 identity independently of its machine-local location.
 
-**Owned state:** Logical identity, Resource kind, and rebindable environment
-locator.
+**Owned state:** ObjectIdentity-backed logical identity and immutable Resource
+kind. The rebindable environment locator belongs to a separate ResourceBinding
+current-config family.
 
 **Version behavior:** Identity is portable. Locator rebind does not prove
 content continuity or Verification applicability.
@@ -455,10 +502,14 @@ remain policy unless explicitly requested.
 **Purpose:** Evidence is immutable support material captured or referenced by
 a Verification or another semantic object.
 
-**Lifecycle:** Evidence is captured or referenced, hashed, and retained under
-its policy.
+**Lifecycle:** Evidence is captured or referenced and retained under its
+policy. Stored content objects are digest-identified; metadata-only or external
+Evidence need not invent a local blob.
 
-**Owned state:** Digest, locator/object reference, and capture metadata.
+**Owned state:** ObjectIdentity-backed Evidence identity, capture/provenance
+metadata, external references, and zero or more links to digest-identified
+ContentObjects. ContentObject storage location is separate from its digest
+metadata.
 
 **Relations:** A Verification or another semantic object may be `evidenced_by`
 Evidence. A Finding or other semantic claim may independently `support` a
@@ -479,10 +530,12 @@ for `T-18/AC-2`.
 its deterministic state transformation; Events explain its semantics; a
 WorkStateCommit places the resulting state in the DAG.
 
-**Lifecycle:** One accepted versioned semantic operation creates one ChangeSet,
-one or more Events, and exactly one WorkStateCommit. Failure rolls back the
-complete ChangeSet. A pure Runtime Coordination operation updates runtime state
-atomically and emits provenance Events without creating a WorkStateCommit.
+**Lifecycle:** One accepted versioned semantic operation creates exactly one
+non-reusable ChangeSet and one WorkStateCommit plus one or more Events. Genesis
+uses its own initialization ChangeSet and may contain zero ChangeOperations.
+Failure rolls back the complete ChangeSet. A pure Runtime Coordination or
+infrastructure operation updates its own state atomically and emits provenance
+Events without creating a WorkStateCommit.
 
 **Owned state:** ChangeSet metadata and semantic intent; schema-versioned
 Change Operations with expected-before/after state; Event type and payload;

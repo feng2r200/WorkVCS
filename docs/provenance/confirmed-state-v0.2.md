@@ -188,5 +188,8 @@ The following are intentionally not promoted as final implementation choices:
 - cross-Store live federation, remote subscriptions, and distributed sync;
 - exact semantic operation for any future mandatory-AC waiver.
 
-SQLite Logical Schema design and runtime implementation remain the next
-separate design stage and are not part of this promotion.
+At the v0.2 promotion boundary, SQLite Logical Schema design and runtime
+implementation were the next separate stages and were not part of that
+promotion. Decisions 189–318 later closed the logical-family stage; see
+[Confirmed State v0.3 Provenance](confirmed-state-v0.3.md). Logical DDL and
+runtime implementation still remain separate.

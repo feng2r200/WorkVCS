@@ -122,11 +122,14 @@ records from a transcript.
 ## Current product stage
 
 This repository currently contains a confirmed design baseline, not an
-implemented WorkVCS runtime. Language selection, detailed storage schema, and
-the final CLI command surface remain implementation-planning work unless a
-confirmed document says otherwise.
+implemented WorkVCS runtime. The logical schema family and authority boundaries
+are now confirmed, but language selection, Logical DDL, physical database
+schema, and the final CLI command surface remain later work unless a confirmed
+document says otherwise.
 
 The confirmed logical persistence architecture now defines canonical
 Commit/ChangeSet history, immutable Entity/Relation versions, rebuildable
 projections, checkpoints, KnowledgeExposure, and portable Bundle semantics. It
-does not yet define a complete SQLite schema or runtime implementation.
+also defines ObjectIdentity/typed-family ownership and Runtime/Provenance/
+Resource/Federation infrastructure boundaries. It does not yet define complete
+SQLite DDL or a runtime implementation.

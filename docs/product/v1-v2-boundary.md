@@ -191,6 +191,11 @@ V1 includes:
   divergence, and never resurrects imported active Runtime Coordination;
 - HOT/WARM/COLD projections that remove terminal history from default working
   context without destructively deleting core provenance.
+- the confirmed logical schema families and authority split in
+  [Logical Schema Boundaries](../architecture/logical-schema-boundaries.md),
+  including ObjectIdentity family ownership, immutable Verification closure,
+  stable Relation-key reuse, staged import, and required Bundle local-reference
+  closure;
 
 ## Explicitly deferred beyond V1
 
@@ -222,13 +227,14 @@ unresolved:
 - final equal-candidate tie-breaker for `next`;
 - final CLI spelling, protocol encoding, complete operation/error catalogue,
   and any future semantic AC-waiver operation;
-- complete SQLite schema, DDL, indexes, programming language, identity format,
-  hash algorithm, canonical encoding, object layout, physical sibling-order
-  representation, checkpoint schedule, and projection-eviction policy;
+- final SQLite DDL, table/column spelling and types, concrete indexes, exact FK
+  enforcement, programming language, identity/UUID encoding, hash algorithm,
+  canonical serialization, object layout, physical sibling-order
+  representation, checkpoint strategy, and typed-projection count/shape;
 - exact Resource path/glob normalization and persisted observation capture
   policy outside Verification/explicit snapshots;
 - exact KnowledgeExposure lifecycle/source-status enum, source-stale Context
-  policy, access/security model, physical persistence tables, exchange API,
+  policy, access/security model, exchange API,
   Bundle container/profile details, and import recovery-state vocabulary;
 - any cross-Store live federation or distributed synchronization protocol.
 

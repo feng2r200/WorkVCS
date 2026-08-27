@@ -55,6 +55,11 @@ leaving its physical schema and protocols unfixed.
 11. Live cross-Store Knowledge federation, remote subscriptions, and a global
     Knowledge Space service are outside V1.
 
+The later accepted [ADR-0005](0005-logical-schema-family-boundaries.md)
+clarifies that unresolved external references are allowed metadata rather than
+canonical Relation endpoints. Bundle export includes required Store-local
+Relation endpoint objects before foreign source provenance may remain external.
+
 ## Consequences
 
 - A Store can move without identity loss while an intentional fork remains

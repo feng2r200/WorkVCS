@@ -78,6 +78,13 @@ their semantics become a separately confirmed canonical relation.
 - A Relation has stable logical identity and immutable RelationVersion state.
   Branches select active RelationVersions through heads/projections; removing
   an edge from current Work State never physically deletes canonical history.
+- A Relation's logical key is Workspace + canonical type + source + target +
+  immutable discriminator. `related_to` uses its required label as that
+  discriminator. One logical key has one Relation identity; removing and later
+  adding the same logical relation reuses that identity.
+- Relation endpoint, type, and discriminator are identity properties, not
+  mutable RelationVersion fields. RelationVersion carries only relation-owned
+  metadata state.
 - Semantic operations such as split, supersede, invalidate, promote, verify,
   adopt, and reparent create or update the required canonical edges
   automatically.
@@ -122,6 +129,12 @@ are forbidden in V1. Cross-Workspace Knowledge reuse uses Store-local
 KnowledgeExposure with source-version provenance rather than a normal
 cross-Workspace Work Graph edge. A Session Context Set may consult multiple
 Workspaces temporarily, but that does not create a permanent relation.
+
+`ExternalObjectRef` is not a Relation endpoint. It is allowed only in named
+foreign federation, lineage, or imported provenance metadata. A Bundle that
+includes a canonical Relation must include its Store-local endpoint objects in
+the required local reference closure rather than replacing an endpoint with an
+external reference.
 
 ## Merge and context participation
 

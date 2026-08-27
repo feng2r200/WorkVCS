@@ -75,7 +75,8 @@ default. These operations move one Store lineage.
 An explicit Store fork creates a new Store identity and records
 `derived_from_store` lineage. Fork and copy are different semantic operations;
 import never invents a new Store identity merely because it runs on another
-machine.
+machine. A fork preserves internal local IDs by default under the new Store
+namespace, so portable complete references use `(store_id, local_id)`.
 
 ## Bundle interchange
 
@@ -133,6 +134,13 @@ reference containing the Exposure, source Knowledge version, Workspace, and
 Store identity/lineage. The reference may later resolve; V1 does not require
 network lookup.
 
+An ExternalObjectRef is allowed only in explicit federation, lineage, or
+imported provenance metadata. It never replaces a canonical Relation endpoint.
+When an included object has a canonical Relation to another Store-local object,
+the exporter includes the Relation and endpoint object in the required local
+reference closure. The endpoint object's own foreign-source provenance may
+remain an ExternalObjectRef.
+
 ## Cross-Store boundary
 
 V1 Knowledge Spaces are Store-local. Export/import and retained adoption
@@ -142,7 +150,7 @@ are deferred beyond V1.
 
 ## Open implementation boundary
 
-The physical tables, exchange/access API, authorization model, exact lifecycle
+The final DDL/columns/indexes/FK mechanism, exchange/access API, authorization model, exact lifecycle
 and source-status enum, source-stale Context policy, Bundle container and
 profile details, streaming/compression protocol, runtime recovery states, hash
 algorithm, encoding, and cross-Store live protocol remain unfixed.

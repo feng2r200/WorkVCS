@@ -14,14 +14,27 @@ The confirmed baseline contains:
 - [Domain invariants](domain/invariants.md)
 - [System boundaries](architecture/system-boundaries.md)
 - [Versioning engine](architecture/versioning-engine.md)
+- [Semantic operations and state machines](architecture/semantic-operations-and-state-machines.md)
+- [Verification and resource drift](architecture/verification-and-resource-drift.md)
+- [Versioned-state persistence model](architecture/persistence-model.md)
+- [Knowledge federation and Store portability](architecture/knowledge-federation-and-portability.md)
+
+Material architecture decisions promoted after the initial baseline are
+recorded as Accepted ADRs:
+
+- [ADR-0001: Verification Applicability and Resource Drift](decisions/adr/0001-verification-applicability-and-resource-drift.md)
+- [ADR-0002: Semantic Operations and Runtime State Machines](decisions/adr/0002-semantic-operations-and-runtime-state-machines.md)
+- [ADR-0003: Versioned-State Persistence Model](decisions/adr/0003-versioned-state-persistence-model.md)
+- [ADR-0004: Knowledge Federation and Store Portability](decisions/adr/0004-knowledge-federation-and-store-portability.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.
 
 Detailed promotion evidence and the confirmation ledger are retained in
-[Confirmed State v0.1 Provenance](provenance/confirmed-state-v0.1.md). That
-document supports audit and reconstruction but is not a parallel normative
-specification.
+[Confirmed State v0.1 Provenance](provenance/confirmed-state-v0.1.md) and
+[Confirmed State v0.2 Provenance](provenance/confirmed-state-v0.2.md). These
+documents support audit and reconstruction but are not parallel normative
+specifications.
 
 ## Authority and conflict handling
 

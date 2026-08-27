@@ -20,18 +20,25 @@ implemented.
 - Cross-Workspace reuse occurs through Knowledge Spaces. Cross-Workspace Task
   dependency or containment is outside V1.
 
-V1 requires cross-Workspace Knowledge exposure and reuse with traceable source
-provenance. Whether this uses publication, references, subscriptions, copies,
-or another access model—and how it versions concurrent changes—is not yet
-confirmed and requires an explicit decision before implementation. Current
-repository policy may record that decision as an ADR; no mutable global
-Knowledge DAG is implied by this baseline.
+V1 cross-Workspace Knowledge reuse uses Store-local KnowledgeExposure records.
+An Exposure has stable identity and binds one specific immutable source
+Knowledge version. Consulting it is read-only; explicit adoption creates new
+Workspace-local Knowledge with complete source provenance. Exposure history is
+append-only with a rebuildable current availability projection; V1 does not add
+an independent Knowledge Space branch/merge/restore DAG.
 
 The confirmed V1 storage direction is SQLite metadata plus a content-addressed
 object store. This is an implementation direction, not a domain invariant;
 replacing it requires a later explicit confirmed decision, which current
 repository policy may record as an accepted ADR. The exact schema, object
 layout, and implementation language are not fixed by this baseline.
+
+The confirmed logical persistence model is commit/delta-based: immutable
+EntityVersion and RelationVersion state; canonical WorkStateCommit + ChangeSet
+and deterministic Change Operation reconstruction; semantic Events as
+provenance; rebuildable current projections and checkpoints; O(1) Branch refs;
+and resulting-state digests distinct from Commit identity. This fixes logical
+semantics, not tables or encoding.
 
 ### Versioned work and cognition
 
@@ -43,6 +50,8 @@ V1 versions:
   semantics as Records;
 - versioned Verification state and relations, with references to immutable
   Evidence provenance;
+- immutable single-target Verification judgments, stable AC-local Verification
+  Requirements, and branch-sensitive applicability/effective AC projections;
 - top-down Goal -> Plan -> SubPlan -> Task decomposition and bottom-up
   Task -> Finding -> Plan -> Goal discovery;
 - Plan descriptions, constraints, scoped Assumptions, Task-graph references,
@@ -62,12 +71,19 @@ V1 versions:
 - ordinary `Record(kind=decision)` entries that can be promoted to a Decision
   with context, options, choice, rationale, and consequences, with later
   change represented by supersession;
-- optional Acceptance Criteria, with all mandatory criteria verified before
-  automatic Task completion when criteria exist.
+- optional Acceptance Criteria, with all mandatory criteria effectively
+  `verified` before Task completion when criteria exist; an ordinary
+  coordination force cannot bypass this gate.
 
 The exact persistent identity scheme is not fixed by this baseline. Stable
 Task-local Acceptance Criterion identities are required so references survive
 wording changes.
+
+Task, Plan, Goal, Assumption, Attempt, and Decision follow the state machines
+defined in [Semantic Operations and State Machines](../architecture/semantic-operations-and-state-machines.md).
+In particular, explicit blockers and dependency readiness are distinct,
+terminal Attempts are never reopened, and superseded entities require
+supersession-aware transitions rather than ordinary reopen.
 
 ### Work-State versioning
 
@@ -89,16 +105,19 @@ V1 includes:
   subject but selecting different choices;
 - retention of useful findings, attempts, verification, evidence, and
   completed evaluation work from unselected branches;
-- preservation of the source Branch after merge.
+- preservation of the source Branch after merge;
+- merge resolutions remain provisional Runtime Coordination until `continue`;
+  one target Workspace/Branch has at most one active merge, and continue
+  rejects moved source or target heads rather than locking either Branch.
 
 ### Sessions and concurrency
 
 V1 includes:
 
 - Session provenance independent of Work Branch state;
-- deterministic Session-end diff plus an optional semantic Handoff; when
-  claimed or in-progress work remains, Session end recommends but does not
-  require a Handoff;
+- deterministic cross-Workspace Session-end diff plus zero or more optional
+  semantic Handoffs; each Handoff belongs to exactly one Workspace and Work
+  Branch and may bind a Focus/context path;
 - multiple Sessions on the same Work Branch without a branch-wide lock;
 - optimistic concurrency using an expected base and deterministic
   reconciliation when safe;
@@ -117,7 +136,12 @@ V1 includes:
 - shared claimants may add Verification and other non-destructive updates, but
   terminal or structural changes require a unique claimant or explicit force
   provenance;
-- atomic “select next runnable Task and claim it” behavior.
+- atomic “select next runnable Task and claim it” behavior;
+- explicit atomic Session Workspace/Branch switches with deterministic Focus
+  preservation/clearing, and atomic Session end that leaves Handoff creation
+  separate;
+- a Claim active-set invariant of none, one exclusive, or one-or-more shared,
+  with explicit provenance-bearing mode change and takeover.
 
 ### Deterministic Agent interface
 
@@ -144,11 +168,10 @@ V1 includes:
   and manual order cannot override readiness or eligibility;
 - a lightweight Attempt lifecycle with `running`, `succeeded`, `failed`, and
   `inconclusive` states plus a one-shot shortcut;
-- a Verification command wrapper that, for a command-based Verification,
-  captures applicable execution Evidence such as command, working directory,
-  start/end, exit status, duration, output artifact/digest, and Git SHA, plus
-  the Verification result; this does not require every Verification method to
-  expose the same fields;
+- a deterministic single-target Verification command wrapper that captures
+  applicable execution Evidence and the actual verified Resource state,
+  including relevant uncommitted Git changes rather than Git HEAD alone; one
+  Evidence object may support multiple separately recorded judgments;
 - an Agent-readable operation protocol and concise, actionable errors; the
   concrete encoding and command spelling are not fixed by this baseline;
 - Agent adapters based on the same CLI and semantic operation contract.
@@ -157,14 +180,15 @@ V1 includes:
 
 V1 includes:
 
-- low-coupling source-state traceability that reports the observed source
-  state, its comparison baseline, and the resulting difference without making
-  Git the Work-State database; when source state supports a Verification, its
-  provenance identifies the source observation, including the Git SHA when
-  Git is applicable;
+- a Resource Adapter boundary with stable logical Resource identity,
+  rebindable locators, immutable ResourceObservations, deterministic scoped
+  fingerprints and differences, and conservative `applicable`/`stale`/
+  `unknown` combination across Resource and Work-State basis;
 - independently controlled inclusion or exclusion of WorkVCS data from Git;
-- portable export/bundle behavior suitable for moving a Store without a live
-  distributed synchronization protocol;
+- self-contained Bundle interchange that preserves Store identity for ordinary
+  copy/move/export/import/backup/restore, distinguishes an explicit Store fork,
+  validates/deduplicates immutable objects by content, detects same-Store ref
+  divergence, and never resurrects imported active Runtime Coordination;
 - HOT/WARM/COLD projections that remove terminal history from default working
   context without destructively deleting core provenance.
 
@@ -179,6 +203,8 @@ V1 includes:
 - Agent launching, scheduling, orchestration, or automatic execution;
 - cloud synchronization, distributed collaboration, and a replication
   protocol for branch refs and object exchange;
+- cross-Store live Knowledge federation, a global Knowledge Space service,
+  remote subscriptions, and live cross-Store references;
 - destructive compaction of core Decision, Finding, Knowledge, ChangeSet, or
   WorkStateCommit history;
 - a required TUI, GUI, or human-first storage format.
@@ -187,32 +213,33 @@ Large Evidence may later receive configurable retention policies, but critical
 metadata, digests, and provenance remain preserved. Derived caches, indexes,
 and projections may be regenerated and garbage-collected.
 
-## Open for Product and Architecture Specification
+## Open implementation and later-architecture boundary
 
-The following boundaries are deliberately unresolved by the confirmed
-baseline and require an explicit later decision:
+The earlier Verification-representation and cross-Workspace Handoff questions
+are closed by Accepted ADRs 0001 and 0002. The following remain deliberately
+unresolved:
 
-- **Verification representation:** Verification semantic state and relations
-  are versioned, and Evidence is immutable provenance. Whether a changed
-  judgment updates one logical Verification through Work-State history or
-  creates a new Verification that supersedes an earlier judgment remains Open.
-- **Cross-Workspace Session Handoff ownership:** when a Session reads or works
-  across multiple Workspaces, the Workspace ownership and cardinality of its
-  optional semantic Handoff Record or Records remain Open. Every Handoff that
-  is recorded as Versioned Work State must still target exactly one Workspace
-  and Work Branch per mutation.
-
-These questions do not weaken the current Verification/Evidence boundary or
-move Handoff into Runtime Coordination or immutable Session provenance.
+- final equal-candidate tie-breaker for `next`;
+- final CLI spelling, protocol encoding, complete operation/error catalogue,
+  and any future semantic AC-waiver operation;
+- complete SQLite schema, DDL, indexes, programming language, identity format,
+  hash algorithm, canonical encoding, object layout, physical sibling-order
+  representation, checkpoint schedule, and projection-eviction policy;
+- exact Resource path/glob normalization and persisted observation capture
+  policy outside Verification/explicit snapshots;
+- exact KnowledgeExposure lifecycle/source-status enum, source-stale Context
+  policy, access/security model, physical persistence tables, exchange API,
+  Bundle container/profile details, and import recovery-state vocabulary;
+- any cross-Store live federation or distributed synchronization protocol.
 
 ## Scope-control rule
 
 A concept appearing in the V1 model does not authorize an unconfirmed
 implementation choice. Detailed database schema, programming language,
-identity scheme, protocol encoding, source-state evidence data model, specific
-CLI spelling, sync transport, UI, and deployment model require later planning
-and explicit confirmation when they become material decisions. Current
-repository policy may record such a decision as an ADR.
+identity scheme, protocol encoding, exact Resource Adapter rules, specific CLI
+spelling, sync transport, UI, and deployment model require later planning and
+explicit confirmation when they become material decisions. Current repository
+policy may record such a decision as an ADR.
 
 The broader Record taxonomy remains Open only for `Blocker`, `Review`, and
 `Note`; no current confirmed requirement makes them distinct V1 Record kinds.

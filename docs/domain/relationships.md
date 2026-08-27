@@ -18,14 +18,15 @@ behavior without parsing natural language.
 | Epistemic | `contradicts` | claim -> target | Explicitly identifies incompatible knowledge or evidence |
 | Epistemic | `validates` | finding/evidence -> assumption/knowledge | Confirms the target under the recorded scope |
 | Epistemic | `invalidates` | finding/evidence -> assumption/knowledge | Rejects the target under the recorded scope |
-| Verification | `verifies` | verification -> criterion/claim | Records a structured verification result for the target |
+| Verification | `verifies` | verification -> requirement/criterion/claim | Records a structured verification result for the target |
 | Verification | `evidenced_by` | semantic object -> evidence | Attaches immutable source material without duplicating an epistemic edge |
 
 `supports` relates two semantic assertions; `evidenced_by` attaches an
 immutable Evidence object to a semantic object. They are not inverse forms of
-one edge. A Verification therefore `verifies` an Acceptance Criterion and is
-`evidenced_by` captured Evidence; a Finding may independently `support` a
-Decision.
+one edge. A Verification therefore `verifies` one Verification Requirement
+when present, otherwise its Acceptance Criterion or another supported claim,
+and is `evidenced_by` captured Evidence; a Finding may independently `support`
+a Decision.
 
 Only the canonical direction is stored. Reverse views such as `blocks`,
 `contained_by`, or `superseded_by` are projections and must not be stored as a
@@ -49,6 +50,11 @@ Likewise, invalidating an Assumption because of a Finding creates the canonical
 evolutionary and epistemic neighborhood and may render friendlier causal
 language without changing the stored graph.
 
+Explicit Knowledge adoption creates Workspace-local Knowledge with
+`derived_from -> KnowledgeExposure` plus preserved source Knowledge-version,
+Workspace, and Store provenance. Merely consulting an Exposure creates no Work
+Graph relation or Work-State mutation.
+
 ## Generic escape hatch
 
 V1 provides:
@@ -66,6 +72,12 @@ their semantics become a separately confirmed canonical relation.
 
 ## Relation creation rules
 
+- Canonical relation types use stable controlled internal identifiers. Free
+  strings cannot become core relation semantics; custom meaning uses
+  `related_to + label`.
+- A Relation has stable logical identity and immutable RelationVersion state.
+  Branches select active RelationVersions through heads/projections; removing
+  an edge from current Work State never physically deletes canonical history.
 - Semantic operations such as split, supersede, invalidate, promote, verify,
   adopt, and reparent create or update the required canonical edges
   automatically.
@@ -95,14 +107,21 @@ priority       value or urgency field
 containment parent does not determine its priority. Plan and Task children may
 be mixed within one ordered container.
 
+Primary containment is tree/forest-like in one Work State: an Entity has at
+most one primary containment parent, and adding a containment edge must not
+create a cycle. Multi-Plan reuse uses `references`, not another primary
+`contains` edge. `depends_on` must likewise remain acyclic. Explicit sibling
+order is canonical semantics, but its physical storage representation remains
+Open.
+
 ## Cross-Workspace boundary
 
-Canonical Work Graph relations never connect Goal, Plan, or Task entities
-across Workspaces in V1. Cross-Workspace reuse exposes Knowledge through a
-Knowledge Space with source provenance; the exact publication, reference, or
-subscription mechanism remains Open. A Session Context Set may consult multiple
-Workspaces temporarily, but that does not create a permanent Work Graph
-relation.
+Every canonical Work Graph Relation belongs to the same Workspace as both
+endpoints. Cross-Workspace Goal, Plan, Task, containment, and dependency edges
+are forbidden in V1. Cross-Workspace Knowledge reuse uses Store-local
+KnowledgeExposure with source-version provenance rather than a normal
+cross-Workspace Work Graph edge. A Session Context Set may consult multiple
+Workspaces temporarily, but that does not create a permanent relation.
 
 ## Merge and context participation
 

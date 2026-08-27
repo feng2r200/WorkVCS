@@ -50,6 +50,14 @@ format does not supply the confirmation. The direction is not a domain
 invariant and does not freeze a SQL schema, object layout, implementation
 language, or project-marker format.
 
+A Store is self-describing for Store identity, format/schema version,
+capabilities, and object-format version. Ordinary copy, move, export/import,
+backup, and restore preserve Store identity; explicit fork creates a new
+identity with source lineage. Bundle interchange is self-contained and is not
+defined by copying the physical SQLite file. See
+[Versioned-State Persistence Model](persistence-model.md) and
+[Knowledge Federation and Store Portability](knowledge-federation-and-portability.md).
+
 ## Workspace
 
 A Workspace answers one question:
@@ -86,16 +94,18 @@ Workspace A Finding/Decision/Verification
                               `-- usable by Workspace B
 ```
 
-Workspace B may use K-17 in context and trace its origin. It does not inherit
-Workspace A's Tasks, Plans, Claims, or current execution state.
+Workspace A exposes one specific immutable Knowledge version through a stable
+Store-local KnowledgeExposure. Workspace B may consult the Exposure in Context
+and trace its origin without creating Work-State mutation. Explicit adoption
+creates B-local Knowledge with Exposure/source-version provenance; B does not
+inherit A's Tasks, Plans, Claims, or current execution state.
 
-The confirmed boundary requires cross-Workspace reuse and origin provenance.
-Publication, reference, subscription, copy, live binding, and the Knowledge
-Space's own versioning or concurrency mechanism are still Open and require an
-explicit confirmed decision before implementation. Current repository policy
-may record that decision as an ADR, but the ADR does not make an unconfirmed
-choice authoritative. This baseline does not authorize mutable global
-Knowledge state with unspecified conflict behavior.
+Knowledge Space uses append-only Exposure history plus a current availability
+projection and has no independent V1 branch/merge/restore DAG. Source drift
+creates a derived source-stale warning rather than silently withdrawing an
+Exposure. Exact lifecycle labels, source-stale Context policy, access control,
+physical schema, and exchange API remain Open. Cross-Store live federation is
+outside V1.
 
 ## Session and Context Set
 
@@ -121,17 +131,18 @@ provenance.
 
 ## Source-state traceability
 
-WorkVCS does not use Git as its core database. Work-State data may enter Git or
-remain independent under separate control. V1 must support reviewable drift
-inspection so an Agent can identify whether associated source state changed
-and state the exact comparison basis without tightly coupling every
-WorkStateCommit to a Git commit. A drift result identifies the observed source
-state, its comparison baseline, and the resulting difference. When source
-state supports a Verification, retained provenance identifies the source
-observation used, including the Git SHA when Git is applicable.
+WorkVCS does not use Git as its core database. A Resource has stable logical
+identity and a rebindable environment locator. WorkVCS Core requests scoped
+observation, fingerprint, and difference from a Resource Adapter instead of
+implementing Git-specific comparison.
 
-The concrete entity model and captured fields for source-state evidence are
-not fixed by this baseline.
+Verification persists the ResourceObservation/fingerprint it used. Git-backed
+observations represent the actual verified working state, including relevant
+uncommitted changes rather than HEAD alone. Missing or incomparable Resources
+produce `unknown`; locator rebind does not prove continuity. Mechanical drift
+changes only Derived Projection until an Agent explicitly records semantic
+cognition or re-verifies. Exact path normalization, adapter implementation,
+and non-Verification capture policy remain Open.
 
 ## State ownership matrix
 
@@ -140,11 +151,17 @@ not fixed by this baseline.
 | Goal / Plan / Task | Workspace Work State | Yes | Yes | Yes |
 | Decision / Knowledge / Record | Workspace Work State | Yes | Yes | Yes |
 | Verification | Workspace Work State | Yes | Yes | Yes |
+| Verification Requirement | Owning AC / Workspace Work State | Yes | Yes | Yes |
 | Acceptance Criterion / typed relation | Workspace Work State | Yes | Yes | Yes |
+| EntityVersion / RelationVersion | Canonical version history | Selected by Branch | Yes | Historical state |
+| KnowledgeExposure source binding | Store-local Knowledge Space | No independent DAG | Yes | Availability projection only |
+| Resource | Store / Workspace association | No | Identity/binding history | Rebind, not restore |
+| ResourceObservation | Immutable provenance/object storage | No | Yes | No |
 | active Session / Focus / Claim | Runtime Coordination | No | Changes emit Events | No |
 | merge-in-progress | Runtime Coordination | No | Attempt and resolution Events | No |
 | Event / Session timeline / ChangeSet / WorkStateCommit | Provenance and version history | No | Yes | Historical Work State only |
 | Evidence | Provenance/object storage | No | Yes | No |
+| checkpoint | Derived acceleration/object storage | No | Rebuildable | No |
 | context / next / why / ready / progress | Derived Projection | No | Recomputable | No |
 
 ## Working set and retention boundary

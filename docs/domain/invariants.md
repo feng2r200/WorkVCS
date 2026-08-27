@@ -27,8 +27,8 @@ identified by any one physical source location.
 ### INV-004 — Cross-Workspace sharing is knowledge-only in V1
 
 Goal, Plan, Task, and their execution relations remain Workspace-local.
-Cross-Workspace reuse exposes Knowledge with provenance through a Knowledge
-Space; it does not share a Work Graph or fix an exchange mechanism.
+Cross-Workspace reuse uses Store-local KnowledgeExposure bound to one immutable
+source Knowledge version; it does not share a Work Graph.
 
 ### INV-005 — Runtime state is not restored or merged
 
@@ -137,8 +137,8 @@ represented as a linear replay that destroys ancestry.
 ### INV-022 — Merge is persistent and reversible before commit
 
 Merge follows `start -> resolve -> continue` or `abort`. Abort restores the
-target Work State exactly to its pre-merge state while retaining merge-attempt
-provenance.
+target Work State exactly because provisional resolutions never mutate it;
+merge-attempt provenance remains.
 
 ### INV-023 — Sibling Branches do not contaminate current state
 
@@ -223,7 +223,8 @@ Knowledge, and newly discovered Task links may still be attached with history.
 ### INV-036 — Mandatory criteria gate automatic completion
 
 Acceptance Criteria are optional. When they exist, WorkVCS may automatically
-mark a Task done only after every mandatory criterion has Verification.
+or explicitly mark a Task done only after every mandatory criterion's effective
+status is `verified`. Ordinary coordination force cannot bypass this gate.
 
 ### INV-037 — `next` resolution is deterministic
 
@@ -242,3 +243,165 @@ Priority and manual order are distinct, with priority evaluated first. Manual
 order never overrides dependency readiness or lifecycle eligibility. The final
 stable tie-breaker among otherwise equal candidates is not fixed by this
 baseline.
+
+## Architecture Specification invariants
+
+### INV-038 — Verification judgments are immutable
+
+One Verification records one historical target/result judgment. Re-verification
+creates another judgment and does not automatically supersede the first.
+
+### INV-039 — Result and applicability are distinct
+
+Verification result is immutable. Applicability is a branch-sensitive Derived
+Projection of Resource and Work-State Basis with `applicable`, `stale`, or
+`unknown`; it never rewrites the result.
+
+### INV-040 — Verification Requirements retain local identity
+
+A required Verification intent has stable AC-local identity and remains
+historically referential. It does not encode an execution command. V1
+judgments are single-target, while immutable Evidence may be reused.
+
+### INV-041 — Resource identity, binding, and observation remain separate
+
+A Resource has portable logical identity, a rebindable environment locator,
+and immutable ResourceObservations. Locator rebinding alone never proves
+continuity or applicability.
+
+### INV-042 — Mechanical drift is not semantic mutation
+
+Resource observation or derived drift/applicability creates no
+WorkStateCommit. Applicability combines conservatively: any stale component
+yields stale; otherwise any unknown component yields unknown.
+
+### INV-043 — Semantic lifecycles require explicit transitions
+
+Task, Plan, Goal, Assumption, Attempt, and Decision states change only through
+their confirmed semantic operations. Terminal Attempt never reopens; a
+superseded Entity cannot use an ordinary reopen that ignores its supersession
+relation.
+
+### INV-044 — Dependency blocking is derived
+
+Task `blocked` means an explicit blocker. Dependency readiness is a separate
+Derived Projection and never silently rewrites Task status.
+
+### INV-045 — Session switching and ending are atomic
+
+Workspace/Branch switch and SessionEnd either apply all Runtime Coordination
+effects and Events or leave the prior runtime state intact. Handoff remains a
+separate versioned semantic operation.
+
+### INV-046 — Active Claim modes cannot mix
+
+For one Task and Work Branch, active claims are none, exactly one exclusive,
+or one-or-more shared. Claiming never changes Task status or implies TaskStart.
+
+### INV-047 — Merge resolutions remain provisional
+
+Before `continue`, merge resolutions exist only in Runtime Coordination and
+provenance. One target Workspace/Branch has at most one active merge. Continue
+requires the captured source and target heads to remain unchanged and creates
+one atomic two-parent commit.
+
+### INV-048 — Change Operations reconstruct Work State
+
+WorkStateCommit + ChangeSet + deterministic Change Operations are canonical
+replay truth. Semantic Events are immutable explanation/provenance and cannot
+serve as an alternative state-reconstruction authority.
+
+### INV-049 — Merge replay uses the primary parent
+
+A merge ChangeSet transforms primary parent=target into merged state; secondary
+parent=source preserves ancestry. Historical replay applies the recorded
+ChangeSet and never reruns merge logic.
+
+### INV-050 — Projections and checkpoints are rebuildable
+
+Current projections, indexes, and checkpoints accelerate reads but are not
+canonical state. Checkpoints are digest-validated snapshots associated with a
+commit and may be regenerated.
+
+### INV-051 — Branch creation does not copy Work State
+
+Creating a Branch is an O(1) ref operation at a WorkStateCommit. Only HOT
+Branches need remain materialized.
+
+### INV-052 — Logical identity is separate from immutable version state
+
+Entity and Relation identities survive semantic change. Each changed state is
+an immutable schema-versioned EntityVersion or RelationVersion that may be
+shared by multiple Branches.
+
+### INV-053 — Canonical logical history is not physically deleted
+
+Removing an Entity or Relation from current Work State means absence or
+retirement in later state. It cannot erase canonical identity, versions, or
+history.
+
+### INV-054 — Primary containment and dependency are acyclic
+
+An object has at most one primary containment parent in one Work State;
+multi-Plan reuse uses `references`. Primary containment and Task dependency
+must remain acyclic, and every Work Graph Relation shares a Workspace with both
+endpoints.
+
+### INV-055 — Historical formats remain self-describing
+
+EntityVersion state and Change Operation payloads carry schema versions.
+Readers may upcast immutable history but cannot rewrite it. A Store describes
+its identity, format, schema, capabilities, and object format sufficiently for
+reading or migration.
+
+### INV-056 — Commit identity is not state identity
+
+A commit's resulting-state digest verifies state, replay, and checkpoints but
+does not identify the historical commit. Different histories may produce the
+same state digest.
+
+### INV-057 — KnowledgeExposure binds an exact source version
+
+A Store-local KnowledgeExposure has stable identity and an immutable binding
+to source Store, Workspace, Knowledge, and KnowledgeVersion. It never follows
+source `latest` implicitly.
+
+### INV-058 — Consulting and adopting Knowledge are different
+
+Consulting an Exposure is read-only. Adoption explicitly creates
+Workspace-local Knowledge with retained Exposure/source-version provenance;
+later source changes never silently rewrite the adopted Knowledge.
+
+### INV-059 — Exposure history survives availability changes
+
+Withdrawal or supersession removes an Exposure from the appropriate current
+set but never deletes its history. Source drift creates a derived warning/status
+and does not silently change Exposure semantic state.
+
+### INV-060 — Ordinary portability preserves Store identity
+
+Copy, move, export/import, backup, and restore preserve Store identity. Only an
+explicit Store fork creates a new identity, with source-store lineage.
+
+### INV-061 — Import cannot resurrect runtime or overwrite divergence
+
+Import preserves Session/Claim/merge provenance but never blindly restores
+active Runtime Coordination. Same-Store import detects ref ancestry and
+divergence; last-write-wins is forbidden and recoverable states are preserved.
+
+### INV-062 — Bundle integrity covers canonical history
+
+A Bundle is self-contained for its profile and cannot omit data required to
+reconstruct and validate included canonical history. Rebuildable projections
+need not be transported. Immutable objects are hash-verified and deduplicated.
+
+### INV-063 — Portable references may remain unresolved, not severed
+
+An imported Resource locator may be unresolved and rebound. Cross-Bundle
+Knowledge provenance remains resolved or a portable unresolved external
+reference; source lineage cannot be erased merely because the source is absent.
+
+### INV-064 — V1 Knowledge federation is Store-local
+
+Knowledge Spaces do not provide cross-Store live references, remote
+subscriptions, or a global federation service in V1.

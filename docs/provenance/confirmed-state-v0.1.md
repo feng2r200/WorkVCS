@@ -5,6 +5,11 @@ confirmed-design baseline. It is supporting evidence, not a second normative
 product or architecture specification. Current design authority remains in the
 documents linked from [`docs/README.md`](../README.md).
 
+Architecture Specification decisions 81–188 later closed several questions
+that were Open in this initial snapshot. Their promotion chain is recorded in
+[Confirmed State v0.2 Provenance](confirmed-state-v0.2.md). The statements below
+remain an accurate history of v0.1 and must not be read as overriding v0.2.
+
 ## Source and evidence boundary
 
 The baseline was promoted on 2026-08-24 from confirmed decisions in the

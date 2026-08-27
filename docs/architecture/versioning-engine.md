@@ -12,7 +12,8 @@ Versioned Semantic Operation
 Atomic ChangeSet
         |
         +-- 1..N immutable Events
-        +-- canonical entity/relation changes
+        +-- deterministic Change Operations
+        +-- before/after EntityVersion and RelationVersion bindings
         `-- exactly 1 WorkStateCommit
 ```
 
@@ -41,8 +42,10 @@ A WorkStateCommit is immutable and records:
 - zero parents for a Workspace genesis commit, one parent for an ordinary
   mutation, or two parents for a completed merge;
 - its ChangeSet and semantic operation metadata;
-- active Workspace/Branch plus time and provenance sufficient to identify the
-  originating operation;
+- a digest of its canonical resulting state for replay/checkpoint/integrity
+  validation;
+- target Workspace plus the originating Branch, time, and provenance of the
+  accepted operation, without making the commit Branch-owned;
 - the originating Session when the operation occurs within one, without
   requiring every valid WorkStateCommit source to be a Session.
 
@@ -58,8 +61,11 @@ C4 --------- C9
   C6 -------
 ```
 
-The exact commit identity, serialization, and state-reconstruction strategy
-are not fixed by this baseline.
+Commit identity remains distinct from the resulting-state digest. The exact ID,
+digest algorithm, and serialization are not fixed. Canonical reconstruction is
+fixed at the logical level: Commit + ChangeSet + schema-versioned deterministic
+Change Operations are replay truth; Events are provenance. Detailed storage is
+defined in [Versioned-State Persistence Model](persistence-model.md).
 
 ## Branch semantics
 
@@ -67,6 +73,10 @@ A Work Branch may start at any historical WorkStateCommit. It represents a
 divergent work or cognition route and may exist without a Git Branch. Git
 branch, commit, or worktree associations are optional and do not define Work
 Branch identity.
+
+Branch creation is an O(1) ref operation and does not copy current Entity or
+Relation state. Materialized current projections are rebuildable caches; only
+HOT Branches need remain materialized.
 
 Multiple Sessions may work on one Work Branch. Agent concurrency alone is not
 a reason to create branches. Unmerged sibling Branch state is isolated from
@@ -103,15 +113,19 @@ Branch merge is a persistent workflow:
 merge start
   -> compute base, target head, source head
   -> classify changes
-  -> resolve or investigate
-  -> merge continue -> two-parent commit
-  -> or merge abort -> exact pre-merge target state
+  -> store provisional runtime resolutions
+  -> merge continue -> one atomic ChangeSet + two-parent commit
+  -> or merge abort -> target Work State was never changed
 ```
 
 Merge-in-progress is Runtime Coordination and may continue across commands or
 Sessions. The attempt, classifications, and resolutions remain provenance.
-Abort removes the provisional effect from current state but does not erase that
-the attempt occurred.
+One target Workspace/Branch has at most one active merge. Merge captures base,
+target head, and source head but locks neither Branch. Continue rejects moved
+source or target heads and requires restart or a later separately designed
+recomputation path. Abort marks the attempt aborted and preserves provenance;
+there is no target state to restore because provisional choices never became
+Work State.
 
 ### Classification
 
@@ -127,9 +141,15 @@ different active choices for Decisions with the same exclusive `scope` and
 ### Resolution
 
 Each unresolved item supports `ours`, `theirs`, or `custom`. `custom` may
-produce a third valid state rather than editing one field. A resolution is a
-major semantic transition and therefore records rationale or a causal entity
+produce a structured mini-ChangeSet and create a third valid state or new
+Entity rather than merely selecting one field. Until continue, every
+resolution remains provisional Runtime Coordination. A resolution is a major
+semantic transition and therefore records rationale or a causal entity
 reference.
+
+The resulting merge ChangeSet transforms primary parent=target into merged
+state; secondary parent=source preserves ancestry. Historical replay applies
+that recorded ChangeSet and never reruns the merge algorithm.
 
 ### Retaining unselected work
 
@@ -188,6 +208,10 @@ equal candidates is not fixed by this baseline. An atomic “claim next”
 operation selects, claims, focuses, and returns context without a race between
 separate read and claim steps.
 
+Claim-next does not imply TaskStart. For a Task/Branch, active Claims are none,
+exactly one exclusive, or one-or-more shared; exclusive and shared cannot
+coexist.
+
 ## Context projection
 
 Context resolution follows a deterministic pipeline:
@@ -241,16 +265,29 @@ fragments, and reports omitted categories and counts. Inactive cognition is
 omitted unless a direct causal path requires a concise summary to explain
 current state.
 
-## Source-state drift
+## Verification applicability and source-state drift
 
-WorkStateCommit and external source history are related but not lock-stepped.
-V1 must provide an exact review basis for source-state drift without making Git
-the Work-State database. Drift reporting distinguishes the current source
-observation, its comparison baseline, and the resulting difference. When
-source state supports a Verification, the retained provenance identifies the
-source observation used, including the Git SHA when Git is applicable. The
-concrete evidence entity model and capture points are not fixed by this
-baseline.
+Verification result is an immutable historical judgment. Current applicability
+is a branch-sensitive Derived Projection over declared Resource and Work-State
+Basis:
+
+```text
+any stale        -> stale
+else any unknown -> unknown
+else             -> applicable
+```
+
+Resource Basis identifies a stable logical Resource, scope, and baseline
+ResourceObservation/fingerprint. Work-State Basis identifies the verifying
+WorkStateCommit and explicit semantic dependencies. A Resource Adapter, not
+Core, supplies deterministic scoped fingerprint and difference. Git-backed
+Verification records the actual verified working state, including relevant
+uncommitted changes, rather than HEAD alone.
+
+Observation or drift alone creates no WorkStateCommit. Exact path matching,
+adapter implementations, and persisted capture points outside Verification or
+explicit snapshot remain Open. See
+[Verification and Resource Drift](verification-and-resource-drift.md).
 
 ## Failure guarantees
 
@@ -258,7 +295,10 @@ baseline.
   WorkStateCommit state.
 - A stale expected base never silently overwrites concurrent changes.
 - A merge cannot continue with unresolved `CONFLICT` or `REVIEW` items.
+- A merge cannot continue after its captured source or target head moves.
 - A restore cannot resurrect Runtime Coordination.
+- Store import cannot resurrect active Runtime Coordination or overwrite
+  divergent same-Store refs by last-write-wins.
 - A derived projection cannot certify history if its provenance is missing.
 - Errors are concise and actionable, exposing the relevant current state and a
   safe next action in an Agent-readable form.

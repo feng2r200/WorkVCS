@@ -18,6 +18,11 @@ Store, Workspace, and Knowledge Space define scope or ownership.
 Work Branch refs select heads in immutable version history. They are not
 versioned entities inside their own Work State.
 
+KnowledgeExposure history is an additional Store-local federation surface
+outside any Workspace Work State: Exposure source bindings are immutable,
+while current availability and source-stale status are projections or explicit
+federation state. V1 does not give Knowledge Space its own Work-State DAG.
+
 ## Scope containers
 
 ### Store
@@ -33,6 +38,10 @@ any one project directory or Git repository.
 
 **Version behavior:** A Store contains Work-State DAGs but is not itself a Work
 Branch.
+
+**Portability behavior:** Copy, move, export/import, backup, and restore retain
+Store identity. An explicit fork creates a new Store identity with source-store
+lineage. Import never blindly restores active Runtime Coordination.
 
 ### Workspace
 
@@ -54,19 +63,41 @@ and Work Branch. A Workspace is not a directory, repository, Store, or Session.
 **Purpose:** A long-lived knowledge-sharing boundary above individual
 Workspaces.
 
-**Owned state:** Shared Knowledge statements and their provenance.
+**Owned state:** Immutable KnowledgeExposure bindings, append-only Exposure
+history, current availability projection, and source provenance.
 
-**Relations:** A Workspace may make Knowledge available through a Knowledge
-Space, and another Workspace may read or use it. Goal, Plan, and Task graphs
-never cross Workspace boundaries in V1. Publication, reference, subscription,
-copying, and live-binding semantics are not fixed by this statement.
+**Relations:** A Workspace may expose one specific immutable KnowledgeVersion
+through a stable KnowledgeExposure. Another Workspace may consult that
+Exposure without mutation or explicitly adopt it into new Workspace-local
+Knowledge. Goal, Plan, and Task graphs never cross Workspace boundaries in V1.
 
-**Version behavior:** Cross-Workspace reuse preserves the originating
-Workspace, Decision, Verification, and WorkStateCommit lineage. It does not
-transfer execution ownership. No independent Knowledge Space DAG, access
-protocol, or concurrency model is confirmed yet; those mechanisms require an
-explicit confirmed decision before implementation and may then be recorded as
-an ADR under current repository policy.
+**Version behavior:** An Exposure binds a source Knowledge identity and one
+specific immutable KnowledgeVersion; it never follows `latest`. New source
+versions use new Exposures that may coexist or explicitly supersede older
+ones. Exposure may leave current availability, but its history is not deleted.
+Source drift changes a derived warning/status rather than silently mutating
+Exposure semantic state. V1 has no independent Knowledge Space DAG and no live
+cross-Store federation.
+
+### KnowledgeExposure
+
+**Purpose:** Publishes one exact Workspace Knowledge version through one
+Store-local Knowledge Space without copying or replacing the Knowledge.
+
+**Owned state:** Stable Exposure identity, Knowledge Space, source Store and
+Workspace identity, source Knowledge identity, source immutable version, and
+publication provenance.
+
+**Lifecycle:** The source binding is immutable. Current availability may be
+explicitly withdrawn or superseded while history remains. Relevant source
+change produces a derived source-stale status; it does not automatically
+transition Exposure semantic state. Exact lifecycle/source-status enum names
+remain Open.
+
+**Version behavior:** V1 uses append-only Exposure history and a current
+availability projection, not a Knowledge Space DAG. Consulting creates no
+Workspace mutation; adoption creates Workspace-local Knowledge with a
+`derived_from` edge and retained source-version provenance.
 
 ## Versioned Work State
 
@@ -75,7 +106,9 @@ an ADR under current repository policy.
 **Purpose:** States what the work ultimately intends to make true.
 
 **Lifecycle:** A Goal may be created before work or discovered after Tasks and
-Plans already exist. Achievement or abandonment is explicit.
+Plans already exist. Core states are `active`, `achieved`, and `abandoned`.
+Achievement, abandonment, and reopening are explicit and carry required
+provenance. Goal replacement is expressed through relation.
 
 **Owned state:** Description, state, optional SubGoals, rationale for terminal
 transitions, and references to Plans or other work.
@@ -96,10 +129,12 @@ confirmed path to the new Goal.
 **Purpose:** Describes a strategy, hypothesis, or decomposition for reaching a
 Goal or solving a Workspace-level problem.
 
-**Lifecycle:** A Plan may exist without a Goal, contain SubPlans and Tasks in
-mixed order, evolve in place for ordinary edits, and be superseded when its
-core strategy changes. A Goal may have multiple active Plans on one Work
-Branch. Completion is explicit.
+**Lifecycle:** A Plan may be `active`, `completed`, `abandoned`, or
+`superseded`. It may exist without a Goal, contain SubPlans and Tasks in mixed
+order, evolve in place for ordinary edits, and be superseded when its core
+strategy changes. A Goal may have multiple active Plans on one Work Branch.
+Completion, abandonment, and reopening are explicit; a superseded Plan cannot
+use an ordinary reopen.
 
 **Owned state:** Description, constraints, strategy, Plan-scoped Assumptions,
 status, ordered children, Task-graph references, and optional completion
@@ -122,7 +157,11 @@ and a compatibility Task as mixed siblings.
 `cancelled`, or `superseded`. Execution status and outcome are separate. A Task
 may be decomposed into SubTasks while remaining independently executable.
 After terminal state it remains queryable and may receive later Findings,
-Decisions, Knowledge, or links to newly discovered Tasks.
+Decisions, Knowledge, or links to newly discovered Tasks. `blocked` is an
+explicit non-dependency blocker; dependency blocking is derived readiness.
+`done`, `failed`, and `cancelled` require an explicit rationale-bearing reopen
+or retry to become non-terminal. `superseded` requires supersession-aware
+resolution.
 
 **Owned state:** Description, execution status, open-semantic outcome,
 priority, stable local Acceptance Criteria, and optional child ordering.
@@ -146,19 +185,43 @@ an option is still `done`, not `failed`.
 It may be revised without losing identity.
 
 **Owned state:** Stable Task-local identity, statement, required/optional
-classification, and current verification projection.
+classification, and zero or more stable AC-local Verification Requirements.
 
-**Relations:** Referenced by Verification, Evidence, and Decision objects.
+**Derived state:** Current effective verification projection.
+
+**Relations:** Referenced by Verification, Evidence, and Decision objects. A
+Verification targets a Requirement when one exists; without Requirements it
+may target the AC directly.
 
 **Version behavior:** It is versioned with its owning Task but uses a stable
 local reference such as `T-18/AC-2`.
 
-**Completion rule:** Criteria are optional. If they exist, every mandatory
-criterion must have Verification before WorkVCS may automatically mark the
-Task done.
+**Completion rule:** Criteria are optional. A criterion's effective projection
+is `unverified`, `verified`, `failed`, `stale`, or `conflicted`. Every mandatory
+criterion must be `verified` before Task completion; an ordinary coordination
+force cannot bypass this semantic gate.
 
 **Example:** Editing the wording of `T-18/AC-2` does not break an existing
 Verification reference.
+
+### Verification Requirement
+
+**Purpose:** Gives one Acceptance Criterion a stable, explicit statement of
+what must be proven when the criterion needs more than one required coverage
+item.
+
+**Owned state:** Stable AC-local identity and the intent to be proven. It does
+not prescribe a command, test framework, or execution method.
+
+**Relations:** A Verification targets one Requirement when the owning AC has
+Requirements. Multiple single-target Verifications may share one immutable
+Evidence object.
+
+**Version behavior:** Requirement identity remains historically referential
+when its statement is revised or when current AC structure changes. Revision,
+retirement, or supersession cannot erase a referenced historical Requirement.
+This domain contract does not decide whether the persistent representation is
+a separate table, embedded versioned state, or another SQLite shape.
 
 ### Decision
 
@@ -166,9 +229,10 @@ Verification reference.
 evidence supports the current choice.
 
 **Lifecycle:** An ordinary decision begins as `Record(kind=decision)`. An
-important one may be explicitly promoted to a Decision. A Decision may be
-active, superseded, or otherwise explicitly retired; later choices supersede
-rather than rewrite it.
+important one may be explicitly promoted to a Decision. A Decision is
+`active`, `superseded`, or `withdrawn`; later choices supersede rather than
+rewrite it. An old choice can return only through a new Decision that
+supersedes the current one.
 
 **Owned state:** Context, options, choice, rationale, consequences, optional
 exclusive `scope` and `subject`, status, and provenance references.
@@ -188,17 +252,19 @@ deterministic merge review even when their IDs differ.
 **Purpose:** Preserves a reusable statement learned through work, independently
 of whether the originating strategy was selected.
 
-**Lifecycle:** Knowledge may be active, superseded, invalidated, or made
-available for cross-Workspace reuse through a Knowledge Space. Natural-language
-topic similarity alone does not change its state.
+**Lifecycle:** Knowledge may be active, superseded, invalidated, or explicitly
+made available through a KnowledgeExposure that binds one immutable version.
+Natural-language topic similarity alone does not change its state.
 
 **Owned state:** Statement, scope, state, and provenance. V1 scopes include
-Workspace, Goal, Plan, Task, and path/module/tag. The representation of
-cross-Workspace availability is not fixed.
+Workspace, Goal, Plan, Task, and path/module/tag. Cross-Workspace availability
+uses Store-local KnowledgeExposure; the physical schema and access protocol
+remain unfixed.
 
 **Relations:** May be supported, contradicted, validated, invalidated, derived
-from, or superseded. It may be reused across Workspaces through a Knowledge
-Space; Tasks are not.
+from, or superseded. Consulting a KnowledgeExposure does not copy Knowledge.
+Explicit adoption creates new Workspace-local Knowledge `derived_from` the
+Exposure with source-version provenance; Tasks are never shared this way.
 
 **Version behavior:** Workspace-scoped Knowledge participates in that
 Workspace's Work-State DAG. Knowledge reused through a Knowledge Space
@@ -223,6 +289,13 @@ ordinary decision can be promoted to a Decision without erasing its origin.
 Whether `Blocker`, `Review`, or `Note` should be distinct V1 Record kinds is
 Open; no current confirmed requirement makes them distinct V1 kinds.
 
+An Assumption may move `unverified -> validated`, `unverified -> invalidated`,
+or `validated -> invalidated`; an invalidated Assumption is not ordinarily
+revalidated. A terminal Attempt is never reopened; another try creates another
+Attempt. One Session may create zero or more Handoff Records, but each Handoff
+belongs to exactly one Workspace and Work Branch and may bind a Focus/context
+path.
+
 **Owned state:** Kind, statement, scope, lifecycle fields appropriate to the
 kind, and provenance.
 
@@ -242,22 +315,26 @@ may be recorded once with its approach and result.
 or another claim passed, failed, or remained inconclusive, using explicit
 Evidence references.
 
-**Lifecycle:** A Verification is created explicitly or by a deterministic
-command wrapper. Its current semantic result and relationships belong to
-Versioned Work State. V1 does not infer a Verification from transcript text.
+**Lifecycle:** A Verification is one immutable single-target judgment created
+explicitly or by a deterministic command wrapper. Re-verification creates
+another judgment; it does not update or automatically supersede the prior
+instance. V1 does not infer a Verification from transcript text.
 
-**Owned state:** Target, result, method, Evidence references, and provenance
-sufficient to explain the judgment. This baseline does not fix the final
-persistence representation or require every Verification method to capture the
-same fields.
+**Owned state:** One AC or Verification Requirement target, immutable result,
+open structured method descriptor, structured Verification Basis, Evidence
+references, and provenance sufficient to explain the judgment. The Basis may
+include Resource scope/observation/fingerprint plus the verifying
+WorkStateCommit and explicit semantic dependencies.
 
-**Relations:** A Verification `verifies` an Acceptance Criterion or claim and
-is `evidenced_by` immutable Evidence.
+**Relations:** A Verification `verifies` a Verification Requirement when one
+exists, otherwise its Acceptance Criterion or another supported claim, and is
+`evidenced_by` immutable Evidence.
 
-**Version behavior:** Verification state and its relations participate in
-branch, diff, merge, and restore. Evidence remains immutable provenance; a Work
-Branch versions whether and how that Evidence supports the current
-Verification state.
+**Version behavior:** Judgment instances are immutable Versioned Work-State
+facts and their relations participate in branch, diff, merge, and restore.
+Evidence remains immutable provenance. Current applicability is the derived,
+branch-sensitive `applicable`, `stale`, or `unknown` projection and is not the
+historical result field.
 
 **Example:** Branch A may record `T-18/AC-2` as passed while Branch B records it
 as failed using different immutable Evidence; merge must preserve or resolve
@@ -270,8 +347,10 @@ the semantic difference.
 **Purpose:** Identifies one Agent execution provenance boundary and its current
 coordination state.
 
-**Lifecycle:** Starts, changes focus or active Workspace/Branch explicitly,
-and ends with a deterministic Session diff plus an optional semantic Handoff.
+**Lifecycle:** `starting -> active -> ending -> ended`, with
+`active <-> potentially_stale`. It changes Focus or active Workspace/Branch
+explicitly and ends with a deterministic Session diff plus optional semantic
+Handoffs.
 When claimed or in-progress work remains, Session end recommends a Handoff but
 does not require one. Normal end releases claims. After abnormal exit the
 Session is marked `potentially_stale` and its claims remain until explicit
@@ -309,8 +388,10 @@ lock or a Work-State version.
 
 **Lifecycle:** Exclusive by default, optionally shared, released on Branch
 switch by default, released on normal Session end, and explicitly taken over
-when a prior Session is stale. A takeover exposes the prior claimant and last
-activity and emits provenance.
+when a prior Session is stale. The active set is none, exactly one exclusive,
+or one-or-more shared; exclusive and shared cannot coexist. Mode change and
+takeover are explicit atomic operations. A forced takeover requires rationale
+and records prior claimant and last activity.
 
 **Owned state:** Session, Task, Work Branch, mode, and activity metadata.
 
@@ -325,7 +406,49 @@ claimant or explicit force provenance.
 **Version behavior:** Runtime-only. Claim creation, release, and takeover are
 immutable Events.
 
+Claiming or claim-next does not change Task status or imply TaskStart.
+
 ## Provenance and version primitives
+
+### EntityVersion and RelationVersion
+
+**Purpose:** Separate stable logical identity from complete immutable semantic
+state. An Entity or Relation may have many versions, and multiple Branches may
+select the same version.
+
+**Owned state:** Logical identity, state-schema version, complete canonical
+semantic state, state digest where applicable, creating ChangeSet, and optional
+structured field delta on the transition.
+
+**Version behavior:** Versions do not belong to a Branch. Branch heads and
+rebuildable current projections select active versions. Historical readers
+upcast old schema versions without rewriting them. Logical removal preserves
+identity and history.
+
+### Resource
+
+**Purpose:** Gives an associated external source or artifact set stable logical
+identity independently of its machine-local location.
+
+**Owned state:** Logical identity, Resource kind, and rebindable environment
+locator.
+
+**Version behavior:** Identity is portable. Locator rebind does not prove
+content continuity or Verification applicability.
+
+### ResourceObservation
+
+**Purpose:** Records immutable mechanical observation of one Resource at a
+point in time for Verification, diagnostics, or an explicit snapshot.
+
+**Owned state:** Resource identity, Adapter/format metadata, captured time,
+scope, fingerprint, availability metadata, and optional content-addressed
+manifest or diff reference.
+
+**Version behavior:** Immutable provenance, not Work-State semantic cognition.
+Observation or derived drift alone creates no WorkStateCommit. Verification
+persists the observation/fingerprint used as its basis; other capture points
+remain policy unless explicitly requested.
 
 ### Evidence
 
@@ -346,28 +469,33 @@ References to it and the semantic interpretation expressed by Verification
 belong to Versioned Work State.
 
 **Example:** A command wrapper may capture command, cwd, start/end, duration,
-exit status, output artifact or digest, and applicable Git SHA as Evidence for
-`T-18/AC-2`.
+exit status, output artifact or digest, and an observation/fingerprint of the
+actual verified Git state—including relevant uncommitted changes—as Evidence
+for `T-18/AC-2`.
 
 ### ChangeSet, Event, and WorkStateCommit
 
-**Purpose:** A ChangeSet is one atomic semantic mutation; Events are its
-immutable facts; a WorkStateCommit places the resulting state in the DAG.
+**Purpose:** A ChangeSet is one atomic semantic mutation; Change Operations are
+its deterministic state transformation; Events explain its semantics; a
+WorkStateCommit places the resulting state in the DAG.
 
 **Lifecycle:** One accepted versioned semantic operation creates one ChangeSet,
 one or more Events, and exactly one WorkStateCommit. Failure rolls back the
 complete ChangeSet. A pure Runtime Coordination operation updates runtime state
 atomically and emits provenance Events without creating a WorkStateCommit.
 
-**Owned state:** ChangeSet metadata and semantic intent; Event type and
-payload; commit parent(s), ChangeSet reference, time, and provenance sufficient
-to identify the originating operation. When the operation occurs within a
-Session, that Session is recorded; this baseline does not require every
-WorkStateCommit source to be a Session.
+**Owned state:** ChangeSet metadata and semantic intent; schema-versioned
+Change Operations with expected-before/after state; Event type and payload;
+commit parent(s), ChangeSet reference, resulting-state digest, time, and
+provenance sufficient to identify the originating operation. When the
+operation occurs within a Session, that Session is recorded; not every valid
+WorkStateCommit source must be a Session.
 
 **Relations:** A Workspace genesis commit has zero parents, a normal commit has
 one parent, and a merge commit has two.
 
-**Version behavior:** All three are immutable provenance/version primitives.
-The exact persistent representation and reconstruction strategy are not fixed
-by this baseline.
+**Version behavior:** All are immutable provenance/version primitives.
+Commit + ChangeSet + Change Operations reconstruct canonical Work State;
+Events are not replay truth. Commit identity and state digest remain distinct.
+The complete physical schema, ID format, digest algorithm, and encoding are not
+fixed.

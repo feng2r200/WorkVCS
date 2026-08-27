@@ -106,8 +106,10 @@ records from a transcript.
    Plan or Goal is discovered; later organization must preserve identity and
    history.
 4. **Cross-Workspace sharing transfers knowledge, not execution graphs.** Work
-   Graphs remain Workspace-local; Knowledge may be exposed and reused through
-   a Knowledge Space. The exchange mechanism is not fixed here.
+   Graphs remain Workspace-local. V1 exposes one immutable Workspace Knowledge
+   version through a stable Store-local KnowledgeExposure. Consulting it is
+   read-only; explicit adoption creates Workspace-local Knowledge with source
+   provenance.
 5. **Semantic intent is the Agent API.** WorkVCS derives low-level relations,
    events, and commits from an atomic high-level versioned operation; a
    runtime-only operation produces runtime state and Events without a commit.
@@ -123,3 +125,8 @@ This repository currently contains a confirmed design baseline, not an
 implemented WorkVCS runtime. Language selection, detailed storage schema, and
 the final CLI command surface remain implementation-planning work unless a
 confirmed document says otherwise.
+
+The confirmed logical persistence architecture now defines canonical
+Commit/ChangeSet history, immutable Entity/Relation versions, rebuildable
+projections, checkpoints, KnowledgeExposure, and portable Bundle semantics. It
+does not yet define a complete SQLite schema or runtime implementation.

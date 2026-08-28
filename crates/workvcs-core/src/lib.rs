@@ -15,7 +15,8 @@ pub use error::{ErrorCategory, ErrorCode, Result, WorkVcsError};
 pub use history::{
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryEntry, HistoryQueryOptions,
     HistoryQueryResult, HistoryStart, IntegrityReport, ReplayedState, TaskCreateCommit,
-    TaskCreateOptions, TaskSnapshot, TaskState, TaskStatus, WorkspaceInfo, WorkspaceInitOptions,
+    TaskCreateOptions, TaskSnapshot, TaskState, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 pub use identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,

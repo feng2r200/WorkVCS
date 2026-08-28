@@ -54,6 +54,14 @@ impl TaskStatus {
             ))),
         }
     }
+
+    fn is_non_terminal(self) -> bool {
+        matches!(self, Self::Pending | Self::InProgress | Self::Blocked)
+    }
+
+    fn allows_rationale_reentry(self) -> bool {
+        matches!(self, Self::Done | Self::Failed | Self::Cancelled)
+    }
 }
 
 impl fmt::Display for TaskStatus {
@@ -116,6 +124,28 @@ impl TaskState {
             ),
         ])
     }
+
+    fn transition(
+        &self,
+        next_status: TaskStatus,
+        outcome_update: &TaskOutcomeUpdate,
+        rationale: &CanonicalValue,
+    ) -> Result<Self> {
+        validate_lifecycle_transition(self.status, next_status, rationale)?;
+        let outcome = outcome_update.apply(self.outcome.as_ref())?;
+        let next = Self {
+            description: self.description.clone(),
+            status: next_status,
+            outcome,
+            priority: self.priority,
+        };
+        if next == *self {
+            return Err(WorkVcsError::TaskInvalid(
+                "task transition must change status or outcome".to_owned(),
+            ));
+        }
+        Ok(next)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +198,97 @@ pub struct TaskCreateCommit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskTransitionOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    task_entity_id: EntityId,
+    expected_task_entity_version_id: EntityVersionId,
+    next_status: TaskStatus,
+    outcome_update: TaskOutcomeUpdate,
+    rationale: CanonicalValue,
+}
+
+impl TaskTransitionOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        task_entity_id: EntityId,
+        expected_task_entity_version_id: EntityVersionId,
+        next_status: TaskStatus,
+    ) -> Result<Self> {
+        if next_status == TaskStatus::Superseded {
+            return Err(WorkVcsError::TaskInvalid(
+                "ordinary task transition to superseded requires supersession-aware resolution"
+                    .to_owned(),
+            ));
+        }
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            task_entity_id,
+            expected_task_entity_version_id,
+            next_status,
+            outcome_update: TaskOutcomeUpdate::Preserve,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_outcome(mut self, outcome: impl Into<String>) -> Result<Self> {
+        let outcome = outcome.into();
+        validate_outcome(&outcome)?;
+        self.outcome_update = TaskOutcomeUpdate::Set(outcome);
+        Ok(self)
+    }
+
+    pub fn clear_outcome(mut self) -> Self {
+        self.outcome_update = TaskOutcomeUpdate::Clear;
+        self
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TaskOutcomeUpdate {
+    Preserve,
+    Set(String),
+    Clear,
+}
+
+impl TaskOutcomeUpdate {
+    fn apply(&self, current: Option<&String>) -> Result<Option<String>> {
+        match self {
+            Self::Preserve => Ok(current.cloned()),
+            Self::Set(value) => {
+                validate_outcome(value)?;
+                Ok(Some(value.clone()))
+            }
+            Self::Clear => Ok(None),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskTransitionCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub task_entity_id: EntityId,
+    pub previous_task_entity_version_id: EntityVersionId,
+    pub task_entity_version_id: EntityVersionId,
+    pub task_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub previous_state: TaskState,
+    pub state: TaskState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskSnapshot {
     pub workspace_id: WorkspaceId,
     pub commit_id: CommitId,
@@ -202,6 +323,57 @@ pub(crate) fn create_task(
         task_state_digest: commit.entity_state_digest,
         work_state_digest: commit.work_state_digest,
         state: options.state.clone(),
+    })
+}
+
+pub(crate) fn transition_task(
+    connection: &mut StoreConnection,
+    options: &TaskTransitionOptions,
+) -> Result<TaskTransitionCommit> {
+    let current = task_at(
+        connection,
+        options.expected_head_commit_id,
+        options.task_entity_id,
+    )?;
+    if current.task_entity_version_id != options.expected_task_entity_version_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task entity {} expected version {}, found {} at commit {}",
+            options.task_entity_id,
+            options.expected_task_entity_version_id,
+            current.task_entity_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+
+    let next_state = current.state.transition(
+        options.next_status,
+        &options.outcome_update,
+        &options.rationale,
+    )?;
+    let entity_options = EntityTransitionOptions::update(
+        options.branch_id,
+        options.expected_head_commit_id,
+        options.task_entity_id,
+        options.expected_task_entity_version_id,
+        next_state.to_canonical_value()?,
+    )?
+    .with_rationale(options.rationale.clone());
+    let commit = commit_entity_transition(connection, &entity_options)?;
+
+    Ok(TaskTransitionCommit {
+        workspace_id: commit.workspace_id,
+        branch_id: commit.branch_id,
+        previous_head_commit_id: commit.previous_head_commit_id,
+        commit_id: commit.commit_id,
+        changeset_id: commit.changeset_id,
+        operation_id: commit.operation_id,
+        task_entity_id: commit.entity_id,
+        previous_task_entity_version_id: options.expected_task_entity_version_id,
+        task_entity_version_id: commit.entity_version_id,
+        task_state_digest: commit.entity_state_digest,
+        work_state_digest: commit.work_state_digest,
+        previous_state: current.state,
+        state: next_state,
     })
 }
 
@@ -479,6 +651,50 @@ fn validate_outcome(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_lifecycle_transition(
+    current_status: TaskStatus,
+    next_status: TaskStatus,
+    rationale: &CanonicalValue,
+) -> Result<()> {
+    if next_status == TaskStatus::Superseded {
+        return Err(WorkVcsError::TaskInvalid(
+            "ordinary task transition to superseded requires supersession-aware resolution"
+                .to_owned(),
+        ));
+    }
+    if current_status == TaskStatus::Superseded {
+        return Err(WorkVcsError::TaskInvalid(
+            "ordinary task transition from superseded requires supersession-aware resolution"
+                .to_owned(),
+        ));
+    }
+    if current_status.allows_rationale_reentry() && next_status.is_non_terminal() {
+        require_non_empty_rationale_object(rationale)?;
+        return Ok(());
+    }
+    if current_status.allows_rationale_reentry() && current_status != next_status {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "terminal task status {current_status} cannot transition directly to {next_status}"
+        )));
+    }
+    if next_status == TaskStatus::Cancelled && current_status != TaskStatus::Cancelled {
+        require_non_empty_rationale_object(rationale)?;
+    }
+    Ok(())
+}
+
+fn require_non_empty_rationale_object(value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(entries) if !entries.is_empty() => Ok(()),
+        CanonicalValue::Object(_) => Err(WorkVcsError::TaskInvalid(
+            "terminal task re-entry requires a non-empty rationale object".to_owned(),
+        )),
+        _ => Err(WorkVcsError::TaskInvalid(
+            "terminal task re-entry requires a rationale object".to_owned(),
+        )),
+    }
 }
 
 fn validate_priority(value: i64) -> Result<()> {

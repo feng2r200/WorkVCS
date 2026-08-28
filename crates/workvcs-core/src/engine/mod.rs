@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::history::{
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
     HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
-    TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions,
+    TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use std::path::Path;
@@ -69,6 +69,13 @@ impl Engine {
 
     pub fn create_task(&mut self, options: TaskCreateOptions) -> Result<TaskCreateCommit> {
         self.store.create_task(&options)
+    }
+
+    pub fn transition_task(
+        &mut self,
+        options: TaskTransitionOptions,
+    ) -> Result<TaskTransitionCommit> {
+        self.store.transition_task(&options)
     }
 
     pub fn task_at(&self, commit_id: CommitId, task_entity_id: EntityId) -> Result<TaskSnapshot> {

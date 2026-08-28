@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::history::{
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
     HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
-    TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions,
+    TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -98,6 +98,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::create_task(&mut self.connection, options)
+    }
+
+    pub(crate) fn transition_task(
+        &mut self,
+        options: &TaskTransitionOptions,
+    ) -> Result<TaskTransitionCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::transition_task(&mut self.connection, options)
     }
 
     pub(crate) fn task_at(

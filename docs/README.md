@@ -41,6 +41,7 @@ recorded as Accepted ADRs:
 - [ADR-0013: Phase 2 Query, Show-at, and History](decisions/adr/0013-phase-2-query-show-at-history.md)
 - [ADR-0014: Phase 2 Concurrency and Integrity Closure](decisions/adr/0014-phase-2-concurrency-integrity.md)
 - [ADR-0015: Phase 3A Task Semantic Kernel](decisions/adr/0015-phase-3a-task-semantic-kernel.md)
+- [ADR-0016: Phase 3B Task Lifecycle Transition](decisions/adr/0016-phase-3b-task-lifecycle-transition.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

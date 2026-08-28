@@ -34,6 +34,7 @@ recorded as Accepted ADRs:
 - [ADR-0006: SQLite Physical Schema v0.1 Contract](decisions/adr/0006-sqlite-physical-schema-v0.1.md)
 - [ADR-0007: Schema v0.1 Assembly, Install, and Integrity Contract](decisions/adr/0007-schema-v0.1-assembly-install-and-integrity.md)
 - [ADR-0008: Implementation Contract and Phase 1 Canonical Core](decisions/adr/0008-implementation-contract-and-phase-1-canonical-core.md)
+- [ADR-0009: Phase 2 Store Bootstrap and Open Boundary](decisions/adr/0009-phase-2-store-bootstrap-open.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

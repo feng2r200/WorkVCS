@@ -12,6 +12,7 @@ use crate::history::{
     WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::runtime::{
+    ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
     SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
     SessionSnapshot, SessionStartOptions, SessionStartResult,
 };
@@ -20,7 +21,7 @@ use crate::store::bootstrap::{
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
-use crate::{BranchId, CommitId, EntityId, SessionId, WorkspaceId, history, runtime};
+use crate::{BranchId, ClaimId, CommitId, EntityId, SessionId, WorkspaceId, history, runtime};
 use std::path::Path;
 
 pub(crate) struct Store {
@@ -265,5 +266,26 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::end_session(&mut self.connection, options)
+    }
+
+    pub(crate) fn claim_task(&mut self, options: &ClaimTaskOptions) -> Result<ClaimTaskResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::claim_task(&mut self.connection, options)
+    }
+
+    pub(crate) fn claim_snapshot(&self, claim_id: ClaimId) -> Result<ClaimSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::claim_snapshot(&self.connection, claim_id)
+    }
+
+    pub(crate) fn release_claim(
+        &mut self,
+        options: &ClaimReleaseOptions,
+    ) -> Result<ClaimReleaseResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::release_claim(&mut self.connection, options)
     }
 }

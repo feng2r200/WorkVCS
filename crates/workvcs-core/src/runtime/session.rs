@@ -1,3 +1,4 @@
+use super::claim;
 use crate::canonical::{CanonicalValue, WorkState, canonical_bytes, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history;
@@ -585,17 +586,7 @@ pub(crate) fn end_session(
             params![&session_id_bytes[..]],
         )
         .map_err(storage_error)?;
-    transaction
-        .execute(
-            "DELETE FROM claim_runtime
-             WHERE claim_id IN (
-                SELECT claim_id
-                FROM claim
-                WHERE session_id = ?1
-             )",
-            params![&session_id_bytes[..]],
-        )
-        .map_err(storage_error)?;
+    claim::release_active_claims_for_session_end(&transaction, options.session_id(), now_us)?;
     let removed_runtime = transaction
         .execute(
             "DELETE FROM session_runtime
@@ -734,12 +725,12 @@ struct SessionRuntimeRow {
     runtime_json: String,
 }
 
-struct ActiveSessionProjection {
-    active_workspace_id: WorkspaceId,
-    active_branch_id: BranchId,
+pub(super) struct ActiveSessionProjection {
+    pub(super) active_workspace_id: WorkspaceId,
+    pub(super) active_branch_id: BranchId,
 }
 
-fn active_session_projection(
+pub(super) fn active_session_projection(
     connection: &StoreConnection,
     session_id: SessionId,
 ) -> Result<ActiveSessionProjection> {
@@ -821,7 +812,7 @@ fn load_active_branch(
     })
 }
 
-fn load_active_session_runtime_for_update(
+pub(super) fn load_active_session_runtime_for_update(
     transaction: &Transaction<'_>,
     session_id: SessionId,
 ) -> Result<ActiveSessionProjection> {
@@ -910,7 +901,7 @@ fn ensure_no_session_diff(transaction: &Transaction<'_>, session_id: SessionId) 
     }
 }
 
-fn update_session_activity(
+pub(super) fn update_session_activity(
     transaction: &Transaction<'_>,
     session_id: SessionId,
     occurred_at_us: i64,

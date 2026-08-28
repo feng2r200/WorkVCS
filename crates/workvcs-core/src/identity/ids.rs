@@ -115,3 +115,4 @@ typed_uuid!(OperationId);
 typed_uuid!(EventId);
 typed_uuid!(SessionId);
 typed_uuid!(SessionDiffId);
+typed_uuid!(ClaimId);

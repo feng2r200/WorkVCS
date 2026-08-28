@@ -1,4 +1,5 @@
 use crate::BranchId;
+use crate::ClaimId;
 use crate::CommitId;
 use crate::EntityId;
 use crate::SessionId;
@@ -18,6 +19,7 @@ use crate::history::{
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
+    ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
     SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
     SessionSnapshot, SessionStartOptions, SessionStartResult,
 };
@@ -189,5 +191,17 @@ impl Engine {
 
     pub fn end_session(&mut self, options: SessionEndOptions) -> Result<SessionEndResult> {
         self.store.end_session(&options)
+    }
+
+    pub fn claim_task(&mut self, options: ClaimTaskOptions) -> Result<ClaimTaskResult> {
+        self.store.claim_task(&options)
+    }
+
+    pub fn claim_snapshot(&self, claim_id: ClaimId) -> Result<ClaimSnapshot> {
+        self.store.claim_snapshot(claim_id)
+    }
+
+    pub fn release_claim(&mut self, options: ClaimReleaseOptions) -> Result<ClaimReleaseResult> {
+        self.store.release_claim(&options)
     }
 }

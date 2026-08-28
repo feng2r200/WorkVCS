@@ -1,0 +1,750 @@
+use super::session;
+use crate::canonical::{CanonicalValue, canonical_bytes};
+use crate::error::{Result, WorkVcsError, storage_error};
+use crate::history;
+use crate::identity::{BranchId, ClaimId, CommitId, EntityId, EventId, SessionId, WorkspaceId};
+use crate::store::{StoreConnection, current_epoch_micros};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+
+const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
+const CLAIM_OBJECT_KIND: &str = "claim";
+const EXCLUSIVE_CLAIM_MODE: &str = "exclusive";
+const ACTIVE_CLAIM_LIFECYCLE_STATE: &str = "active";
+const RELEASED_CLAIM_LIFECYCLE_STATE: &str = "released";
+const CLAIM_CREATED_EVENT_KIND: &str = "claim.created";
+const CLAIM_RELEASED_EVENT_KIND: &str = "claim.released";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimLifecycleState {
+    Active,
+    Released,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimMode {
+    Exclusive,
+}
+
+impl ClaimMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Exclusive => EXCLUSIVE_CLAIM_MODE,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimTaskOptions {
+    session_id: SessionId,
+    task_entity_id: EntityId,
+}
+
+impl ClaimTaskOptions {
+    pub fn new(session_id: SessionId, task_entity_id: EntityId) -> Self {
+        Self {
+            session_id,
+            task_entity_id,
+        }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn task_entity_id(&self) -> EntityId {
+        self.task_entity_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimReleaseOptions {
+    session_id: SessionId,
+    claim_id: ClaimId,
+}
+
+impl ClaimReleaseOptions {
+    pub fn new(session_id: SessionId, claim_id: ClaimId) -> Self {
+        Self {
+            session_id,
+            claim_id,
+        }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn claim_id(&self) -> ClaimId {
+        self.claim_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimTaskResult {
+    pub claim_id: ClaimId,
+    pub session_id: SessionId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub task_entity_id: EntityId,
+    pub mode: ClaimMode,
+    pub claimed_at_us: i64,
+    pub state: ClaimSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimReleaseResult {
+    pub claim_id: ClaimId,
+    pub session_id: SessionId,
+    pub released_at_us: i64,
+    pub state: ClaimSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimSnapshot {
+    pub claim_id: ClaimId,
+    pub lifecycle_state: ClaimLifecycleState,
+    pub session_id: SessionId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub task_entity_id: EntityId,
+    pub mode: ClaimMode,
+    pub created_at_us: i64,
+    pub last_activity_at_us: Option<i64>,
+}
+
+pub(crate) fn release_claim(
+    connection: &mut StoreConnection,
+    options: &ClaimReleaseOptions,
+) -> Result<ClaimReleaseResult> {
+    connection.verify_foreign_keys()?;
+    session::active_session_projection(connection, options.session_id())?;
+    let now_us = current_epoch_micros()?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    session::load_active_session_runtime_for_update(&transaction, options.session_id())?;
+    let claim = load_claim(&transaction, options.claim_id())?;
+    if claim.session_id != options.session_id() {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "claim {} is owned by session {}, not releasing session {}",
+            options.claim_id(),
+            claim.session_id,
+            options.session_id()
+        )));
+    }
+    ensure_claim_runtime_exists(&transaction, options.claim_id())?;
+    release_claim_runtime_for_row(&transaction, options.claim_id(), &claim, now_us)?;
+    session::update_session_activity(&transaction, options.session_id(), now_us)?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(ClaimReleaseResult {
+        claim_id: options.claim_id(),
+        session_id: options.session_id(),
+        released_at_us: now_us,
+        state: claim_snapshot(connection, options.claim_id())?,
+    })
+}
+
+pub(crate) fn claim_task(
+    connection: &mut StoreConnection,
+    options: &ClaimTaskOptions,
+) -> Result<ClaimTaskResult> {
+    connection.verify_foreign_keys()?;
+    let active = session::active_session_projection(connection, options.session_id())?;
+    let branch_head = history::branch_head(connection, active.active_branch_id)?;
+    if branch_head.workspace_id != active.active_workspace_id {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} active branch {} belongs to workspace {}, not active workspace {}",
+            options.session_id(),
+            active.active_branch_id,
+            branch_head.workspace_id,
+            active.active_workspace_id
+        )));
+    }
+    if branch_head.lifecycle_state != ACTIVE_BRANCH_LIFECYCLE_STATE {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} active branch {} has lifecycle state {:?}",
+            options.session_id(),
+            active.active_branch_id,
+            branch_head.lifecycle_state
+        )));
+    }
+    history::task_at(
+        connection,
+        branch_head.head_commit_id,
+        options.task_entity_id(),
+    )?;
+
+    let claim_id = ClaimId::new_v7();
+    let event_id = EventId::new_v7();
+    let now_us = current_epoch_micros()?;
+    let event_payload_json = claim_created_payload_json(
+        claim_id,
+        options.session_id(),
+        active.active_workspace_id,
+        active.active_branch_id,
+        options.task_entity_id(),
+    )?;
+
+    let claim_id_bytes = claim_id.raw_bytes();
+    let event_id_bytes = event_id.raw_bytes();
+    let session_id_bytes = options.session_id().raw_bytes();
+    let workspace_id_bytes = active.active_workspace_id.raw_bytes();
+    let branch_id_bytes = active.active_branch_id.raw_bytes();
+    let task_entity_id_bytes = options.task_entity_id().raw_bytes();
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let current_runtime =
+        session::load_active_session_runtime_for_update(&transaction, options.session_id())?;
+    if current_runtime.active_workspace_id != active.active_workspace_id
+        || current_runtime.active_branch_id != active.active_branch_id
+    {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} active target changed before claim could be written",
+            options.session_id()
+        )));
+    }
+    let current_branch = load_active_branch(&transaction, active.active_branch_id)?;
+    if current_branch.workspace_id != active.active_workspace_id {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} active branch {} belongs to workspace {}, not active workspace {}",
+            options.session_id(),
+            active.active_branch_id,
+            current_branch.workspace_id,
+            active.active_workspace_id
+        )));
+    }
+    if current_branch.head_commit_id != branch_head.head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} head changed before claim {} could be written",
+            active.active_branch_id, claim_id
+        )));
+    }
+    ensure_no_active_claim_conflict(
+        &transaction,
+        active.active_workspace_id,
+        active.active_branch_id,
+        options.task_entity_id(),
+    )?;
+
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![&claim_id_bytes[..], CLAIM_OBJECT_KIND, now_us],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO claim(
+                claim_id,
+                session_id,
+                workspace_id,
+                branch_id,
+                task_entity_id,
+                mode,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &claim_id_bytes[..],
+                &session_id_bytes[..],
+                &workspace_id_bytes[..],
+                &branch_id_bytes[..],
+                &task_entity_id_bytes[..],
+                EXCLUSIVE_CLAIM_MODE,
+                now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO claim_runtime(claim_id, last_activity_at_us)
+             VALUES (?1, ?2)",
+            params![&claim_id_bytes[..], now_us],
+        )
+        .map_err(storage_error)?;
+    session::update_session_activity(&transaction, options.session_id(), now_us)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
+            params![
+                &event_id_bytes[..],
+                &workspace_id_bytes[..],
+                &session_id_bytes[..],
+                CLAIM_CREATED_EVENT_KIND,
+                now_us,
+                event_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    transaction.commit().map_err(storage_error)?;
+
+    let state = claim_snapshot(connection, claim_id)?;
+    Ok(ClaimTaskResult {
+        claim_id,
+        session_id: options.session_id(),
+        workspace_id: active.active_workspace_id,
+        branch_id: active.active_branch_id,
+        task_entity_id: options.task_entity_id(),
+        mode: ClaimMode::Exclusive,
+        claimed_at_us: now_us,
+        state,
+    })
+}
+
+pub(crate) fn claim_snapshot(
+    connection: &StoreConnection,
+    claim_id: ClaimId,
+) -> Result<ClaimSnapshot> {
+    connection.verify_foreign_keys()?;
+    let transaction = connection
+        .inner()
+        .unchecked_transaction()
+        .map_err(storage_error)?;
+    let snapshot = claim_snapshot_from_connection(&transaction, claim_id)?;
+    transaction.commit().map_err(storage_error)?;
+    Ok(snapshot)
+}
+
+pub(super) fn release_active_claims_for_session_end(
+    transaction: &Transaction<'_>,
+    session_id: SessionId,
+    occurred_at_us: i64,
+) -> Result<usize> {
+    let active_claims = load_active_claims_for_session(transaction, session_id)?;
+    for (claim_id, claim) in &active_claims {
+        release_claim_runtime_for_row(transaction, *claim_id, claim, occurred_at_us)?;
+    }
+    Ok(active_claims.len())
+}
+
+fn claim_snapshot_from_connection(
+    connection: &Connection,
+    claim_id: ClaimId,
+) -> Result<ClaimSnapshot> {
+    let claim = load_claim(connection, claim_id)?;
+    let last_activity_at_us = load_claim_runtime(connection, claim_id)?;
+    Ok(ClaimSnapshot {
+        claim_id,
+        lifecycle_state: if last_activity_at_us.is_some() {
+            ClaimLifecycleState::Active
+        } else {
+            ClaimLifecycleState::Released
+        },
+        session_id: claim.session_id,
+        workspace_id: claim.workspace_id,
+        branch_id: claim.branch_id,
+        task_entity_id: claim.task_entity_id,
+        mode: claim.mode,
+        created_at_us: claim.created_at_us,
+        last_activity_at_us,
+    })
+}
+
+struct BranchRuntimeRow {
+    workspace_id: WorkspaceId,
+    head_commit_id: CommitId,
+}
+
+struct ClaimRow {
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    task_entity_id: EntityId,
+    mode: ClaimMode,
+    created_at_us: i64,
+}
+
+fn load_active_claims_for_session(
+    transaction: &Transaction<'_>,
+    session_id: SessionId,
+) -> Result<Vec<(ClaimId, ClaimRow)>> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT claim.claim_id,
+                    claim.session_id,
+                    claim.workspace_id,
+                    claim.branch_id,
+                    claim.task_entity_id,
+                    claim.mode,
+                    claim.created_at_us
+             FROM claim_runtime
+             INNER JOIN claim ON claim.claim_id = claim_runtime.claim_id
+             WHERE claim.session_id = ?1
+             ORDER BY claim.claim_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&session_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut claims = Vec::new();
+    for row in rows {
+        let (claim_id, session_id, workspace_id, branch_id, task_entity_id, mode, created_at_us) =
+            row.map_err(storage_error)?;
+        let claim_id = decode_claim_id("claim.claim_id", claim_id)?;
+        claims.push((
+            claim_id,
+            ClaimRow {
+                session_id: decode_session_id("claim.session_id", session_id)?,
+                workspace_id: decode_workspace_id("claim.workspace_id", workspace_id)?,
+                branch_id: decode_branch_id("claim.branch_id", branch_id)?,
+                task_entity_id: decode_entity_id("claim.task_entity_id", task_entity_id)?,
+                mode: decode_claim_mode(&mode)?,
+                created_at_us,
+            },
+        ));
+    }
+    Ok(claims)
+}
+
+fn load_active_branch(
+    transaction: &Transaction<'_>,
+    branch_id: BranchId,
+) -> Result<BranchRuntimeRow> {
+    let row = transaction
+        .query_row(
+            "SELECT workspace_id, head_commit_id, lifecycle_state
+             FROM branch
+             WHERE branch_id = ?1",
+            params![&branch_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((workspace_id, head_commit_id, lifecycle_state)) = row else {
+        return Err(WorkVcsError::BranchNotFound(format!(
+            "branch {branch_id} does not exist"
+        )));
+    };
+    if lifecycle_state != ACTIVE_BRANCH_LIFECYCLE_STATE {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "branch {branch_id} has lifecycle state {lifecycle_state:?}"
+        )));
+    }
+
+    Ok(BranchRuntimeRow {
+        workspace_id: decode_workspace_id("branch.workspace_id", workspace_id)?,
+        head_commit_id: decode_commit_id("branch.head_commit_id", head_commit_id)?,
+    })
+}
+
+fn ensure_no_active_claim_conflict(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    task_entity_id: EntityId,
+) -> Result<()> {
+    let row = transaction
+        .query_row(
+            "SELECT claim.claim_id, claim.mode
+             FROM claim_runtime
+             INNER JOIN claim ON claim.claim_id = claim_runtime.claim_id
+             WHERE claim.workspace_id = ?1
+               AND claim.branch_id = ?2
+               AND claim.task_entity_id = ?3
+             LIMIT 1",
+            params![
+                &workspace_id.raw_bytes()[..],
+                &branch_id.raw_bytes()[..],
+                &task_entity_id.raw_bytes()[..]
+            ],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    if let Some((claim_id, mode)) = row {
+        let claim_id = decode_claim_id("claim.claim_id", claim_id)?;
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "task {task_entity_id} already has active {mode:?} claim {claim_id} on branch {branch_id}"
+        )));
+    }
+    Ok(())
+}
+
+fn load_claim(connection: &Connection, claim_id: ClaimId) -> Result<ClaimRow> {
+    let row = connection
+        .query_row(
+            "SELECT session_id,
+                    workspace_id,
+                    branch_id,
+                    task_entity_id,
+                    mode,
+                    created_at_us
+             FROM claim
+             WHERE claim_id = ?1",
+            params![&claim_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((session_id, workspace_id, branch_id, task_entity_id, mode, created_at_us)) = row
+    else {
+        return Err(WorkVcsError::ClaimNotFound(format!(
+            "claim {claim_id} does not exist"
+        )));
+    };
+
+    Ok(ClaimRow {
+        session_id: decode_session_id("claim.session_id", session_id)?,
+        workspace_id: decode_workspace_id("claim.workspace_id", workspace_id)?,
+        branch_id: decode_branch_id("claim.branch_id", branch_id)?,
+        task_entity_id: decode_entity_id("claim.task_entity_id", task_entity_id)?,
+        mode: decode_claim_mode(&mode)?,
+        created_at_us,
+    })
+}
+
+fn load_claim_runtime(connection: &Connection, claim_id: ClaimId) -> Result<Option<i64>> {
+    connection
+        .query_row(
+            "SELECT last_activity_at_us
+             FROM claim_runtime
+             WHERE claim_id = ?1",
+            params![&claim_id.raw_bytes()[..]],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(storage_error)
+}
+
+fn ensure_claim_runtime_exists(connection: &Connection, claim_id: ClaimId) -> Result<()> {
+    if load_claim_runtime(connection, claim_id)?.is_some() {
+        Ok(())
+    } else {
+        Err(WorkVcsError::ClaimInvalid(format!(
+            "claim {claim_id} is not active"
+        )))
+    }
+}
+
+fn release_claim_runtime_for_row(
+    transaction: &Transaction<'_>,
+    claim_id: ClaimId,
+    claim: &ClaimRow,
+    occurred_at_us: i64,
+) -> Result<()> {
+    let claim_id_bytes = claim_id.raw_bytes();
+    let deleted = transaction
+        .execute(
+            "DELETE FROM claim_runtime
+             WHERE claim_id = ?1",
+            params![&claim_id_bytes[..]],
+        )
+        .map_err(storage_error)?;
+    if deleted != 1 {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "claim {claim_id} runtime cleanup affected {deleted} rows"
+        )));
+    }
+    let event_id = EventId::new_v7();
+    let event_id_bytes = event_id.raw_bytes();
+    let workspace_id_bytes = claim.workspace_id.raw_bytes();
+    let session_id_bytes = claim.session_id.raw_bytes();
+    let event_payload_json = claim_released_payload_json(claim_id, claim)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
+            params![
+                &event_id_bytes[..],
+                &workspace_id_bytes[..],
+                &session_id_bytes[..],
+                CLAIM_RELEASED_EVENT_KIND,
+                occurred_at_us,
+                event_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn claim_created_payload_json(
+    claim_id: ClaimId,
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    task_entity_id: EntityId,
+) -> Result<String> {
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "branch_id".to_owned(),
+            CanonicalValue::String(branch_id.to_string()),
+        ),
+        (
+            "claim_id".to_owned(),
+            CanonicalValue::String(claim_id.to_string()),
+        ),
+        (
+            "lifecycle_state".to_owned(),
+            CanonicalValue::String(ACTIVE_CLAIM_LIFECYCLE_STATE.to_owned()),
+        ),
+        (
+            "mode".to_owned(),
+            CanonicalValue::String(ClaimMode::Exclusive.as_str().to_owned()),
+        ),
+        (
+            "session_id".to_owned(),
+            CanonicalValue::String(session_id.to_string()),
+        ),
+        (
+            "task_entity_id".to_owned(),
+            CanonicalValue::String(task_entity_id.to_string()),
+        ),
+        (
+            "workspace_id".to_owned(),
+            CanonicalValue::String(workspace_id.to_string()),
+        ),
+    ])?)
+}
+
+fn claim_released_payload_json(claim_id: ClaimId, claim: &ClaimRow) -> Result<String> {
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "branch_id".to_owned(),
+            CanonicalValue::String(claim.branch_id.to_string()),
+        ),
+        (
+            "claim_id".to_owned(),
+            CanonicalValue::String(claim_id.to_string()),
+        ),
+        (
+            "lifecycle_state".to_owned(),
+            CanonicalValue::String(RELEASED_CLAIM_LIFECYCLE_STATE.to_owned()),
+        ),
+        (
+            "mode".to_owned(),
+            CanonicalValue::String(claim.mode.as_str().to_owned()),
+        ),
+        (
+            "session_id".to_owned(),
+            CanonicalValue::String(claim.session_id.to_string()),
+        ),
+        (
+            "task_entity_id".to_owned(),
+            CanonicalValue::String(claim.task_entity_id.to_string()),
+        ),
+        (
+            "workspace_id".to_owned(),
+            CanonicalValue::String(claim.workspace_id.to_string()),
+        ),
+    ])?)
+}
+
+fn canonical_json_string(value: &CanonicalValue) -> Result<String> {
+    String::from_utf8(canonical_bytes(value)?).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!("canonical JSON was not UTF-8: {error}"))
+    })
+}
+
+fn decode_claim_mode(value: &str) -> Result<ClaimMode> {
+    match value {
+        EXCLUSIVE_CLAIM_MODE => Ok(ClaimMode::Exclusive),
+        "shared" => Err(WorkVcsError::ClaimInvalid(
+            "shared claim mode is not supported by Phase 3F APIs".to_owned(),
+        )),
+        other => Err(WorkVcsError::ClaimInvalid(format!(
+            "claim mode {other:?} is not supported"
+        ))),
+    }
+}
+
+fn decode_session_id(column: &str, bytes: Vec<u8>) -> Result<SessionId> {
+    let bytes = decode_16(column, bytes)?;
+    SessionId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ClaimInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
+    let bytes = decode_16(column, bytes)?;
+    WorkspaceId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ClaimInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_branch_id(column: &str, bytes: Vec<u8>) -> Result<BranchId> {
+    let bytes = decode_16(column, bytes)?;
+    BranchId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ClaimInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
+    let bytes = decode_16(column, bytes)?;
+    CommitId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ClaimInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_claim_id(column: &str, bytes: Vec<u8>) -> Result<ClaimId> {
+    let bytes = decode_16(column, bytes)?;
+    ClaimId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ClaimInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
+    let bytes = decode_16(column, bytes)?;
+    EntityId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ClaimInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {
+    bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::ClaimInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
+    })
+}

@@ -29,6 +29,8 @@ pub enum ErrorCode {
     CommitNotFound,
     BranchHeadConflict,
     BranchNotFound,
+    ClaimInvalid,
+    ClaimNotFound,
     EntityNotFound,
     EntityTransitionInvalid,
     QueryInvalid,
@@ -73,6 +75,12 @@ pub enum WorkVcsError {
 
     #[error("branch not found: {0}")]
     BranchNotFound(String),
+
+    #[error("claim invalid: {0}")]
+    ClaimInvalid(String),
+
+    #[error("claim not found: {0}")]
+    ClaimNotFound(String),
 
     #[error("entity not found: {0}")]
     EntityNotFound(String),
@@ -137,6 +145,8 @@ impl WorkVcsError {
             Self::CommitNotFound(_) => ErrorCode::CommitNotFound,
             Self::BranchHeadConflict(_) => ErrorCode::BranchHeadConflict,
             Self::BranchNotFound(_) => ErrorCode::BranchNotFound,
+            Self::ClaimInvalid(_) => ErrorCode::ClaimInvalid,
+            Self::ClaimNotFound(_) => ErrorCode::ClaimNotFound,
             Self::EntityNotFound(_) => ErrorCode::EntityNotFound,
             Self::EntityTransitionInvalid(_) => ErrorCode::EntityTransitionInvalid,
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
@@ -171,7 +181,10 @@ impl WorkVcsError {
             Self::CommitNotFound(_) | Self::ReplayInvalid(_) | Self::ReplayUnsupported(_) => {
                 ErrorCategory::Replay
             }
-            Self::SessionInvalid(_) | Self::SessionNotFound(_) => ErrorCategory::Runtime,
+            Self::ClaimInvalid(_)
+            | Self::ClaimNotFound(_)
+            | Self::SessionInvalid(_)
+            | Self::SessionNotFound(_) => ErrorCategory::Runtime,
             Self::StoreAlreadyInitialized(_)
             | Self::StoreBootstrapInvalid(_)
             | Self::StoreCompatibilityUnsupported(_) => ErrorCategory::Store,

@@ -30,8 +30,12 @@ pub use history::{
     WorkspaceInfo, WorkspaceInitOptions,
 };
 pub use identity::{
-    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,
-    RelationId, RelationVersionId, SessionDiffId, SessionId, StoreId, WorkspaceId,
+    BranchId, ChangeSetId, ClaimId, CommitId, Digest, EntityId, EntityVersionId, EventId,
+    OperationId, RelationId, RelationVersionId, SessionDiffId, SessionId, StoreId, WorkspaceId,
+};
+pub use runtime::{
+    ClaimLifecycleState, ClaimMode, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
+    ClaimTaskOptions, ClaimTaskResult,
 };
 pub use runtime::{
     SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions, SessionFocusPathEntry,

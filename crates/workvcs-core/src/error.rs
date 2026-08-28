@@ -7,6 +7,7 @@ pub enum ErrorCategory {
     Canonical,
     Identity,
     Import,
+    Replay,
     Store,
     Storage,
     Time,
@@ -19,6 +20,9 @@ pub enum ErrorCode {
     DigestInvalid,
     IdentityInvalid,
     ImmutableImportInvalid,
+    CommitNotFound,
+    ReplayInvalid,
+    ReplayUnsupported,
     StoreAlreadyInitialized,
     StoreBootstrapInvalid,
     StoreCompatibilityUnsupported,
@@ -41,6 +45,15 @@ pub enum WorkVcsError {
 
     #[error("immutable import fixed-point validation failed: {0}")]
     ImmutableImportInvalid(String),
+
+    #[error("commit not found: {0}")]
+    CommitNotFound(String),
+
+    #[error("replay invalid: {0}")]
+    ReplayInvalid(String),
+
+    #[error("replay unsupported: {0}")]
+    ReplayUnsupported(String),
 
     #[error("store already initialized: {0}")]
     StoreAlreadyInitialized(String),
@@ -71,6 +84,9 @@ impl WorkVcsError {
             Self::DigestInvalid(_) => ErrorCode::DigestInvalid,
             Self::IdentityInvalid(_) => ErrorCode::IdentityInvalid,
             Self::ImmutableImportInvalid(_) => ErrorCode::ImmutableImportInvalid,
+            Self::CommitNotFound(_) => ErrorCode::CommitNotFound,
+            Self::ReplayInvalid(_) => ErrorCode::ReplayInvalid,
+            Self::ReplayUnsupported(_) => ErrorCode::ReplayUnsupported,
             Self::StoreAlreadyInitialized(_) => ErrorCode::StoreAlreadyInitialized,
             Self::StoreBootstrapInvalid(_) => ErrorCode::StoreBootstrapInvalid,
             Self::StoreCompatibilityUnsupported(_) => ErrorCode::StoreCompatibilityUnsupported,
@@ -86,6 +102,9 @@ impl WorkVcsError {
             Self::CanonicalEncodingInvalid(_) | Self::DigestInvalid(_) => ErrorCategory::Canonical,
             Self::IdentityInvalid(_) => ErrorCategory::Identity,
             Self::ImmutableImportInvalid(_) => ErrorCategory::Import,
+            Self::CommitNotFound(_) | Self::ReplayInvalid(_) | Self::ReplayUnsupported(_) => {
+                ErrorCategory::Replay
+            }
             Self::StoreAlreadyInitialized(_)
             | Self::StoreBootstrapInvalid(_)
             | Self::StoreCompatibilityUnsupported(_) => ErrorCategory::Store,

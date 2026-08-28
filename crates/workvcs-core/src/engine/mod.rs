@@ -1,6 +1,7 @@
+use crate::CommitId;
 use crate::WorkspaceId;
 use crate::error::Result;
-use crate::history::{WorkspaceInfo, WorkspaceInitOptions};
+use crate::history::{ReplayedState, WorkspaceInfo, WorkspaceInitOptions};
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use std::path::Path;
 
@@ -31,5 +32,9 @@ impl Engine {
 
     pub fn workspace_info(&self, workspace_id: WorkspaceId) -> Result<WorkspaceInfo> {
         self.store.workspace_info(workspace_id)
+    }
+
+    pub fn state_at(&self, commit_id: CommitId) -> Result<ReplayedState> {
+        self.store.state_at(commit_id)
     }
 }

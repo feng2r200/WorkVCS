@@ -12,7 +12,7 @@ pub use canonical::{
 };
 pub use engine::Engine;
 pub use error::{ErrorCategory, ErrorCode, Result, WorkVcsError};
-pub use history::{WorkspaceInfo, WorkspaceInitOptions};
+pub use history::{ReplayedState, WorkspaceInfo, WorkspaceInitOptions};
 pub use identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, RelationId,
     RelationVersionId, StoreId, WorkspaceId,

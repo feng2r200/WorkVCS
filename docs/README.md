@@ -36,6 +36,7 @@ recorded as Accepted ADRs:
 - [ADR-0008: Implementation Contract and Phase 1 Canonical Core](decisions/adr/0008-implementation-contract-and-phase-1-canonical-core.md)
 - [ADR-0009: Phase 2 Store Bootstrap and Open Boundary](decisions/adr/0009-phase-2-store-bootstrap-open.md)
 - [ADR-0010: Phase 2 Workspace Genesis Bootstrap](decisions/adr/0010-phase-2-workspace-genesis-bootstrap.md)
+- [ADR-0011: Phase 2 Genesis Replay](decisions/adr/0011-phase-2-genesis-replay.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

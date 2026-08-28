@@ -1,11 +1,11 @@
 use crate::error::Result;
-use crate::history::{WorkspaceInfo, WorkspaceInitOptions};
+use crate::history::{ReplayedState, WorkspaceInfo, WorkspaceInitOptions};
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
-use crate::{WorkspaceId, history};
+use crate::{CommitId, WorkspaceId, history};
 use std::path::Path;
 
 pub(crate) struct Store {
@@ -51,5 +51,11 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::load_workspace_info(&self.connection, workspace_id)
+    }
+
+    pub(crate) fn state_at(&self, commit_id: CommitId) -> Result<ReplayedState> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::state_at(&self.connection, commit_id)
     }
 }

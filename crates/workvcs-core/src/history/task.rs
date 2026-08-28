@@ -5,12 +5,12 @@ use super::entity::{
 use super::{EntityTransitionOptions, commit_entity_transition, state_at};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, entity_version_digest, parse_canonical_json,
-    validate_import_fixed_point, work_state_mapping_digest,
+    relation_version_digest, validate_import_fixed_point, work_state_mapping_digest,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,
-    WorkspaceId,
+    RelationId, RelationVersionId, WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -19,6 +19,8 @@ use std::fmt;
 
 pub(crate) const ACCEPTANCE_CRITERION_ENTITY_KIND: &str = "acceptance_criterion";
 pub(crate) const TASK_ENTITY_KIND: &str = "task";
+pub(crate) const VERIFICATION_ENTITY_KIND: &str = "verification";
+pub(crate) const VERIFICATION_REQUIREMENT_ENTITY_KIND: &str = "verification_requirement";
 
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const EMPTY_FIELD_DELTA: &str = "{}";
@@ -26,8 +28,17 @@ const ENTITY_OBJECT_KIND: &str = "entity";
 const ENTITY_TRANSITION_EVENT_KIND: &str = "entity.transitioned";
 const NORMAL_COMMIT_KIND: &str = "normal";
 const PRIMARY_PARENT_ROLE: &str = "primary";
+const RELATION_OBJECT_KIND: &str = "relation";
+const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
 const ACCEPTANCE_CRITERION_STATE_SCHEMA_VERSION: i64 = 1;
 const TASK_STATE_SCHEMA_VERSION: i64 = 1;
+const VERIFICATION_BASIS_SCHEMA_VERSION: i64 = 1;
+const VERIFICATION_RECORD_EVENT_KIND: &str = "verification.recorded";
+const VERIFICATION_RECORD_OPERATION_SCHEMA_VERSION: i64 = 1;
+const VERIFICATION_RECORD_OPERATION_TYPE: &str = "verification.record";
+const VERIFICATION_REQUIREMENT_STATE_SCHEMA_VERSION: i64 = 1;
+const VERIFICATION_STATE_SCHEMA_VERSION: i64 = 1;
+const VERIFIES_RELATION_TYPE: &str = "verifies";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskStatus {
@@ -183,7 +194,7 @@ impl TaskAcceptanceCriterionRef {
         acceptance_criterion_entity_id: EntityId,
     ) -> Result<Self> {
         let local_key = local_key.into();
-        validate_local_key(&local_key)?;
+        validate_local_key("acceptance criterion local key", &local_key)?;
         Ok(Self {
             local_key,
             acceptance_criterion_entity_id,
@@ -191,11 +202,46 @@ impl TaskAcceptanceCriterionRef {
     }
 
     fn to_canonical_value(&self) -> Result<CanonicalValue> {
-        validate_local_key(&self.local_key)?;
+        validate_local_key("acceptance criterion local key", &self.local_key)?;
         CanonicalValue::object(vec![
             (
                 "entity_id".to_owned(),
                 CanonicalValue::String(self.acceptance_criterion_entity_id.to_string()),
+            ),
+            (
+                "local_key".to_owned(),
+                CanonicalValue::String(self.local_key.clone()),
+            ),
+        ])
+        .map_err(task_invalid_from)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcceptanceCriterionVerificationRequirementRef {
+    pub local_key: String,
+    pub verification_requirement_entity_id: EntityId,
+}
+
+impl AcceptanceCriterionVerificationRequirementRef {
+    pub fn new(
+        local_key: impl Into<String>,
+        verification_requirement_entity_id: EntityId,
+    ) -> Result<Self> {
+        let local_key = local_key.into();
+        validate_local_key("verification requirement local key", &local_key)?;
+        Ok(Self {
+            local_key,
+            verification_requirement_entity_id,
+        })
+    }
+
+    fn to_canonical_value(&self) -> Result<CanonicalValue> {
+        validate_local_key("verification requirement local key", &self.local_key)?;
+        CanonicalValue::object(vec![
+            (
+                "entity_id".to_owned(),
+                CanonicalValue::String(self.verification_requirement_entity_id.to_string()),
             ),
             (
                 "local_key".to_owned(),
@@ -241,6 +287,7 @@ impl fmt::Display for AcceptanceCriterionClassification {
 pub struct AcceptanceCriterionState {
     pub statement: String,
     pub classification: AcceptanceCriterionClassification,
+    pub verification_requirements: Vec<AcceptanceCriterionVerificationRequirementRef>,
 }
 
 impl AcceptanceCriterionState {
@@ -253,11 +300,28 @@ impl AcceptanceCriterionState {
         Ok(Self {
             statement,
             classification,
+            verification_requirements: Vec::new(),
         })
+    }
+
+    fn with_verification_requirements(
+        mut self,
+        verification_requirements: Vec<AcceptanceCriterionVerificationRequirementRef>,
+    ) -> Result<Self> {
+        validate_verification_requirement_refs(&verification_requirements)?;
+        self.verification_requirements = verification_requirements;
+        Ok(self)
     }
 
     pub fn to_canonical_value(&self) -> Result<CanonicalValue> {
         validate_acceptance_criterion_statement(&self.statement)?;
+        validate_verification_requirement_refs(&self.verification_requirements)?;
+        let mut verification_requirements = self.verification_requirements.clone();
+        verification_requirements.sort_by(|left, right| left.local_key.cmp(&right.local_key));
+        let verification_requirements = verification_requirements
+            .iter()
+            .map(AcceptanceCriterionVerificationRequirementRef::to_canonical_value)
+            .collect::<Result<Vec<_>>>()?;
         CanonicalValue::object(vec![
             (
                 "classification".to_owned(),
@@ -269,10 +333,206 @@ impl AcceptanceCriterionState {
             ),
             (
                 "verification_requirements".to_owned(),
-                CanonicalValue::Array(Vec::new()),
+                CanonicalValue::Array(verification_requirements),
             ),
         ])
         .map_err(task_invalid_from)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationRequirementState {
+    pub statement: String,
+}
+
+impl VerificationRequirementState {
+    pub fn new(statement: impl Into<String>) -> Result<Self> {
+        let statement = statement.into();
+        validate_verification_requirement_statement(&statement)?;
+        Ok(Self { statement })
+    }
+
+    pub fn to_canonical_value(&self) -> Result<CanonicalValue> {
+        validate_verification_requirement_statement(&self.statement)?;
+        CanonicalValue::object(vec![(
+            "statement".to_owned(),
+            CanonicalValue::String(self.statement.clone()),
+        )])
+        .map_err(task_invalid_from)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerificationResult {
+    Passed,
+    Failed,
+    Inconclusive,
+}
+
+impl VerificationResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "passed" => Ok(Self::Passed),
+            "failed" => Ok(Self::Failed),
+            "inconclusive" => Ok(Self::Inconclusive),
+            other => Err(WorkVcsError::TaskInvalid(format!(
+                "verification result {other:?} is not in the confirmed vocabulary"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for VerificationResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerificationTarget {
+    AcceptanceCriterion(EntityId),
+    VerificationRequirement(EntityId),
+}
+
+impl VerificationTarget {
+    pub fn entity_id(self) -> EntityId {
+        match self {
+            Self::AcceptanceCriterion(entity_id) | Self::VerificationRequirement(entity_id) => {
+                entity_id
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationSemanticDependency {
+    pub entity_id: EntityId,
+    pub entity_version_id: EntityVersionId,
+}
+
+impl VerificationSemanticDependency {
+    pub fn new(entity_id: EntityId, entity_version_id: EntityVersionId) -> Self {
+        Self {
+            entity_id,
+            entity_version_id,
+        }
+    }
+
+    fn to_canonical_value(&self) -> Result<CanonicalValue> {
+        CanonicalValue::object(vec![
+            (
+                "entity_id".to_owned(),
+                CanonicalValue::String(self.entity_id.to_string()),
+            ),
+            (
+                "entity_version_id".to_owned(),
+                CanonicalValue::String(self.entity_version_id.to_string()),
+            ),
+        ])
+        .map_err(task_invalid_from)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationState {
+    pub result: VerificationResult,
+    pub method: CanonicalValue,
+    pub verified_at_commit_id: CommitId,
+    pub semantic_dependencies: Vec<VerificationSemanticDependency>,
+}
+
+impl VerificationState {
+    pub fn new(
+        result: VerificationResult,
+        method: CanonicalValue,
+        verified_at_commit_id: CommitId,
+        semantic_dependencies: Vec<VerificationSemanticDependency>,
+    ) -> Result<Self> {
+        validate_verification_method(&method)?;
+        validate_verification_semantic_dependencies(&semantic_dependencies)?;
+        Ok(Self {
+            result,
+            method,
+            verified_at_commit_id,
+            semantic_dependencies,
+        })
+    }
+
+    pub fn to_canonical_value(&self) -> Result<CanonicalValue> {
+        validate_verification_method(&self.method)?;
+        validate_verification_semantic_dependencies(&self.semantic_dependencies)?;
+        let mut dependencies = self.semantic_dependencies.clone();
+        dependencies.sort_by(|left, right| {
+            left.entity_id
+                .raw_bytes()
+                .cmp(&right.entity_id.raw_bytes())
+                .then_with(|| {
+                    left.entity_version_id
+                        .raw_bytes()
+                        .cmp(&right.entity_version_id.raw_bytes())
+                })
+        });
+        let dependencies = dependencies
+            .iter()
+            .map(VerificationSemanticDependency::to_canonical_value)
+            .collect::<Result<Vec<_>>>()?;
+        CanonicalValue::object(vec![
+            (
+                "basis".to_owned(),
+                CanonicalValue::object(vec![
+                    (
+                        "semantic_dependencies".to_owned(),
+                        CanonicalValue::Array(dependencies),
+                    ),
+                    (
+                        "verified_at_commit_id".to_owned(),
+                        CanonicalValue::String(self.verified_at_commit_id.to_string()),
+                    ),
+                ])?,
+            ),
+            ("evidence".to_owned(), CanonicalValue::Array(Vec::new())),
+            ("method".to_owned(), self.method.clone()),
+            (
+                "result".to_owned(),
+                CanonicalValue::String(self.result.as_str().to_owned()),
+            ),
+        ])
+        .map_err(task_invalid_from)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcceptanceCriterionEffectiveStatus {
+    Unverified,
+    Verified,
+    Failed,
+    Stale,
+    Conflicted,
+}
+
+impl AcceptanceCriterionEffectiveStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unverified => "unverified",
+            Self::Verified => "verified",
+            Self::Failed => "failed",
+            Self::Stale => "stale",
+            Self::Conflicted => "conflicted",
+        }
+    }
+}
+
+impl fmt::Display for AcceptanceCriterionEffectiveStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -438,7 +698,7 @@ impl AcceptanceCriterionCreateOptions {
         classification: AcceptanceCriterionClassification,
     ) -> Result<Self> {
         let local_key = local_key.into();
-        validate_local_key(&local_key)?;
+        validate_local_key("acceptance criterion local key", &local_key)?;
         Ok(Self {
             branch_id,
             expected_head_commit_id,
@@ -552,6 +812,205 @@ pub struct AcceptanceCriterionSnapshot {
     pub acceptance_criterion_entity_version_id: EntityVersionId,
     pub state_digest: Digest,
     pub state: AcceptanceCriterionState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationRequirementCreateOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    acceptance_criterion_entity_id: EntityId,
+    expected_acceptance_criterion_entity_version_id: EntityVersionId,
+    local_key: String,
+    state: VerificationRequirementState,
+    rationale: CanonicalValue,
+}
+
+impl VerificationRequirementCreateOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        acceptance_criterion_entity_id: EntityId,
+        expected_acceptance_criterion_entity_version_id: EntityVersionId,
+        local_key: impl Into<String>,
+        statement: impl Into<String>,
+    ) -> Result<Self> {
+        let local_key = local_key.into();
+        validate_local_key("verification requirement local key", &local_key)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            acceptance_criterion_entity_id,
+            expected_acceptance_criterion_entity_version_id,
+            local_key,
+            state: VerificationRequirementState::new(statement)?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationRequirementCreateCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub verification_requirement_operation_id: OperationId,
+    pub acceptance_criterion_operation_id: OperationId,
+    pub acceptance_criterion_entity_id: EntityId,
+    pub previous_acceptance_criterion_entity_version_id: EntityVersionId,
+    pub acceptance_criterion_entity_version_id: EntityVersionId,
+    pub acceptance_criterion_state_digest: Digest,
+    pub verification_requirement_entity_id: EntityId,
+    pub verification_requirement_entity_version_id: EntityVersionId,
+    pub verification_requirement_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub local_key: String,
+    pub state: VerificationRequirementState,
+    pub acceptance_criterion_state: AcceptanceCriterionState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationRequirementRevisionOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    verification_requirement_entity_id: EntityId,
+    expected_verification_requirement_entity_version_id: EntityVersionId,
+    state: VerificationRequirementState,
+    rationale: CanonicalValue,
+}
+
+impl VerificationRequirementRevisionOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        verification_requirement_entity_id: EntityId,
+        expected_verification_requirement_entity_version_id: EntityVersionId,
+        statement: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            verification_requirement_entity_id,
+            expected_verification_requirement_entity_version_id,
+            state: VerificationRequirementState::new(statement)?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationRequirementRevisionCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub acceptance_criterion_entity_id: EntityId,
+    pub local_key: String,
+    pub verification_requirement_entity_id: EntityId,
+    pub previous_verification_requirement_entity_version_id: EntityVersionId,
+    pub verification_requirement_entity_version_id: EntityVersionId,
+    pub verification_requirement_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub previous_state: VerificationRequirementState,
+    pub state: VerificationRequirementState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationRequirementSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub acceptance_criterion_entity_id: EntityId,
+    pub local_key: String,
+    pub verification_requirement_entity_id: EntityId,
+    pub verification_requirement_entity_version_id: EntityVersionId,
+    pub state_digest: Digest,
+    pub state: VerificationRequirementState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationCreateOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    target: VerificationTarget,
+    result: VerificationResult,
+    method: CanonicalValue,
+    rationale: CanonicalValue,
+}
+
+impl VerificationCreateOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        target: VerificationTarget,
+        result: VerificationResult,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            target,
+            result,
+            method: CanonicalValue::object(Vec::new())?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_method(mut self, method: CanonicalValue) -> Result<Self> {
+        validate_verification_method(&method)?;
+        self.method = method;
+        Ok(self)
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationCreateCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub verification_operation_id: OperationId,
+    pub verifies_relation_operation_id: OperationId,
+    pub verification_entity_id: EntityId,
+    pub verification_entity_version_id: EntityVersionId,
+    pub verification_state_digest: Digest,
+    pub verifies_relation_id: RelationId,
+    pub verifies_relation_version_id: RelationVersionId,
+    pub verifies_relation_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub target: VerificationTarget,
+    pub state: VerificationState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub verification_entity_id: EntityId,
+    pub verification_entity_version_id: EntityVersionId,
+    pub state_digest: Digest,
+    pub verifies_relation_id: RelationId,
+    pub verifies_relation_version_id: RelationVersionId,
+    pub verifies_relation_state_digest: Digest,
+    pub target: VerificationTarget,
+    pub state: VerificationState,
 }
 
 pub(crate) fn create_task(
@@ -696,7 +1155,7 @@ pub(crate) fn create_acceptance_criterion(
         && options.state.classification == AcceptanceCriterionClassification::Required
     {
         return Err(WorkVcsError::TaskInvalid(
-            "mandatory acceptance criteria cannot be added to a done task before Verification is implemented"
+            "mandatory acceptance criteria cannot be added to a done task without a dedicated semantic operation"
                 .to_owned(),
         ));
     }
@@ -872,11 +1331,15 @@ pub(crate) fn revise_acceptance_criterion(
         && options.state.classification == AcceptanceCriterionClassification::Required
     {
         return Err(WorkVcsError::TaskInvalid(
-            "mandatory acceptance criteria cannot be revised under a done task before Verification is implemented"
+            "mandatory acceptance criteria cannot be revised under a done task without a dedicated semantic operation"
                 .to_owned(),
         ));
     }
-    if current.state == options.state {
+    let next_state = options
+        .state
+        .clone()
+        .with_verification_requirements(current.state.verification_requirements.clone())?;
+    if current.state == next_state {
         return Err(WorkVcsError::TaskInvalid(
             "acceptance criterion revision must change statement or classification".to_owned(),
         ));
@@ -887,7 +1350,7 @@ pub(crate) fn revise_acceptance_criterion(
         options.expected_head_commit_id,
         options.acceptance_criterion_entity_id,
         options.expected_acceptance_criterion_entity_version_id,
-        options.state.to_canonical_value()?,
+        next_state.to_canonical_value()?,
     )?
     .with_rationale(options.rationale.clone());
     let commit = commit_entity_transition(connection, &entity_options)?;
@@ -908,7 +1371,7 @@ pub(crate) fn revise_acceptance_criterion(
         work_state_digest: commit.work_state_digest,
         local_key: current.local_key,
         previous_state: current.state,
-        state: options.state.clone(),
+        state: next_state,
     })
 }
 
@@ -986,6 +1449,551 @@ pub(crate) fn acceptance_criterion_at(
     })
 }
 
+pub(crate) fn create_verification_requirement(
+    connection: &mut StoreConnection,
+    options: &VerificationRequirementCreateOptions,
+) -> Result<VerificationRequirementCreateCommit> {
+    connection.verify_foreign_keys()?;
+
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let current_criterion = acceptance_criterion_at(
+        connection,
+        options.expected_head_commit_id,
+        options.acceptance_criterion_entity_id,
+    )?;
+    if current_criterion.acceptance_criterion_entity_version_id
+        != options.expected_acceptance_criterion_entity_version_id
+    {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "acceptance criterion entity {} expected version {}, found {} at commit {}",
+            options.acceptance_criterion_entity_id,
+            options.expected_acceptance_criterion_entity_version_id,
+            current_criterion.acceptance_criterion_entity_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+    if current_criterion
+        .state
+        .verification_requirements
+        .iter()
+        .any(|requirement| requirement.local_key == options.local_key)
+    {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "acceptance criterion entity {} already has verification requirement local key {:?}",
+            options.acceptance_criterion_entity_id, options.local_key
+        )));
+    }
+    let owner_task = task_at(
+        connection,
+        options.expected_head_commit_id,
+        current_criterion.task_entity_id,
+    )?;
+    require_task_references_acceptance_criterion(&owner_task.state, &current_criterion)?;
+    if owner_task.state.status == TaskStatus::Done
+        && current_criterion.state.classification == AcceptanceCriterionClassification::Required
+    {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification requirements cannot be added to a required acceptance criterion under a done task"
+                .to_owned(),
+        ));
+    }
+
+    let verification_requirement_entity_id = EntityId::new_v7();
+    let verification_requirement_entity_version_id = EntityVersionId::new_v7();
+    let acceptance_criterion_entity_version_id = EntityVersionId::new_v7();
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let verification_requirement_operation_id = OperationId::new_v7();
+    let acceptance_criterion_operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+
+    let mut acceptance_criterion_state = current_criterion.state.clone();
+    acceptance_criterion_state.verification_requirements.push(
+        AcceptanceCriterionVerificationRequirementRef::new(
+            options.local_key.clone(),
+            verification_requirement_entity_id,
+        )?,
+    );
+    acceptance_criterion_state
+        .verification_requirements
+        .sort_by(|left, right| {
+            left.local_key.cmp(&right.local_key).then_with(|| {
+                left.verification_requirement_entity_id
+                    .cmp(&right.verification_requirement_entity_id)
+            })
+        });
+    validate_verification_requirement_refs(&acceptance_criterion_state.verification_requirements)?;
+
+    let verification_requirement_state_value = options.state.to_canonical_value()?;
+    let verification_requirement_state_json =
+        canonical_json_string(&verification_requirement_state_value)?;
+    let verification_requirement_state_digest =
+        entity_version_digest(&verification_requirement_state_value)?;
+    let acceptance_criterion_state_value = acceptance_criterion_state.to_canonical_value()?;
+    let acceptance_criterion_state_json = canonical_json_string(&acceptance_criterion_state_value)?;
+    let acceptance_criterion_state_digest =
+        entity_version_digest(&acceptance_criterion_state_value)?;
+    let next_work_state = work_state_after_verification_requirement_create(
+        &parent.state,
+        options.acceptance_criterion_entity_id,
+        options.expected_acceptance_criterion_entity_version_id,
+        acceptance_criterion_entity_version_id,
+        verification_requirement_entity_id,
+        verification_requirement_entity_version_id,
+    )?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let verification_requirement_payload_value = entity_transition_payload_value(
+        verification_requirement_entity_id,
+        None,
+        verification_requirement_entity_version_id,
+    )?;
+    let acceptance_criterion_payload_value = entity_transition_payload_value(
+        options.acceptance_criterion_entity_id,
+        Some(options.expected_acceptance_criterion_entity_version_id),
+        acceptance_criterion_entity_version_id,
+    )?;
+    let verification_requirement_payload_json =
+        canonical_json_string(&verification_requirement_payload_value)?;
+    let acceptance_criterion_payload_json =
+        canonical_json_string(&acceptance_criterion_payload_value)?;
+    let changeset_payload_json = canonical_json_string(&CanonicalValue::object(vec![(
+        "operations".to_owned(),
+        CanonicalValue::Array(vec![
+            verification_requirement_payload_value,
+            acceptance_criterion_payload_value,
+        ]),
+    )])?)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    ensure_verification_requirement_local_key_available(
+        &transaction,
+        options.acceptance_criterion_entity_id,
+        &options.local_key,
+    )?;
+    write_verification_requirement_create(
+        &transaction,
+        &VerificationRequirementCreateRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            acceptance_criterion_entity_id: options.acceptance_criterion_entity_id,
+            previous_acceptance_criterion_entity_version_id: options
+                .expected_acceptance_criterion_entity_version_id,
+            acceptance_criterion_entity_version_id,
+            acceptance_criterion_state_json,
+            acceptance_criterion_state_digest,
+            verification_requirement_entity_id,
+            verification_requirement_entity_version_id,
+            verification_requirement_state_json,
+            verification_requirement_state_digest,
+            local_key: options.local_key.clone(),
+            changeset_id,
+            commit_id,
+            verification_requirement_operation_id,
+            acceptance_criterion_operation_id,
+            verification_requirement_payload_json,
+            acceptance_criterion_payload_json,
+            changeset_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(VerificationRequirementCreateCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        verification_requirement_operation_id,
+        acceptance_criterion_operation_id,
+        acceptance_criterion_entity_id: options.acceptance_criterion_entity_id,
+        previous_acceptance_criterion_entity_version_id: options
+            .expected_acceptance_criterion_entity_version_id,
+        acceptance_criterion_entity_version_id,
+        acceptance_criterion_state_digest,
+        verification_requirement_entity_id,
+        verification_requirement_entity_version_id,
+        verification_requirement_state_digest,
+        work_state_digest,
+        local_key: options.local_key.clone(),
+        state: options.state.clone(),
+        acceptance_criterion_state,
+    })
+}
+
+pub(crate) fn revise_verification_requirement(
+    connection: &mut StoreConnection,
+    options: &VerificationRequirementRevisionOptions,
+) -> Result<VerificationRequirementRevisionCommit> {
+    let current = verification_requirement_at(
+        connection,
+        options.expected_head_commit_id,
+        options.verification_requirement_entity_id,
+    )?;
+    if current.verification_requirement_entity_version_id
+        != options.expected_verification_requirement_entity_version_id
+    {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {} expected version {}, found {} at commit {}",
+            options.verification_requirement_entity_id,
+            options.expected_verification_requirement_entity_version_id,
+            current.verification_requirement_entity_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+    let criterion = acceptance_criterion_at(
+        connection,
+        options.expected_head_commit_id,
+        current.acceptance_criterion_entity_id,
+    )?;
+    require_acceptance_criterion_references_verification_requirement(&criterion.state, &current)?;
+    let task = task_at(
+        connection,
+        options.expected_head_commit_id,
+        criterion.task_entity_id,
+    )?;
+    require_task_references_acceptance_criterion(&task.state, &criterion)?;
+    if task.state.status == TaskStatus::Done
+        && criterion.state.classification == AcceptanceCriterionClassification::Required
+    {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification requirements cannot be revised under a required acceptance criterion on a done task"
+                .to_owned(),
+        ));
+    }
+    if current.state == options.state {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification requirement revision must change statement".to_owned(),
+        ));
+    }
+
+    let entity_options = EntityTransitionOptions::update(
+        options.branch_id,
+        options.expected_head_commit_id,
+        options.verification_requirement_entity_id,
+        options.expected_verification_requirement_entity_version_id,
+        options.state.to_canonical_value()?,
+    )?
+    .with_rationale(options.rationale.clone());
+    let commit = commit_entity_transition(connection, &entity_options)?;
+
+    Ok(VerificationRequirementRevisionCommit {
+        workspace_id: commit.workspace_id,
+        branch_id: commit.branch_id,
+        previous_head_commit_id: commit.previous_head_commit_id,
+        commit_id: commit.commit_id,
+        changeset_id: commit.changeset_id,
+        operation_id: commit.operation_id,
+        acceptance_criterion_entity_id: current.acceptance_criterion_entity_id,
+        local_key: current.local_key,
+        verification_requirement_entity_id: commit.entity_id,
+        previous_verification_requirement_entity_version_id: options
+            .expected_verification_requirement_entity_version_id,
+        verification_requirement_entity_version_id: commit.entity_version_id,
+        verification_requirement_state_digest: commit.entity_state_digest,
+        work_state_digest: commit.work_state_digest,
+        previous_state: current.state,
+        state: options.state.clone(),
+    })
+}
+
+pub(crate) fn verification_requirement_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    verification_requirement_entity_id: EntityId,
+) -> Result<VerificationRequirementSnapshot> {
+    let replayed = state_at(connection, commit_id)?;
+    let Some(verification_requirement_entity_version_id) = replayed
+        .state
+        .entities()
+        .iter()
+        .find_map(|(entity_id, entity_version_id)| {
+            (*entity_id == verification_requirement_entity_id).then_some(*entity_version_id)
+        })
+    else {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "verification requirement entity {verification_requirement_entity_id} is not present at commit {commit_id}"
+        )));
+    };
+
+    let loaded = load_verification_requirement_version(
+        connection,
+        replayed.workspace_id,
+        verification_requirement_entity_id,
+        verification_requirement_entity_version_id,
+    )?;
+    Ok(VerificationRequirementSnapshot {
+        workspace_id: replayed.workspace_id,
+        commit_id,
+        acceptance_criterion_entity_id: loaded.acceptance_criterion_entity_id,
+        local_key: loaded.local_key,
+        verification_requirement_entity_id,
+        verification_requirement_entity_version_id,
+        state_digest: loaded.state_digest,
+        state: loaded.state,
+    })
+}
+
+pub(crate) fn create_verification(
+    connection: &mut StoreConnection,
+    options: &VerificationCreateOptions,
+) -> Result<VerificationCreateCommit> {
+    connection.verify_foreign_keys()?;
+    validate_verification_method(&options.method)?;
+
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let semantic_dependencies = verification_semantic_dependencies_for_target(
+        connection,
+        options.expected_head_commit_id,
+        options.target,
+    )?;
+
+    let verification_entity_id = EntityId::new_v7();
+    let verification_entity_version_id = EntityVersionId::new_v7();
+    let verifies_relation_id = RelationId::new_v7();
+    let verifies_relation_version_id = RelationVersionId::new_v7();
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let verification_operation_id = OperationId::new_v7();
+    let verifies_relation_operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+
+    let verification_state = VerificationState::new(
+        options.result,
+        options.method.clone(),
+        options.expected_head_commit_id,
+        semantic_dependencies,
+    )?;
+    let verification_state_value = verification_state.to_canonical_value()?;
+    let verification_state_json = canonical_json_string(&verification_state_value)?;
+    let verification_state_digest = entity_version_digest(&verification_state_value)?;
+    let relation_state_value = CanonicalValue::object(Vec::new())?;
+    let verifies_relation_state_json = canonical_json_string(&relation_state_value)?;
+    let verifies_relation_state_digest = relation_version_digest(&relation_state_value)?;
+    let basis_json = canonical_json_string(&verification_basis_value(
+        verification_state.verified_at_commit_id,
+        &verification_state.semantic_dependencies,
+    )?)?;
+    let next_work_state = work_state_after_verification_create(
+        &parent.state,
+        verification_entity_id,
+        verification_entity_version_id,
+        verifies_relation_id,
+        verifies_relation_version_id,
+    )?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let verification_payload_value = entity_transition_payload_value(
+        verification_entity_id,
+        None,
+        verification_entity_version_id,
+    )?;
+    let verifies_relation_payload_value = relation_transition_payload_value(
+        verifies_relation_id,
+        None,
+        verifies_relation_version_id,
+    )?;
+    let verification_payload_json = canonical_json_string(&verification_payload_value)?;
+    let verifies_relation_payload_json = canonical_json_string(&verifies_relation_payload_value)?;
+    let changeset_payload_json = canonical_json_string(&CanonicalValue::object(vec![(
+        "operations".to_owned(),
+        CanonicalValue::Array(vec![
+            verification_payload_value,
+            verifies_relation_payload_value,
+        ]),
+    )])?)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    write_verification_create(
+        &transaction,
+        &VerificationCreateRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            verification_entity_id,
+            verification_entity_version_id,
+            verification_state_json,
+            verification_state_digest,
+            verifies_relation_id,
+            verifies_relation_version_id,
+            verifies_relation_state_json,
+            verifies_relation_state_digest,
+            target: options.target,
+            basis_json,
+            semantic_dependencies: verification_state.semantic_dependencies.clone(),
+            changeset_id,
+            commit_id,
+            verification_operation_id,
+            verifies_relation_operation_id,
+            verification_payload_json,
+            verifies_relation_payload_json,
+            changeset_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(VerificationCreateCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        verification_operation_id,
+        verifies_relation_operation_id,
+        verification_entity_id,
+        verification_entity_version_id,
+        verification_state_digest,
+        verifies_relation_id,
+        verifies_relation_version_id,
+        verifies_relation_state_digest,
+        work_state_digest,
+        target: options.target,
+        state: verification_state,
+    })
+}
+
+pub(crate) fn verification_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    verification_entity_id: EntityId,
+) -> Result<VerificationSnapshot> {
+    let replayed = state_at(connection, commit_id)?;
+    let Some(verification_entity_version_id) =
+        replayed
+            .state
+            .entities()
+            .iter()
+            .find_map(|(entity_id, entity_version_id)| {
+                (*entity_id == verification_entity_id).then_some(*entity_version_id)
+            })
+    else {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "verification entity {verification_entity_id} is not present at commit {commit_id}"
+        )));
+    };
+
+    let loaded = load_verification_version(
+        connection,
+        replayed.workspace_id,
+        verification_entity_id,
+        verification_entity_version_id,
+    )?;
+    let defining_relation = load_current_verifies_relation_for_source(
+        connection,
+        replayed.workspace_id,
+        &replayed.state,
+        verification_entity_id,
+    )?;
+    Ok(VerificationSnapshot {
+        workspace_id: replayed.workspace_id,
+        commit_id,
+        verification_entity_id,
+        verification_entity_version_id,
+        state_digest: loaded.state_digest,
+        verifies_relation_id: defining_relation.relation_id,
+        verifies_relation_version_id: defining_relation.relation_version_id,
+        verifies_relation_state_digest: defining_relation.state_digest,
+        target: defining_relation.target,
+        state: loaded.state,
+    })
+}
+
+pub(crate) fn acceptance_criterion_effective_status(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    acceptance_criterion_entity_id: EntityId,
+) -> Result<AcceptanceCriterionEffectiveStatus> {
+    let criterion = acceptance_criterion_at(connection, commit_id, acceptance_criterion_entity_id)?;
+    if criterion.state.verification_requirements.is_empty() {
+        return effective_status_for_target(
+            connection,
+            commit_id,
+            VerificationTarget::AcceptanceCriterion(acceptance_criterion_entity_id),
+        );
+    }
+
+    let mut combined = AcceptanceCriterionEffectiveStatus::Verified;
+    for requirement_ref in &criterion.state.verification_requirements {
+        let requirement = verification_requirement_at(
+            connection,
+            commit_id,
+            requirement_ref.verification_requirement_entity_id,
+        )?;
+        if requirement.acceptance_criterion_entity_id != acceptance_criterion_entity_id
+            || requirement.local_key != requirement_ref.local_key
+        {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "acceptance criterion {} verification requirement reference {:?} does not match stored identity",
+                acceptance_criterion_entity_id, requirement_ref.local_key
+            )));
+        }
+        let status = effective_status_for_target(
+            connection,
+            commit_id,
+            VerificationTarget::VerificationRequirement(
+                requirement_ref.verification_requirement_entity_id,
+            ),
+        )?;
+        combined = combine_acceptance_criterion_status(combined, status);
+    }
+    Ok(combined)
+}
+
 struct LoadedTaskVersion {
     state_digest: Digest,
     state: TaskState,
@@ -996,6 +2004,26 @@ struct LoadedAcceptanceCriterionVersion {
     local_key: String,
     state_digest: Digest,
     state: AcceptanceCriterionState,
+}
+
+struct LoadedVerificationRequirementVersion {
+    acceptance_criterion_entity_id: EntityId,
+    local_key: String,
+    state_digest: Digest,
+    state: VerificationRequirementState,
+}
+
+struct LoadedVerificationVersion {
+    state_digest: Digest,
+    state: VerificationState,
+}
+
+struct LoadedVerifiesRelationVersion {
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    source_verification_entity_id: EntityId,
+    state_digest: Digest,
+    target: VerificationTarget,
 }
 
 struct BranchRow {
@@ -1022,6 +2050,57 @@ struct AcceptanceCriterionCreateRows {
     task_operation_id: OperationId,
     acceptance_criterion_payload_json: String,
     task_payload_json: String,
+    changeset_payload_json: String,
+    rationale_json: String,
+    work_state_digest: Digest,
+    now_us: i64,
+}
+
+struct VerificationRequirementCreateRows {
+    workspace_id: WorkspaceId,
+    expected_head_commit_id: CommitId,
+    acceptance_criterion_entity_id: EntityId,
+    previous_acceptance_criterion_entity_version_id: EntityVersionId,
+    acceptance_criterion_entity_version_id: EntityVersionId,
+    acceptance_criterion_state_json: String,
+    acceptance_criterion_state_digest: Digest,
+    verification_requirement_entity_id: EntityId,
+    verification_requirement_entity_version_id: EntityVersionId,
+    verification_requirement_state_json: String,
+    verification_requirement_state_digest: Digest,
+    local_key: String,
+    changeset_id: ChangeSetId,
+    commit_id: CommitId,
+    verification_requirement_operation_id: OperationId,
+    acceptance_criterion_operation_id: OperationId,
+    verification_requirement_payload_json: String,
+    acceptance_criterion_payload_json: String,
+    changeset_payload_json: String,
+    rationale_json: String,
+    work_state_digest: Digest,
+    now_us: i64,
+}
+
+struct VerificationCreateRows {
+    workspace_id: WorkspaceId,
+    expected_head_commit_id: CommitId,
+    verification_entity_id: EntityId,
+    verification_entity_version_id: EntityVersionId,
+    verification_state_json: String,
+    verification_state_digest: Digest,
+    verifies_relation_id: RelationId,
+    verifies_relation_version_id: RelationVersionId,
+    verifies_relation_state_json: String,
+    verifies_relation_state_digest: Digest,
+    target: VerificationTarget,
+    basis_json: String,
+    semantic_dependencies: Vec<VerificationSemanticDependency>,
+    changeset_id: ChangeSetId,
+    commit_id: CommitId,
+    verification_operation_id: OperationId,
+    verifies_relation_operation_id: OperationId,
+    verification_payload_json: String,
+    verifies_relation_payload_json: String,
     changeset_payload_json: String,
     rationale_json: String,
     work_state_digest: Digest,
@@ -1216,7 +2295,7 @@ fn load_acceptance_criterion_version(
             "acceptance criterion entity {acceptance_criterion_entity_id} version {acceptance_criterion_entity_version_id} has state schema version {state_schema_version}"
         )));
     }
-    validate_local_key(&local_key)?;
+    validate_local_key("acceptance criterion local key", &local_key)?;
 
     let entity_workspace_id = decode_workspace_id("entity.workspace_id", entity_workspace_id)?;
     if entity_workspace_id != workspace_id {
@@ -1259,6 +2338,518 @@ fn load_acceptance_criterion_version(
         state_digest,
         state: parse_acceptance_criterion_state(value)?,
     })
+}
+
+fn load_verification_requirement_version(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    verification_requirement_entity_id: EntityId,
+    verification_requirement_entity_version_id: EntityVersionId,
+) -> Result<LoadedVerificationRequirementVersion> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    entity.workspace_id,
+                    entity.entity_kind,
+                    verification_requirement_identity.owner_entity_id,
+                    verification_requirement_identity.local_key,
+                    owner_entity.workspace_id,
+                    owner_entity.entity_kind,
+                    entity_version.state_schema_version,
+                    entity_version.state_json,
+                    entity_version.state_digest
+             FROM entity
+             JOIN object_identity
+               ON object_identity.object_id = entity.object_id
+             JOIN verification_requirement_identity
+               ON verification_requirement_identity.entity_id = entity.object_id
+             JOIN entity AS owner_entity
+               ON owner_entity.object_id = verification_requirement_identity.owner_entity_id
+             JOIN entity_version
+               ON entity_version.entity_id = entity.object_id
+             WHERE entity.object_id = ?1
+               AND entity_version.entity_version_id = ?2",
+            params![
+                &verification_requirement_entity_id.raw_bytes()[..],
+                &verification_requirement_entity_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Vec<u8>>(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        object_kind,
+        entity_workspace_id,
+        entity_kind,
+        owner_entity_id,
+        local_key,
+        owner_workspace_id,
+        owner_entity_kind,
+        state_schema_version,
+        state_json,
+        state_digest,
+    )) = row
+    else {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "verification requirement entity {verification_requirement_entity_id} version {verification_requirement_entity_version_id} does not exist"
+        )));
+    };
+    if object_kind != ENTITY_OBJECT_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {verification_requirement_entity_id} has object kind {object_kind:?}"
+        )));
+    }
+    if entity_kind != VERIFICATION_REQUIREMENT_ENTITY_KIND {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "entity {verification_requirement_entity_id} has kind {entity_kind:?}, not {VERIFICATION_REQUIREMENT_ENTITY_KIND:?}"
+        )));
+    }
+    if owner_entity_kind != ACCEPTANCE_CRITERION_ENTITY_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {verification_requirement_entity_id} owner has kind {owner_entity_kind:?}, not {ACCEPTANCE_CRITERION_ENTITY_KIND:?}"
+        )));
+    }
+    if state_schema_version != VERIFICATION_REQUIREMENT_STATE_SCHEMA_VERSION {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {verification_requirement_entity_id} version {verification_requirement_entity_version_id} has state schema version {state_schema_version}"
+        )));
+    }
+    validate_local_key("verification requirement local key", &local_key)?;
+
+    let entity_workspace_id = decode_workspace_id("entity.workspace_id", entity_workspace_id)?;
+    if entity_workspace_id != workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {verification_requirement_entity_id} belongs to workspace {entity_workspace_id}, not {workspace_id}"
+        )));
+    }
+    let owner_workspace_id = decode_workspace_id("owner_entity.workspace_id", owner_workspace_id)?;
+    if owner_workspace_id != workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {verification_requirement_entity_id} owner belongs to workspace {owner_workspace_id}, not {workspace_id}"
+        )));
+    }
+
+    let state_digest = decode_digest("entity_version.state_digest", state_digest)?;
+    validate_import_fixed_point(
+        state_json.as_bytes(),
+        state_digest,
+        ImportDigestDomain::EntityVersion,
+    )
+    .map_err(|error| {
+        WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {verification_requirement_entity_id} version {verification_requirement_entity_version_id} fixed-point validation failed: {error}"
+        ))
+    })?;
+    let value = parse_canonical_json(state_json.as_bytes()).map_err(task_invalid_from)?;
+    let actual = entity_version_digest(&value).map_err(task_invalid_from)?;
+    if actual != state_digest {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {verification_requirement_entity_id} version {verification_requirement_entity_version_id} digest does not match state JSON"
+        )));
+    }
+
+    Ok(LoadedVerificationRequirementVersion {
+        acceptance_criterion_entity_id: decode_entity_id(
+            "verification_requirement_identity.owner_entity_id",
+            owner_entity_id,
+        )?,
+        local_key,
+        state_digest,
+        state: parse_verification_requirement_state(value)?,
+    })
+}
+
+fn load_verification_version(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    verification_entity_id: EntityId,
+    verification_entity_version_id: EntityVersionId,
+) -> Result<LoadedVerificationVersion> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    entity.workspace_id,
+                    entity.entity_kind,
+                    entity_version.state_schema_version,
+                    entity_version.state_json,
+                    entity_version.state_digest,
+                    verification_basis.verified_at_commit_id,
+                    verification_basis.basis_schema_version,
+                    verification_basis.basis_json
+             FROM entity
+             JOIN object_identity
+               ON object_identity.object_id = entity.object_id
+             JOIN entity_version
+               ON entity_version.entity_id = entity.object_id
+             JOIN verification_basis
+               ON verification_basis.verification_entity_id = entity.object_id
+             WHERE entity.object_id = ?1
+               AND entity_version.entity_version_id = ?2",
+            params![
+                &verification_entity_id.raw_bytes()[..],
+                &verification_entity_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        object_kind,
+        entity_workspace_id,
+        entity_kind,
+        state_schema_version,
+        state_json,
+        state_digest,
+        verified_at_commit_id,
+        basis_schema_version,
+        basis_json,
+    )) = row
+    else {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "verification entity {verification_entity_id} version {verification_entity_version_id} does not exist"
+        )));
+    };
+    if object_kind != ENTITY_OBJECT_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} has object kind {object_kind:?}"
+        )));
+    }
+    if entity_kind != VERIFICATION_ENTITY_KIND {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "entity {verification_entity_id} has kind {entity_kind:?}, not {VERIFICATION_ENTITY_KIND:?}"
+        )));
+    }
+    if state_schema_version != VERIFICATION_STATE_SCHEMA_VERSION {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} version {verification_entity_version_id} has state schema version {state_schema_version}"
+        )));
+    }
+    if basis_schema_version != VERIFICATION_BASIS_SCHEMA_VERSION {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} basis has schema version {basis_schema_version}"
+        )));
+    }
+
+    let entity_workspace_id = decode_workspace_id("entity.workspace_id", entity_workspace_id)?;
+    if entity_workspace_id != workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} belongs to workspace {entity_workspace_id}, not {workspace_id}"
+        )));
+    }
+
+    let state_digest = decode_digest("entity_version.state_digest", state_digest)?;
+    validate_import_fixed_point(
+        state_json.as_bytes(),
+        state_digest,
+        ImportDigestDomain::EntityVersion,
+    )
+    .map_err(|error| {
+        WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} version {verification_entity_version_id} fixed-point validation failed: {error}"
+        ))
+    })?;
+    let value = parse_canonical_json(state_json.as_bytes()).map_err(task_invalid_from)?;
+    let actual = entity_version_digest(&value).map_err(task_invalid_from)?;
+    if actual != state_digest {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} version {verification_entity_version_id} digest does not match state JSON"
+        )));
+    }
+
+    let dependencies = load_verification_semantic_dependencies(connection, verification_entity_id)?;
+    let state = parse_verification_state(value)?;
+    let verified_at_commit_id = decode_commit_id(
+        "verification_basis.verified_at_commit_id",
+        verified_at_commit_id,
+    )?;
+    if state.verified_at_commit_id != verified_at_commit_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} state basis commit does not match verification_basis"
+        )));
+    }
+    if state.semantic_dependencies != dependencies {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} state dependencies do not match verification_semantic_dependency rows"
+        )));
+    }
+    let basis_value = parse_canonical_json(basis_json.as_bytes()).map_err(task_invalid_from)?;
+    let basis_json_actual = canonical_json_string(&basis_value)?;
+    if basis_json_actual != basis_json {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} basis_json is not canonical fixed-point JSON"
+        )));
+    }
+    let expected_basis_json = canonical_json_string(&verification_basis_value(
+        verified_at_commit_id,
+        &dependencies,
+    )?)?;
+    if basis_json != expected_basis_json {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} basis_json does not match dependency rows"
+        )));
+    }
+
+    Ok(LoadedVerificationVersion {
+        state_digest,
+        state,
+    })
+}
+
+fn load_verification_semantic_dependencies(
+    connection: &StoreConnection,
+    verification_entity_id: EntityId,
+) -> Result<Vec<VerificationSemanticDependency>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT ordinal, dependency_entity_id, expected_entity_version_id
+             FROM verification_semantic_dependency
+             WHERE verification_entity_id = ?1
+             ORDER BY ordinal",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&verification_entity_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut dependencies = Vec::new();
+    for row in rows {
+        let (ordinal, dependency_entity_id, expected_entity_version_id) =
+            row.map_err(storage_error)?;
+        if ordinal != dependencies.len() as i64 {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification entity {verification_entity_id} semantic dependency ordinals are not contiguous"
+            )));
+        }
+        dependencies.push(VerificationSemanticDependency::new(
+            decode_entity_id(
+                "verification_semantic_dependency.dependency_entity_id",
+                dependency_entity_id,
+            )?,
+            decode_entity_version_id(
+                "verification_semantic_dependency.expected_entity_version_id",
+                expected_entity_version_id,
+            )?,
+        ));
+    }
+    validate_verification_semantic_dependencies(&dependencies)?;
+    require_verification_semantic_dependencies_canonical_order(&dependencies)?;
+    Ok(dependencies)
+}
+
+fn load_verifies_relation_version(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<LoadedVerifiesRelationVersion> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    relation.workspace_id,
+                    relation.relation_type,
+                    relation.source_object_id,
+                    relation.target_object_id,
+                    relation.relation_discriminator,
+                    relation_version.state_schema_version,
+                    relation_version.metadata_json,
+                    relation_version.state_digest,
+                    source_entity.entity_kind,
+                    target_entity.entity_kind
+             FROM relation
+             JOIN object_identity
+               ON object_identity.object_id = relation.object_id
+             JOIN relation_version
+               ON relation_version.relation_id = relation.object_id
+             JOIN entity AS source_entity
+               ON source_entity.object_id = relation.source_object_id
+             JOIN entity AS target_entity
+               ON target_entity.object_id = relation.target_object_id
+             WHERE relation.object_id = ?1
+               AND relation_version.relation_version_id = ?2",
+            params![
+                &relation_id.raw_bytes()[..],
+                &relation_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        object_kind,
+        relation_workspace_id,
+        relation_type,
+        source_object_id,
+        target_object_id,
+        relation_discriminator,
+        state_schema_version,
+        metadata_json,
+        state_digest,
+        source_entity_kind,
+        target_entity_kind,
+    )) = row
+    else {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "verifies relation {relation_id} version {relation_version_id} does not exist"
+        )));
+    };
+    if object_kind != RELATION_OBJECT_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} has object kind {object_kind:?}"
+        )));
+    }
+    let relation_workspace_id =
+        decode_workspace_id("relation.workspace_id", relation_workspace_id)?;
+    if relation_workspace_id != workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} belongs to workspace {relation_workspace_id}, not {workspace_id}"
+        )));
+    }
+    if relation_type != VERIFIES_RELATION_TYPE {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "relation {relation_id} has type {relation_type:?}, not {VERIFIES_RELATION_TYPE:?}"
+        )));
+    }
+    if !relation_discriminator.is_empty() {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
+        )));
+    }
+    if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} version {relation_version_id} has state schema version {state_schema_version}"
+        )));
+    }
+    if source_entity_kind != VERIFICATION_ENTITY_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} source has kind {source_entity_kind:?}, not {VERIFICATION_ENTITY_KIND:?}"
+        )));
+    }
+    let target_entity_id = decode_entity_id("relation.target_object_id", target_object_id)?;
+    let target = match target_entity_kind.as_str() {
+        ACCEPTANCE_CRITERION_ENTITY_KIND => {
+            VerificationTarget::AcceptanceCriterion(target_entity_id)
+        }
+        VERIFICATION_REQUIREMENT_ENTITY_KIND => {
+            VerificationTarget::VerificationRequirement(target_entity_id)
+        }
+        other => {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verifies relation {relation_id} target has unsupported kind {other:?}"
+            )));
+        }
+    };
+
+    let state_digest = decode_digest("relation_version.state_digest", state_digest)?;
+    validate_import_fixed_point(
+        metadata_json.as_bytes(),
+        state_digest,
+        ImportDigestDomain::RelationVersion,
+    )
+    .map_err(|error| {
+        WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} version {relation_version_id} fixed-point validation failed: {error}"
+        ))
+    })?;
+    let metadata_value =
+        parse_canonical_json(metadata_json.as_bytes()).map_err(task_invalid_from)?;
+    let actual = relation_version_digest(&metadata_value).map_err(task_invalid_from)?;
+    if actual != state_digest {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} version {relation_version_id} digest does not match metadata JSON"
+        )));
+    }
+
+    Ok(LoadedVerifiesRelationVersion {
+        relation_id,
+        relation_version_id,
+        source_verification_entity_id: decode_entity_id(
+            "relation.source_object_id",
+            source_object_id,
+        )?,
+        state_digest,
+        target,
+    })
+}
+
+fn load_current_verifies_relation_for_source(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+    verification_entity_id: EntityId,
+) -> Result<LoadedVerifiesRelationVersion> {
+    let mut matches = Vec::new();
+    for (relation_id, relation_version_id) in state.relations() {
+        let relation = load_verifies_relation_version(
+            connection,
+            workspace_id,
+            *relation_id,
+            *relation_version_id,
+        )?;
+        if relation.source_verification_entity_id == verification_entity_id {
+            matches.push(relation);
+        }
+    }
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} has no current defining verifies relation"
+        ))),
+        count => Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} has {count} current defining verifies relations"
+        ))),
+    }
 }
 
 fn load_active_branch(transaction: &Transaction<'_>, branch_id: BranchId) -> Result<BranchRow> {
@@ -1320,6 +2911,30 @@ fn ensure_acceptance_criterion_local_key_available(
     }
 }
 
+fn ensure_verification_requirement_local_key_available(
+    transaction: &Transaction<'_>,
+    acceptance_criterion_entity_id: EntityId,
+    local_key: &str,
+) -> Result<()> {
+    let existing = transaction
+        .query_row(
+            "SELECT count(*)
+             FROM verification_requirement_identity
+             WHERE owner_entity_id = ?1
+               AND local_key = ?2",
+            params![&acceptance_criterion_entity_id.raw_bytes()[..], local_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?;
+    if existing == 0 {
+        Ok(())
+    } else {
+        Err(WorkVcsError::TaskInvalid(format!(
+            "acceptance criterion entity {acceptance_criterion_entity_id} already has verification requirement local key {local_key:?}"
+        )))
+    }
+}
+
 fn work_state_after_acceptance_criterion_create(
     parent_state: &WorkState,
     task_entity_id: EntityId,
@@ -1359,6 +2974,88 @@ fn work_state_after_acceptance_criterion_create(
     }
 
     WorkState::new(entities, parent_state.relations().to_vec()).map_err(task_invalid_from)
+}
+
+fn work_state_after_verification_requirement_create(
+    parent_state: &WorkState,
+    acceptance_criterion_entity_id: EntityId,
+    expected_acceptance_criterion_entity_version_id: EntityVersionId,
+    next_acceptance_criterion_entity_version_id: EntityVersionId,
+    verification_requirement_entity_id: EntityId,
+    verification_requirement_entity_version_id: EntityVersionId,
+) -> Result<WorkState> {
+    let mut entities = parent_state
+        .entities()
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
+    match entities.insert(
+        acceptance_criterion_entity_id,
+        next_acceptance_criterion_entity_version_id,
+    ) {
+        Some(current) if current == expected_acceptance_criterion_entity_version_id => {}
+        Some(current) => {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "acceptance criterion entity {acceptance_criterion_entity_id} expected parent version {expected_acceptance_criterion_entity_version_id}, found {current}"
+            )));
+        }
+        None => {
+            return Err(WorkVcsError::TaskNotFound(format!(
+                "acceptance criterion entity {acceptance_criterion_entity_id} is not present in the parent WorkState"
+            )));
+        }
+    }
+    if entities
+        .insert(
+            verification_requirement_entity_id,
+            verification_requirement_entity_version_id,
+        )
+        .is_some()
+    {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement entity {verification_requirement_entity_id} was expected to be absent before creation"
+        )));
+    }
+
+    WorkState::new(entities, parent_state.relations().to_vec()).map_err(task_invalid_from)
+}
+
+fn work_state_after_verification_create(
+    parent_state: &WorkState,
+    verification_entity_id: EntityId,
+    verification_entity_version_id: EntityVersionId,
+    verifies_relation_id: RelationId,
+    verifies_relation_version_id: RelationVersionId,
+) -> Result<WorkState> {
+    let mut entities = parent_state
+        .entities()
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
+    if entities
+        .insert(verification_entity_id, verification_entity_version_id)
+        .is_some()
+    {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} was expected to be absent before creation"
+        )));
+    }
+
+    let mut relations = parent_state
+        .relations()
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
+    if relations
+        .insert(verifies_relation_id, verifies_relation_version_id)
+        .is_some()
+    {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verifies relation {verifies_relation_id} was expected to be absent before creation"
+        )));
+    }
+
+    WorkState::new(entities, relations).map_err(task_invalid_from)
 }
 
 fn write_acceptance_criterion_create(
@@ -1615,6 +3312,573 @@ fn write_acceptance_criterion_create(
     Ok(())
 }
 
+fn write_verification_requirement_create(
+    transaction: &Transaction<'_>,
+    rows: &VerificationRequirementCreateRows,
+) -> Result<()> {
+    let workspace_id_bytes = rows.workspace_id.raw_bytes();
+    let acceptance_criterion_entity_id_bytes = rows.acceptance_criterion_entity_id.raw_bytes();
+    let previous_acceptance_criterion_entity_version_id_bytes = rows
+        .previous_acceptance_criterion_entity_version_id
+        .raw_bytes();
+    let acceptance_criterion_entity_version_id_bytes =
+        rows.acceptance_criterion_entity_version_id.raw_bytes();
+    let acceptance_criterion_state_digest_bytes = rows.acceptance_criterion_state_digest.as_bytes();
+    let verification_requirement_entity_id_bytes =
+        rows.verification_requirement_entity_id.raw_bytes();
+    let verification_requirement_entity_version_id_bytes =
+        rows.verification_requirement_entity_version_id.raw_bytes();
+    let verification_requirement_state_digest_bytes =
+        rows.verification_requirement_state_digest.as_bytes();
+    let changeset_id_bytes = rows.changeset_id.raw_bytes();
+    let commit_id_bytes = rows.commit_id.raw_bytes();
+    let verification_requirement_operation_id_bytes =
+        rows.verification_requirement_operation_id.raw_bytes();
+    let acceptance_criterion_operation_id_bytes =
+        rows.acceptance_criterion_operation_id.raw_bytes();
+    let parent_commit_id_bytes = rows.expected_head_commit_id.raw_bytes();
+    let work_state_digest_bytes = rows.work_state_digest.as_bytes();
+
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &verification_requirement_entity_id_bytes[..],
+                ENTITY_OBJECT_KIND,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO entity(object_id, workspace_id, entity_kind)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &verification_requirement_entity_id_bytes[..],
+                &workspace_id_bytes[..],
+                VERIFICATION_REQUIREMENT_ENTITY_KIND
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO verification_requirement_identity(entity_id, owner_entity_id, local_key)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &verification_requirement_entity_id_bytes[..],
+                &acceptance_criterion_entity_id_bytes[..],
+                rows.local_key
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO entity_version(
+                entity_version_id,
+                entity_id,
+                state_schema_version,
+                state_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &verification_requirement_entity_version_id_bytes[..],
+                &verification_requirement_entity_id_bytes[..],
+                VERIFICATION_REQUIREMENT_STATE_SCHEMA_VERSION,
+                rows.verification_requirement_state_json,
+                &verification_requirement_state_digest_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO entity_version(
+                entity_version_id,
+                entity_id,
+                state_schema_version,
+                state_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &acceptance_criterion_entity_version_id_bytes[..],
+                &acceptance_criterion_entity_id_bytes[..],
+                ACCEPTANCE_CRITERION_STATE_SCHEMA_VERSION,
+                rows.acceptance_criterion_state_json,
+                &acceptance_criterion_state_digest_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                &changeset_id_bytes[..],
+                &workspace_id_bytes[..],
+                ENTITY_TRANSITION_OPERATION_TYPE,
+                ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION,
+                rows.changeset_payload_json,
+                rows.rationale_json,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 0, 'entity', ?3, ?4)",
+            params![
+                &verification_requirement_operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                &verification_requirement_entity_id_bytes[..],
+                rows.verification_requirement_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 1, 'entity', ?3, ?4)",
+            params![
+                &acceptance_criterion_operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                &acceptance_criterion_entity_id_bytes[..],
+                rows.acceptance_criterion_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO entity_membership_change(
+                operation_id,
+                entity_id,
+                before_entity_version_id,
+                after_entity_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4)",
+            params![
+                &verification_requirement_operation_id_bytes[..],
+                &verification_requirement_entity_id_bytes[..],
+                &verification_requirement_entity_version_id_bytes[..],
+                EMPTY_FIELD_DELTA
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO entity_membership_change(
+                operation_id,
+                entity_id,
+                before_entity_version_id,
+                after_entity_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &acceptance_criterion_operation_id_bytes[..],
+                &acceptance_criterion_entity_id_bytes[..],
+                &previous_acceptance_criterion_entity_version_id_bytes[..],
+                &acceptance_criterion_entity_version_id_bytes[..],
+                EMPTY_FIELD_DELTA
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &commit_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                NORMAL_COMMIT_KIND,
+                &work_state_digest_bytes[..],
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, ?2, ?3)",
+            params![
+                &commit_id_bytes[..],
+                PRIMARY_PARENT_ROLE,
+                &parent_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+            params![
+                &EventId::new_v7().raw_bytes()[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                ENTITY_TRANSITION_EVENT_KIND,
+                rows.now_us,
+                rows.changeset_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    Ok(())
+}
+
+fn write_verification_create(
+    transaction: &Transaction<'_>,
+    rows: &VerificationCreateRows,
+) -> Result<()> {
+    let workspace_id_bytes = rows.workspace_id.raw_bytes();
+    let verification_entity_id_bytes = rows.verification_entity_id.raw_bytes();
+    let verification_entity_version_id_bytes = rows.verification_entity_version_id.raw_bytes();
+    let verification_state_digest_bytes = rows.verification_state_digest.as_bytes();
+    let verifies_relation_id_bytes = rows.verifies_relation_id.raw_bytes();
+    let verifies_relation_version_id_bytes = rows.verifies_relation_version_id.raw_bytes();
+    let verifies_relation_state_digest_bytes = rows.verifies_relation_state_digest.as_bytes();
+    let target_entity_id_bytes = rows.target.entity_id().raw_bytes();
+    let changeset_id_bytes = rows.changeset_id.raw_bytes();
+    let commit_id_bytes = rows.commit_id.raw_bytes();
+    let verification_operation_id_bytes = rows.verification_operation_id.raw_bytes();
+    let verifies_relation_operation_id_bytes = rows.verifies_relation_operation_id.raw_bytes();
+    let parent_commit_id_bytes = rows.expected_head_commit_id.raw_bytes();
+    let work_state_digest_bytes = rows.work_state_digest.as_bytes();
+
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &verification_entity_id_bytes[..],
+                ENTITY_OBJECT_KIND,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO entity(object_id, workspace_id, entity_kind)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &verification_entity_id_bytes[..],
+                &workspace_id_bytes[..],
+                VERIFICATION_ENTITY_KIND
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO entity_version(
+                entity_version_id,
+                entity_id,
+                state_schema_version,
+                state_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &verification_entity_version_id_bytes[..],
+                &verification_entity_id_bytes[..],
+                VERIFICATION_STATE_SCHEMA_VERSION,
+                rows.verification_state_json,
+                &verification_state_digest_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO verification_basis(
+                verification_entity_id,
+                verified_at_commit_id,
+                basis_schema_version,
+                basis_json
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &verification_entity_id_bytes[..],
+                &parent_commit_id_bytes[..],
+                VERIFICATION_BASIS_SCHEMA_VERSION,
+                rows.basis_json
+            ],
+        )
+        .map_err(storage_error)?;
+    for (ordinal, dependency) in rows.semantic_dependencies.iter().enumerate() {
+        transaction
+            .execute(
+                "INSERT INTO verification_semantic_dependency(
+                    verification_entity_id,
+                    ordinal,
+                    dependency_entity_id,
+                    expected_entity_version_id
+                 )
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    &verification_entity_id_bytes[..],
+                    ordinal as i64,
+                    &dependency.entity_id.raw_bytes()[..],
+                    &dependency.entity_version_id.raw_bytes()[..]
+                ],
+            )
+            .map_err(storage_error)?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &verifies_relation_id_bytes[..],
+                RELATION_OBJECT_KIND,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation(
+                object_id,
+                workspace_id,
+                relation_type,
+                source_object_id,
+                target_object_id,
+                relation_discriminator
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, '')",
+            params![
+                &verifies_relation_id_bytes[..],
+                &workspace_id_bytes[..],
+                VERIFIES_RELATION_TYPE,
+                &verification_entity_id_bytes[..],
+                &target_entity_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_version(
+                relation_version_id,
+                relation_id,
+                state_schema_version,
+                metadata_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &verifies_relation_version_id_bytes[..],
+                &verifies_relation_id_bytes[..],
+                RELATION_STATE_SCHEMA_VERSION,
+                rows.verifies_relation_state_json,
+                &verifies_relation_state_digest_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                &changeset_id_bytes[..],
+                &workspace_id_bytes[..],
+                VERIFICATION_RECORD_OPERATION_TYPE,
+                VERIFICATION_RECORD_OPERATION_SCHEMA_VERSION,
+                rows.changeset_payload_json,
+                rows.rationale_json,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 0, 'entity', ?3, ?4)",
+            params![
+                &verification_operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                &verification_entity_id_bytes[..],
+                rows.verification_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 1, 'relation', ?3, ?4)",
+            params![
+                &verifies_relation_operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                &verifies_relation_id_bytes[..],
+                rows.verifies_relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO entity_membership_change(
+                operation_id,
+                entity_id,
+                before_entity_version_id,
+                after_entity_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4)",
+            params![
+                &verification_operation_id_bytes[..],
+                &verification_entity_id_bytes[..],
+                &verification_entity_version_id_bytes[..],
+                EMPTY_FIELD_DELTA
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_membership_change(
+                operation_id,
+                relation_id,
+                before_relation_version_id,
+                after_relation_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4)",
+            params![
+                &verifies_relation_operation_id_bytes[..],
+                &verifies_relation_id_bytes[..],
+                &verifies_relation_version_id_bytes[..],
+                EMPTY_FIELD_DELTA
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &commit_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                NORMAL_COMMIT_KIND,
+                &work_state_digest_bytes[..],
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, ?2, ?3)",
+            params![
+                &commit_id_bytes[..],
+                PRIMARY_PARENT_ROLE,
+                &parent_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+            params![
+                &EventId::new_v7().raw_bytes()[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                VERIFICATION_RECORD_EVENT_KIND,
+                rows.now_us,
+                rows.changeset_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    Ok(())
+}
+
 fn move_branch_head(
     transaction: &Transaction<'_>,
     branch_id: BranchId,
@@ -1663,7 +3927,10 @@ fn load_entity_kind_for_public_boundary(
 fn is_reserved_semantic_entity_kind(entity_kind: &str) -> bool {
     matches!(
         entity_kind,
-        TASK_ENTITY_KIND | ACCEPTANCE_CRITERION_ENTITY_KIND
+        TASK_ENTITY_KIND
+            | ACCEPTANCE_CRITERION_ENTITY_KIND
+            | VERIFICATION_REQUIREMENT_ENTITY_KIND
+            | VERIFICATION_ENTITY_KIND
     )
 }
 
@@ -1794,7 +4061,7 @@ fn parse_task_acceptance_criteria(
                 }
                 "local_key" => {
                     let value = require_string("acceptance_criteria[].local_key", value)?;
-                    validate_local_key(&value)?;
+                    validate_local_key("acceptance criterion local key", &value)?;
                     local_key = Some(value);
                 }
                 other => {
@@ -1850,8 +4117,8 @@ fn parse_acceptance_criterion_state(value: CanonicalValue) -> Result<AcceptanceC
                 statement = Some(value);
             }
             "verification_requirements" => {
-                require_empty_array("verification_requirements", &value)?;
-                verification_requirements = Some(());
+                verification_requirements =
+                    Some(parse_acceptance_criterion_verification_requirements(value)?);
             }
             other => {
                 return Err(WorkVcsError::TaskInvalid(format!(
@@ -1860,7 +4127,7 @@ fn parse_acceptance_criterion_state(value: CanonicalValue) -> Result<AcceptanceC
             }
         }
     }
-    verification_requirements.ok_or_else(|| {
+    let verification_requirements = verification_requirements.ok_or_else(|| {
         WorkVcsError::TaskInvalid(
             "acceptance criterion state is missing verification_requirements".to_owned(),
         )
@@ -1875,6 +4142,67 @@ fn parse_acceptance_criterion_state(value: CanonicalValue) -> Result<AcceptanceC
             )
         })?,
     )
+    .and_then(|state| state.with_verification_requirements(verification_requirements))
+}
+
+fn parse_acceptance_criterion_verification_requirements(
+    value: CanonicalValue,
+) -> Result<Vec<AcceptanceCriterionVerificationRequirementRef>> {
+    let CanonicalValue::Array(values) = value else {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification_requirements must be an array".to_owned(),
+        ));
+    };
+    let mut requirements = Vec::with_capacity(values.len());
+    for value in values {
+        let CanonicalValue::Object(entries) = value else {
+            return Err(WorkVcsError::TaskInvalid(
+                "verification_requirements entries must be canonical objects".to_owned(),
+            ));
+        };
+        if entries.len() != 2 {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification_requirements entries must contain exactly 2 fields, found {}",
+                entries.len()
+            )));
+        }
+
+        let mut entity_id = None;
+        let mut local_key = None;
+        for (key, value) in entries {
+            match key.as_str() {
+                "entity_id" => {
+                    let value = require_string("verification_requirements[].entity_id", value)?;
+                    entity_id = Some(EntityId::parse_canonical(&value).map_err(task_invalid_from)?);
+                }
+                "local_key" => {
+                    let value = require_string("verification_requirements[].local_key", value)?;
+                    validate_local_key("verification requirement local key", &value)?;
+                    local_key = Some(value);
+                }
+                other => {
+                    return Err(WorkVcsError::TaskInvalid(format!(
+                        "verification_requirements entry contains unsupported field {other:?}"
+                    )));
+                }
+            }
+        }
+        requirements.push(AcceptanceCriterionVerificationRequirementRef::new(
+            local_key.ok_or_else(|| {
+                WorkVcsError::TaskInvalid(
+                    "verification_requirements entry is missing local_key".to_owned(),
+                )
+            })?,
+            entity_id.ok_or_else(|| {
+                WorkVcsError::TaskInvalid(
+                    "verification_requirements entry is missing entity_id".to_owned(),
+                )
+            })?,
+        )?);
+    }
+    validate_verification_requirement_refs(&requirements)?;
+    require_verification_requirements_canonical_order(&requirements)?;
+    Ok(requirements)
 }
 
 fn require_task_references_acceptance_criterion(
@@ -1893,6 +4221,453 @@ fn require_task_references_acceptance_criterion(
             criterion.task_entity_id, criterion.local_key, criterion.acceptance_criterion_entity_id
         )))
     }
+}
+
+fn require_acceptance_criterion_references_verification_requirement(
+    criterion_state: &AcceptanceCriterionState,
+    requirement: &VerificationRequirementSnapshot,
+) -> Result<()> {
+    let referenced = criterion_state
+        .verification_requirements
+        .iter()
+        .any(|candidate| {
+            candidate.local_key == requirement.local_key
+                && candidate.verification_requirement_entity_id
+                    == requirement.verification_requirement_entity_id
+        });
+    if referenced {
+        Ok(())
+    } else {
+        Err(WorkVcsError::TaskInvalid(format!(
+            "acceptance criterion entity {} does not reference verification requirement {}/{}",
+            requirement.acceptance_criterion_entity_id,
+            requirement.local_key,
+            requirement.verification_requirement_entity_id
+        )))
+    }
+}
+
+fn parse_verification_requirement_state(
+    value: CanonicalValue,
+) -> Result<VerificationRequirementState> {
+    let CanonicalValue::Object(entries) = value else {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification requirement state must be a canonical object".to_owned(),
+        ));
+    };
+    if entries.len() != 1 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification requirement state must contain exactly 1 field, found {}",
+            entries.len()
+        )));
+    }
+
+    let mut statement = None;
+    for (key, value) in entries {
+        match key.as_str() {
+            "statement" => {
+                let value = require_string("statement", value)?;
+                validate_verification_requirement_statement(&value)?;
+                statement = Some(value);
+            }
+            other => {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "verification requirement state contains unsupported field {other:?}"
+                )));
+            }
+        }
+    }
+
+    VerificationRequirementState::new(statement.ok_or_else(|| {
+        WorkVcsError::TaskInvalid("verification requirement state is missing statement".to_owned())
+    })?)
+}
+
+fn parse_verification_state(value: CanonicalValue) -> Result<VerificationState> {
+    let CanonicalValue::Object(entries) = value else {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification state must be a canonical object".to_owned(),
+        ));
+    };
+    if entries.len() != 4 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification state must contain exactly 4 fields, found {}",
+            entries.len()
+        )));
+    }
+
+    let mut basis = None;
+    let mut evidence = None;
+    let mut method = None;
+    let mut result = None;
+    for (key, value) in entries {
+        match key.as_str() {
+            "basis" => {
+                basis = Some(parse_verification_basis(value)?);
+            }
+            "evidence" => {
+                require_empty_array("verification evidence", &value)?;
+                evidence = Some(());
+            }
+            "method" => {
+                validate_verification_method(&value)?;
+                method = Some(value);
+            }
+            "result" => {
+                let value = require_string("result", value)?;
+                result = Some(VerificationResult::parse(&value)?);
+            }
+            other => {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "verification state contains unsupported field {other:?}"
+                )));
+            }
+        }
+    }
+    evidence.ok_or_else(|| {
+        WorkVcsError::TaskInvalid("verification state is missing evidence".to_owned())
+    })?;
+    let (verified_at_commit_id, semantic_dependencies) = basis.ok_or_else(|| {
+        WorkVcsError::TaskInvalid("verification state is missing basis".to_owned())
+    })?;
+    VerificationState::new(
+        result.ok_or_else(|| {
+            WorkVcsError::TaskInvalid("verification state is missing result".to_owned())
+        })?,
+        method.ok_or_else(|| {
+            WorkVcsError::TaskInvalid("verification state is missing method".to_owned())
+        })?,
+        verified_at_commit_id,
+        semantic_dependencies,
+    )
+}
+
+fn parse_verification_basis(
+    value: CanonicalValue,
+) -> Result<(CommitId, Vec<VerificationSemanticDependency>)> {
+    let CanonicalValue::Object(entries) = value else {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification basis must be a canonical object".to_owned(),
+        ));
+    };
+    if entries.len() != 2 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification basis must contain exactly 2 fields, found {}",
+            entries.len()
+        )));
+    }
+
+    let mut semantic_dependencies = None;
+    let mut verified_at_commit_id = None;
+    for (key, value) in entries {
+        match key.as_str() {
+            "semantic_dependencies" => {
+                semantic_dependencies = Some(parse_verification_semantic_dependencies(value)?);
+            }
+            "verified_at_commit_id" => {
+                let value = require_string("verified_at_commit_id", value)?;
+                verified_at_commit_id =
+                    Some(CommitId::parse_canonical(&value).map_err(task_invalid_from)?);
+            }
+            other => {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "verification basis contains unsupported field {other:?}"
+                )));
+            }
+        }
+    }
+
+    Ok((
+        verified_at_commit_id.ok_or_else(|| {
+            WorkVcsError::TaskInvalid(
+                "verification basis is missing verified_at_commit_id".to_owned(),
+            )
+        })?,
+        semantic_dependencies.ok_or_else(|| {
+            WorkVcsError::TaskInvalid(
+                "verification basis is missing semantic_dependencies".to_owned(),
+            )
+        })?,
+    ))
+}
+
+fn parse_verification_semantic_dependencies(
+    value: CanonicalValue,
+) -> Result<Vec<VerificationSemanticDependency>> {
+    let CanonicalValue::Array(values) = value else {
+        return Err(WorkVcsError::TaskInvalid(
+            "semantic_dependencies must be an array".to_owned(),
+        ));
+    };
+    let mut dependencies = Vec::with_capacity(values.len());
+    for value in values {
+        let CanonicalValue::Object(entries) = value else {
+            return Err(WorkVcsError::TaskInvalid(
+                "semantic_dependencies entries must be canonical objects".to_owned(),
+            ));
+        };
+        if entries.len() != 2 {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "semantic_dependencies entries must contain exactly 2 fields, found {}",
+                entries.len()
+            )));
+        }
+
+        let mut entity_id = None;
+        let mut entity_version_id = None;
+        for (key, value) in entries {
+            match key.as_str() {
+                "entity_id" => {
+                    let value = require_string("semantic_dependencies[].entity_id", value)?;
+                    entity_id = Some(EntityId::parse_canonical(&value).map_err(task_invalid_from)?);
+                }
+                "entity_version_id" => {
+                    let value = require_string("semantic_dependencies[].entity_version_id", value)?;
+                    entity_version_id =
+                        Some(EntityVersionId::parse_canonical(&value).map_err(task_invalid_from)?);
+                }
+                other => {
+                    return Err(WorkVcsError::TaskInvalid(format!(
+                        "semantic_dependencies entry contains unsupported field {other:?}"
+                    )));
+                }
+            }
+        }
+        dependencies.push(VerificationSemanticDependency::new(
+            entity_id.ok_or_else(|| {
+                WorkVcsError::TaskInvalid(
+                    "semantic_dependencies entry is missing entity_id".to_owned(),
+                )
+            })?,
+            entity_version_id.ok_or_else(|| {
+                WorkVcsError::TaskInvalid(
+                    "semantic_dependencies entry is missing entity_version_id".to_owned(),
+                )
+            })?,
+        ));
+    }
+    validate_verification_semantic_dependencies(&dependencies)?;
+    require_verification_semantic_dependencies_canonical_order(&dependencies)?;
+    Ok(dependencies)
+}
+
+fn verification_semantic_dependencies_for_target(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    target: VerificationTarget,
+) -> Result<Vec<VerificationSemanticDependency>> {
+    match target {
+        VerificationTarget::AcceptanceCriterion(acceptance_criterion_entity_id) => {
+            let criterion =
+                acceptance_criterion_at(connection, commit_id, acceptance_criterion_entity_id)?;
+            if !criterion.state.verification_requirements.is_empty() {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "acceptance criterion {acceptance_criterion_entity_id} has verification requirements; verification must target a requirement"
+                )));
+            }
+            Ok(vec![VerificationSemanticDependency::new(
+                acceptance_criterion_entity_id,
+                criterion.acceptance_criterion_entity_version_id,
+            )])
+        }
+        VerificationTarget::VerificationRequirement(verification_requirement_entity_id) => {
+            let requirement = verification_requirement_at(
+                connection,
+                commit_id,
+                verification_requirement_entity_id,
+            )?;
+            let criterion = acceptance_criterion_at(
+                connection,
+                commit_id,
+                requirement.acceptance_criterion_entity_id,
+            )?;
+            require_acceptance_criterion_references_verification_requirement(
+                &criterion.state,
+                &requirement,
+            )?;
+            Ok(vec![VerificationSemanticDependency::new(
+                verification_requirement_entity_id,
+                requirement.verification_requirement_entity_version_id,
+            )])
+        }
+    }
+}
+
+fn effective_status_for_target(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    target: VerificationTarget,
+) -> Result<AcceptanceCriterionEffectiveStatus> {
+    let replayed = state_at(connection, commit_id)?;
+    let verifications = load_current_verifications_for_target(
+        connection,
+        commit_id,
+        replayed.workspace_id,
+        &replayed.state,
+        target,
+    )?;
+    let mut has_applicable_passed = false;
+    let mut has_applicable_failed = false;
+    let mut has_stale = false;
+
+    for verification in verifications {
+        if verification_is_applicable(&replayed.state, &verification.state.semantic_dependencies) {
+            match verification.state.result {
+                VerificationResult::Passed => has_applicable_passed = true,
+                VerificationResult::Failed => has_applicable_failed = true,
+                VerificationResult::Inconclusive => {}
+            }
+        } else {
+            has_stale = true;
+        }
+    }
+
+    match (has_applicable_passed, has_applicable_failed, has_stale) {
+        (true, true, _) => Ok(AcceptanceCriterionEffectiveStatus::Conflicted),
+        (_, true, _) => Ok(AcceptanceCriterionEffectiveStatus::Failed),
+        (true, false, _) => Ok(AcceptanceCriterionEffectiveStatus::Verified),
+        (false, false, true) => Ok(AcceptanceCriterionEffectiveStatus::Stale),
+        (false, false, false) => Ok(AcceptanceCriterionEffectiveStatus::Unverified),
+    }
+}
+
+fn load_current_verifications_for_target(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+    target: VerificationTarget,
+) -> Result<Vec<VerificationSnapshot>> {
+    let mut verifications = Vec::new();
+    for (relation_id, relation_version_id) in state.relations() {
+        let relation = load_verifies_relation_version(
+            connection,
+            workspace_id,
+            *relation_id,
+            *relation_version_id,
+        )?;
+        if relation.target != target {
+            continue;
+        }
+        let Some(verification_entity_version_id) =
+            state
+                .entities()
+                .iter()
+                .find_map(|(entity_id, entity_version_id)| {
+                    (*entity_id == relation.source_verification_entity_id)
+                        .then_some(*entity_version_id)
+                })
+        else {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verifies relation {} source verification {} is not present in WorkState",
+                relation.relation_id, relation.source_verification_entity_id
+            )));
+        };
+        let loaded = load_verification_version(
+            connection,
+            workspace_id,
+            relation.source_verification_entity_id,
+            verification_entity_version_id,
+        )?;
+        verifications.push(VerificationSnapshot {
+            workspace_id,
+            commit_id,
+            verification_entity_id: relation.source_verification_entity_id,
+            verification_entity_version_id,
+            state_digest: loaded.state_digest,
+            verifies_relation_id: relation.relation_id,
+            verifies_relation_version_id: relation.relation_version_id,
+            verifies_relation_state_digest: relation.state_digest,
+            target: relation.target,
+            state: loaded.state,
+        });
+    }
+    Ok(verifications)
+}
+
+fn verification_is_applicable(
+    state: &WorkState,
+    dependencies: &[VerificationSemanticDependency],
+) -> bool {
+    dependencies.iter().all(|dependency| {
+        state
+            .entities()
+            .iter()
+            .find_map(|(entity_id, entity_version_id)| {
+                (*entity_id == dependency.entity_id).then_some(*entity_version_id)
+            })
+            == Some(dependency.entity_version_id)
+    })
+}
+
+fn combine_acceptance_criterion_status(
+    left: AcceptanceCriterionEffectiveStatus,
+    right: AcceptanceCriterionEffectiveStatus,
+) -> AcceptanceCriterionEffectiveStatus {
+    use AcceptanceCriterionEffectiveStatus::{Conflicted, Failed, Stale, Unverified, Verified};
+    match (left, right) {
+        (Conflicted, _) | (_, Conflicted) => Conflicted,
+        (Failed, _) | (_, Failed) => Failed,
+        (Stale, _) | (_, Stale) => Stale,
+        (Unverified, _) | (_, Unverified) => Unverified,
+        (Verified, Verified) => Verified,
+    }
+}
+
+fn relation_transition_payload_value(
+    relation_id: RelationId,
+    before_relation_version_id: Option<RelationVersionId>,
+    after_relation_version_id: RelationVersionId,
+) -> Result<CanonicalValue> {
+    let before_value = match before_relation_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    CanonicalValue::object(vec![
+        (
+            "after_relation_version_id".to_owned(),
+            CanonicalValue::String(after_relation_version_id.to_string()),
+        ),
+        ("before_relation_version_id".to_owned(), before_value),
+        (
+            "relation_id".to_owned(),
+            CanonicalValue::String(relation_id.to_string()),
+        ),
+    ])
+    .map_err(task_invalid_from)
+}
+
+fn verification_basis_value(
+    verified_at_commit_id: CommitId,
+    semantic_dependencies: &[VerificationSemanticDependency],
+) -> Result<CanonicalValue> {
+    validate_verification_semantic_dependencies(semantic_dependencies)?;
+    let mut semantic_dependencies = semantic_dependencies.to_vec();
+    semantic_dependencies.sort_by(|left, right| {
+        left.entity_id
+            .raw_bytes()
+            .cmp(&right.entity_id.raw_bytes())
+            .then_with(|| {
+                left.entity_version_id
+                    .raw_bytes()
+                    .cmp(&right.entity_version_id.raw_bytes())
+            })
+    });
+    let dependencies = semantic_dependencies
+        .iter()
+        .map(VerificationSemanticDependency::to_canonical_value)
+        .collect::<Result<Vec<_>>>()?;
+    CanonicalValue::object(vec![
+        (
+            "semantic_dependencies".to_owned(),
+            CanonicalValue::Array(dependencies),
+        ),
+        (
+            "verified_at_commit_id".to_owned(),
+            CanonicalValue::String(verified_at_commit_id.to_string()),
+        ),
+    ])
+    .map_err(task_invalid_from)
 }
 
 fn require_mandatory_acceptance_criteria_verified(
@@ -1915,10 +4690,17 @@ fn require_mandatory_acceptance_criteria_verified(
             )));
         }
         if criterion.state.classification == AcceptanceCriterionClassification::Required {
-            return Err(WorkVcsError::TaskInvalid(format!(
-                "mandatory acceptance criterion {} is unverified; Verification projection is deferred",
-                criterion.local_key
-            )));
+            let status = acceptance_criterion_effective_status(
+                connection,
+                commit_id,
+                criterion.acceptance_criterion_entity_id,
+            )?;
+            if status != AcceptanceCriterionEffectiveStatus::Verified {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "mandatory acceptance criterion {} is {status}; expected verified",
+                    criterion.local_key
+                )));
+            }
         }
     }
     Ok(())
@@ -1952,7 +4734,7 @@ fn validate_acceptance_criterion_refs(criteria: &[TaskAcceptanceCriterionRef]) -
     let mut local_keys = HashSet::new();
     let mut entity_ids = HashSet::new();
     for criterion in criteria {
-        validate_local_key(&criterion.local_key)?;
+        validate_local_key("acceptance criterion local key", &criterion.local_key)?;
         if !local_keys.insert(criterion.local_key.as_str()) {
             return Err(WorkVcsError::TaskInvalid(format!(
                 "task state contains duplicate acceptance criterion local key {:?}",
@@ -1963,6 +4745,29 @@ fn validate_acceptance_criterion_refs(criteria: &[TaskAcceptanceCriterionRef]) -
             return Err(WorkVcsError::TaskInvalid(format!(
                 "task state contains duplicate acceptance criterion entity id {}",
                 criterion.acceptance_criterion_entity_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_verification_requirement_refs(
+    requirements: &[AcceptanceCriterionVerificationRequirementRef],
+) -> Result<()> {
+    let mut local_keys = HashSet::new();
+    let mut entity_ids = HashSet::new();
+    for requirement in requirements {
+        validate_local_key("verification requirement local key", &requirement.local_key)?;
+        if !local_keys.insert(requirement.local_key.as_str()) {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "acceptance criterion state contains duplicate verification requirement local key {:?}",
+                requirement.local_key
+            )));
+        }
+        if !entity_ids.insert(requirement.verification_requirement_entity_id.raw_bytes()) {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "acceptance criterion state contains duplicate verification requirement entity id {}",
+                requirement.verification_requirement_entity_id
             )));
         }
     }
@@ -1985,27 +4790,42 @@ fn require_acceptance_criteria_canonical_order(
     Ok(())
 }
 
-fn validate_local_key(value: &str) -> Result<()> {
+fn require_verification_requirements_canonical_order(
+    requirements: &[AcceptanceCriterionVerificationRequirementRef],
+) -> Result<()> {
+    for pair in requirements.windows(2) {
+        let [left, right] = pair else {
+            continue;
+        };
+        if left.local_key >= right.local_key {
+            return Err(WorkVcsError::TaskInvalid(
+                "acceptance criterion verification_requirements must be sorted by local_key"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_local_key(label: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
-        return Err(WorkVcsError::TaskInvalid(
-            "acceptance criterion local key must not be empty".to_owned(),
-        ));
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "{label} must not be empty"
+        )));
     }
     if value.trim() != value {
-        return Err(WorkVcsError::TaskInvalid(
-            "acceptance criterion local key must not have leading or trailing whitespace"
-                .to_owned(),
-        ));
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "{label} must not have leading or trailing whitespace"
+        )));
     }
     if value
         .as_bytes()
         .iter()
         .any(|byte| *byte == b'\0' || *byte < 0x20 || *byte == 0x7f)
     {
-        return Err(WorkVcsError::TaskInvalid(
-            "acceptance criterion local key must not contain NUL or ASCII control characters"
-                .to_owned(),
-        ));
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "{label} must not contain NUL or ASCII control characters"
+        )));
     }
     Ok(())
 }
@@ -2020,6 +4840,65 @@ fn validate_acceptance_criterion_statement(value: &str) -> Result<()> {
         return Err(WorkVcsError::TaskInvalid(
             "acceptance criterion statement must not contain NUL".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_verification_requirement_statement(value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification requirement statement must not be empty".to_owned(),
+        ));
+    }
+    if value.contains('\0') {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification requirement statement must not contain NUL".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_verification_method(value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(_) => Ok(()),
+        _ => Err(WorkVcsError::TaskInvalid(
+            "verification method must be a canonical object descriptor".to_owned(),
+        )),
+    }
+}
+
+fn validate_verification_semantic_dependencies(
+    dependencies: &[VerificationSemanticDependency],
+) -> Result<()> {
+    if dependencies.is_empty() {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification semantic_dependencies must not be empty".to_owned(),
+        ));
+    }
+    let mut entity_ids = HashSet::new();
+    for dependency in dependencies {
+        if !entity_ids.insert(dependency.entity_id.raw_bytes()) {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification semantic_dependencies contains duplicate entity id {}",
+                dependency.entity_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn require_verification_semantic_dependencies_canonical_order(
+    dependencies: &[VerificationSemanticDependency],
+) -> Result<()> {
+    for pair in dependencies.windows(2) {
+        let [left, right] = pair else {
+            continue;
+        };
+        if left.entity_id.raw_bytes() >= right.entity_id.raw_bytes() {
+            return Err(WorkVcsError::TaskInvalid(
+                "verification semantic_dependencies must be sorted by raw entity id".to_owned(),
+            ));
+        }
     }
     Ok(())
 }
@@ -2114,6 +4993,11 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
 fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
     let bytes = decode_16(column, bytes)?;
     EntityId::from_bytes(bytes).map_err(task_invalid_from)
+}
+
+fn decode_entity_version_id(column: &str, bytes: Vec<u8>) -> Result<EntityVersionId> {
+    let bytes = decode_16(column, bytes)?;
+    EntityVersionId::from_bytes(bytes).map_err(task_invalid_from)
 }
 
 fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {

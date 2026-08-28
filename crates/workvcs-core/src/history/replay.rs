@@ -4,11 +4,13 @@ use super::entity::{
 };
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, canonical_bytes, entity_version_digest,
-    parse_canonical_json, validate_import_fixed_point, work_state_mapping_digest,
+    parse_canonical_json, relation_version_digest, validate_import_fixed_point,
+    work_state_mapping_digest,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, OperationId, WorkspaceId,
+    ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, OperationId, RelationId,
+    RelationVersionId, WorkspaceId,
 };
 use crate::store::StoreConnection;
 use rusqlite::{OptionalExtension, Params, params};
@@ -19,6 +21,10 @@ const GENESIS_OPERATION_TYPE: &str = "workspace.genesis";
 const GENESIS_COMMIT_KIND: &str = "genesis";
 const NORMAL_COMMIT_KIND: &str = "normal";
 const MERGE_COMMIT_KIND: &str = "merge";
+const RELATION_OBJECT_KIND: &str = "relation";
+const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
+const VERIFICATION_RECORD_OPERATION_SCHEMA_VERSION: i64 = 1;
+const VERIFICATION_RECORD_OPERATION_TYPE: &str = "verification.record";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplayedState {
@@ -313,6 +319,11 @@ fn apply_entity_transition_changeset(
         .iter()
         .copied()
         .collect::<BTreeMap<_, _>>();
+    let mut relations = parent_state
+        .relations()
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
     for (expected_ordinal, operation) in operations.into_iter().enumerate() {
         if operation.ordinal != expected_ordinal as i64 {
             return Err(WorkVcsError::ReplayInvalid(format!(
@@ -320,26 +331,44 @@ fn apply_entity_transition_changeset(
                 operation.operation_id, operation.ordinal
             )));
         }
-        if operation.subject_family != "entity" {
-            return Err(WorkVcsError::ReplayUnsupported(format!(
-                "ChangeOperation {} subject family {:?} is deferred",
-                operation.operation_id, operation.subject_family
-            )));
+        let subject_family = operation.subject_family.clone();
+        match subject_family.as_str() {
+            "entity" => {
+                let subject_object_id = decode_entity_id(
+                    "change_operation.subject_object_id",
+                    operation.subject_object_id.clone(),
+                )?;
+                apply_entity_operation(
+                    connection,
+                    workspace_id,
+                    &mut entities,
+                    operation,
+                    subject_object_id,
+                )?;
+            }
+            "relation" => {
+                let subject_object_id = decode_relation_id(
+                    "change_operation.subject_object_id",
+                    operation.subject_object_id.clone(),
+                )?;
+                apply_relation_operation(
+                    connection,
+                    workspace_id,
+                    &mut relations,
+                    operation,
+                    subject_object_id,
+                )?;
+            }
+            _ => {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "ChangeOperation {} subject family {:?} is deferred",
+                    operation.operation_id, operation.subject_family
+                )));
+            }
         }
-        let subject_object_id = decode_entity_id(
-            "change_operation.subject_object_id",
-            operation.subject_object_id.clone(),
-        )?;
-        apply_entity_operation(
-            connection,
-            workspace_id,
-            &mut entities,
-            operation,
-            subject_object_id,
-        )?;
     }
 
-    WorkState::new(entities, parent_state.relations().to_vec()).map_err(|error| {
+    WorkState::new(entities, relations).map_err(|error| {
         WorkVcsError::ReplayInvalid(format!("replayed WorkState is invalid: {error}"))
     })
 }
@@ -376,15 +405,26 @@ fn validate_entity_transition_changeset(
             "normal ChangeSet {changeset_id} does not exist"
         )));
     };
-    if operation_type != ENTITY_TRANSITION_OPERATION_TYPE {
-        return Err(WorkVcsError::ReplayUnsupported(format!(
-            "normal ChangeSet {changeset_id} operation type {operation_type:?} is deferred"
-        )));
-    }
-    if operation_schema_version != ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION {
-        return Err(WorkVcsError::ReplayUnsupported(format!(
-            "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
-        )));
+    match operation_type.as_str() {
+        ENTITY_TRANSITION_OPERATION_TYPE => {
+            if operation_schema_version != ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        VERIFICATION_RECORD_OPERATION_TYPE => {
+            if operation_schema_version != VERIFICATION_RECORD_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        _ => {
+            return Err(WorkVcsError::ReplayUnsupported(format!(
+                "normal ChangeSet {changeset_id} operation type {operation_type:?} is deferred"
+            )));
+        }
     }
     validate_canonical_json_text("changeset.operation_payload_json", &operation_payload_json)?;
     validate_canonical_json_text("changeset.rationale_json", &rationale_json)?;
@@ -504,10 +544,77 @@ fn apply_entity_operation(
     Ok(())
 }
 
+fn apply_relation_operation(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    relations: &mut BTreeMap<RelationId, RelationVersionId>,
+    operation: OperationRow,
+    subject_relation_id: RelationId,
+) -> Result<()> {
+    let change = load_relation_membership_change(connection, operation.operation_id)?;
+    if change.relation_id != subject_relation_id {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "Relation membership change {} targets {}, but ChangeOperation targets {}",
+            operation.operation_id, change.relation_id, subject_relation_id
+        )));
+    }
+
+    validate_canonical_json_text(
+        "change_operation.operation_payload_json",
+        &operation.operation_payload_json,
+    )?;
+    validate_canonical_json_text(
+        "relation_membership_change.field_delta_json",
+        &change.field_delta_json,
+    )?;
+
+    if change.before_relation_version_id.is_some() {
+        return Err(WorkVcsError::ReplayUnsupported(format!(
+            "relation update for {subject_relation_id} is deferred"
+        )));
+    }
+    let after_relation_version_id = change.after_relation_version_id.ok_or_else(|| {
+        WorkVcsError::ReplayUnsupported(format!(
+            "relation removal for {subject_relation_id} is deferred"
+        ))
+    })?;
+    let expected_payload =
+        relation_transition_payload_json(subject_relation_id, None, after_relation_version_id)?;
+    if operation.operation_payload_json != expected_payload {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "ChangeOperation {} payload does not match relation membership change",
+            operation.operation_id
+        )));
+    }
+
+    let current = relations.get(&subject_relation_id).copied();
+    if current.is_some() {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "relation {subject_relation_id} was expected to be absent before creation, found {current:?}"
+        )));
+    }
+
+    validate_relation_version(
+        connection,
+        workspace_id,
+        subject_relation_id,
+        after_relation_version_id,
+    )?;
+    relations.insert(subject_relation_id, after_relation_version_id);
+    Ok(())
+}
+
 struct EntityMembershipChange {
     entity_id: EntityId,
     before_entity_version_id: Option<EntityVersionId>,
     after_entity_version_id: Option<EntityVersionId>,
+    field_delta_json: String,
+}
+
+struct RelationMembershipChange {
+    relation_id: RelationId,
+    before_relation_version_id: Option<RelationVersionId>,
+    after_relation_version_id: Option<RelationVersionId>,
     field_delta_json: String,
 }
 
@@ -550,6 +657,54 @@ fn load_entity_membership_change(
         after_entity_version_id: decode_optional_entity_version_id(
             "entity_membership_change.after_entity_version_id",
             after_entity_version_id,
+        )?,
+        field_delta_json,
+    })
+}
+
+fn load_relation_membership_change(
+    connection: &StoreConnection,
+    operation_id: OperationId,
+) -> Result<RelationMembershipChange> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT relation_id, before_relation_version_id, after_relation_version_id, field_delta_json
+             FROM relation_membership_change
+             WHERE operation_id = ?1",
+            params![&operation_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        relation_id,
+        before_relation_version_id,
+        after_relation_version_id,
+        field_delta_json,
+    )) = row
+    else {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "ChangeOperation {operation_id} has no relation membership change"
+        )));
+    };
+    Ok(RelationMembershipChange {
+        relation_id: decode_relation_id("relation_membership_change.relation_id", relation_id)?,
+        before_relation_version_id: decode_optional_relation_version_id(
+            "relation_membership_change.before_relation_version_id",
+            before_relation_version_id,
+        )?,
+        after_relation_version_id: decode_optional_relation_version_id(
+            "relation_membership_change.after_relation_version_id",
+            after_relation_version_id,
         )?,
         field_delta_json,
     })
@@ -622,6 +777,98 @@ fn validate_entity_version(
     Ok(())
 }
 
+fn validate_relation_version(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<()> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    relation.workspace_id,
+                    relation_version.state_schema_version,
+                    relation_version.metadata_json,
+                    relation_version.state_digest
+             FROM relation
+             JOIN object_identity ON object_identity.object_id = relation.object_id
+             JOIN relation_version ON relation_version.relation_id = relation.object_id
+             WHERE relation.object_id = ?1
+               AND relation_version.relation_version_id = ?2",
+            params![
+                &relation_id.raw_bytes()[..],
+                &relation_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        object_kind,
+        relation_workspace_id,
+        state_schema_version,
+        metadata_json,
+        state_digest,
+    )) = row
+    else {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "RelationVersion {relation_version_id} for relation {relation_id} does not exist"
+        )));
+    };
+    if object_kind != RELATION_OBJECT_KIND {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "relation {relation_id} has object kind {object_kind:?}"
+        )));
+    }
+    let relation_workspace_id =
+        decode_workspace_id("relation.workspace_id", relation_workspace_id)?;
+    if relation_workspace_id != workspace_id {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "relation {relation_id} belongs to workspace {relation_workspace_id}, not {workspace_id}"
+        )));
+    }
+    if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
+        return Err(WorkVcsError::ReplayUnsupported(format!(
+            "RelationVersion {relation_version_id} state schema version {state_schema_version} is deferred"
+        )));
+    }
+
+    let state_digest = decode_digest("relation_version.state_digest", state_digest)?;
+    validate_import_fixed_point(
+        metadata_json.as_bytes(),
+        state_digest,
+        ImportDigestDomain::RelationVersion,
+    )
+    .map_err(|error| {
+        WorkVcsError::ReplayInvalid(format!(
+            "RelationVersion {relation_version_id} fixed-point validation failed: {error}"
+        ))
+    })?;
+
+    let value = parse_canonical_json(metadata_json.as_bytes()).map_err(|error| {
+        WorkVcsError::ReplayInvalid(format!("RelationVersion {relation_version_id}: {error}"))
+    })?;
+    let actual = relation_version_digest(&value).map_err(|error| {
+        WorkVcsError::ReplayInvalid(format!("RelationVersion {relation_version_id}: {error}"))
+    })?;
+    if actual != state_digest {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "RelationVersion {relation_version_id} digest does not match metadata JSON"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_canonical_json_text(label: &str, value: &str) -> Result<CanonicalValue> {
     let parsed = parse_canonical_json(value.as_bytes())
         .map_err(|error| WorkVcsError::ReplayInvalid(format!("{label}: {error}")))?;
@@ -642,6 +889,28 @@ fn canonical_empty_object_json() -> Result<String> {
             "canonical empty object JSON was not UTF-8: {error}"
         ))
     })
+}
+
+fn relation_transition_payload_json(
+    relation_id: RelationId,
+    before_relation_version_id: Option<RelationVersionId>,
+    after_relation_version_id: RelationVersionId,
+) -> Result<String> {
+    let before_value = match before_relation_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "after_relation_version_id".to_owned(),
+            CanonicalValue::String(after_relation_version_id.to_string()),
+        ),
+        ("before_relation_version_id".to_owned(), before_value),
+        (
+            "relation_id".to_owned(),
+            CanonicalValue::String(relation_id.to_string()),
+        ),
+    ])?)
 }
 
 fn require_count<P: Params>(
@@ -692,6 +961,13 @@ fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
     })
 }
 
+fn decode_relation_id(column: &str, bytes: Vec<u8>) -> Result<RelationId> {
+    let bytes = decode_16(column, bytes)?;
+    RelationId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ReplayInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
 fn decode_operation_id(column: &str, bytes: Vec<u8>) -> Result<OperationId> {
     let bytes = decode_16(column, bytes)?;
     OperationId::from_bytes(bytes).map_err(|error| {
@@ -708,9 +984,25 @@ fn decode_optional_entity_version_id(
         .transpose()
 }
 
+fn decode_optional_relation_version_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<RelationVersionId>> {
+    bytes
+        .map(|value| decode_relation_version_id(column, value))
+        .transpose()
+}
+
 fn decode_entity_version_id(column: &str, bytes: Vec<u8>) -> Result<EntityVersionId> {
     let bytes = decode_16(column, bytes)?;
     EntityVersionId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ReplayInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_relation_version_id(column: &str, bytes: Vec<u8>) -> Result<RelationVersionId> {
+    let bytes = decode_16(column, bytes)?;
+    RelationVersionId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::ReplayInvalid(format!("{column} is not a UUIDv7 value: {error}"))
     })
 }

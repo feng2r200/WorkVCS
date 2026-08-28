@@ -43,6 +43,7 @@ recorded as Accepted ADRs:
 - [ADR-0015: Phase 3A Task Semantic Kernel](decisions/adr/0015-phase-3a-task-semantic-kernel.md)
 - [ADR-0016: Phase 3B Task Lifecycle Transition](decisions/adr/0016-phase-3b-task-lifecycle-transition.md)
 - [ADR-0017: Phase 3C Acceptance Criteria](decisions/adr/0017-phase-3c-acceptance-criteria.md)
+- [ADR-0018: Phase 3D Verification Requirement Projection](decisions/adr/0018-phase-3d-verification-requirement-projection.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

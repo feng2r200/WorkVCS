@@ -1,11 +1,15 @@
 use crate::error::Result;
 use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
-    AcceptanceCriterionRevisionCommit, AcceptanceCriterionRevisionOptions,
-    AcceptanceCriterionSnapshot, BranchHead, EntityTransitionCommit, EntityTransitionOptions,
-    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit,
-    TaskCreateOptions, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
+    AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
+    EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
+    IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
+    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
+    WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -131,6 +135,33 @@ impl Store {
         history::revise_acceptance_criterion(&mut self.connection, options)
     }
 
+    pub(crate) fn create_verification_requirement(
+        &mut self,
+        options: &VerificationRequirementCreateOptions,
+    ) -> Result<VerificationRequirementCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_verification_requirement(&mut self.connection, options)
+    }
+
+    pub(crate) fn revise_verification_requirement(
+        &mut self,
+        options: &VerificationRequirementRevisionOptions,
+    ) -> Result<VerificationRequirementRevisionCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::revise_verification_requirement(&mut self.connection, options)
+    }
+
+    pub(crate) fn create_verification(
+        &mut self,
+        options: &VerificationCreateOptions,
+    ) -> Result<VerificationCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_verification(&mut self.connection, options)
+    }
+
     pub(crate) fn task_at(
         &self,
         commit_id: CommitId,
@@ -149,6 +180,44 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::acceptance_criterion_at(
+            &self.connection,
+            commit_id,
+            acceptance_criterion_entity_id,
+        )
+    }
+
+    pub(crate) fn verification_requirement_at(
+        &self,
+        commit_id: CommitId,
+        verification_requirement_entity_id: EntityId,
+    ) -> Result<VerificationRequirementSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::verification_requirement_at(
+            &self.connection,
+            commit_id,
+            verification_requirement_entity_id,
+        )
+    }
+
+    pub(crate) fn verification_at(
+        &self,
+        commit_id: CommitId,
+        verification_entity_id: EntityId,
+    ) -> Result<VerificationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::verification_at(&self.connection, commit_id, verification_entity_id)
+    }
+
+    pub(crate) fn acceptance_criterion_effective_status(
+        &self,
+        commit_id: CommitId,
+        acceptance_criterion_entity_id: EntityId,
+    ) -> Result<AcceptanceCriterionEffectiveStatus> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::acceptance_criterion_effective_status(
             &self.connection,
             commit_id,
             acceptance_criterion_entity_id,

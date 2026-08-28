@@ -5,11 +5,15 @@ use crate::WorkspaceId;
 use crate::error::Result;
 use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
-    AcceptanceCriterionRevisionCommit, AcceptanceCriterionRevisionOptions,
-    AcceptanceCriterionSnapshot, BranchHead, EntityTransitionCommit, EntityTransitionOptions,
-    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit,
-    TaskCreateOptions, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
+    AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
+    EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
+    IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
+    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
+    WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use std::path::Path;
@@ -95,6 +99,27 @@ impl Engine {
         self.store.revise_acceptance_criterion(&options)
     }
 
+    pub fn create_verification_requirement(
+        &mut self,
+        options: VerificationRequirementCreateOptions,
+    ) -> Result<VerificationRequirementCreateCommit> {
+        self.store.create_verification_requirement(&options)
+    }
+
+    pub fn revise_verification_requirement(
+        &mut self,
+        options: VerificationRequirementRevisionOptions,
+    ) -> Result<VerificationRequirementRevisionCommit> {
+        self.store.revise_verification_requirement(&options)
+    }
+
+    pub fn create_verification(
+        &mut self,
+        options: VerificationCreateOptions,
+    ) -> Result<VerificationCreateCommit> {
+        self.store.create_verification(&options)
+    }
+
     pub fn task_at(&self, commit_id: CommitId, task_entity_id: EntityId) -> Result<TaskSnapshot> {
         self.store.task_at(commit_id, task_entity_id)
     }
@@ -106,5 +131,32 @@ impl Engine {
     ) -> Result<AcceptanceCriterionSnapshot> {
         self.store
             .acceptance_criterion_at(commit_id, acceptance_criterion_entity_id)
+    }
+
+    pub fn verification_requirement_at(
+        &self,
+        commit_id: CommitId,
+        verification_requirement_entity_id: EntityId,
+    ) -> Result<VerificationRequirementSnapshot> {
+        self.store
+            .verification_requirement_at(commit_id, verification_requirement_entity_id)
+    }
+
+    pub fn verification_at(
+        &self,
+        commit_id: CommitId,
+        verification_entity_id: EntityId,
+    ) -> Result<VerificationSnapshot> {
+        self.store
+            .verification_at(commit_id, verification_entity_id)
+    }
+
+    pub fn acceptance_criterion_effective_status(
+        &self,
+        commit_id: CommitId,
+        acceptance_criterion_entity_id: EntityId,
+    ) -> Result<AcceptanceCriterionEffectiveStatus> {
+        self.store
+            .acceptance_criterion_effective_status(commit_id, acceptance_criterion_entity_id)
     }
 }

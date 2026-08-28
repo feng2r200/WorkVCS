@@ -531,7 +531,7 @@ fn replay_rejects_corrupted_changeset_payload() {
 }
 
 #[test]
-fn relation_change_operation_replay_remains_unsupported() {
+fn relation_change_operation_without_membership_is_invalid() {
     let (_tempdir, path) = store_path();
     let (engine, workspace) = create_workspace(&path);
     let connection = raw_connection(&path);
@@ -615,9 +615,9 @@ fn relation_change_operation_replay_remains_unsupported() {
 
     let error = engine
         .state_at(commit_id)
-        .expect_err("relation replay unsupported");
+        .expect_err("relation replay invalid without membership row");
 
-    assert_eq!(error.code(), ErrorCode::ReplayUnsupported);
+    assert_eq!(error.code(), ErrorCode::ReplayInvalid);
 }
 
 #[test]

@@ -14,12 +14,19 @@ pub use engine::Engine;
 pub use error::{ErrorCategory, ErrorCode, Result, WorkVcsError};
 pub use history::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
-    AcceptanceCriterionCreateOptions, AcceptanceCriterionRevisionCommit,
-    AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, AcceptanceCriterionState,
-    BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryEntry, HistoryQueryOptions,
-    HistoryQueryResult, HistoryStart, IntegrityReport, ReplayedState, TaskAcceptanceCriterionRef,
-    TaskCreateCommit, TaskCreateOptions, TaskSnapshot, TaskState, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, WorkspaceInfo, WorkspaceInitOptions,
+    AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
+    AcceptanceCriterionRevisionCommit, AcceptanceCriterionRevisionOptions,
+    AcceptanceCriterionSnapshot, AcceptanceCriterionState,
+    AcceptanceCriterionVerificationRequirementRef, BranchHead, EntityTransitionCommit,
+    EntityTransitionOptions, HistoryEntry, HistoryQueryOptions, HistoryQueryResult, HistoryStart,
+    IntegrityReport, ReplayedState, TaskAcceptanceCriterionRef, TaskCreateCommit,
+    TaskCreateOptions, TaskSnapshot, TaskState, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
+    VerificationRequirementSnapshot, VerificationRequirementState, VerificationResult,
+    VerificationSemanticDependency, VerificationSnapshot, VerificationState, VerificationTarget,
+    WorkspaceInfo, WorkspaceInitOptions,
 };
 pub use identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,

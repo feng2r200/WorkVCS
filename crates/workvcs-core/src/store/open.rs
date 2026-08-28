@@ -11,12 +11,16 @@ use crate::history::{
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
 };
+use crate::runtime::{
+    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult,
+};
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
-use crate::{BranchId, CommitId, EntityId, WorkspaceId, history};
+use crate::{BranchId, CommitId, EntityId, SessionId, WorkspaceId, history, runtime};
 use std::path::Path;
 
 pub(crate) struct Store {
@@ -222,5 +226,44 @@ impl Store {
             commit_id,
             acceptance_criterion_entity_id,
         )
+    }
+
+    pub(crate) fn start_session(
+        &mut self,
+        options: &SessionStartOptions,
+    ) -> Result<SessionStartResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::start_session(&mut self.connection, options)
+    }
+
+    pub(crate) fn session_snapshot(&self, session_id: SessionId) -> Result<SessionSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::session_snapshot(&self.connection, session_id)
+    }
+
+    pub(crate) fn set_session_focus(
+        &mut self,
+        options: &SessionFocusOptions,
+    ) -> Result<SessionFocusUpdateResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::set_session_focus(&mut self.connection, options)
+    }
+
+    pub(crate) fn clear_session_focus(
+        &mut self,
+        session_id: SessionId,
+    ) -> Result<SessionFocusUpdateResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::clear_session_focus(&mut self.connection, session_id)
+    }
+
+    pub(crate) fn end_session(&mut self, options: &SessionEndOptions) -> Result<SessionEndResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::end_session(&mut self.connection, options)
     }
 }

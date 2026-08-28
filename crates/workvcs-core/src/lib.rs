@@ -3,6 +3,7 @@ pub mod engine;
 pub mod error;
 mod history;
 pub mod identity;
+mod runtime;
 pub mod store;
 
 pub use canonical::{
@@ -30,6 +31,11 @@ pub use history::{
 };
 pub use identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,
-    RelationId, RelationVersionId, StoreId, WorkspaceId,
+    RelationId, RelationVersionId, SessionDiffId, SessionId, StoreId, WorkspaceId,
+};
+pub use runtime::{
+    SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions, SessionFocusPathEntry,
+    SessionFocusUpdateResult, SessionLifecycleState, SessionSnapshot, SessionStartOptions,
+    SessionStartResult,
 };
 pub use store::{StoreInfo, StoreInitOptions, StoreManifest};

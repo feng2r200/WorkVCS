@@ -11,6 +11,7 @@ pub enum ErrorCategory {
     Mutation,
     Query,
     Replay,
+    Runtime,
     Store,
     Storage,
     Task,
@@ -34,6 +35,8 @@ pub enum ErrorCode {
     QueryUnsupported,
     ReplayInvalid,
     ReplayUnsupported,
+    SessionInvalid,
+    SessionNotFound,
     StoreAlreadyInitialized,
     StoreBootstrapInvalid,
     StoreCompatibilityUnsupported,
@@ -89,6 +92,12 @@ pub enum WorkVcsError {
     #[error("replay unsupported: {0}")]
     ReplayUnsupported(String),
 
+    #[error("session invalid: {0}")]
+    SessionInvalid(String),
+
+    #[error("session not found: {0}")]
+    SessionNotFound(String),
+
     #[error("store already initialized: {0}")]
     StoreAlreadyInitialized(String),
 
@@ -134,6 +143,8 @@ impl WorkVcsError {
             Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
             Self::ReplayInvalid(_) => ErrorCode::ReplayInvalid,
             Self::ReplayUnsupported(_) => ErrorCode::ReplayUnsupported,
+            Self::SessionInvalid(_) => ErrorCode::SessionInvalid,
+            Self::SessionNotFound(_) => ErrorCode::SessionNotFound,
             Self::StoreAlreadyInitialized(_) => ErrorCode::StoreAlreadyInitialized,
             Self::StoreBootstrapInvalid(_) => ErrorCode::StoreBootstrapInvalid,
             Self::StoreCompatibilityUnsupported(_) => ErrorCode::StoreCompatibilityUnsupported,
@@ -160,6 +171,7 @@ impl WorkVcsError {
             Self::CommitNotFound(_) | Self::ReplayInvalid(_) | Self::ReplayUnsupported(_) => {
                 ErrorCategory::Replay
             }
+            Self::SessionInvalid(_) | Self::SessionNotFound(_) => ErrorCategory::Runtime,
             Self::StoreAlreadyInitialized(_)
             | Self::StoreBootstrapInvalid(_)
             | Self::StoreCompatibilityUnsupported(_) => ErrorCategory::Store,

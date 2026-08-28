@@ -1,6 +1,7 @@
 use crate::BranchId;
 use crate::CommitId;
 use crate::EntityId;
+use crate::SessionId;
 use crate::WorkspaceId;
 use crate::error::Result;
 use crate::history::{
@@ -16,6 +17,10 @@ use crate::history::{
     WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
+use crate::{
+    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult,
+};
 use std::path::Path;
 
 pub struct Engine {
@@ -158,5 +163,31 @@ impl Engine {
     ) -> Result<AcceptanceCriterionEffectiveStatus> {
         self.store
             .acceptance_criterion_effective_status(commit_id, acceptance_criterion_entity_id)
+    }
+
+    pub fn start_session(&mut self, options: SessionStartOptions) -> Result<SessionStartResult> {
+        self.store.start_session(&options)
+    }
+
+    pub fn session_snapshot(&self, session_id: SessionId) -> Result<SessionSnapshot> {
+        self.store.session_snapshot(session_id)
+    }
+
+    pub fn set_session_focus(
+        &mut self,
+        options: SessionFocusOptions,
+    ) -> Result<SessionFocusUpdateResult> {
+        self.store.set_session_focus(&options)
+    }
+
+    pub fn clear_session_focus(
+        &mut self,
+        session_id: SessionId,
+    ) -> Result<SessionFocusUpdateResult> {
+        self.store.clear_session_focus(session_id)
+    }
+
+    pub fn end_session(&mut self, options: SessionEndOptions) -> Result<SessionEndResult> {
+        self.store.end_session(&options)
     }
 }

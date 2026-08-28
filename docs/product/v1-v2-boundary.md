@@ -31,9 +31,10 @@ The confirmed V1 storage direction is SQLite metadata plus a content-addressed
 object store. This is an implementation direction, not a domain invariant;
 replacing it requires a later explicit confirmed decision, which current
 repository policy may record as an accepted ADR. The Physical DDL contract is
-now fixed by [ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md),
-while the complete executable schema, object layout, and implementation
-language are not yet fixed.
+fixed by [ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md), and
+the first executable schema assembly is closed by
+[ADR-0007](../decisions/adr/0007-schema-v0.1-assembly-install-and-integrity.md).
+Object layout and implementation language are not yet fixed.
 
 The confirmed logical persistence model is commit/delta-based: immutable
 EntityVersion and RelationVersion state; canonical WorkStateCommit + ChangeSet
@@ -229,12 +230,13 @@ unresolved:
 - final equal-candidate tie-breaker for `next`;
 - final CLI spelling, protocol encoding, complete operation/error catalogue,
   and any future semantic AC-waiver operation;
-- complete executable `schema-v0.1.sql`, creation order, concrete performance
-  indexes, programming language/SQLite binding, exact canonical JSON profile,
-  object layout, physical sibling-order representation, checkpoint strategy,
-  and typed-projection count/shape; UUIDv7/BLOB IDs, BLAKE3-256 digests,
-  JSON/timestamp storage, and core FK/transaction policy are closed by
-  [ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md);
+- concrete performance indexes, programming language/SQLite binding, exact
+  canonical JSON profile, object layout, physical sibling-order
+  representation, checkpoint strategy, and typed-projection count/shape;
+  UUIDv7/BLOB IDs, BLAKE3-256 digests, JSON/timestamp storage, core
+  FK/transaction policy, and executable schema assembly are closed by
+  [ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md) and
+  [ADR-0007](../decisions/adr/0007-schema-v0.1-assembly-install-and-integrity.md);
 - exact Resource path/glob normalization and persisted observation capture
   policy outside Verification/explicit snapshots;
 - source-stale Context policy, access/security model, exchange API,

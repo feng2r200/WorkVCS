@@ -6,10 +6,14 @@ v0.1. It realizes
 by the logical authority model in
 [Logical Schema Boundaries](logical-schema-boundaries.md).
 
-This is the normative physical contract, not the assembled executable schema.
-`schema-v0.1.sql` does not yet exist. Exact table ordering, the complete
-foreign-key graph, and executable empty-database validation belong to the next
-assembly stage.
+This is the normative physical contract realized by the assembled executable
+schema in [schema-v0.1.sql](../../schema/schema-v0.1.sql). The install and
+bootstrap validation harness is
+[validate-schema-v0.1.sh](../../scripts/validate-schema-v0.1.sh).
+
+The executable schema contains the confirmed 67 v0.1 tables and correctness
+indexes only. It deliberately does not add performance/query indexes, new table
+families, or storage-engine business implementation.
 
 ## Predecessor closure carried forward
 
@@ -250,10 +254,85 @@ Performance indexes are deliberately not designed in this contract. Index
 design follows executable schema validation and the core `context`, `next`,
 `why`, `history`, `diff`, and `merge` query contracts.
 
+## Executable schema assembly closure
+
+**Schema v0.1 Assembly = PASS / CLOSED.**
+
+Decisions 514-566 close the executable-schema assembly, install/bootstrap, and
+integrity boundary. The assembled schema:
+
+- separates durable schema DDL from per-connection bootstrap checks such as
+  `PRAGMA foreign_keys = ON`;
+- uses a readable creation order while relying on a single real deferred cycle:
+  `Workspace.genesis_commit_id -> WorkStateCommit.commit_id`;
+- adds immutable `merge_attempt_outcome` rows for completed and aborted merge
+  attempts;
+- removes `merge_resolution.finalization_kind`;
+- enforces the ExternalObjectRef object/version partial uniqueness and the
+  one-initial-Exposure-transition partial uniqueness as correctness indexes;
+- permits Applicability Resource Stamps to record unavailable/error
+  observations with nullable observed fingerprint and observation reference;
+- requires Branch projection Commit and digest to be present or absent as a
+  pair; and
+- retains exactly the confirmed physical encodings: SQLite `STRICT`,
+  UUIDv7/BLOB16 identities, BLAKE3-256/BLOB32 digests and Resource
+  fingerprints, canonical JSON TEXT plus `json_valid`, symbolic TEXT
+  vocabularies, UTC epoch microseconds, and StoreManifest format parameters.
+
+The schema uses SQL constraints for structural facts SQLite can express. Exact
+family ownership, ChangeOperation typed-child exclusivity, relation endpoint
+kind/workspace contracts, merge result-shape validation, Verification defining
+closure, and candidate Work-State validation remain Engine validator contracts.
+
+## Constraint and transaction responsibility closure
+
+**Constraint / Transaction Model = CLOSED.**
+
+The responsibility split is:
+
+1. SQLite enforces primary keys, foreign keys, nullability, local uniqueness,
+   partial uniqueness, JSON syntax, bounded BLOB lengths, and closed structural
+   vocabularies.
+2. Engine preflight validates typed-family exactness, semantic relation
+   endpoints, candidate Work-State invariants, Verification closure, import
+   closure, and merge parent/result shape.
+3. Canonical semantic mutations run in explicit versioned transactions and
+   create no empty commits except Workspace Genesis.
+4. Runtime coordination transactions update mutable runtime rows, immutable
+   occurrence/outcome records, cleanup, and Events without creating
+   WorkStateCommits unless they complete a canonical semantic mutation.
+5. Branch HEAD movement always uses expected-head compare-and-swap; `BEGIN
+   IMMEDIATE` supplies writer serialization but does not replace logical CAS.
+
+Events are required provenance for state changes but are not replay authority
+or semantic ordering authority. Ordinary failed transactions leave no Event
+unless the failure is itself modeled as an occurrence/outcome record.
+
+## Install, open, compatibility, and integrity closure
+
+**Compatibility / Integrity = CLOSED.**
+
+Schema installation sets a fixed `application_id` and does not use
+`PRAGMA user_version` as a second schema authority. A Store open path separates
+bootstrap validation from deep validation:
+
+- bootstrap validation checks `application_id`, per-connection FK enforcement,
+  exactly one Store and StoreManifest, supported Store/schema/object-store
+  versions, ID scheme, digest algorithm, and canonical JSON profile;
+- deep validation checks SQLite physical integrity, structural referential
+  integrity, canonical history integrity, derived-state integrity, DAG shape,
+  replay/digest behavior, exact-family contracts, projections, and doctor
+  diagnostics.
+
+Newer-than-supported Store or schema format fails closed. Older Stores require
+an explicit migration operation rather than silent ordinary-open migration.
+Derived projection/cache corruption may be discarded and rebuilt without a
+WorkStateCommit. Canonical history corruption fails closed and requires an
+explicit doctor/recovery path. A `ContentObject` with zero storage locations is
+an availability condition, not by itself a canonical integrity failure.
+
 ## Still Open
 
-- the complete executable `schema-v0.1.sql`, creation order, and full
-  DDL-to-Engine invariant matrix;
 - performance/query indexes and workload evidence;
 - the exact canonical JSON profile rules, serializer implementation, and
   programming language/SQLite binding;

@@ -6,9 +6,10 @@ boundaries for WorkVCS. It realizes
 
 It is intentionally the logical layer. Names in this document name logical
 roles and families; later physical choices are defined by
-[Physical Schema v0.1 Contract](physical-schema-v0.1.md) and
-[ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md). This document
-does not independently redefine those physical choices.
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md),
+[ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md), and
+[ADR-0007](../decisions/adr/0007-schema-v0.1-assembly-install-and-integrity.md).
+This document does not independently redefine those physical choices.
 
 ## Authority layers
 
@@ -378,16 +379,15 @@ conflict and is never updated in place.
 
 ## Current implementation boundary
 
-The logical-family model above is Confirmed. Decisions 443–513 subsequently
+The logical-family model above is Confirmed. Decisions 443-566 subsequently
 closed the V1 ID/digest encodings, core SQLite type and foreign-key policy,
-canonical JSON storage boundary, writer-transaction baseline, and bounded
-Physical DDL constraints. The following remain Open:
+canonical JSON storage boundary, writer-transaction baseline, bounded Physical
+DDL constraints, executable schema assembly, bootstrap/open validation, and
+integrity classification. The following remain Open:
 
 - the final equal-candidate stable tie-breaker for `next`;
 - final CLI spelling and protocol encoding;
 - implementation language;
-- the complete executable `schema-v0.1.sql`, creation order, and Engine
-  invariant matrix;
 - concrete performance indexes and query plans;
 - the exact canonical JSON profile rules and serializer implementation;
 - checkpoint creation, retention, selection, and eviction strategy;

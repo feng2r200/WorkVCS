@@ -206,5 +206,5 @@ provenance. The concrete protocol encoding is not fixed by this baseline.
 The complete logical ownership matrix is
 [Logical Schema Boundaries](logical-schema-boundaries.md). Confirmed SQLite
 physical boundaries are defined separately in
-[Physical Schema v0.1 Contract](physical-schema-v0.1.md); its executable schema
-assembly remains a later stage.
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md), with the first
+executable assembly in [schema-v0.1.sql](../../schema/schema-v0.1.sql).

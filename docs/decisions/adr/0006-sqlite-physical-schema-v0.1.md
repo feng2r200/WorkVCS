@@ -11,6 +11,15 @@
   `7e3df5ef-a05a-441b-94d9-451f9041ce37`, and
   `9fe613e6-773f-4452-a597-68fcebef79bc`
 
+## Subsequent resolution
+
+[ADR-0007](0007-schema-v0.1-assembly-install-and-integrity.md) subsequently
+closes the executable schema assembly, install/bootstrap validation,
+transaction template, and compatibility/integrity items that ADR-0006
+deliberately left undecided. ADR-0006 remains the physical schema contract for
+decisions 443-513; ADR-0007 records the accepted decisions 514-566 and the
+first executable assembly.
+
 ## Context
 
 ADR-0005 closed the logical family and single-authority model while leaving
@@ -88,8 +97,6 @@ The detailed normative contract is
 
 ## Deliberately not decided
 
-- the assembled `schema-v0.1.sql`, table-creation order, and complete executable
-  foreign-key/invariant matrix;
 - performance indexes or query plans;
 - the exact canonical JSON profile rules and implementation language/binding;
 - checkpoint policy and the workload-driven typed-projection set;

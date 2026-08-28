@@ -32,12 +32,17 @@ const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
 const ACCEPTANCE_CRITERION_STATE_SCHEMA_VERSION: i64 = 1;
 const TASK_STATE_SCHEMA_VERSION: i64 = 1;
+const TASK_SCHEDULING_RELATION_CREATE_EVENT_KIND: &str = "task.scheduling_relation.created";
+const TASK_SCHEDULING_RELATION_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
+const TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE: &str = "task.scheduling_relation.create";
 const VERIFICATION_BASIS_SCHEMA_VERSION: i64 = 1;
 const VERIFICATION_RECORD_EVENT_KIND: &str = "verification.recorded";
 const VERIFICATION_RECORD_OPERATION_SCHEMA_VERSION: i64 = 1;
 const VERIFICATION_RECORD_OPERATION_TYPE: &str = "verification.record";
 const VERIFICATION_REQUIREMENT_STATE_SCHEMA_VERSION: i64 = 1;
 const VERIFICATION_STATE_SCHEMA_VERSION: i64 = 1;
+const DEPENDS_ON_RELATION_TYPE: &str = "depends_on";
+const ORDERED_BEFORE_RELATION_TYPE: &str = "ordered_before";
 const VERIFIES_RELATION_TYPE: &str = "verifies";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -676,6 +681,116 @@ pub struct TaskTransitionCommit {
     pub state: TaskState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TaskSchedulingRelationType {
+    DependsOn,
+    OrderedBefore,
+}
+
+impl TaskSchedulingRelationType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DependsOn => DEPENDS_ON_RELATION_TYPE,
+            Self::OrderedBefore => ORDERED_BEFORE_RELATION_TYPE,
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            DEPENDS_ON_RELATION_TYPE => Some(Self::DependsOn),
+            ORDERED_BEFORE_RELATION_TYPE => Some(Self::OrderedBefore),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for TaskSchedulingRelationType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskSchedulingRelationCreateOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    relation_type: TaskSchedulingRelationType,
+    source_task_entity_id: EntityId,
+    target_task_entity_id: EntityId,
+    rationale: CanonicalValue,
+}
+
+impl TaskSchedulingRelationCreateOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        relation_type: TaskSchedulingRelationType,
+        source_task_entity_id: EntityId,
+        target_task_entity_id: EntityId,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type,
+            source_task_entity_id,
+            target_task_entity_id,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn depends_on(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        dependent_task_entity_id: EntityId,
+        prerequisite_task_entity_id: EntityId,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            TaskSchedulingRelationType::DependsOn,
+            dependent_task_entity_id,
+            prerequisite_task_entity_id,
+        )
+    }
+
+    pub fn ordered_before(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        earlier_task_entity_id: EntityId,
+        later_task_entity_id: EntityId,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            TaskSchedulingRelationType::OrderedBefore,
+            earlier_task_entity_id,
+            later_task_entity_id,
+        )
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskSchedulingRelationCreateCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: TaskSchedulingRelationType,
+    pub source_task_entity_id: EntityId,
+    pub target_task_entity_id: EntityId,
+    pub relation_state_digest: Digest,
+    pub work_state_digest: Digest,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AcceptanceCriterionCreateOptions {
     branch_id: BranchId,
@@ -800,6 +915,18 @@ pub struct TaskSnapshot {
     pub task_entity_version_id: EntityVersionId,
     pub state_digest: Digest,
     pub state: TaskState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskSchedulingRelationSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: TaskSchedulingRelationType,
+    pub source_task_entity_id: EntityId,
+    pub target_task_entity_id: EntityId,
+    pub state_digest: Digest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1449,6 +1576,180 @@ pub(crate) fn tasks_at(
     Ok(tasks)
 }
 
+pub(crate) fn create_task_scheduling_relation(
+    connection: &mut StoreConnection,
+    options: &TaskSchedulingRelationCreateOptions,
+) -> Result<TaskSchedulingRelationCreateCommit> {
+    connection.verify_foreign_keys()?;
+    if options.source_task_entity_id == options.target_task_entity_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {} cannot use the same task {} as both source and target",
+            options.relation_type, options.source_task_entity_id
+        )));
+    }
+
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let source = task_at(
+        connection,
+        options.expected_head_commit_id,
+        options.source_task_entity_id,
+    )?;
+    let target = task_at(
+        connection,
+        options.expected_head_commit_id,
+        options.target_task_entity_id,
+    )?;
+    if source.workspace_id != parent.workspace_id || target.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation endpoints must belong to workspace {}",
+            parent.workspace_id
+        )));
+    }
+    if options.relation_type == TaskSchedulingRelationType::DependsOn {
+        ensure_dependency_create_is_acyclic(
+            connection,
+            options.expected_head_commit_id,
+            parent.workspace_id,
+            &parent.state,
+            options.source_task_entity_id,
+            options.target_task_entity_id,
+        )?;
+    }
+
+    let relation_id = RelationId::new_v7();
+    let relation_version_id = RelationVersionId::new_v7();
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+
+    let relation_state_value = CanonicalValue::object(Vec::new())?;
+    let relation_state_json = canonical_json_string(&relation_state_value)?;
+    let relation_state_digest = relation_version_digest(&relation_state_value)?;
+    let next_work_state = work_state_after_task_scheduling_relation_create(
+        &parent.state,
+        relation_id,
+        relation_version_id,
+    )?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let relation_payload_value =
+        relation_transition_payload_value(relation_id, None, relation_version_id)?;
+    let relation_payload_json = canonical_json_string(&relation_payload_value)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    ensure_task_scheduling_relation_logical_key_available(
+        &transaction,
+        branch.workspace_id,
+        options.relation_type,
+        options.source_task_entity_id,
+        options.target_task_entity_id,
+    )?;
+    write_task_scheduling_relation_create(
+        &transaction,
+        &TaskSchedulingRelationCreateRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            relation_id,
+            relation_version_id,
+            relation_state_json,
+            relation_state_digest,
+            relation_type: options.relation_type,
+            source_task_entity_id: options.source_task_entity_id,
+            target_task_entity_id: options.target_task_entity_id,
+            changeset_id,
+            commit_id,
+            operation_id,
+            relation_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(TaskSchedulingRelationCreateCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        operation_id,
+        relation_id,
+        relation_version_id,
+        relation_type: options.relation_type,
+        source_task_entity_id: options.source_task_entity_id,
+        target_task_entity_id: options.target_task_entity_id,
+        relation_state_digest,
+        work_state_digest,
+    })
+}
+
+pub(crate) fn task_scheduling_relations_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<TaskSchedulingRelationSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut relations = Vec::new();
+
+    for (relation_id, relation_version_id) in replayed.state.relations() {
+        let Some(relation) = load_task_scheduling_relation_version(
+            connection,
+            replayed.workspace_id,
+            commit_id,
+            *relation_id,
+            *relation_version_id,
+        )?
+        else {
+            continue;
+        };
+        relations.push(TaskSchedulingRelationSnapshot {
+            workspace_id: replayed.workspace_id,
+            commit_id,
+            relation_id: relation.relation_id,
+            relation_version_id: relation.relation_version_id,
+            relation_type: relation.relation_type,
+            source_task_entity_id: relation.source_task_entity_id,
+            target_task_entity_id: relation.target_task_entity_id,
+            state_digest: relation.state_digest,
+        });
+    }
+
+    relations.sort_by(|left, right| {
+        left.relation_type
+            .cmp(&right.relation_type)
+            .then_with(|| left.source_task_entity_id.cmp(&right.source_task_entity_id))
+            .then_with(|| left.target_task_entity_id.cmp(&right.target_task_entity_id))
+            .then_with(|| left.relation_id.cmp(&right.relation_id))
+    });
+    Ok(relations)
+}
+
 pub(crate) fn acceptance_criterion_at(
     connection: &StoreConnection,
     commit_id: CommitId,
@@ -2064,6 +2365,15 @@ struct LoadedVerifiesRelationVersion {
     target: VerificationTarget,
 }
 
+struct LoadedTaskSchedulingRelationVersion {
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    relation_type: TaskSchedulingRelationType,
+    source_task_entity_id: EntityId,
+    target_task_entity_id: EntityId,
+    state_digest: Digest,
+}
+
 struct BranchRow {
     workspace_id: WorkspaceId,
     head_commit_id: CommitId,
@@ -2140,6 +2450,25 @@ struct VerificationCreateRows {
     verification_payload_json: String,
     verifies_relation_payload_json: String,
     changeset_payload_json: String,
+    rationale_json: String,
+    work_state_digest: Digest,
+    now_us: i64,
+}
+
+struct TaskSchedulingRelationCreateRows {
+    workspace_id: WorkspaceId,
+    expected_head_commit_id: CommitId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    relation_state_json: String,
+    relation_state_digest: Digest,
+    relation_type: TaskSchedulingRelationType,
+    source_task_entity_id: EntityId,
+    target_task_entity_id: EntityId,
+    changeset_id: ChangeSetId,
+    commit_id: CommitId,
+    operation_id: OperationId,
+    relation_payload_json: String,
     rationale_json: String,
     work_state_digest: Digest,
     now_us: i64,
@@ -2715,7 +3044,7 @@ fn load_verifies_relation_version(
     workspace_id: WorkspaceId,
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
-) -> Result<LoadedVerifiesRelationVersion> {
+) -> Result<Option<LoadedVerifiesRelationVersion>> {
     let row = connection
         .inner()
         .query_row(
@@ -2795,9 +3124,7 @@ fn load_verifies_relation_version(
         )));
     }
     if relation_type != VERIFIES_RELATION_TYPE {
-        return Err(WorkVcsError::TaskInvalid(format!(
-            "relation {relation_id} has type {relation_type:?}, not {VERIFIES_RELATION_TYPE:?}"
-        )));
+        return Ok(None);
     }
     if !relation_discriminator.is_empty() {
         return Err(WorkVcsError::TaskInvalid(format!(
@@ -2849,7 +3176,7 @@ fn load_verifies_relation_version(
         )));
     }
 
-    Ok(LoadedVerifiesRelationVersion {
+    Ok(Some(LoadedVerifiesRelationVersion {
         relation_id,
         relation_version_id,
         source_verification_entity_id: decode_entity_id(
@@ -2858,7 +3185,142 @@ fn load_verifies_relation_version(
         )?,
         state_digest,
         target,
-    })
+    }))
+}
+
+fn load_task_scheduling_relation_version(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    commit_id: CommitId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<Option<LoadedTaskSchedulingRelationVersion>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    relation.workspace_id,
+                    relation.relation_type,
+                    relation.source_object_id,
+                    relation.target_object_id,
+                    relation.relation_discriminator,
+                    relation_version.state_schema_version,
+                    relation_version.metadata_json,
+                    relation_version.state_digest
+             FROM relation
+             JOIN object_identity
+               ON object_identity.object_id = relation.object_id
+             JOIN relation_version
+               ON relation_version.relation_id = relation.object_id
+             WHERE relation.object_id = ?1
+               AND relation_version.relation_version_id = ?2",
+            params![
+                &relation_id.raw_bytes()[..],
+                &relation_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        object_kind,
+        relation_workspace_id,
+        relation_type,
+        source_object_id,
+        target_object_id,
+        relation_discriminator,
+        state_schema_version,
+        metadata_json,
+        state_digest,
+    )) = row
+    else {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "task scheduling relation {relation_id} version {relation_version_id} does not exist"
+        )));
+    };
+    if object_kind != RELATION_OBJECT_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} has object kind {object_kind:?}"
+        )));
+    }
+    let relation_workspace_id =
+        decode_workspace_id("relation.workspace_id", relation_workspace_id)?;
+    if relation_workspace_id != workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} belongs to workspace {relation_workspace_id}, not {workspace_id}"
+        )));
+    }
+
+    let Some(relation_type) = TaskSchedulingRelationType::parse(&relation_type) else {
+        return Ok(None);
+    };
+    if !relation_discriminator.is_empty() {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
+        )));
+    }
+    if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} version {relation_version_id} has state schema version {state_schema_version}"
+        )));
+    }
+
+    let state_digest = decode_digest("relation_version.state_digest", state_digest)?;
+    validate_import_fixed_point(
+        metadata_json.as_bytes(),
+        state_digest,
+        ImportDigestDomain::RelationVersion,
+    )
+    .map_err(|error| {
+        WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} version {relation_version_id} fixed-point validation failed: {error}"
+        ))
+    })?;
+    let metadata_value =
+        parse_canonical_json(metadata_json.as_bytes()).map_err(task_invalid_from)?;
+    if metadata_value != CanonicalValue::object(Vec::new())? {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} version {relation_version_id} state must be canonical empty object"
+        )));
+    }
+    let actual = relation_version_digest(&metadata_value).map_err(task_invalid_from)?;
+    if actual != state_digest {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} version {relation_version_id} digest does not match metadata JSON"
+        )));
+    }
+
+    let source_task_entity_id = decode_entity_id("relation.source_object_id", source_object_id)?;
+    let target_task_entity_id = decode_entity_id("relation.target_object_id", target_object_id)?;
+    let source = task_at(connection, commit_id, source_task_entity_id)?;
+    let target = task_at(connection, commit_id, target_task_entity_id)?;
+    if source.workspace_id != workspace_id || target.workspace_id != workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} endpoints must belong to workspace {workspace_id}"
+        )));
+    }
+
+    Ok(Some(LoadedTaskSchedulingRelationVersion {
+        relation_id,
+        relation_version_id,
+        relation_type,
+        source_task_entity_id,
+        target_task_entity_id,
+        state_digest,
+    }))
 }
 
 fn load_current_verifies_relation_for_source(
@@ -2869,12 +3331,15 @@ fn load_current_verifies_relation_for_source(
 ) -> Result<LoadedVerifiesRelationVersion> {
     let mut matches = Vec::new();
     for (relation_id, relation_version_id) in state.relations() {
-        let relation = load_verifies_relation_version(
+        let Some(relation) = load_verifies_relation_version(
             connection,
             workspace_id,
             *relation_id,
             *relation_version_id,
-        )?;
+        )?
+        else {
+            continue;
+        };
         if relation.source_verification_entity_id == verification_entity_id {
             matches.push(relation);
         }
@@ -2969,6 +3434,40 @@ fn ensure_verification_requirement_local_key_available(
     } else {
         Err(WorkVcsError::TaskInvalid(format!(
             "acceptance criterion entity {acceptance_criterion_entity_id} already has verification requirement local key {local_key:?}"
+        )))
+    }
+}
+
+fn ensure_task_scheduling_relation_logical_key_available(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+    relation_type: TaskSchedulingRelationType,
+    source_task_entity_id: EntityId,
+    target_task_entity_id: EntityId,
+) -> Result<()> {
+    let existing = transaction
+        .query_row(
+            "SELECT count(*)
+             FROM relation
+             WHERE workspace_id = ?1
+               AND relation_type = ?2
+               AND source_object_id = ?3
+               AND target_object_id = ?4
+               AND relation_discriminator = ''",
+            params![
+                &workspace_id.raw_bytes()[..],
+                relation_type.as_str(),
+                &source_task_entity_id.raw_bytes()[..],
+                &target_task_entity_id.raw_bytes()[..],
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?;
+    if existing == 0 {
+        Ok(())
+    } else {
+        Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_type} from {source_task_entity_id} to {target_task_entity_id} already exists in workspace {workspace_id}"
         )))
     }
 }
@@ -3090,6 +3589,26 @@ fn work_state_after_verification_create(
     {
         return Err(WorkVcsError::TaskInvalid(format!(
             "verifies relation {verifies_relation_id} was expected to be absent before creation"
+        )));
+    }
+
+    WorkState::new(entities, relations).map_err(task_invalid_from)
+}
+
+fn work_state_after_task_scheduling_relation_create(
+    parent_state: &WorkState,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<WorkState> {
+    let entities = parent_state.entities().to_vec();
+    let mut relations = parent_state
+        .relations()
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
+    if relations.insert(relation_id, relation_version_id).is_some() {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation {relation_id} was expected to be absent before creation"
         )));
     }
 
@@ -3917,6 +4436,192 @@ fn write_verification_create(
     Ok(())
 }
 
+fn write_task_scheduling_relation_create(
+    transaction: &Transaction<'_>,
+    rows: &TaskSchedulingRelationCreateRows,
+) -> Result<()> {
+    let workspace_id_bytes = rows.workspace_id.raw_bytes();
+    let relation_id_bytes = rows.relation_id.raw_bytes();
+    let relation_version_id_bytes = rows.relation_version_id.raw_bytes();
+    let relation_state_digest_bytes = rows.relation_state_digest.as_bytes();
+    let source_task_entity_id_bytes = rows.source_task_entity_id.raw_bytes();
+    let target_task_entity_id_bytes = rows.target_task_entity_id.raw_bytes();
+    let changeset_id_bytes = rows.changeset_id.raw_bytes();
+    let commit_id_bytes = rows.commit_id.raw_bytes();
+    let operation_id_bytes = rows.operation_id.raw_bytes();
+    let parent_commit_id_bytes = rows.expected_head_commit_id.raw_bytes();
+    let work_state_digest_bytes = rows.work_state_digest.as_bytes();
+
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![&relation_id_bytes[..], RELATION_OBJECT_KIND, rows.now_us],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation(
+                object_id,
+                workspace_id,
+                relation_type,
+                source_object_id,
+                target_object_id,
+                relation_discriminator
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, '')",
+            params![
+                &relation_id_bytes[..],
+                &workspace_id_bytes[..],
+                rows.relation_type.as_str(),
+                &source_task_entity_id_bytes[..],
+                &target_task_entity_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_version(
+                relation_version_id,
+                relation_id,
+                state_schema_version,
+                metadata_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &relation_version_id_bytes[..],
+                &relation_id_bytes[..],
+                RELATION_STATE_SCHEMA_VERSION,
+                rows.relation_state_json,
+                &relation_state_digest_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                &changeset_id_bytes[..],
+                &workspace_id_bytes[..],
+                TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE,
+                TASK_SCHEDULING_RELATION_CREATE_OPERATION_SCHEMA_VERSION,
+                rows.relation_payload_json,
+                rows.rationale_json,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 0, 'relation', ?3, ?4)",
+            params![
+                &operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                &relation_id_bytes[..],
+                rows.relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_membership_change(
+                operation_id,
+                relation_id,
+                before_relation_version_id,
+                after_relation_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4)",
+            params![
+                &operation_id_bytes[..],
+                &relation_id_bytes[..],
+                &relation_version_id_bytes[..],
+                EMPTY_FIELD_DELTA
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &commit_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                NORMAL_COMMIT_KIND,
+                &work_state_digest_bytes[..],
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, ?2, ?3)",
+            params![
+                &commit_id_bytes[..],
+                PRIMARY_PARENT_ROLE,
+                &parent_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+            params![
+                &EventId::new_v7().raw_bytes()[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                TASK_SCHEDULING_RELATION_CREATE_EVENT_KIND,
+                rows.now_us,
+                rows.relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    Ok(())
+}
+
 fn move_branch_head(
     transaction: &Transaction<'_>,
     branch_id: BranchId,
@@ -4489,6 +5194,118 @@ fn parse_verification_semantic_dependencies(
     Ok(dependencies)
 }
 
+fn ensure_dependency_create_is_acyclic(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+    dependent_task_entity_id: EntityId,
+    prerequisite_task_entity_id: EntityId,
+) -> Result<()> {
+    let graph = current_dependency_graph(connection, commit_id, workspace_id, state)?;
+    ensure_dependency_graph_is_acyclic(&graph)?;
+    if dependency_path_exists(
+        &graph,
+        prerequisite_task_entity_id,
+        dependent_task_entity_id,
+    ) {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "depends_on relation from {dependent_task_entity_id} to {prerequisite_task_entity_id} would create a dependency cycle"
+        )));
+    }
+    Ok(())
+}
+
+fn current_dependency_graph(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+) -> Result<BTreeMap<EntityId, Vec<EntityId>>> {
+    let mut graph = BTreeMap::<EntityId, Vec<EntityId>>::new();
+    for (relation_id, relation_version_id) in state.relations() {
+        let Some(relation) = load_task_scheduling_relation_version(
+            connection,
+            workspace_id,
+            commit_id,
+            *relation_id,
+            *relation_version_id,
+        )?
+        else {
+            continue;
+        };
+        if relation.relation_type == TaskSchedulingRelationType::DependsOn {
+            graph
+                .entry(relation.source_task_entity_id)
+                .or_default()
+                .push(relation.target_task_entity_id);
+        }
+    }
+    for prerequisites in graph.values_mut() {
+        prerequisites.sort();
+        prerequisites.dedup();
+    }
+    Ok(graph)
+}
+
+fn ensure_dependency_graph_is_acyclic(graph: &BTreeMap<EntityId, Vec<EntityId>>) -> Result<()> {
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    for node in graph.keys().copied() {
+        if dependency_dfs_has_cycle(node, graph, &mut visiting, &mut visited) {
+            return Err(WorkVcsError::TaskInvalid(
+                "current depends_on graph already contains a dependency cycle".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dependency_dfs_has_cycle(
+    node: EntityId,
+    graph: &BTreeMap<EntityId, Vec<EntityId>>,
+    visiting: &mut HashSet<EntityId>,
+    visited: &mut HashSet<EntityId>,
+) -> bool {
+    if visited.contains(&node) {
+        return false;
+    }
+    if !visiting.insert(node) {
+        return true;
+    }
+    if let Some(next_nodes) = graph.get(&node) {
+        for next in next_nodes {
+            if dependency_dfs_has_cycle(*next, graph, visiting, visited) {
+                return true;
+            }
+        }
+    }
+    visiting.remove(&node);
+    visited.insert(node);
+    false
+}
+
+fn dependency_path_exists(
+    graph: &BTreeMap<EntityId, Vec<EntityId>>,
+    start: EntityId,
+    target: EntityId,
+) -> bool {
+    let mut seen = HashSet::new();
+    let mut stack = vec![start];
+    while let Some(node) = stack.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        if node == target {
+            return true;
+        }
+        if let Some(next_nodes) = graph.get(&node) {
+            stack.extend(next_nodes.iter().copied());
+        }
+    }
+    false
+}
+
 fn verification_semantic_dependencies_for_target(
     connection: &StoreConnection,
     commit_id: CommitId,
@@ -4578,12 +5395,15 @@ fn load_current_verifications_for_target(
 ) -> Result<Vec<VerificationSnapshot>> {
     let mut verifications = Vec::new();
     for (relation_id, relation_version_id) in state.relations() {
-        let relation = load_verifies_relation_version(
+        let Some(relation) = load_verifies_relation_version(
             connection,
             workspace_id,
             *relation_id,
             *relation_version_id,
-        )?;
+        )?
+        else {
+            continue;
+        };
         if relation.target != target {
             continue;
         }

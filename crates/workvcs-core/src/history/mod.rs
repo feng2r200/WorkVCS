@@ -16,12 +16,14 @@ pub use task::{
     AcceptanceCriterionRevisionCommit, AcceptanceCriterionRevisionOptions,
     AcceptanceCriterionSnapshot, AcceptanceCriterionState,
     AcceptanceCriterionVerificationRequirementRef, TaskAcceptanceCriterionRef, TaskCreateCommit,
-    TaskCreateOptions, TaskSnapshot, TaskState, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
-    VerificationRequirementSnapshot, VerificationRequirementState, VerificationResult,
-    VerificationSemanticDependency, VerificationSnapshot, VerificationState, VerificationTarget,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSchedulingRelationType, TaskSnapshot, TaskState,
+    TaskStatus, TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
+    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot,
+    VerificationRequirementState, VerificationResult, VerificationSemanticDependency,
+    VerificationSnapshot, VerificationState, VerificationTarget,
 };
 
 pub(crate) use entity::commit_entity_transition;
@@ -31,8 +33,9 @@ pub(crate) use query::{branch_head, query_history};
 pub(crate) use replay::state_at;
 pub(crate) use task::{
     acceptance_criterion_at, acceptance_criterion_effective_status, create_acceptance_criterion,
-    create_task, create_verification, create_verification_requirement,
-    reject_reserved_semantic_entity_transition, revise_acceptance_criterion,
-    revise_verification_requirement, task_at, tasks_at, transition_task, verification_at,
+    create_task, create_task_scheduling_relation, create_verification,
+    create_verification_requirement, reject_reserved_semantic_entity_transition,
+    revise_acceptance_criterion, revise_verification_requirement, task_at,
+    task_scheduling_relations_at, tasks_at, transition_task, verification_at,
     verification_requirement_at,
 };

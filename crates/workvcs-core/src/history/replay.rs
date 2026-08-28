@@ -23,6 +23,8 @@ const NORMAL_COMMIT_KIND: &str = "normal";
 const MERGE_COMMIT_KIND: &str = "merge";
 const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
+const TASK_SCHEDULING_RELATION_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
+const TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE: &str = "task.scheduling_relation.create";
 const VERIFICATION_RECORD_OPERATION_SCHEMA_VERSION: i64 = 1;
 const VERIFICATION_RECORD_OPERATION_TYPE: &str = "verification.record";
 
@@ -415,6 +417,14 @@ fn validate_entity_transition_changeset(
         }
         VERIFICATION_RECORD_OPERATION_TYPE => {
             if operation_schema_version != VERIFICATION_RECORD_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE => {
+            if operation_schema_version != TASK_SCHEDULING_RELATION_CREATE_OPERATION_SCHEMA_VERSION
+            {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
                     "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
                 )));

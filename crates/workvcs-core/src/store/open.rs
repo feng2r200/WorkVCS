@@ -4,9 +4,10 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
     EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -123,6 +124,15 @@ impl Store {
         history::transition_task(&mut self.connection, options)
     }
 
+    pub(crate) fn create_task_scheduling_relation(
+        &mut self,
+        options: &TaskSchedulingRelationCreateOptions,
+    ) -> Result<TaskSchedulingRelationCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_task_scheduling_relation(&mut self.connection, options)
+    }
+
     pub(crate) fn create_acceptance_criterion(
         &mut self,
         options: &AcceptanceCriterionCreateOptions,
@@ -214,6 +224,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::verification_at(&self.connection, commit_id, verification_entity_id)
+    }
+
+    pub(crate) fn task_scheduling_relations_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<TaskSchedulingRelationSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::task_scheduling_relations_at(&self.connection, commit_id)
     }
 
     pub(crate) fn acceptance_criterion_effective_status(

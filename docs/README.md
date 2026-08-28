@@ -47,6 +47,7 @@ recorded as Accepted ADRs:
 - [ADR-0019: Phase 3E Session Runtime Foundation](decisions/adr/0019-phase-3e-session-runtime-foundation.md)
 - [ADR-0020: Phase 3F Claim Runtime Foundation](decisions/adr/0020-phase-3f-claim-runtime-foundation.md)
 - [ADR-0021: Phase 3G Runnable Task Projection](decisions/adr/0021-phase-3g-runnable-task-projection.md)
+- [ADR-0022: Phase 3H Task Scheduling Relation Foundation](decisions/adr/0022-phase-3h-task-scheduling-relation-foundation.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

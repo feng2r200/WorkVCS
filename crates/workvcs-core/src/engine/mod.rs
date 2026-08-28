@@ -10,9 +10,10 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
     EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -93,6 +94,13 @@ impl Engine {
         self.store.transition_task(&options)
     }
 
+    pub fn create_task_scheduling_relation(
+        &mut self,
+        options: TaskSchedulingRelationCreateOptions,
+    ) -> Result<TaskSchedulingRelationCreateCommit> {
+        self.store.create_task_scheduling_relation(&options)
+    }
+
     pub fn create_acceptance_criterion(
         &mut self,
         options: AcceptanceCriterionCreateOptions,
@@ -157,6 +165,13 @@ impl Engine {
     ) -> Result<VerificationSnapshot> {
         self.store
             .verification_at(commit_id, verification_entity_id)
+    }
+
+    pub fn task_scheduling_relations_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<TaskSchedulingRelationSnapshot>> {
+        self.store.task_scheduling_relations_at(commit_id)
     }
 
     pub fn acceptance_criterion_effective_status(

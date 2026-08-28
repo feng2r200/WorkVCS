@@ -13,8 +13,8 @@ pub use canonical::{
 pub use engine::Engine;
 pub use error::{ErrorCategory, ErrorCode, Result, WorkVcsError};
 pub use history::{
-    EntityTransitionCommit, EntityTransitionOptions, ReplayedState, WorkspaceInfo,
-    WorkspaceInitOptions,
+    BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryEntry, HistoryQueryOptions,
+    HistoryQueryResult, HistoryStart, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
 };
 pub use identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,

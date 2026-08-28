@@ -1,0 +1,389 @@
+use crate::error::{Result, WorkVcsError, storage_error};
+use crate::identity::{BranchId, ChangeSetId, CommitId, Digest, WorkspaceId};
+use crate::store::StoreConnection;
+use rusqlite::{OptionalExtension, Params, params};
+use std::collections::HashSet;
+
+const GENESIS_COMMIT_KIND: &str = "genesis";
+const NORMAL_COMMIT_KIND: &str = "normal";
+const MERGE_COMMIT_KIND: &str = "merge";
+const PRIMARY_PARENT_ROLE: &str = "primary";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchHead {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub name: String,
+    pub head_commit_id: CommitId,
+    pub lifecycle_state: String,
+    pub state_digest: Digest,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryStart {
+    Branch(BranchId),
+    Commit(CommitId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryQueryOptions {
+    start: HistoryStart,
+    limit: Option<usize>,
+}
+
+impl HistoryQueryOptions {
+    pub fn from_branch(branch_id: BranchId) -> Self {
+        Self {
+            start: HistoryStart::Branch(branch_id),
+            limit: None,
+        }
+    }
+
+    pub fn from_commit(commit_id: CommitId) -> Self {
+        Self {
+            start: HistoryStart::Commit(commit_id),
+            limit: None,
+        }
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Result<Self> {
+        if limit == 0 {
+            return Err(WorkVcsError::QueryInvalid(
+                "history limit must be greater than zero".to_owned(),
+            ));
+        }
+        self.limit = Some(limit);
+        Ok(self)
+    }
+
+    pub fn start(&self) -> HistoryStart {
+        self.start
+    }
+
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryQueryResult {
+    pub start_commit_id: CommitId,
+    pub entries: Vec<HistoryEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub commit_kind: String,
+    pub state_digest: Digest,
+    pub committed_at_us: i64,
+    pub operation_type: String,
+    pub operation_schema_version: i64,
+    pub changeset_created_at_us: i64,
+    pub parent_commit_id: Option<CommitId>,
+}
+
+struct BranchRow {
+    workspace_id: WorkspaceId,
+    name: String,
+    head_commit_id: CommitId,
+    lifecycle_state: String,
+}
+
+pub(crate) fn branch_head(connection: &StoreConnection, branch_id: BranchId) -> Result<BranchHead> {
+    let branch = load_branch(connection, branch_id)?;
+    let head = load_history_entry(connection, branch.head_commit_id)?;
+    if head.workspace_id != branch.workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "branch {branch_id} head {} belongs to workspace {}, not {}",
+            branch.head_commit_id, head.workspace_id, branch.workspace_id
+        )));
+    }
+
+    Ok(BranchHead {
+        workspace_id: branch.workspace_id,
+        branch_id,
+        name: branch.name,
+        head_commit_id: branch.head_commit_id,
+        lifecycle_state: branch.lifecycle_state,
+        state_digest: head.state_digest,
+    })
+}
+
+pub(crate) fn query_history(
+    connection: &StoreConnection,
+    options: &HistoryQueryOptions,
+) -> Result<HistoryQueryResult> {
+    let start_commit_id = match options.start() {
+        HistoryStart::Branch(branch_id) => branch_head(connection, branch_id)?.head_commit_id,
+        HistoryStart::Commit(commit_id) => commit_id,
+    };
+    let mut entries = Vec::new();
+    let mut visiting = HashSet::new();
+    let mut next_commit_id = Some(start_commit_id);
+
+    while let Some(commit_id) = next_commit_id {
+        if let Some(limit) = options.limit()
+            && entries.len() >= limit
+        {
+            break;
+        }
+        if !visiting.insert(commit_id.raw_bytes()) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "cycle detected while reading history at commit {commit_id}"
+            )));
+        }
+
+        let mut entry = load_history_entry(connection, commit_id)?;
+        let parent_commit_id =
+            load_first_parent(connection, commit_id, entry.commit_kind.as_str())?;
+        entry.parent_commit_id = parent_commit_id;
+        next_commit_id = parent_commit_id;
+        entries.push(entry);
+    }
+
+    Ok(HistoryQueryResult {
+        start_commit_id,
+        entries,
+    })
+}
+
+fn load_branch(connection: &StoreConnection, branch_id: BranchId) -> Result<BranchRow> {
+    let branch_id_bytes = branch_id.raw_bytes();
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT workspace_id, name, head_commit_id, lifecycle_state
+             FROM branch
+             WHERE branch_id = ?1",
+            params![&branch_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((workspace_id, name, head_commit_id, lifecycle_state)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "branch {branch_id} does not exist"
+        )));
+    };
+    validate_stored_text("branch.name", &name)?;
+    validate_stored_text("branch.lifecycle_state", &lifecycle_state)?;
+
+    Ok(BranchRow {
+        workspace_id: decode_workspace_id("branch.workspace_id", workspace_id)?,
+        name,
+        head_commit_id: decode_commit_id("branch.head_commit_id", head_commit_id)?,
+        lifecycle_state,
+    })
+}
+
+fn load_history_entry(connection: &StoreConnection, commit_id: CommitId) -> Result<HistoryEntry> {
+    let commit_id_bytes = commit_id.raw_bytes();
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT workstate_commit.workspace_id,
+                    workstate_commit.changeset_id,
+                    workstate_commit.commit_kind,
+                    workstate_commit.state_digest,
+                    workstate_commit.committed_at_us,
+                    changeset.operation_type,
+                    changeset.operation_schema_version,
+                    changeset.created_at_us
+             FROM workstate_commit
+             JOIN changeset
+               ON changeset.workspace_id = workstate_commit.workspace_id
+              AND changeset.changeset_id = workstate_commit.changeset_id
+             WHERE workstate_commit.commit_id = ?1",
+            params![&commit_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        workspace_id,
+        changeset_id,
+        commit_kind,
+        state_digest,
+        committed_at_us,
+        operation_type,
+        operation_schema_version,
+        changeset_created_at_us,
+    )) = row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "commit {commit_id} does not exist or lacks its ChangeSet"
+        )));
+    };
+    validate_stored_text("workstate_commit.commit_kind", &commit_kind)?;
+    validate_stored_text("changeset.operation_type", &operation_type)?;
+    if operation_schema_version <= 0 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "commit {commit_id} ChangeSet has invalid operation schema version {operation_schema_version}"
+        )));
+    }
+
+    Ok(HistoryEntry {
+        workspace_id: decode_workspace_id("workstate_commit.workspace_id", workspace_id)?,
+        commit_id,
+        changeset_id: decode_changeset_id("workstate_commit.changeset_id", changeset_id)?,
+        commit_kind,
+        state_digest: decode_digest("workstate_commit.state_digest", state_digest)?,
+        committed_at_us,
+        operation_type,
+        operation_schema_version,
+        changeset_created_at_us,
+        parent_commit_id: None,
+    })
+}
+
+fn load_first_parent(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    commit_kind: &str,
+) -> Result<Option<CommitId>> {
+    match commit_kind {
+        GENESIS_COMMIT_KIND => {
+            require_count(
+                connection,
+                "Genesis history parents",
+                0,
+                "SELECT count(*)
+                 FROM commit_parent
+                 WHERE commit_id = ?1",
+                params![&commit_id.raw_bytes()[..]],
+            )?;
+            Ok(None)
+        }
+        NORMAL_COMMIT_KIND => {
+            require_count(
+                connection,
+                "Normal history parents",
+                1,
+                "SELECT count(*)
+                 FROM commit_parent
+                 WHERE commit_id = ?1",
+                params![&commit_id.raw_bytes()[..]],
+            )?;
+            let parent = connection
+                .inner()
+                .query_row(
+                    "SELECT parent_commit_id
+                     FROM commit_parent
+                     WHERE commit_id = ?1
+                       AND parent_ordinal = 0
+                       AND parent_role = ?2",
+                    params![&commit_id.raw_bytes()[..], PRIMARY_PARENT_ROLE],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()
+                .map_err(storage_error)?;
+            let Some(parent) = parent else {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "normal commit {commit_id} does not have an ordinal-0 primary parent"
+                )));
+            };
+            Ok(Some(decode_commit_id(
+                "commit_parent.parent_commit_id",
+                parent,
+            )?))
+        }
+        MERGE_COMMIT_KIND => Err(WorkVcsError::QueryUnsupported(format!(
+            "merge commit history at {commit_id} is deferred"
+        ))),
+        other => Err(WorkVcsError::QueryInvalid(format!(
+            "unsupported WorkStateCommit kind {other:?}"
+        ))),
+    }
+}
+
+fn validate_stored_text(label: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must not be empty"
+        )));
+    }
+    if value
+        .as_bytes()
+        .iter()
+        .any(|byte| *byte == b'\0' || *byte < 0x20 || *byte == 0x7f)
+    {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must not contain NUL or ASCII control characters"
+        )));
+    }
+    Ok(())
+}
+
+fn require_count<P: Params>(
+    connection: &StoreConnection,
+    label: &str,
+    expected: i64,
+    sql: &str,
+    params: P,
+) -> Result<()> {
+    let actual = connection
+        .inner()
+        .query_row(sql, params, |row| row.get::<_, i64>(0))
+        .map_err(storage_error)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(WorkVcsError::QueryInvalid(format!(
+            "{label} expected count {expected}, found {actual}"
+        )))
+    }
+}
+
+fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
+    let bytes = decode_16(column, bytes)?;
+    WorkspaceId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_changeset_id(column: &str, bytes: Vec<u8>) -> Result<ChangeSetId> {
+    let bytes = decode_16(column, bytes)?;
+    ChangeSetId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
+    let bytes = decode_16(column, bytes)?;
+    CommitId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {
+    bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::QueryInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
+    })
+}
+
+fn decode_digest(column: &str, bytes: Vec<u8>) -> Result<Digest> {
+    let bytes = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::QueryInvalid(format!("{column} must be 32 bytes, found {}", bytes.len()))
+    })?;
+    Ok(Digest::from_bytes(bytes))
+}

@@ -1,14 +1,14 @@
 use crate::error::Result;
 use crate::history::{
-    EntityTransitionCommit, EntityTransitionOptions, ReplayedState, WorkspaceInfo,
-    WorkspaceInitOptions,
+    BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
+    HistoryQueryResult, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
-use crate::{CommitId, WorkspaceId, history};
+use crate::{BranchId, CommitId, WorkspaceId, history};
 use std::path::Path;
 
 pub(crate) struct Store {
@@ -60,6 +60,22 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::state_at(&self.connection, commit_id)
+    }
+
+    pub(crate) fn show_at(&self, commit_id: CommitId) -> Result<ReplayedState> {
+        self.state_at(commit_id)
+    }
+
+    pub(crate) fn branch_head(&self, branch_id: BranchId) -> Result<BranchHead> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::branch_head(&self.connection, branch_id)
+    }
+
+    pub(crate) fn history(&self, options: &HistoryQueryOptions) -> Result<HistoryQueryResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::query_history(&self.connection, options)
     }
 
     pub(crate) fn commit_entity_transition(

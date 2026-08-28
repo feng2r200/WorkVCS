@@ -8,6 +8,7 @@ pub enum ErrorCategory {
     Identity,
     Import,
     Mutation,
+    Query,
     Replay,
     Store,
     Storage,
@@ -26,6 +27,8 @@ pub enum ErrorCode {
     BranchNotFound,
     EntityNotFound,
     EntityTransitionInvalid,
+    QueryInvalid,
+    QueryUnsupported,
     ReplayInvalid,
     ReplayUnsupported,
     StoreAlreadyInitialized,
@@ -65,6 +68,12 @@ pub enum WorkVcsError {
 
     #[error("entity transition invalid: {0}")]
     EntityTransitionInvalid(String),
+
+    #[error("query invalid: {0}")]
+    QueryInvalid(String),
+
+    #[error("query unsupported: {0}")]
+    QueryUnsupported(String),
 
     #[error("replay invalid: {0}")]
     ReplayInvalid(String),
@@ -106,6 +115,8 @@ impl WorkVcsError {
             Self::BranchNotFound(_) => ErrorCode::BranchNotFound,
             Self::EntityNotFound(_) => ErrorCode::EntityNotFound,
             Self::EntityTransitionInvalid(_) => ErrorCode::EntityTransitionInvalid,
+            Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
+            Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
             Self::ReplayInvalid(_) => ErrorCode::ReplayInvalid,
             Self::ReplayUnsupported(_) => ErrorCode::ReplayUnsupported,
             Self::StoreAlreadyInitialized(_) => ErrorCode::StoreAlreadyInitialized,
@@ -127,6 +138,7 @@ impl WorkVcsError {
             | Self::BranchNotFound(_)
             | Self::EntityNotFound(_)
             | Self::EntityTransitionInvalid(_) => ErrorCategory::Mutation,
+            Self::QueryInvalid(_) | Self::QueryUnsupported(_) => ErrorCategory::Query,
             Self::CommitNotFound(_) | Self::ReplayInvalid(_) | Self::ReplayUnsupported(_) => {
                 ErrorCategory::Replay
             }

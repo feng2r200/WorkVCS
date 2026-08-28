@@ -13,6 +13,7 @@ pub enum ErrorCategory {
     Replay,
     Store,
     Storage,
+    Task,
     Time,
     Workspace,
 }
@@ -37,6 +38,8 @@ pub enum ErrorCode {
     StoreBootstrapInvalid,
     StoreCompatibilityUnsupported,
     StorageFailure,
+    TaskInvalid,
+    TaskNotFound,
     TimeInvalid,
     WorkspaceInvalid,
     WorkspaceNotFound,
@@ -98,6 +101,12 @@ pub enum WorkVcsError {
     #[error("storage failure: {0}")]
     StorageFailure(String),
 
+    #[error("task invalid: {0}")]
+    TaskInvalid(String),
+
+    #[error("task not found: {0}")]
+    TaskNotFound(String),
+
     #[error("time invalid: {0}")]
     TimeInvalid(String),
 
@@ -129,6 +138,8 @@ impl WorkVcsError {
             Self::StoreBootstrapInvalid(_) => ErrorCode::StoreBootstrapInvalid,
             Self::StoreCompatibilityUnsupported(_) => ErrorCode::StoreCompatibilityUnsupported,
             Self::StorageFailure(_) => ErrorCode::StorageFailure,
+            Self::TaskInvalid(_) => ErrorCode::TaskInvalid,
+            Self::TaskNotFound(_) => ErrorCode::TaskNotFound,
             Self::TimeInvalid(_) => ErrorCode::TimeInvalid,
             Self::WorkspaceInvalid(_) => ErrorCode::WorkspaceInvalid,
             Self::WorkspaceNotFound(_) => ErrorCode::WorkspaceNotFound,
@@ -153,6 +164,7 @@ impl WorkVcsError {
             | Self::StoreBootstrapInvalid(_)
             | Self::StoreCompatibilityUnsupported(_) => ErrorCategory::Store,
             Self::StorageFailure(_) => ErrorCategory::Storage,
+            Self::TaskInvalid(_) | Self::TaskNotFound(_) => ErrorCategory::Task,
             Self::TimeInvalid(_) => ErrorCategory::Time,
             Self::WorkspaceInvalid(_) | Self::WorkspaceNotFound(_) => ErrorCategory::Workspace,
         }

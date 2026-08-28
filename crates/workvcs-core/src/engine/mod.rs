@@ -1,10 +1,12 @@
 use crate::BranchId;
 use crate::CommitId;
+use crate::EntityId;
 use crate::WorkspaceId;
 use crate::error::Result;
 use crate::history::{
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, IntegrityReport, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
+    HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
+    TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use std::path::Path;
@@ -63,5 +65,13 @@ impl Engine {
         options: EntityTransitionOptions,
     ) -> Result<EntityTransitionCommit> {
         self.store.commit_entity_transition(&options)
+    }
+
+    pub fn create_task(&mut self, options: TaskCreateOptions) -> Result<TaskCreateCommit> {
+        self.store.create_task(&options)
+    }
+
+    pub fn task_at(&self, commit_id: CommitId, task_entity_id: EntityId) -> Result<TaskSnapshot> {
+        self.store.task_at(commit_id, task_entity_id)
     }
 }

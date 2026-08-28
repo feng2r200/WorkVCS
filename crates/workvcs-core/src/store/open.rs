@@ -1,14 +1,15 @@
 use crate::error::Result;
 use crate::history::{
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, IntegrityReport, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
+    HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
+    TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
-use crate::{BranchId, CommitId, WorkspaceId, history};
+use crate::{BranchId, CommitId, EntityId, WorkspaceId, history};
 use std::path::Path;
 
 pub(crate) struct Store {
@@ -91,5 +92,21 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::commit_entity_transition(&mut self.connection, options)
+    }
+
+    pub(crate) fn create_task(&mut self, options: &TaskCreateOptions) -> Result<TaskCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_task(&mut self.connection, options)
+    }
+
+    pub(crate) fn task_at(
+        &self,
+        commit_id: CommitId,
+        task_entity_id: EntityId,
+    ) -> Result<TaskSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::task_at(&self.connection, commit_id, task_entity_id)
     }
 }

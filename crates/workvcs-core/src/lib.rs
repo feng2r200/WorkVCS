@@ -14,7 +14,8 @@ pub use engine::Engine;
 pub use error::{ErrorCategory, ErrorCode, Result, WorkVcsError};
 pub use history::{
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryEntry, HistoryQueryOptions,
-    HistoryQueryResult, HistoryStart, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
+    HistoryQueryResult, HistoryStart, IntegrityReport, ReplayedState, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 pub use identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,

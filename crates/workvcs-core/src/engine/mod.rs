@@ -4,7 +4,7 @@ use crate::WorkspaceId;
 use crate::error::Result;
 use crate::history::{
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
+    HistoryQueryResult, IntegrityReport, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use std::path::Path;
@@ -52,6 +52,10 @@ impl Engine {
 
     pub fn history(&self, options: HistoryQueryOptions) -> Result<HistoryQueryResult> {
         self.store.history(&options)
+    }
+
+    pub fn validate_integrity(&self) -> Result<IntegrityReport> {
+        self.store.validate_integrity()
     }
 
     pub fn commit_entity_transition(

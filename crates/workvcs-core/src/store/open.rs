@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::history::{
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
+    HistoryQueryResult, IntegrityReport, ReplayedState, WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -76,6 +76,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::query_history(&self.connection, options)
+    }
+
+    pub(crate) fn validate_integrity(&self) -> Result<IntegrityReport> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::validate_integrity(&self.connection)
     }
 
     pub(crate) fn commit_entity_transition(

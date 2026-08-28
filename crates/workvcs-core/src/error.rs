@@ -7,6 +7,7 @@ pub enum ErrorCategory {
     Canonical,
     Identity,
     Import,
+    Integrity,
     Mutation,
     Query,
     Replay,
@@ -22,6 +23,7 @@ pub enum ErrorCode {
     DigestInvalid,
     IdentityInvalid,
     ImmutableImportInvalid,
+    IntegrityInvalid,
     CommitNotFound,
     BranchHeadConflict,
     BranchNotFound,
@@ -53,6 +55,9 @@ pub enum WorkVcsError {
 
     #[error("immutable import fixed-point validation failed: {0}")]
     ImmutableImportInvalid(String),
+
+    #[error("integrity invalid: {0}")]
+    IntegrityInvalid(String),
 
     #[error("commit not found: {0}")]
     CommitNotFound(String),
@@ -110,6 +115,7 @@ impl WorkVcsError {
             Self::DigestInvalid(_) => ErrorCode::DigestInvalid,
             Self::IdentityInvalid(_) => ErrorCode::IdentityInvalid,
             Self::ImmutableImportInvalid(_) => ErrorCode::ImmutableImportInvalid,
+            Self::IntegrityInvalid(_) => ErrorCode::IntegrityInvalid,
             Self::CommitNotFound(_) => ErrorCode::CommitNotFound,
             Self::BranchHeadConflict(_) => ErrorCode::BranchHeadConflict,
             Self::BranchNotFound(_) => ErrorCode::BranchNotFound,
@@ -134,6 +140,7 @@ impl WorkVcsError {
             Self::CanonicalEncodingInvalid(_) | Self::DigestInvalid(_) => ErrorCategory::Canonical,
             Self::IdentityInvalid(_) => ErrorCategory::Identity,
             Self::ImmutableImportInvalid(_) => ErrorCategory::Import,
+            Self::IntegrityInvalid(_) => ErrorCategory::Integrity,
             Self::BranchHeadConflict(_)
             | Self::BranchNotFound(_)
             | Self::EntityNotFound(_)

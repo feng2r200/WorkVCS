@@ -81,9 +81,14 @@ fn run(cli: Cli) -> Result<String> {
         Command::Doctor { store } => {
             let engine = Engine::open(store)?;
             let info = engine.store_info()?;
+            let integrity = engine.validate_integrity()?;
             Ok(format!(
-                "ok store_id={} schema_version={} canonical_json_profile={}\n",
-                info.store_id, info.manifest.schema_version, info.manifest.canonical_json_profile
+                "ok store_id={} schema_version={} canonical_json_profile={} checked_branches={} checked_commits={}\n",
+                info.store_id,
+                info.manifest.schema_version,
+                info.manifest.canonical_json_profile,
+                integrity.checked_branches,
+                integrity.checked_commits
             ))
         }
         Command::History {
@@ -228,5 +233,7 @@ mod tests {
             .expect("run doctor");
         assert!(doctor.starts_with("ok store_id="));
         assert!(doctor.contains("canonical_json_profile=workvcs-jcs-v1"));
+        assert!(doctor.contains("checked_branches=0"));
+        assert!(doctor.contains("checked_commits=0"));
     }
 }

@@ -2,8 +2,8 @@ use rusqlite::{Connection, Params, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    Engine, ErrorCode, StoreInitOptions, WorkState, WorkspaceId, WorkspaceInfo,
-    WorkspaceInitOptions, work_state_mapping_digest,
+    ChangeSetId, CommitId, Engine, EntityId, ErrorCode, EventId, StoreInitOptions, WorkState,
+    WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, work_state_mapping_digest,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -301,6 +301,30 @@ fn workspace_info_rejects_corrupted_genesis_json_payloads() {
 }
 
 #[test]
+fn workspace_info_rejects_corrupted_genesis_rationale_json() {
+    let (_tempdir, path) = store_path();
+    let mut engine = init_engine(&path);
+    let workspace = engine
+        .create_workspace(WorkspaceInitOptions::new("rationale").expect("workspace options"))
+        .expect("create workspace");
+
+    let connection = raw_connection(&path);
+    let changeset_id = workspace.genesis_changeset_id.raw_bytes();
+    connection
+        .execute(
+            "UPDATE changeset SET rationale_json = ?1 WHERE changeset_id = ?2",
+            params![r#"{"unexpected":true}"#, &changeset_id[..]],
+        )
+        .expect("corrupt rationale");
+    drop(connection);
+
+    let error = engine
+        .workspace_info(workspace.workspace_id)
+        .expect_err("invalid rationale");
+    assert_eq!(error.code(), ErrorCode::StoreBootstrapInvalid);
+}
+
+#[test]
 fn workspace_info_rejects_missing_canonical_provenance_event() {
     let (_tempdir, path) = store_path();
     let mut engine = init_engine(&path);
@@ -321,5 +345,114 @@ fn workspace_info_rejects_missing_canonical_provenance_event() {
     let error = engine
         .workspace_info(workspace.workspace_id)
         .expect_err("missing canonical event");
+    assert_eq!(error.code(), ErrorCode::StoreBootstrapInvalid);
+}
+
+#[test]
+fn workspace_info_rejects_genesis_with_parent() {
+    let (_tempdir, path) = store_path();
+    let mut engine = init_engine(&path);
+    let workspace = engine
+        .create_workspace(WorkspaceInitOptions::new("parent").expect("workspace options"))
+        .expect("create workspace");
+
+    let connection = raw_connection(&path);
+    let workspace_id = workspace.workspace_id.raw_bytes();
+    let genesis_commit_id = workspace.genesis_commit_id.raw_bytes();
+    let parent_changeset_id = ChangeSetId::new_v7().raw_bytes();
+    let parent_commit_id = CommitId::new_v7().raw_bytes();
+    connection
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, 'test.parent', 1, '{}', '{}', NULL, 1)",
+            params![&parent_changeset_id[..], &workspace_id[..]],
+        )
+        .expect("insert parent changeset");
+    connection
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, 'normal', ?4, 2)",
+            params![
+                &parent_commit_id[..],
+                &workspace_id[..],
+                &parent_changeset_id[..],
+                &workspace.state_digest.as_bytes()[..]
+            ],
+        )
+        .expect("insert parent commit");
+    connection
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, 'primary', ?2)",
+            params![&genesis_commit_id[..], &parent_commit_id[..]],
+        )
+        .expect("insert invalid genesis parent");
+    drop(connection);
+
+    let error = engine
+        .workspace_info(workspace.workspace_id)
+        .expect_err("invalid genesis parent");
+    assert_eq!(error.code(), ErrorCode::StoreBootstrapInvalid);
+}
+
+#[test]
+fn workspace_info_rejects_genesis_with_change_operation() {
+    let (_tempdir, path) = store_path();
+    let mut engine = init_engine(&path);
+    let workspace = engine
+        .create_workspace(WorkspaceInitOptions::new("operation").expect("workspace options"))
+        .expect("create workspace");
+
+    let connection = raw_connection(&path);
+    let changeset_id = workspace.genesis_changeset_id.raw_bytes();
+    let object_id = EntityId::new_v7().raw_bytes();
+    let operation_id = EventId::new_v7().raw_bytes();
+    connection
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, 'entity', 1)",
+            params![&object_id[..]],
+        )
+        .expect("insert subject object");
+    connection
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 0, 'entity', ?3, '{}')",
+            params![&operation_id[..], &changeset_id[..], &object_id[..]],
+        )
+        .expect("insert invalid genesis change operation");
+    drop(connection);
+
+    let error = engine
+        .workspace_info(workspace.workspace_id)
+        .expect_err("invalid genesis change operation");
     assert_eq!(error.code(), ErrorCode::StoreBootstrapInvalid);
 }

@@ -38,6 +38,10 @@ pub use runtime::{
     ClaimTaskOptions, ClaimTaskResult,
 };
 pub use runtime::{
+    RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTaskProjectionDimension, RunnableTasksOptions, RunnableTasksProjection,
+};
+pub use runtime::{
     SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions, SessionFocusPathEntry,
     SessionFocusUpdateResult, SessionLifecycleState, SessionSnapshot, SessionStartOptions,
     SessionStartResult,

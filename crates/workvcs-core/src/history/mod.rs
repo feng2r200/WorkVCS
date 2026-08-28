@@ -33,6 +33,6 @@ pub(crate) use task::{
     acceptance_criterion_at, acceptance_criterion_effective_status, create_acceptance_criterion,
     create_task, create_verification, create_verification_requirement,
     reject_reserved_semantic_entity_transition, revise_acceptance_criterion,
-    revise_verification_requirement, task_at, transition_task, verification_at,
+    revise_verification_requirement, task_at, tasks_at, transition_task, verification_at,
     verification_requirement_at,
 };

@@ -1411,6 +1411,44 @@ pub(crate) fn task_at(
     })
 }
 
+pub(crate) fn tasks_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<TaskSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut tasks = Vec::new();
+
+    for (entity_id, entity_version_id) in replayed.state.entities() {
+        match load_entity_kind_for_public_boundary(connection, *entity_id)? {
+            Some(entity_kind) if entity_kind == TASK_ENTITY_KIND => {
+                let loaded = load_task_version(
+                    connection,
+                    replayed.workspace_id,
+                    *entity_id,
+                    *entity_version_id,
+                )?;
+                tasks.push(TaskSnapshot {
+                    workspace_id: replayed.workspace_id,
+                    commit_id,
+                    task_entity_id: *entity_id,
+                    task_entity_version_id: *entity_version_id,
+                    state_digest: loaded.state_digest,
+                    state: loaded.state,
+                });
+            }
+            Some(_) => {}
+            None => {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "WorkState at commit {commit_id} references missing entity {entity_id}"
+                )));
+            }
+        }
+    }
+
+    tasks.sort_by_key(|task| task.task_entity_id);
+    Ok(tasks)
+}
+
 pub(crate) fn acceptance_criterion_at(
     connection: &StoreConnection,
     commit_id: CommitId,

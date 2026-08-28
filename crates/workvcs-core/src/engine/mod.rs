@@ -20,8 +20,9 @@ use crate::history::{
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
     ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
-    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
-    SessionSnapshot, SessionStartOptions, SessionStartResult,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
+    SessionStartResult,
 };
 use std::path::Path;
 
@@ -203,5 +204,9 @@ impl Engine {
 
     pub fn release_claim(&mut self, options: ClaimReleaseOptions) -> Result<ClaimReleaseResult> {
         self.store.release_claim(&options)
+    }
+
+    pub fn runnable_tasks(&self, options: RunnableTasksOptions) -> Result<RunnableTasksProjection> {
+        self.store.runnable_tasks(&options)
     }
 }

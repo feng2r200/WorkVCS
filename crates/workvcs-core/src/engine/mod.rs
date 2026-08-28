@@ -4,9 +4,12 @@ use crate::EntityId;
 use crate::WorkspaceId;
 use crate::error::Result;
 use crate::history::{
-    BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
-    TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions, WorkspaceInfo, WorkspaceInitOptions,
+    AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
+    AcceptanceCriterionRevisionCommit, AcceptanceCriterionRevisionOptions,
+    AcceptanceCriterionSnapshot, BranchHead, EntityTransitionCommit, EntityTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit,
+    TaskCreateOptions, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use std::path::Path;
@@ -78,7 +81,30 @@ impl Engine {
         self.store.transition_task(&options)
     }
 
+    pub fn create_acceptance_criterion(
+        &mut self,
+        options: AcceptanceCriterionCreateOptions,
+    ) -> Result<AcceptanceCriterionCreateCommit> {
+        self.store.create_acceptance_criterion(&options)
+    }
+
+    pub fn revise_acceptance_criterion(
+        &mut self,
+        options: AcceptanceCriterionRevisionOptions,
+    ) -> Result<AcceptanceCriterionRevisionCommit> {
+        self.store.revise_acceptance_criterion(&options)
+    }
+
     pub fn task_at(&self, commit_id: CommitId, task_entity_id: EntityId) -> Result<TaskSnapshot> {
         self.store.task_at(commit_id, task_entity_id)
+    }
+
+    pub fn acceptance_criterion_at(
+        &self,
+        commit_id: CommitId,
+        acceptance_criterion_entity_id: EntityId,
+    ) -> Result<AcceptanceCriterionSnapshot> {
+        self.store
+            .acceptance_criterion_at(commit_id, acceptance_criterion_entity_id)
     }
 }

@@ -115,6 +115,7 @@ fn task_state_json(
         status,
         outcome: outcome.map(str::to_owned),
         priority,
+        acceptance_criteria: Vec::new(),
     };
     String::from_utf8(
         canonical_bytes(&state.to_canonical_value().expect("canonical task state"))

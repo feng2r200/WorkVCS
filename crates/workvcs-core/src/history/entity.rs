@@ -70,6 +70,23 @@ impl EntityTransitionOptions {
         self.rationale = rationale;
         self
     }
+
+    pub(crate) fn created_entity_kind(&self) -> Option<&str> {
+        match &self.subject {
+            EntityTransitionSubject::Create { entity_kind } => Some(entity_kind),
+            EntityTransitionSubject::Update { .. } => None,
+        }
+    }
+
+    pub(crate) fn update_subject(&self) -> Option<(EntityId, EntityVersionId)> {
+        match self.subject {
+            EntityTransitionSubject::Create { .. } => None,
+            EntityTransitionSubject::Update {
+                entity_id,
+                expected_entity_version_id,
+            } => Some((entity_id, expected_entity_version_id)),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -592,11 +609,23 @@ pub(crate) fn entity_transition_payload_json(
     before_entity_version_id: Option<EntityVersionId>,
     after_entity_version_id: EntityVersionId,
 ) -> Result<String> {
+    canonical_json_string(&entity_transition_payload_value(
+        entity_id,
+        before_entity_version_id,
+        after_entity_version_id,
+    )?)
+}
+
+pub(crate) fn entity_transition_payload_value(
+    entity_id: EntityId,
+    before_entity_version_id: Option<EntityVersionId>,
+    after_entity_version_id: EntityVersionId,
+) -> Result<CanonicalValue> {
     let before_value = match before_entity_version_id {
         Some(version_id) => CanonicalValue::String(version_id.to_string()),
         None => CanonicalValue::Null,
     };
-    let payload = CanonicalValue::object(vec![
+    CanonicalValue::object(vec![
         (
             "after_entity_version_id".to_owned(),
             CanonicalValue::String(after_entity_version_id.to_string()),
@@ -606,8 +635,7 @@ pub(crate) fn entity_transition_payload_json(
             "entity_id".to_owned(),
             CanonicalValue::String(entity_id.to_string()),
         ),
-    ])?;
-    canonical_json_string(&payload)
+    ])
 }
 
 fn validate_entity_kind(value: &str) -> Result<()> {

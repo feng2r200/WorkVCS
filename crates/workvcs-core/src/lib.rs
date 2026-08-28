@@ -13,9 +13,12 @@ pub use canonical::{
 pub use engine::Engine;
 pub use error::{ErrorCategory, ErrorCode, Result, WorkVcsError};
 pub use history::{
+    AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
+    AcceptanceCriterionCreateOptions, AcceptanceCriterionRevisionCommit,
+    AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, AcceptanceCriterionState,
     BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryEntry, HistoryQueryOptions,
-    HistoryQueryResult, HistoryStart, IntegrityReport, ReplayedState, TaskCreateCommit,
-    TaskCreateOptions, TaskSnapshot, TaskState, TaskStatus, TaskTransitionCommit,
+    HistoryQueryResult, HistoryStart, IntegrityReport, ReplayedState, TaskAcceptanceCriterionRef,
+    TaskCreateCommit, TaskCreateOptions, TaskSnapshot, TaskState, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 pub use identity::{

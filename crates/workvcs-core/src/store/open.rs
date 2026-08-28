@@ -1,8 +1,11 @@
 use crate::error::Result;
 use crate::history::{
-    BranchHead, EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
-    TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions, WorkspaceInfo, WorkspaceInitOptions,
+    AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
+    AcceptanceCriterionRevisionCommit, AcceptanceCriterionRevisionOptions,
+    AcceptanceCriterionSnapshot, BranchHead, EntityTransitionCommit, EntityTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, ReplayedState, TaskCreateCommit,
+    TaskCreateOptions, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -91,6 +94,7 @@ impl Store {
     ) -> Result<EntityTransitionCommit> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
+        history::reject_reserved_semantic_entity_transition(&self.connection, options)?;
         history::commit_entity_transition(&mut self.connection, options)
     }
 
@@ -109,6 +113,24 @@ impl Store {
         history::transition_task(&mut self.connection, options)
     }
 
+    pub(crate) fn create_acceptance_criterion(
+        &mut self,
+        options: &AcceptanceCriterionCreateOptions,
+    ) -> Result<AcceptanceCriterionCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_acceptance_criterion(&mut self.connection, options)
+    }
+
+    pub(crate) fn revise_acceptance_criterion(
+        &mut self,
+        options: &AcceptanceCriterionRevisionOptions,
+    ) -> Result<AcceptanceCriterionRevisionCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::revise_acceptance_criterion(&mut self.connection, options)
+    }
+
     pub(crate) fn task_at(
         &self,
         commit_id: CommitId,
@@ -117,5 +139,19 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::task_at(&self.connection, commit_id, task_entity_id)
+    }
+
+    pub(crate) fn acceptance_criterion_at(
+        &self,
+        commit_id: CommitId,
+        acceptance_criterion_entity_id: EntityId,
+    ) -> Result<AcceptanceCriterionSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::acceptance_criterion_at(
+            &self.connection,
+            commit_id,
+            acceptance_criterion_entity_id,
+        )
     }
 }

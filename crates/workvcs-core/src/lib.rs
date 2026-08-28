@@ -1,6 +1,7 @@
 pub mod canonical;
 pub mod engine;
 pub mod error;
+mod history;
 pub mod identity;
 pub mod store;
 
@@ -11,6 +12,7 @@ pub use canonical::{
 };
 pub use engine::Engine;
 pub use error::{ErrorCategory, ErrorCode, Result, WorkVcsError};
+pub use history::{WorkspaceInfo, WorkspaceInitOptions};
 pub use identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, RelationId,
     RelationVersionId, StoreId, WorkspaceId,

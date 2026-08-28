@@ -1,9 +1,11 @@
 use crate::error::Result;
+use crate::history::{WorkspaceInfo, WorkspaceInitOptions};
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
+use crate::{WorkspaceId, history};
 use std::path::Path;
 
 pub(crate) struct Store {
@@ -34,5 +36,20 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         Ok(current)
+    }
+
+    pub(crate) fn create_workspace(
+        &mut self,
+        options: &WorkspaceInitOptions,
+    ) -> Result<WorkspaceInfo> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_workspace(&mut self.connection, current.store_id, options)
+    }
+
+    pub(crate) fn workspace_info(&self, workspace_id: WorkspaceId) -> Result<WorkspaceInfo> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::load_workspace_info(&self.connection, workspace_id)
     }
 }

@@ -1,4 +1,6 @@
+use crate::WorkspaceId;
 use crate::error::Result;
+use crate::history::{WorkspaceInfo, WorkspaceInitOptions};
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use std::path::Path;
 
@@ -21,5 +23,13 @@ impl Engine {
 
     pub fn store_info(&self) -> Result<StoreInfo> {
         self.store.info()
+    }
+
+    pub fn create_workspace(&mut self, options: WorkspaceInitOptions) -> Result<WorkspaceInfo> {
+        self.store.create_workspace(&options)
+    }
+
+    pub fn workspace_info(&self, workspace_id: WorkspaceId) -> Result<WorkspaceInfo> {
+        self.store.workspace_info(workspace_id)
     }
 }

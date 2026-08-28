@@ -10,6 +10,7 @@ pub enum ErrorCategory {
     Store,
     Storage,
     Time,
+    Workspace,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +24,8 @@ pub enum ErrorCode {
     StoreCompatibilityUnsupported,
     StorageFailure,
     TimeInvalid,
+    WorkspaceInvalid,
+    WorkspaceNotFound,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -53,6 +56,12 @@ pub enum WorkVcsError {
 
     #[error("time invalid: {0}")]
     TimeInvalid(String),
+
+    #[error("workspace invalid: {0}")]
+    WorkspaceInvalid(String),
+
+    #[error("workspace not found: {0}")]
+    WorkspaceNotFound(String),
 }
 
 impl WorkVcsError {
@@ -67,6 +76,8 @@ impl WorkVcsError {
             Self::StoreCompatibilityUnsupported(_) => ErrorCode::StoreCompatibilityUnsupported,
             Self::StorageFailure(_) => ErrorCode::StorageFailure,
             Self::TimeInvalid(_) => ErrorCode::TimeInvalid,
+            Self::WorkspaceInvalid(_) => ErrorCode::WorkspaceInvalid,
+            Self::WorkspaceNotFound(_) => ErrorCode::WorkspaceNotFound,
         }
     }
 
@@ -80,6 +91,7 @@ impl WorkVcsError {
             | Self::StoreCompatibilityUnsupported(_) => ErrorCategory::Store,
             Self::StorageFailure(_) => ErrorCategory::Storage,
             Self::TimeInvalid(_) => ErrorCategory::Time,
+            Self::WorkspaceInvalid(_) | Self::WorkspaceNotFound(_) => ErrorCategory::Workspace,
         }
     }
 

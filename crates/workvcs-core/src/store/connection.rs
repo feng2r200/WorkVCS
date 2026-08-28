@@ -41,7 +41,7 @@ impl StoreConnection {
             .map_err(storage_error)
     }
 
-    fn verify_foreign_keys(&self) -> Result<()> {
+    pub(crate) fn verify_foreign_keys(&self) -> Result<()> {
         if self.foreign_keys_enabled()? {
             Ok(())
         } else {

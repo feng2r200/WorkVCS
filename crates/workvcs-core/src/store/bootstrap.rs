@@ -366,7 +366,7 @@ fn decode_store_id(bytes: Vec<u8>) -> Result<StoreId> {
     })
 }
 
-fn current_epoch_micros() -> Result<i64> {
+pub(crate) fn current_epoch_micros() -> Result<i64> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| {

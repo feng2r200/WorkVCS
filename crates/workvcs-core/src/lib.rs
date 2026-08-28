@@ -12,9 +12,12 @@ pub use canonical::{
 };
 pub use engine::Engine;
 pub use error::{ErrorCategory, ErrorCode, Result, WorkVcsError};
-pub use history::{ReplayedState, WorkspaceInfo, WorkspaceInitOptions};
+pub use history::{
+    EntityTransitionCommit, EntityTransitionOptions, ReplayedState, WorkspaceInfo,
+    WorkspaceInitOptions,
+};
 pub use identity::{
-    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, RelationId,
-    RelationVersionId, StoreId, WorkspaceId,
+    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,
+    RelationId, RelationVersionId, StoreId, WorkspaceId,
 };
 pub use store::{StoreInfo, StoreInitOptions, StoreManifest};

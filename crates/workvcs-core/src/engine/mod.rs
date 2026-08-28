@@ -1,7 +1,10 @@
 use crate::CommitId;
 use crate::WorkspaceId;
 use crate::error::Result;
-use crate::history::{ReplayedState, WorkspaceInfo, WorkspaceInitOptions};
+use crate::history::{
+    EntityTransitionCommit, EntityTransitionOptions, ReplayedState, WorkspaceInfo,
+    WorkspaceInitOptions,
+};
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use std::path::Path;
 
@@ -36,5 +39,12 @@ impl Engine {
 
     pub fn state_at(&self, commit_id: CommitId) -> Result<ReplayedState> {
         self.store.state_at(commit_id)
+    }
+
+    pub fn commit_entity_transition(
+        &mut self,
+        options: EntityTransitionOptions,
+    ) -> Result<EntityTransitionCommit> {
+        self.store.commit_entity_transition(&options)
     }
 }

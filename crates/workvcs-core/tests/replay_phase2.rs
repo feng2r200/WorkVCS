@@ -414,7 +414,7 @@ fn state_at_rejects_corrupted_genesis_rationale_json() {
 }
 
 #[test]
-fn state_at_marks_non_genesis_commits_unsupported_for_this_slice() {
+fn state_at_marks_unsupported_normal_operations_unsupported() {
     let (_tempdir, path) = store_path();
     let (engine, workspace) = create_workspace(&path, "normal");
 
@@ -424,7 +424,7 @@ fn state_at_marks_non_genesis_commits_unsupported_for_this_slice() {
 
     let error = engine
         .state_at(normal_commit_id)
-        .expect_err("normal replay not implemented");
+        .expect_err("unsupported normal operation");
 
     assert_eq!(error.code(), ErrorCode::ReplayUnsupported);
 }

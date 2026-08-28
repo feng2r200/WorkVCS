@@ -1,5 +1,8 @@
 use crate::error::Result;
-use crate::history::{ReplayedState, WorkspaceInfo, WorkspaceInitOptions};
+use crate::history::{
+    EntityTransitionCommit, EntityTransitionOptions, ReplayedState, WorkspaceInfo,
+    WorkspaceInitOptions,
+};
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
 };
@@ -57,5 +60,14 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::state_at(&self.connection, commit_id)
+    }
+
+    pub(crate) fn commit_entity_transition(
+        &mut self,
+        options: &EntityTransitionOptions,
+    ) -> Result<EntityTransitionCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::commit_entity_transition(&mut self.connection, options)
     }
 }

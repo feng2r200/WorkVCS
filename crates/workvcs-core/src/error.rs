@@ -7,6 +7,7 @@ pub enum ErrorCategory {
     Canonical,
     Identity,
     Import,
+    Mutation,
     Replay,
     Store,
     Storage,
@@ -21,6 +22,10 @@ pub enum ErrorCode {
     IdentityInvalid,
     ImmutableImportInvalid,
     CommitNotFound,
+    BranchHeadConflict,
+    BranchNotFound,
+    EntityNotFound,
+    EntityTransitionInvalid,
     ReplayInvalid,
     ReplayUnsupported,
     StoreAlreadyInitialized,
@@ -48,6 +53,18 @@ pub enum WorkVcsError {
 
     #[error("commit not found: {0}")]
     CommitNotFound(String),
+
+    #[error("branch head conflict: {0}")]
+    BranchHeadConflict(String),
+
+    #[error("branch not found: {0}")]
+    BranchNotFound(String),
+
+    #[error("entity not found: {0}")]
+    EntityNotFound(String),
+
+    #[error("entity transition invalid: {0}")]
+    EntityTransitionInvalid(String),
 
     #[error("replay invalid: {0}")]
     ReplayInvalid(String),
@@ -85,6 +102,10 @@ impl WorkVcsError {
             Self::IdentityInvalid(_) => ErrorCode::IdentityInvalid,
             Self::ImmutableImportInvalid(_) => ErrorCode::ImmutableImportInvalid,
             Self::CommitNotFound(_) => ErrorCode::CommitNotFound,
+            Self::BranchHeadConflict(_) => ErrorCode::BranchHeadConflict,
+            Self::BranchNotFound(_) => ErrorCode::BranchNotFound,
+            Self::EntityNotFound(_) => ErrorCode::EntityNotFound,
+            Self::EntityTransitionInvalid(_) => ErrorCode::EntityTransitionInvalid,
             Self::ReplayInvalid(_) => ErrorCode::ReplayInvalid,
             Self::ReplayUnsupported(_) => ErrorCode::ReplayUnsupported,
             Self::StoreAlreadyInitialized(_) => ErrorCode::StoreAlreadyInitialized,
@@ -102,6 +123,10 @@ impl WorkVcsError {
             Self::CanonicalEncodingInvalid(_) | Self::DigestInvalid(_) => ErrorCategory::Canonical,
             Self::IdentityInvalid(_) => ErrorCategory::Identity,
             Self::ImmutableImportInvalid(_) => ErrorCategory::Import,
+            Self::BranchHeadConflict(_)
+            | Self::BranchNotFound(_)
+            | Self::EntityNotFound(_)
+            | Self::EntityTransitionInvalid(_) => ErrorCategory::Mutation,
             Self::CommitNotFound(_) | Self::ReplayInvalid(_) | Self::ReplayUnsupported(_) => {
                 ErrorCategory::Replay
             }
@@ -115,7 +140,7 @@ impl WorkVcsError {
     }
 
     pub fn retryable(&self) -> bool {
-        false
+        matches!(self, Self::BranchHeadConflict(_))
     }
 }
 

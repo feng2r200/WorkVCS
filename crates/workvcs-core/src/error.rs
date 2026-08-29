@@ -10,6 +10,7 @@ pub enum ErrorCategory {
     Identity,
     Import,
     Integrity,
+    Knowledge,
     Mutation,
     Plan,
     Query,
@@ -34,6 +35,8 @@ pub enum ErrorCode {
     IdentityInvalid,
     ImmutableImportInvalid,
     IntegrityInvalid,
+    KnowledgeInvalid,
+    KnowledgeNotFound,
     CommitNotFound,
     BranchHeadConflict,
     BranchNotFound,
@@ -90,6 +93,12 @@ pub enum WorkVcsError {
 
     #[error("integrity invalid: {0}")]
     IntegrityInvalid(String),
+
+    #[error("knowledge invalid: {0}")]
+    KnowledgeInvalid(String),
+
+    #[error("knowledge not found: {0}")]
+    KnowledgeNotFound(String),
 
     #[error("commit not found: {0}")]
     CommitNotFound(String),
@@ -198,6 +207,8 @@ impl WorkVcsError {
             Self::IdentityInvalid(_) => ErrorCode::IdentityInvalid,
             Self::ImmutableImportInvalid(_) => ErrorCode::ImmutableImportInvalid,
             Self::IntegrityInvalid(_) => ErrorCode::IntegrityInvalid,
+            Self::KnowledgeInvalid(_) => ErrorCode::KnowledgeInvalid,
+            Self::KnowledgeNotFound(_) => ErrorCode::KnowledgeNotFound,
             Self::CommitNotFound(_) => ErrorCode::CommitNotFound,
             Self::BranchHeadConflict(_) => ErrorCode::BranchHeadConflict,
             Self::BranchNotFound(_) => ErrorCode::BranchNotFound,
@@ -240,6 +251,7 @@ impl WorkVcsError {
             Self::IdentityInvalid(_) => ErrorCategory::Identity,
             Self::ImmutableImportInvalid(_) => ErrorCategory::Import,
             Self::IntegrityInvalid(_) => ErrorCategory::Integrity,
+            Self::KnowledgeInvalid(_) | Self::KnowledgeNotFound(_) => ErrorCategory::Knowledge,
             Self::BranchHeadConflict(_)
             | Self::BranchNotFound(_)
             | Self::EntityNotFound(_)

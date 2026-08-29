@@ -6,6 +6,7 @@ mod evidence;
 mod genesis;
 mod goal;
 mod integrity;
+mod knowledge;
 mod plan;
 mod query;
 mod record;
@@ -35,6 +36,10 @@ pub use goal::{
     GoalTransitionOptions,
 };
 pub use integrity::IntegrityReport;
+pub use knowledge::{
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeSnapshot, KnowledgeState, KnowledgeStatus,
+};
 pub use plan::{
     PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanState, PlanStatus, PlanTransitionCommit,
     PlanTransitionOptions,
@@ -95,6 +100,7 @@ pub(crate) use evidence::{create_evidence, evidence};
 pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
+pub(crate) use knowledge::{create_knowledge, knowledge_at, knowledges_at};
 pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use query::{branch_head, query_history};
 pub(crate) use record::{

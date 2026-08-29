@@ -4,6 +4,7 @@ use super::entity::{
 };
 use super::evidence::{EVIDENCE_OBJECT_KIND, require_evidence_exists};
 use super::goal::GOAL_ENTITY_KIND;
+use super::knowledge::KNOWLEDGE_ENTITY_KIND;
 use super::plan::PLAN_ENTITY_KIND;
 use super::record::RECORD_ENTITY_KIND;
 use super::resource::{resource, resource_observation};
@@ -6269,6 +6270,7 @@ fn is_reserved_semantic_entity_kind(entity_kind: &str) -> bool {
     matches!(
         entity_kind,
         GOAL_ENTITY_KIND
+            | KNOWLEDGE_ENTITY_KIND
             | PLAN_ENTITY_KIND
             | TASK_ENTITY_KIND
             | RECORD_ENTITY_KIND

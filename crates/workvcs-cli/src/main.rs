@@ -9,26 +9,28 @@ use workvcs_core::{
     ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
-    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
-    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
-    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
-    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkVcsError, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
+    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult, KnowledgeSnapshot,
+    KnowledgeStatus, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
+    RecordKind, RecordListOptions, RecordListResult, RecordRelationCreateCommit,
+    RecordRelationCreateOptions, RecordRelationListOptions, RecordRelationListResult,
+    RecordRelationRemoveCommit, RecordRelationRemoveOptions, RecordRelationRestoreCommit,
+    RecordRelationRestoreOptions, RecordRelationSnapshot, RecordRelationType, RecordSnapshot,
+    RecordStatus, RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId,
+    ReplayedState, ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult,
+    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
+    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
+    WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, content_object_digest,
+    parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -113,6 +115,10 @@ enum Command {
     Branch {
         #[command(subcommand)]
         command: BranchCommand,
+    },
+    Knowledge {
+        #[command(subcommand)]
+        command: KnowledgeCommand,
     },
     Task {
         #[command(subcommand)]
@@ -214,6 +220,70 @@ enum BranchCommand {
 
         #[arg(long)]
         name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum KnowledgeCommand {
+    Create {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+
+        #[arg(long)]
+        provenance_json: Option<String>,
+    },
+    #[command(group(
+        ArgGroup::new("knowledge-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        knowledge: String,
+    },
+    #[command(group(
+        ArgGroup::new("knowledge-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        status: Option<String>,
+
+        #[arg(long)]
+        statement_contains: Option<String>,
     },
 }
 
@@ -1162,6 +1232,69 @@ fn run(cli: Cli) -> Result<String> {
             };
             let forked = engine.fork_branch(options)?;
             Ok(render_branch_fork(&forked))
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::Create {
+                    store,
+                    branch,
+                    head,
+                    statement,
+                    scope_json,
+                    provenance_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = KnowledgeCreateOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("knowledge scope", &scope_json)?)?;
+            }
+            if let Some(provenance_json) = provenance_json {
+                options = options
+                    .with_provenance(parse_cli_object("knowledge provenance", &provenance_json)?)?;
+            }
+            Ok(render_knowledge_create(&engine.create_knowledge(options)?)?)
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::Show {
+                    store,
+                    branch,
+                    commit,
+                    knowledge,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_knowledge_query_commit(&engine, branch, commit)?;
+            Ok(render_knowledge_snapshot(&engine.knowledge_at(
+                commit_id,
+                EntityId::parse_canonical(&knowledge)?,
+            )?)?)
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::List {
+                    store,
+                    branch,
+                    commit,
+                    status,
+                    statement_contains,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options =
+                KnowledgeListOptions::new(resolve_knowledge_query_commit(&engine, branch, commit)?);
+            if let Some(status) = status {
+                options = options.with_status(parse_knowledge_status(&status)?);
+            }
+            if let Some(statement_contains) = statement_contains {
+                options = options.with_statement_contains(statement_contains)?;
+            }
+            Ok(render_knowledge_list(&engine.knowledges_at(options)?)?)
         }
         Command::Task {
             command:
@@ -2196,6 +2329,33 @@ fn resolve_record_query_commit(
     }
 }
 
+fn resolve_knowledge_query_commit(
+    engine: &Engine,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<CommitId> {
+    match (branch, commit) {
+        (Some(branch), None) => Ok(engine
+            .branch_head(BranchId::parse_canonical(&branch)?)
+            .map(|head| head.head_commit_id)?),
+        (None, Some(commit)) => CommitId::parse_canonical(&commit),
+        _ => Err(WorkVcsError::QueryInvalid(
+            "knowledge query target requires exactly one of --branch or --commit".to_owned(),
+        )),
+    }
+}
+
+fn parse_knowledge_status(value: &str) -> Result<KnowledgeStatus> {
+    match value {
+        "active" => Ok(KnowledgeStatus::Active),
+        "invalidated" => Ok(KnowledgeStatus::Invalidated),
+        "superseded" => Ok(KnowledgeStatus::Superseded),
+        other => Err(WorkVcsError::KnowledgeInvalid(format!(
+            "knowledge status {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
 fn parse_record_kind(value: &str) -> Result<RecordKind> {
     match value {
         "assumption" => Ok(RecordKind::Assumption),
@@ -2449,6 +2609,115 @@ fn render_branch_fork(branch: &BranchForkResult) -> String {
         branch.event_id,
         branch.created_at_us
     )
+}
+
+fn render_knowledge_create(knowledge: &KnowledgeCreateCommit) -> Result<String> {
+    let statement_json = knowledge_statement_json(&knowledge.state.statement)?;
+    let scope_json = knowledge_value_json("knowledge scope", &knowledge.state.scope)?;
+    let provenance_json =
+        knowledge_value_json("knowledge provenance", &knowledge.state.provenance)?;
+    Ok(format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nknowledge_entity_id={}\nknowledge_entity_version_id={}\nknowledge_state_digest={}\nwork_state_digest={}\nknowledge_status={}\nknowledge_statement_json={}\nknowledge_scope_json={}\nknowledge_provenance_json={}\n",
+        knowledge.workspace_id,
+        knowledge.branch_id,
+        knowledge.previous_head_commit_id,
+        knowledge.commit_id,
+        knowledge.changeset_id,
+        knowledge.operation_id,
+        knowledge.knowledge_entity_id,
+        knowledge.knowledge_entity_version_id,
+        knowledge.knowledge_state_digest,
+        knowledge.work_state_digest,
+        knowledge.state.status,
+        statement_json,
+        scope_json,
+        provenance_json
+    ))
+}
+
+fn render_knowledge_snapshot(knowledge: &KnowledgeSnapshot) -> Result<String> {
+    let statement_json = knowledge_statement_json(&knowledge.state.statement)?;
+    let scope_json = knowledge_value_json("knowledge scope", &knowledge.state.scope)?;
+    let provenance_json =
+        knowledge_value_json("knowledge provenance", &knowledge.state.provenance)?;
+    Ok(format!(
+        "workspace_id={}\ncommit_id={}\nknowledge_entity_id={}\nknowledge_entity_version_id={}\nknowledge_state_digest={}\nknowledge_status={}\nknowledge_statement_json={}\nknowledge_scope_json={}\nknowledge_provenance_json={}\n",
+        knowledge.workspace_id,
+        knowledge.commit_id,
+        knowledge.knowledge_entity_id,
+        knowledge.knowledge_entity_version_id,
+        knowledge.state_digest,
+        knowledge.state.status,
+        statement_json,
+        scope_json,
+        provenance_json
+    ))
+}
+
+fn render_knowledge_list(result: &KnowledgeListResult) -> Result<String> {
+    let mut output = format!(
+        "workspace_id={}\ncommit_id={}\nknowledge={}\n",
+        result.workspace_id,
+        result.commit_id,
+        result.knowledge.len()
+    );
+    for (index, knowledge) in result.knowledge.iter().enumerate() {
+        writeln!(
+            output,
+            "knowledge.{index}.knowledge_entity_id={}",
+            knowledge.knowledge_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "knowledge.{index}.knowledge_entity_version_id={}",
+            knowledge.knowledge_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "knowledge.{index}.knowledge_state_digest={}",
+            knowledge.state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "knowledge.{index}.knowledge_status={}",
+            knowledge.state.status
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "knowledge.{index}.knowledge_statement_json={}",
+            knowledge_statement_json(&knowledge.state.statement)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "knowledge.{index}.knowledge_scope_json={}",
+            knowledge_value_json("knowledge scope", &knowledge.state.scope)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "knowledge.{index}.knowledge_provenance_json={}",
+            knowledge_value_json("knowledge provenance", &knowledge.state.provenance)?
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
+fn knowledge_statement_json(statement: &str) -> Result<String> {
+    serde_json::to_string(statement).map_err(|error| {
+        WorkVcsError::KnowledgeInvalid(format!("knowledge statement encode failed: {error}"))
+    })
+}
+
+fn knowledge_value_json(label: &str, value: &CanonicalValue) -> Result<String> {
+    String::from_utf8(canonical_bytes(value)?).map_err(|error| {
+        WorkVcsError::KnowledgeInvalid(format!("{label} encode produced non-UTF-8: {error}"))
+    })
 }
 
 fn render_task_create(task: &TaskCreateCommit) -> String {
@@ -3435,6 +3704,7 @@ mod tests {
                 "why",
                 "workspace",
                 "branch",
+                "knowledge",
                 "task",
                 "ac",
                 "vr",
@@ -6488,6 +6758,104 @@ mod tests {
             value(&listed_restored, "relation.0.relation_id"),
             value(&relation, "relation_id")
         );
+    }
+
+    #[test]
+    fn cli_creates_and_queries_knowledge() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "SQLite is sufficient under serialized writes",
+            "--scope-json",
+            "{\"kind\":\"workspace\"}",
+            "--provenance-json",
+            "{\"source\":\"cli\"}",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        assert_eq!(value(&knowledge, "knowledge_status"), "active");
+        assert!(
+            knowledge.contains(
+                "knowledge_statement_json=\"SQLite is sufficient under serialized writes\""
+            )
+        );
+        assert!(knowledge.contains("knowledge_scope_json={\"kind\":\"workspace\"}"));
+        assert!(knowledge.contains("knowledge_provenance_json={\"source\":\"cli\"}"));
+
+        let show = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+        ])
+        .expect("parse knowledge show"))
+        .expect("show knowledge");
+        assert_eq!(
+            value(&show, "knowledge_entity_version_id"),
+            value(&knowledge, "knowledge_entity_version_id")
+        );
+        assert!(show.contains("knowledge_scope_json={\"kind\":\"workspace\"}"));
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "active",
+            "--statement-contains",
+            "serialized",
+        ])
+        .expect("parse knowledge list"))
+        .expect("list knowledge");
+        assert_eq!(value(&listed, "knowledge"), "1");
+        assert_eq!(
+            value(&listed, "knowledge.0.knowledge_entity_id"),
+            value(&knowledge, "knowledge_entity_id")
+        );
+
+        let empty =
+            run(
+                Cli::try_parse_from(["workvcs", "knowledge", "list", store, "--commit", &head])
+                    .expect("parse historical knowledge list"),
+            )
+            .expect("list historical knowledge");
+        assert_eq!(value(&empty, "knowledge"), "0");
     }
 
     fn value(output: &str, key: &str) -> String {

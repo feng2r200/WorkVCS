@@ -9,13 +9,13 @@ use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
-    EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    EntityTransitionCommit, EntityTransitionOptions, GoalCreateCommit, GoalCreateOptions,
+    GoalSnapshot, HistoryQueryOptions, HistoryQueryResult, IntegrityReport, PlanCreateCommit,
+    PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -89,6 +89,10 @@ impl Engine {
         self.store.create_plan(&options)
     }
 
+    pub fn create_goal(&mut self, options: GoalCreateOptions) -> Result<GoalCreateCommit> {
+        self.store.create_goal(&options)
+    }
+
     pub fn create_task(&mut self, options: TaskCreateOptions) -> Result<TaskCreateCommit> {
         self.store.create_task(&options)
     }
@@ -155,6 +159,10 @@ impl Engine {
 
     pub fn plan_at(&self, commit_id: CommitId, plan_entity_id: EntityId) -> Result<PlanSnapshot> {
         self.store.plan_at(commit_id, plan_entity_id)
+    }
+
+    pub fn goal_at(&self, commit_id: CommitId, goal_entity_id: EntityId) -> Result<GoalSnapshot> {
+        self.store.goal_at(commit_id, goal_entity_id)
     }
 
     pub fn acceptance_criterion_at(

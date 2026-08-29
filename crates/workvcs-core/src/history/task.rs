@@ -2,6 +2,7 @@ use super::entity::{
     ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION, ENTITY_TRANSITION_OPERATION_TYPE,
     canonical_json_string, entity_transition_payload_value,
 };
+use super::goal::GOAL_ENTITY_KIND;
 use super::plan::PLAN_ENTITY_KIND;
 use super::{EntityTransitionOptions, commit_entity_transition, state_at};
 use crate::canonical::{
@@ -4671,7 +4672,8 @@ fn load_entity_kind_for_public_boundary(
 fn is_reserved_semantic_entity_kind(entity_kind: &str) -> bool {
     matches!(
         entity_kind,
-        PLAN_ENTITY_KIND
+        GOAL_ENTITY_KIND
+            | PLAN_ENTITY_KIND
             | TASK_ENTITY_KIND
             | ACCEPTANCE_CRITERION_ENTITY_KIND
             | VERIFICATION_REQUIREMENT_ENTITY_KIND

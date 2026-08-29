@@ -3,13 +3,13 @@ use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
-    EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    EntityTransitionCommit, EntityTransitionOptions, GoalCreateCommit, GoalCreateOptions,
+    GoalSnapshot, HistoryQueryOptions, HistoryQueryResult, IntegrityReport, PlanCreateCommit,
+    PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -117,6 +117,12 @@ impl Store {
         history::create_plan(&mut self.connection, options)
     }
 
+    pub(crate) fn create_goal(&mut self, options: &GoalCreateOptions) -> Result<GoalCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_goal(&mut self.connection, options)
+    }
+
     pub(crate) fn create_task(&mut self, options: &TaskCreateOptions) -> Result<TaskCreateCommit> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
@@ -213,6 +219,16 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::plan_at(&self.connection, commit_id, plan_entity_id)
+    }
+
+    pub(crate) fn goal_at(
+        &self,
+        commit_id: CommitId,
+        goal_entity_id: EntityId,
+    ) -> Result<GoalSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::goal_at(&self.connection, commit_id, goal_entity_id)
     }
 
     pub(crate) fn acceptance_criterion_at(

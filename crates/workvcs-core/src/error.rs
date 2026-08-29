@@ -5,6 +5,7 @@ pub type Result<T> = std::result::Result<T, WorkVcsError>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCategory {
     Canonical,
+    Goal,
     Identity,
     Import,
     Integrity,
@@ -35,6 +36,8 @@ pub enum ErrorCode {
     ClaimNotFound,
     EntityNotFound,
     EntityTransitionInvalid,
+    GoalInvalid,
+    GoalNotFound,
     PlanInvalid,
     PlanNotFound,
     QueryInvalid,
@@ -92,6 +95,12 @@ pub enum WorkVcsError {
 
     #[error("entity transition invalid: {0}")]
     EntityTransitionInvalid(String),
+
+    #[error("goal invalid: {0}")]
+    GoalInvalid(String),
+
+    #[error("goal not found: {0}")]
+    GoalNotFound(String),
 
     #[error("plan invalid: {0}")]
     PlanInvalid(String),
@@ -163,6 +172,8 @@ impl WorkVcsError {
             Self::ClaimNotFound(_) => ErrorCode::ClaimNotFound,
             Self::EntityNotFound(_) => ErrorCode::EntityNotFound,
             Self::EntityTransitionInvalid(_) => ErrorCode::EntityTransitionInvalid,
+            Self::GoalInvalid(_) => ErrorCode::GoalInvalid,
+            Self::GoalNotFound(_) => ErrorCode::GoalNotFound,
             Self::PlanInvalid(_) => ErrorCode::PlanInvalid,
             Self::PlanNotFound(_) => ErrorCode::PlanNotFound,
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
@@ -194,6 +205,7 @@ impl WorkVcsError {
             | Self::BranchNotFound(_)
             | Self::EntityNotFound(_)
             | Self::EntityTransitionInvalid(_) => ErrorCategory::Mutation,
+            Self::GoalInvalid(_) | Self::GoalNotFound(_) => ErrorCategory::Goal,
             Self::PlanInvalid(_) | Self::PlanNotFound(_) => ErrorCategory::Plan,
             Self::QueryInvalid(_) | Self::QueryUnsupported(_) => ErrorCategory::Query,
             Self::RelationInvalid(_) => ErrorCategory::Relation,

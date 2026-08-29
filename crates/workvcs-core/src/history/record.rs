@@ -21,6 +21,8 @@ pub(crate) const RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION: i64 = 1;
 pub(crate) const RECORD_DECISION_SUPERSEDE_OPERATION_TYPE: &str = "record.decision.supersede";
 pub(crate) const KNOWLEDGE_RELATION_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
 pub(crate) const KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE: &str = "knowledge.relation.create";
+pub(crate) const KNOWLEDGE_RELATION_REMOVE_OPERATION_SCHEMA_VERSION: i64 = 1;
+pub(crate) const KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE: &str = "knowledge.relation.remove";
 pub(crate) const RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
 pub(crate) const RECORD_RELATION_CREATE_OPERATION_TYPE: &str = "record.relation.create";
 pub(crate) const RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION: i64 = 1;
@@ -38,6 +40,7 @@ const NORMAL_COMMIT_KIND: &str = "normal";
 const PRIMARY_PARENT_ROLE: &str = "primary";
 const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
 const KNOWLEDGE_RELATION_CREATE_EVENT_KIND: &str = "knowledge.relation.created";
+const KNOWLEDGE_RELATION_REMOVE_EVENT_KIND: &str = "knowledge.relation.removed";
 const RECORD_RELATION_CREATE_EVENT_KIND: &str = "record.relation.created";
 const RECORD_RELATION_REMOVE_EVENT_KIND: &str = "record.relation.removed";
 const RECORD_RELATION_RESTORE_EVENT_KIND: &str = "record.relation.restored";
@@ -1174,6 +1177,56 @@ pub struct KnowledgeRelationListResult {
     pub workspace_id: WorkspaceId,
     pub commit_id: CommitId,
     pub relations: Vec<KnowledgeRelationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeRelationRemoveOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    relation_id: RelationId,
+    expected_relation_version_id: RelationVersionId,
+    rationale: CanonicalValue,
+}
+
+impl KnowledgeRelationRemoveOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        relation_id: RelationId,
+        expected_relation_version_id: RelationVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_id,
+            expected_relation_version_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeRelationRemoveCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub relation_id: RelationId,
+    pub previous_relation_version_id: RelationVersionId,
+    pub relation_type: RecordRelationType,
+    pub replacement_knowledge_entity_id: EntityId,
+    pub prior_knowledge_entity_id: EntityId,
+    pub work_state_digest: Digest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2401,6 +2454,9 @@ pub(crate) fn remove_record_relation(
         &RecordRelationRemoveRows {
             workspace_id: branch.workspace_id,
             expected_head_commit_id: options.expected_head_commit_id,
+            operation_type: RECORD_RELATION_REMOVE_OPERATION_TYPE,
+            operation_schema_version: RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION,
+            event_kind: RECORD_RELATION_REMOVE_EVENT_KIND,
             relation_id: options.relation_id,
             relation_version_id: options.expected_relation_version_id,
             changeset_id,
@@ -2515,6 +2571,9 @@ pub(crate) fn remove_record_knowledge_relation(
         &RecordRelationRemoveRows {
             workspace_id: branch.workspace_id,
             expected_head_commit_id: options.expected_head_commit_id,
+            operation_type: RECORD_RELATION_REMOVE_OPERATION_TYPE,
+            operation_schema_version: RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION,
+            event_kind: RECORD_RELATION_REMOVE_EVENT_KIND,
             relation_id: options.relation_id,
             relation_version_id: options.expected_relation_version_id,
             changeset_id,
@@ -3219,6 +3278,122 @@ pub(crate) fn record_knowledge_relation_at(
     })
 }
 
+pub(crate) fn remove_knowledge_relation(
+    connection: &mut StoreConnection,
+    options: &KnowledgeRelationRemoveOptions,
+) -> Result<KnowledgeRelationRemoveCommit> {
+    connection.verify_foreign_keys()?;
+    require_non_empty_rationale_object(&options.rationale)?;
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let current_relation_version_id = parent
+        .state
+        .relations()
+        .iter()
+        .find_map(|(relation_id, relation_version_id)| {
+            (*relation_id == options.relation_id).then_some(*relation_version_id)
+        })
+        .ok_or_else(|| {
+            WorkVcsError::KnowledgeNotFound(format!(
+                "knowledge relation {} is not present at commit {}",
+                options.relation_id, options.expected_head_commit_id
+            ))
+        })?;
+    if current_relation_version_id != options.expected_relation_version_id {
+        return Err(WorkVcsError::KnowledgeInvalid(format!(
+            "knowledge relation {} expected version {}, found {} at commit {}",
+            options.relation_id,
+            options.expected_relation_version_id,
+            current_relation_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+
+    let relation = knowledge_relation_at(
+        connection,
+        options.expected_head_commit_id,
+        options.relation_id,
+    )?;
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+    let next_work_state = work_state_after_record_relation_remove(
+        &parent.state,
+        options.relation_id,
+        options.expected_relation_version_id,
+    )?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let relation_payload_value = relation_transition_payload_value(
+        options.relation_id,
+        Some(options.expected_relation_version_id),
+        None,
+    )?;
+    let relation_payload_json = canonical_json_string(&relation_payload_value)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::KnowledgeInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    write_record_relation_remove(
+        &transaction,
+        &RecordRelationRemoveRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            operation_type: KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE,
+            operation_schema_version: KNOWLEDGE_RELATION_REMOVE_OPERATION_SCHEMA_VERSION,
+            event_kind: KNOWLEDGE_RELATION_REMOVE_EVENT_KIND,
+            relation_id: options.relation_id,
+            relation_version_id: options.expected_relation_version_id,
+            changeset_id,
+            commit_id,
+            operation_id,
+            relation_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(KnowledgeRelationRemoveCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        operation_id,
+        relation_id: options.relation_id,
+        previous_relation_version_id: options.expected_relation_version_id,
+        relation_type: relation.relation_type,
+        replacement_knowledge_entity_id: relation.replacement_knowledge_entity_id,
+        prior_knowledge_entity_id: relation.prior_knowledge_entity_id,
+        work_state_digest,
+    })
+}
+
 struct RecordRelationCreateRows {
     workspace_id: WorkspaceId,
     expected_head_commit_id: CommitId,
@@ -3245,6 +3420,9 @@ struct RecordRelationCreateRows {
 struct RecordRelationRemoveRows {
     workspace_id: WorkspaceId,
     expected_head_commit_id: CommitId,
+    operation_type: &'static str,
+    operation_schema_version: i64,
+    event_kind: &'static str,
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
     changeset_id: ChangeSetId,
@@ -4068,8 +4246,8 @@ fn write_record_relation_remove(
             params![
                 &changeset_id_bytes[..],
                 &workspace_id_bytes[..],
-                RECORD_RELATION_REMOVE_OPERATION_TYPE,
-                RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION,
+                rows.operation_type,
+                rows.operation_schema_version,
                 rows.relation_payload_json,
                 rows.rationale_json,
                 rows.now_us
@@ -4166,7 +4344,7 @@ fn write_record_relation_remove(
                 &EventId::new_v7().raw_bytes()[..],
                 &workspace_id_bytes[..],
                 &changeset_id_bytes[..],
-                RECORD_RELATION_REMOVE_EVENT_KIND,
+                rows.event_kind,
                 rows.now_us,
                 rows.relation_payload_json
             ],

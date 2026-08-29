@@ -49,17 +49,17 @@ pub use query::{BranchHead, HistoryEntry, HistoryQueryOptions, HistoryQueryResul
 pub use record::{
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, KnowledgeRelationCreateCommit,
     KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationSnapshot, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordRelationType, RecordSnapshot, RecordState, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions,
+    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationSnapshot,
+    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordState, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions,
 };
 pub use reference::{
     StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
@@ -114,9 +114,9 @@ pub(crate) use record::{
     create_knowledge_relation, create_record, create_record_knowledge_relation,
     create_record_relation, knowledge_relation_at, knowledge_relations_at, record_at,
     record_knowledge_relation_at, record_knowledge_relations_at, record_relation_at,
-    record_relations_at, records_at, remove_record_knowledge_relation, remove_record_relation,
-    restore_record_knowledge_relation, restore_record_relation, supersede_decision_record,
-    transition_record,
+    record_relations_at, records_at, remove_knowledge_relation, remove_record_knowledge_relation,
+    remove_record_relation, restore_record_knowledge_relation, restore_record_relation,
+    supersede_decision_record, transition_record,
 };
 pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::state_at;

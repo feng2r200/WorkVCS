@@ -12,9 +12,10 @@ use workvcs_core::{
     EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
-    KnowledgeTransitionCommit, KnowledgeTransitionOptions, NextWorkOptions, NextWorkResult,
-    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
+    KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit,
+    KnowledgeTransitionOptions, NextWorkOptions, NextWorkResult, RecordCreateCommit,
+    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
     RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
@@ -391,6 +392,25 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         relation: String,
+    },
+    RelationRemove {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        relation: String,
+
+        #[arg(long)]
+        relation_version: String,
+
+        #[arg(long)]
+        rationale: String,
     },
 }
 
@@ -1677,6 +1697,27 @@ fn run(cli: Cli) -> Result<String> {
                 &engine
                     .knowledge_relation_at(commit_id, RelationId::parse_canonical(&relation)?)?,
             ))
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::RelationRemove {
+                    store,
+                    branch,
+                    head,
+                    relation,
+                    relation_version,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let removed = engine.remove_knowledge_relation(KnowledgeRelationRemoveOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                RelationId::parse_canonical(&relation)?,
+                RelationVersionId::parse_canonical(&relation_version)?,
+                rationale,
+            )?)?;
+            Ok(render_knowledge_relation_remove(&removed))
         }
         Command::Task {
             command:
@@ -3342,6 +3383,24 @@ fn render_knowledge_relation_snapshot(relation: &KnowledgeRelationSnapshot) -> S
         relation.replacement_knowledge_entity_id,
         relation.prior_knowledge_entity_id,
         relation.state_digest
+    )
+}
+
+fn render_knowledge_relation_remove(relation: &KnowledgeRelationRemoveCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nprevious_relation_version_id={}\nrelation_type={}\nreplacement_knowledge_entity_id={}\nprior_knowledge_entity_id={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.previous_relation_version_id,
+        relation.relation_type,
+        relation.replacement_knowledge_entity_id,
+        relation.prior_knowledge_entity_id,
+        relation.work_state_digest
     )
 }
 
@@ -8406,6 +8465,55 @@ mod tests {
         assert_eq!(value(&why, "relation.0.direction"), "incoming");
         assert_eq!(value(&why, "relation.0.source_entity_kind"), "knowledge");
         assert_eq!(value(&why, "relation.0.target_entity_kind"), "knowledge");
+
+        let removed = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "relation-remove",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--relation-version",
+            &value(&relation, "relation_version_id"),
+            "--rationale",
+            "The lineage edge was recorded against the wrong prior Knowledge",
+        ])
+        .expect("parse knowledge relation remove"))
+        .expect("remove knowledge relation");
+        assert_eq!(value(&removed, "relation_type"), "supersedes");
+        assert_eq!(
+            value(&removed, "previous_relation_version_id"),
+            value(&relation, "relation_version_id")
+        );
+
+        let after_remove = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "relation-list",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse knowledge relation list after remove"))
+        .expect("list knowledge relations after remove");
+        assert_eq!(value(&after_remove, "relations"), "0");
+
+        let why_after_remove = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--entity",
+            &value(&prior, "knowledge_entity_id"),
+        ])
+        .expect("parse why after knowledge relation remove"))
+        .expect("why after knowledge relation remove");
+        assert_eq!(value(&why_after_remove, "relation_edges"), "0");
     }
 
     #[test]

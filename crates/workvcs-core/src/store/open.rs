@@ -39,10 +39,11 @@ use crate::history::{
 use crate::identity::RelationId;
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
-    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, NextWorkOptions,
-    NextWorkResult, RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions,
-    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
+    SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -755,6 +756,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::end_session(&mut self.connection, options)
+    }
+
+    pub(crate) fn start_merge(&mut self, options: &MergeStartOptions) -> Result<MergeStartResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::start_merge(&mut self.connection, options)
     }
 
     pub(crate) fn claim_task(&mut self, options: &ClaimTaskOptions) -> Result<ClaimTaskResult> {

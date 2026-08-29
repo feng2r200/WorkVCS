@@ -69,14 +69,15 @@ pub use history::{
 };
 pub use identity::{
     BranchId, ChangeSetId, ClaimId, CommitId, Digest, EntityId, EntityVersionId, EventId,
-    EvidenceId, OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId,
-    SessionDiffId, SessionId, StoreId, WorkspaceId,
+    EvidenceId, MergeId, OperationId, RelationId, RelationVersionId, ResourceId,
+    ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
     ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
 };
 pub use runtime::{ContextOverview, ContextOverviewOptions};
+pub use runtime::{MergeRuntimeState, MergeStartOptions, MergeStartResult};
 pub use runtime::{NextWorkOptions, NextWorkResult};
 pub use runtime::{
     RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,

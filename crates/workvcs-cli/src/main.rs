@@ -15,24 +15,24 @@ use workvcs_core::{
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
     KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit,
+    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
+    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
@@ -178,6 +178,10 @@ enum Command {
         #[command(subcommand)]
         command: VerificationCommand,
     },
+    Merge {
+        #[command(subcommand)]
+        command: MergeCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -228,6 +232,23 @@ enum BranchCommand {
 
         #[arg(long)]
         name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MergeCommand {
+    Start {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        target_branch: String,
+
+        #[arg(long)]
+        source_branch: String,
+
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 
@@ -2897,6 +2918,25 @@ fn run(cli: Cli) -> Result<String> {
             ))?;
             Ok(render_runnable_tasks(&projection))
         }
+        Command::Merge {
+            command:
+                MergeCommand::Start {
+                    store,
+                    target_branch,
+                    source_branch,
+                    session,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = MergeStartOptions::new(
+                BranchId::parse_canonical(&target_branch)?,
+                BranchId::parse_canonical(&source_branch)?,
+            );
+            if let Some(session) = session {
+                options = options.with_origin_session_id(SessionId::parse_canonical(&session)?);
+            }
+            Ok(render_merge_start(&engine.start_merge(options)?))
+        }
     }
 }
 
@@ -4091,6 +4131,27 @@ fn render_session_end(session: &SessionEndResult) -> String {
     )
 }
 
+fn render_merge_start(merge: &MergeStartResult) -> String {
+    let origin_session_id = merge
+        .origin_session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    format!(
+        "merge_id={}\nworkspace_id={}\ntarget_branch_id={}\nsource_branch_id={}\nmerge_base_commit_id={}\ntarget_head_commit_id={}\nsource_head_commit_id={}\norigin_session_id={}\nevent_id={}\ncreated_at_us={}\nruntime_state={}\n",
+        merge.merge_id,
+        merge.workspace_id,
+        merge.target_branch_id,
+        merge.source_branch_id,
+        merge.merge_base_commit_id,
+        merge.target_head_commit_id,
+        merge.source_head_commit_id,
+        origin_session_id,
+        merge.event_id,
+        merge.created_at_us,
+        merge.runtime_state.as_str()
+    )
+}
+
 fn render_claim_task(claim: &ClaimTaskResult) -> String {
     format!(
         "claim_id={}\nsession_id={}\nworkspace_id={}\nbranch_id={}\ntask_entity_id={}\nmode={}\nclaimed_at_us={}\nlifecycle_state={}\n",
@@ -4777,7 +4838,8 @@ mod tests {
                 "context",
                 "next",
                 "runnable",
-                "verification"
+                "verification",
+                "merge"
             ]
         );
     }
@@ -9660,6 +9722,144 @@ mod tests {
             value(&listed, "relation.0.relation_id"),
             value(&relation, "relation_id")
         );
+    }
+
+    #[test]
+    fn cli_starts_merge_attempt_without_advancing_target_branch() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let target_branch = value(&workspace, "branch_id");
+        let genesis_head = value(&workspace, "genesis_commit_id");
+
+        let base = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &target_branch,
+            "--head",
+            &genesis_head,
+            "--description",
+            "Base task",
+        ])
+        .expect("parse base task"))
+        .expect("create base task");
+        let base_commit = value(&base, "commit_id");
+
+        let source = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "fork",
+            store,
+            "--from-branch",
+            &target_branch,
+            "--name",
+            "source",
+        ])
+        .expect("parse source branch"))
+        .expect("fork source branch");
+        let source_branch = value(&source, "branch_id");
+
+        let target = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &target_branch,
+            "--head",
+            &base_commit,
+            "--description",
+            "Target work",
+        ])
+        .expect("parse target task"))
+        .expect("create target task");
+        let target_head = value(&target, "commit_id");
+
+        let source_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &source_branch,
+            "--head",
+            &base_commit,
+            "--description",
+            "Source work",
+        ])
+        .expect("parse source task"))
+        .expect("create source task");
+        let source_head = value(&source_task, "commit_id");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &target_branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let merge = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "start",
+            store,
+            "--target-branch",
+            &target_branch,
+            "--source-branch",
+            &source_branch,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse merge start"))
+        .expect("start merge");
+
+        assert_eq!(value(&merge, "workspace_id"), workspace_id);
+        assert_eq!(value(&merge, "target_branch_id"), target_branch);
+        assert_eq!(value(&merge, "source_branch_id"), source_branch);
+        assert_eq!(value(&merge, "merge_base_commit_id"), base_commit);
+        assert_eq!(value(&merge, "target_head_commit_id"), target_head);
+        assert_eq!(value(&merge, "source_head_commit_id"), source_head);
+        assert_eq!(value(&merge, "origin_session_id"), session_id);
+        assert_eq!(value(&merge, "runtime_state"), "active");
+
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            store,
+            "--branch",
+            &target_branch,
+        ])
+        .expect("parse target head"))
+        .expect("target head");
+        assert_eq!(value(&head, "head_commit_id"), target_head);
     }
 
     fn value(output: &str, key: &str) -> String {

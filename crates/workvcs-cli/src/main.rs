@@ -6609,7 +6609,7 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
 
 fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
     format!(
-        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nupdated_branch_heads={}\nproblem={}\n",
+        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nimported_relation_versions={}\nupdated_branch_heads={}\nproblem={}\n",
         result.applied,
         render_optional_display_or_none(result.import_id.as_ref()),
         result.bundle_digest,
@@ -6636,6 +6636,7 @@ fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
         result.imported_entity_versions,
         result.imported_acceptance_criterion_identities,
         result.imported_verification_requirement_identities,
+        result.imported_relation_versions,
         result.updated_branch_heads,
         result.preflight.problem.as_deref().unwrap_or("none")
     )

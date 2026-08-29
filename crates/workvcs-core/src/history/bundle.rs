@@ -22,6 +22,7 @@ const BUNDLE_PAYLOAD_INDEX_PROFILE: &str = "workvcs-local-payload-index-v1";
 const BUNDLE_PAYLOAD_INDEX_VERSION: i64 = 1;
 const BUNDLE_PAYLOAD_MEDIA_TYPE: &str = "application/json";
 const BUNDLE_IMPORT_PROFILE: &str = "workvcs-local-payload-directory-v1";
+const RELATION_OBJECT_KIND: &str = "relation";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BundleExportOptions {
@@ -416,6 +417,7 @@ pub struct BundleImportApplyResult {
     pub imported_entity_versions: usize,
     pub imported_acceptance_criterion_identities: usize,
     pub imported_verification_requirement_identities: usize,
+    pub imported_relation_versions: usize,
     pub updated_branch_heads: usize,
 }
 
@@ -733,7 +735,9 @@ struct BundleSameStoreApplyDocument {
     entity_versions: Vec<BundleEntityVersionRef>,
     acceptance_criterion_identities: Vec<BundleAcceptanceCriterionIdentityRef>,
     verification_requirement_identities: Vec<BundleVerificationRequirementIdentityRef>,
+    relation_versions: Vec<BundleRelationVersionRef>,
     entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
+    relation_membership_changes: Vec<BundleRelationMembershipChangeRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1255,6 +1259,7 @@ pub(crate) fn apply_bundle_import(
             imported_entity_versions: 0,
             imported_acceptance_criterion_identities: 0,
             imported_verification_requirement_identities: 0,
+            imported_relation_versions: 0,
             updated_branch_heads: 0,
         });
     }
@@ -1295,7 +1300,9 @@ pub(crate) fn apply_bundle_import(
         apply_acceptance_criterion_identities(&transaction, &document)?;
     let imported_verification_requirement_identities =
         apply_verification_requirement_identities(&transaction, &document)?;
-    let imported_commits = apply_task_commit_closure(&transaction, &document, &payload_lookup)?;
+    let imported_relation_versions =
+        apply_relation_versions(&transaction, &document, &payload_lookup, now_us)?;
+    let imported_commits = apply_commit_closure(&transaction, &document, &payload_lookup)?;
     let updated_branch_heads =
         apply_same_store_branch_fast_forwards(&transaction, &document, now_us)?;
 
@@ -1306,6 +1313,7 @@ pub(crate) fn apply_bundle_import(
         imported_entity_versions,
         imported_acceptance_criterion_identities,
         imported_verification_requirement_identities,
+        imported_relation_versions,
         updated_branch_heads,
     )?;
     insert_import_attempt_outcome(
@@ -1336,6 +1344,7 @@ pub(crate) fn apply_bundle_import(
         imported_entity_versions,
         imported_acceptance_criterion_identities,
         imported_verification_requirement_identities,
+        imported_relation_versions,
         updated_branch_heads,
     })
 }
@@ -4005,6 +4014,7 @@ fn bundle_import_apply_detail_json(
     imported_entity_versions: usize,
     imported_acceptance_criterion_identities: usize,
     imported_verification_requirement_identities: usize,
+    imported_relation_versions: usize,
     updated_branch_heads: usize,
 ) -> Result<String> {
     let value = CanonicalValue::object(vec![
@@ -4055,6 +4065,10 @@ fn bundle_import_apply_detail_json(
                 "imported_verification_requirement_identities",
                 imported_verification_requirement_identities,
             )?,
+        )?,
+        integer_field(
+            "imported_relation_versions",
+            usize_to_i64("imported_relation_versions", imported_relation_versions)?,
         )?,
         integer_field(
             "updated_branch_heads",
@@ -4217,7 +4231,52 @@ fn apply_verification_requirement_identities(
     Ok(imported)
 }
 
-fn apply_task_commit_closure(
+fn apply_relation_versions(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+    now_us: i64,
+) -> Result<usize> {
+    for relation_version in &document.relation_versions {
+        ensure_relation_object_identity(
+            transaction,
+            relation_version.relation_id,
+            relation_created_at_us(document, relation_version.relation_id).unwrap_or(now_us),
+        )?;
+    }
+
+    let mut imported = 0;
+    for relation_version in &document.relation_versions {
+        let owner = CanonicalValue::object(vec![
+            string_field("relation_id", relation_version.relation_id.to_string()),
+            string_field(
+                "relation_version_id",
+                relation_version.relation_version_id.to_string(),
+            ),
+        ])?;
+        let metadata_json = payload_lookup.required_json(
+            "relation_version_metadata",
+            owner,
+            Some(relation_version.metadata_json_digest),
+            Some(relation_version.metadata_json_size_bytes),
+        )?;
+        let metadata_value =
+            validate_canonical_json_value("bundle relation_version.metadata_json", &metadata_json)?;
+        if relation_version_digest(&metadata_value)? != relation_version.state_digest {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "bundle RelationVersion {} state digest does not match payload",
+                relation_version.relation_version_id
+            )));
+        }
+        ensure_relation_row(transaction, document.workspace_id, relation_version)?;
+        if ensure_relation_version_row(transaction, relation_version, &metadata_json)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_commit_closure(
     transaction: &Transaction<'_>,
     document: &BundleSameStoreApplyDocument,
     payload_lookup: &BundlePayloadLookup,
@@ -4240,17 +4299,26 @@ fn apply_task_commit_closure(
                 commit.commit_id
             )));
         }
-        let membership_changes = document
+        let entity_membership_changes = document
             .entity_membership_changes
             .iter()
             .filter(|change| change.changeset_id == commit.changeset_id)
             .collect::<Vec<_>>();
-        let membership_count = i64::try_from(membership_changes.len()).map_err(|_| {
-            WorkVcsError::QueryInvalid("bundle membership change count does not fit i64".to_owned())
-        })?;
+        let relation_membership_changes = document
+            .relation_membership_changes
+            .iter()
+            .filter(|change| change.changeset_id == commit.changeset_id)
+            .collect::<Vec<_>>();
+        let membership_count =
+            i64::try_from(entity_membership_changes.len() + relation_membership_changes.len())
+                .map_err(|_| {
+                    WorkVcsError::QueryInvalid(
+                        "bundle membership change count does not fit i64".to_owned(),
+                    )
+                })?;
         if membership_count != commit.change_operation_count {
             return Err(WorkVcsError::QueryInvalid(format!(
-                "bundle commit {} operation count does not match task-only membership changes",
+                "bundle commit {} operation count does not match membership changes",
                 commit.commit_id
             )));
         }
@@ -4279,8 +4347,16 @@ fn apply_task_commit_closure(
             &rationale_json,
         )?;
 
-        for change in membership_changes {
+        for change in entity_membership_changes {
             insert_task_change_operation_and_membership(
+                transaction,
+                commit,
+                change,
+                payload_lookup,
+            )?;
+        }
+        for change in relation_membership_changes {
+            insert_relation_change_operation_and_membership(
                 transaction,
                 commit,
                 change,
@@ -4559,6 +4635,263 @@ fn ensure_typed_identity_row(
     Ok(true)
 }
 
+fn ensure_relation_object_identity(
+    transaction: &Transaction<'_>,
+    relation_id: RelationId,
+    created_at_us: i64,
+) -> Result<()> {
+    let relation_id_bytes = relation_id.raw_bytes();
+    let existing_object_kind = transaction
+        .query_row(
+            "SELECT object_kind
+             FROM object_identity
+             WHERE object_id = ?1",
+            params![&relation_id_bytes[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    match existing_object_kind {
+        Some(object_kind) if object_kind == RELATION_OBJECT_KIND => Ok(()),
+        Some(object_kind) => Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "object {} exists with kind {}, not relation",
+            relation_id, object_kind
+        ))),
+        None => {
+            transaction
+                .execute(
+                    "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+                     VALUES (?1, ?2, ?3)",
+                    params![&relation_id_bytes[..], RELATION_OBJECT_KIND, created_at_us],
+                )
+                .map_err(storage_error)?;
+            Ok(())
+        }
+    }
+}
+
+fn ensure_relation_row(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+    relation_version: &BundleRelationVersionRef,
+) -> Result<()> {
+    let relation_id_bytes = relation_version.relation_id.raw_bytes();
+    let workspace_id_bytes = workspace_id.raw_bytes();
+    let source_object_id_bytes = parse_object_id_bytes(
+        "bundle relation_version.source_object_id",
+        &relation_version.source_object_id,
+    )?;
+    let target_object_id_bytes = parse_object_id_bytes(
+        "bundle relation_version.target_object_id",
+        &relation_version.target_object_id,
+    )?;
+    require_object_identity(
+        transaction,
+        "bundle relation source_object_id",
+        &source_object_id_bytes,
+    )?;
+    require_object_identity(
+        transaction,
+        "bundle relation target_object_id",
+        &target_object_id_bytes,
+    )?;
+
+    let existing = transaction
+        .query_row(
+            "SELECT workspace_id,
+                    relation_type,
+                    source_object_id,
+                    target_object_id,
+                    relation_discriminator
+             FROM relation
+             WHERE object_id = ?1",
+            params![&relation_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((
+        existing_workspace_id,
+        existing_relation_type,
+        existing_source_object_id,
+        existing_target_object_id,
+        existing_relation_discriminator,
+    )) = existing
+    {
+        let existing_workspace_id =
+            decode_workspace_id("relation.workspace_id", existing_workspace_id)?;
+        let existing_source_object_id =
+            decode_16("relation.source_object_id", existing_source_object_id)?;
+        let existing_target_object_id =
+            decode_16("relation.target_object_id", existing_target_object_id)?;
+        if existing_workspace_id != workspace_id
+            || existing_relation_type != relation_version.relation_type
+            || existing_source_object_id != source_object_id_bytes
+            || existing_target_object_id != target_object_id_bytes
+            || existing_relation_discriminator != relation_version.relation_discriminator
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "relation {} exists with different content",
+                relation_version.relation_id
+            )));
+        }
+        return Ok(());
+    }
+
+    let existing_for_identity = transaction
+        .query_row(
+            "SELECT object_id
+             FROM relation
+             WHERE workspace_id = ?1
+               AND relation_type = ?2
+               AND source_object_id = ?3
+               AND target_object_id = ?4
+               AND relation_discriminator = ?5",
+            params![
+                &workspace_id_bytes[..],
+                relation_version.relation_type,
+                &source_object_id_bytes[..],
+                &target_object_id_bytes[..],
+                relation_version.relation_discriminator,
+            ],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(existing_relation_id) = existing_for_identity {
+        let existing_relation_id = decode_relation_id("relation.object_id", existing_relation_id)?;
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "relation identity already belongs to relation {existing_relation_id}, not {}",
+            relation_version.relation_id
+        )));
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO relation(
+                object_id,
+                workspace_id,
+                relation_type,
+                source_object_id,
+                target_object_id,
+                relation_discriminator
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &relation_id_bytes[..],
+                &workspace_id_bytes[..],
+                relation_version.relation_type,
+                &source_object_id_bytes[..],
+                &target_object_id_bytes[..],
+                relation_version.relation_discriminator,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn require_object_identity(
+    transaction: &Transaction<'_>,
+    label: &str,
+    object_id_bytes: &[u8; 16],
+) -> Result<()> {
+    let present = transaction
+        .query_row(
+            "SELECT 1
+             FROM object_identity
+             WHERE object_id = ?1",
+            params![&object_id_bytes[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if present.is_some() {
+        Ok(())
+    } else {
+        Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "{label} is missing from object_identity"
+        )))
+    }
+}
+
+fn ensure_relation_version_row(
+    transaction: &Transaction<'_>,
+    relation_version: &BundleRelationVersionRef,
+    metadata_json: &str,
+) -> Result<bool> {
+    let relation_id_bytes = relation_version.relation_id.raw_bytes();
+    let relation_version_id_bytes = relation_version.relation_version_id.raw_bytes();
+    let existing = transaction
+        .query_row(
+            "SELECT relation_id, state_schema_version, metadata_json, state_digest
+             FROM relation_version
+             WHERE relation_version_id = ?1",
+            params![&relation_version_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((
+        existing_relation_id,
+        state_schema_version,
+        existing_metadata_json,
+        state_digest,
+    )) = existing
+    {
+        let existing_relation_id =
+            decode_relation_id("relation_version.relation_id", existing_relation_id)?;
+        let state_digest = decode_digest("relation_version.state_digest", state_digest)?;
+        if existing_relation_id != relation_version.relation_id
+            || state_schema_version != relation_version.state_schema_version
+            || existing_metadata_json != metadata_json
+            || state_digest != relation_version.state_digest
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "RelationVersion {} exists with different content",
+                relation_version.relation_version_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    let state_digest_bytes = *relation_version.state_digest.as_bytes();
+    transaction
+        .execute(
+            "INSERT INTO relation_version(
+                relation_version_id,
+                relation_id,
+                state_schema_version,
+                metadata_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &relation_version_id_bytes[..],
+                &relation_id_bytes[..],
+                relation_version.state_schema_version,
+                metadata_json,
+                &state_digest_bytes[..],
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
 fn ensure_entity_version_row(
     transaction: &Transaction<'_>,
     entity_version: &BundleEntityVersionRef,
@@ -4783,6 +5116,96 @@ fn insert_task_change_operation_and_membership(
     Ok(())
 }
 
+fn insert_relation_change_operation_and_membership(
+    transaction: &Transaction<'_>,
+    commit: &BundleCommitRef,
+    change: &BundleRelationMembershipChangeRef,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<()> {
+    let operation_owner = CanonicalValue::object(vec![
+        string_field("changeset_id", commit.changeset_id.to_string()),
+        string_field("operation_id", change.operation_id.to_string()),
+        integer_field("ordinal", change.ordinal)?,
+        string_field("subject_family", "relation"),
+        string_field("subject_object_id", change.relation_id.to_string()),
+    ])?;
+    let operation_payload_json =
+        payload_lookup.required_json("change_operation_payload", operation_owner, None, None)?;
+    validate_canonical_json_text(
+        "bundle change_operation.operation_payload_json",
+        &operation_payload_json,
+    )?;
+
+    let operation_id_bytes = change.operation_id.raw_bytes();
+    let changeset_id_bytes = commit.changeset_id.raw_bytes();
+    let relation_id_bytes = change.relation_id.raw_bytes();
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, ?3, 'relation', ?4, ?5)",
+            params![
+                &operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                change.ordinal,
+                &relation_id_bytes[..],
+                operation_payload_json,
+            ],
+        )
+        .map_err(storage_error)?;
+
+    let field_delta_owner = CanonicalValue::object(vec![
+        string_field("changeset_id", commit.changeset_id.to_string()),
+        string_field("operation_id", change.operation_id.to_string()),
+        integer_field("ordinal", change.ordinal)?,
+        string_field("relation_id", change.relation_id.to_string()),
+    ])?;
+    let field_delta_json = payload_lookup.required_json(
+        "relation_membership_field_delta",
+        field_delta_owner,
+        Some(change.field_delta_digest),
+        Some(change.field_delta_size_bytes),
+    )?;
+    validate_canonical_json_text(
+        "bundle relation_membership_change.field_delta_json",
+        &field_delta_json,
+    )?;
+
+    let before_relation_version_id_bytes =
+        change.before_relation_version_id.map(|id| id.raw_bytes());
+    let after_relation_version_id_bytes = change.after_relation_version_id.map(|id| id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO relation_membership_change(
+                operation_id,
+                relation_id,
+                before_relation_version_id,
+                after_relation_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &operation_id_bytes[..],
+                &relation_id_bytes[..],
+                before_relation_version_id_bytes
+                    .as_ref()
+                    .map(|bytes| &bytes[..]),
+                after_relation_version_id_bytes
+                    .as_ref()
+                    .map(|bytes| &bytes[..]),
+                field_delta_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
 fn insert_workstate_commit_row(
     transaction: &Transaction<'_>,
     commit: &BundleCommitRef,
@@ -4885,6 +5308,26 @@ fn entity_created_at_us(
         .iter()
         .filter_map(|change| {
             (change.entity_id == entity_id && change.before_entity_version_id.is_none())
+                .then(|| {
+                    document.commits.iter().find_map(|commit| {
+                        (commit.changeset_id == change.changeset_id)
+                            .then_some(commit.changeset_created_at_us)
+                    })
+                })
+                .flatten()
+        })
+        .min()
+}
+
+fn relation_created_at_us(
+    document: &BundleSameStoreApplyDocument,
+    relation_id: RelationId,
+) -> Option<i64> {
+    document
+        .relation_membership_changes
+        .iter()
+        .filter_map(|change| {
+            (change.relation_id == relation_id && change.before_relation_version_id.is_none())
                 .then(|| {
                     document.commits.iter().find_map(|commit| {
                         (commit.changeset_id == change.changeset_id)
@@ -5027,13 +5470,11 @@ fn bundle_manifest_supports_same_store_apply(
     value: &CanonicalValue,
 ) -> std::result::Result<bool, String> {
     let unsupported_array_fields = [
-        "relation_versions",
         "knowledge_spaces",
         "knowledge_exposures",
         "knowledge_exposure_local_sources",
         "knowledge_exposure_transitions",
         "knowledge_exposure_source_statuses",
-        "relation_membership_changes",
         "checkpoint_candidates",
     ];
     for field in unsupported_array_fields {
@@ -5457,11 +5898,22 @@ fn parse_bundle_same_store_apply_document(
     .iter()
     .map(parse_bundle_verification_requirement_identity_ref)
     .collect::<Result<Vec<_>>>()?;
+    let relation_versions = array_field_ref(value, "bundle manifest", "relation_versions")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_relation_version_ref)
+        .collect::<Result<Vec<_>>>()?;
     let entity_membership_changes =
         array_field_ref(value, "bundle manifest", "entity_membership_changes")
             .map_err(WorkVcsError::QueryInvalid)?
             .iter()
             .map(parse_bundle_entity_membership_change_ref)
+            .collect::<Result<Vec<_>>>()?;
+    let relation_membership_changes =
+        array_field_ref(value, "bundle manifest", "relation_membership_changes")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_relation_membership_change_ref)
             .collect::<Result<Vec<_>>>()?;
 
     let document = BundleSameStoreApplyDocument {
@@ -5474,9 +5926,12 @@ fn parse_bundle_same_store_apply_document(
         entity_versions,
         acceptance_criterion_identities,
         verification_requirement_identities,
+        relation_versions,
         entity_membership_changes,
+        relation_membership_changes,
     };
     validate_same_store_apply_identity_coverage(&document)?;
+    validate_same_store_apply_relation_coverage(&document)?;
     Ok(document)
 }
 
@@ -5784,6 +6239,218 @@ fn unique_verification_requirement_identity_ids(
     Ok(ids)
 }
 
+fn validate_same_store_apply_relation_coverage(
+    document: &BundleSameStoreApplyDocument,
+) -> Result<()> {
+    let mut relation_versions = BTreeSet::new();
+    let mut relation_shapes = BTreeMap::new();
+    for relation_version in &document.relation_versions {
+        if !relation_versions.insert((
+            relation_version.relation_id,
+            relation_version.relation_version_id,
+        )) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle relation version {} for relation {} appears more than once",
+                relation_version.relation_version_id, relation_version.relation_id
+            )));
+        }
+        let shape = (
+            relation_version.relation_type.clone(),
+            relation_version.source_object_id.clone(),
+            relation_version.target_object_id.clone(),
+            relation_version.relation_discriminator.clone(),
+        );
+        if let Some(existing_shape) =
+            relation_shapes.insert(relation_version.relation_id, shape.clone())
+            && existing_shape != shape
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle relation {} has inconsistent relation identity fields",
+                relation_version.relation_id
+            )));
+        }
+    }
+    for change in &document.relation_membership_changes {
+        if let Some(relation_version_id) = change.before_relation_version_id
+            && !relation_versions.contains(&(change.relation_id, relation_version_id))
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle relation membership change {} before version {} is missing from relation_versions",
+                change.operation_id, relation_version_id
+            )));
+        }
+        if let Some(relation_version_id) = change.after_relation_version_id
+            && !relation_versions.contains(&(change.relation_id, relation_version_id))
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle relation membership change {} after version {} is missing from relation_versions",
+                change.operation_id, relation_version_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parse_bundle_relation_version_ref(value: &CanonicalValue) -> Result<BundleRelationVersionRef> {
+    let relation_type =
+        string_field_value(value, "bundle manifest relation version", "relation_type")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .to_owned();
+    validate_portable_text("bundle manifest relation_type", &relation_type)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let source_object_id = string_field_value(
+        value,
+        "bundle manifest relation version",
+        "source_object_id",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    parse_object_id_bytes(
+        "bundle manifest relation version source_object_id",
+        &source_object_id,
+    )?;
+    let target_object_id = string_field_value(
+        value,
+        "bundle manifest relation version",
+        "target_object_id",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    parse_object_id_bytes(
+        "bundle manifest relation version target_object_id",
+        &target_object_id,
+    )?;
+    let relation_discriminator = string_field_value(
+        value,
+        "bundle manifest relation version",
+        "relation_discriminator",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_stored_text_allow_empty(
+        "bundle manifest relation_discriminator",
+        &relation_discriminator,
+    )?;
+    let state_schema_version = integer_field_value(
+        value,
+        "bundle manifest relation version",
+        "state_schema_version",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_positive_i64(
+        "bundle manifest relation version state_schema_version",
+        state_schema_version,
+    )?;
+    let metadata_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest relation version",
+        "metadata_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest relation version metadata_json_size_bytes",
+        metadata_json_size_bytes,
+    )?;
+    Ok(BundleRelationVersionRef {
+        relation_id: parse_relation_id_field(
+            value,
+            "bundle manifest relation version",
+            "relation_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        relation_version_id: parse_relation_version_id_field(
+            value,
+            "bundle manifest relation version",
+            "relation_version_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        relation_type,
+        source_object_id,
+        target_object_id,
+        relation_discriminator,
+        state_schema_version,
+        state_digest: parse_digest_field(value, "bundle manifest relation version", "state_digest")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        metadata_json_digest: parse_digest_field(
+            value,
+            "bundle manifest relation version",
+            "metadata_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        metadata_json_size_bytes,
+    })
+}
+
+fn parse_bundle_relation_membership_change_ref(
+    value: &CanonicalValue,
+) -> Result<BundleRelationMembershipChangeRef> {
+    let ordinal = integer_field_value(
+        value,
+        "bundle manifest relation membership change",
+        "ordinal",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest relation membership change ordinal",
+        ordinal,
+    )?;
+    let field_delta_size_bytes = integer_field_value(
+        value,
+        "bundle manifest relation membership change",
+        "field_delta_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest relation membership change field_delta_size_bytes",
+        field_delta_size_bytes,
+    )?;
+    let before_relation_version_id = parse_optional_relation_version_field(
+        value,
+        "bundle manifest relation membership change",
+        "before_relation_version_id",
+    )?;
+    let after_relation_version_id = parse_optional_relation_version_field(
+        value,
+        "bundle manifest relation membership change",
+        "after_relation_version_id",
+    )?;
+    validate_membership_transition(
+        "bundle manifest relation membership change",
+        before_relation_version_id,
+        after_relation_version_id,
+    )?;
+    Ok(BundleRelationMembershipChangeRef {
+        changeset_id: parse_changeset_id_field(
+            value,
+            "bundle manifest relation membership change",
+            "changeset_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        operation_id: parse_operation_id_field(
+            value,
+            "bundle manifest relation membership change",
+            "operation_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        ordinal,
+        relation_id: parse_relation_id_field(
+            value,
+            "bundle manifest relation membership change",
+            "relation_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        before_relation_version_id,
+        after_relation_version_id,
+        field_delta_digest: parse_digest_field(
+            value,
+            "bundle manifest relation membership change",
+            "field_delta_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        field_delta_size_bytes,
+    })
+}
+
 fn parse_bundle_entity_membership_change_ref(
     value: &CanonicalValue,
 ) -> Result<BundleEntityMembershipChangeRef> {
@@ -6013,6 +6680,24 @@ fn parse_entity_version_id_field(
         .map_err(|error| error.to_string())
 }
 
+fn parse_relation_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<RelationId, String> {
+    RelationId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_relation_version_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<RelationVersionId, String> {
+    RelationVersionId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_optional_entity_version_field(
     value: &CanonicalValue,
     label: &str,
@@ -6029,12 +6714,39 @@ fn parse_optional_entity_version_field(
     }
 }
 
+fn parse_optional_relation_version_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<RelationVersionId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => RelationVersionId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
 fn parse_digest_field(
     value: &CanonicalValue,
     label: &str,
     field: &str,
 ) -> std::result::Result<Digest, String> {
     Digest::from_hex(string_field_value(value, label, field)?).map_err(|error| error.to_string())
+}
+
+fn parse_object_id_bytes(label: &str, value: &str) -> Result<[u8; 16]> {
+    let uuid = Uuid::parse_str(value)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{label}: {error}")))?;
+    if uuid.get_version_num() != 7 || uuid.hyphenated().to_string() != value {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be a canonical lowercase hyphenated UUIDv7"
+        )));
+    }
+    Ok(*uuid.as_bytes())
 }
 
 fn validate_portable_text(label: &str, value: &str) -> std::result::Result<(), String> {

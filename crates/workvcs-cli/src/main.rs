@@ -3,13 +3,17 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
-    AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus, BranchId, CanonicalValue,
-    CommitId, Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, ReplayedState,
+    AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
+    ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchId,
+    CanonicalValue, CommitId, Digest, Engine, EntityId, EntityVersionId, HistoryEntry,
+    HistoryQueryOptions, ReplayedState, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
     Result, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResult, VerificationTarget, WorkState,
-    WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
+    WorkspaceInfo, WorkspaceInitOptions, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -74,6 +78,10 @@ enum Command {
     Vr {
         #[command(subcommand)]
         command: VerificationRequirementCommand,
+    },
+    Resource {
+        #[command(subcommand)]
+        command: ResourceCommand,
     },
     Verification {
         #[command(subcommand)]
@@ -203,6 +211,45 @@ enum VerificationRequirementCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum ResourceCommand {
+    Create {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        kind: String,
+    },
+    #[command(group(
+        ArgGroup::new("resource-observation-fingerprint")
+            .required(true)
+            .multiple(false)
+            .args(["fingerprint", "content"])
+    ))]
+    Observe {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        resource: String,
+
+        #[arg(long)]
+        adapter_kind: String,
+
+        #[arg(long)]
+        adapter_schema_version: i64,
+
+        #[arg(long)]
+        fingerprint: Option<String>,
+
+        #[arg(long)]
+        content: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        summary_json: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum VerificationCommand {
     #[command(group(
         ArgGroup::new("verification-target")
@@ -231,6 +278,67 @@ enum VerificationCommand {
 
         #[arg(long)]
         verification_requirement: Option<String>,
+
+        #[arg(long)]
+        resource: Option<String>,
+
+        #[arg(long)]
+        adapter_kind: Option<String>,
+
+        #[arg(long)]
+        adapter_schema_version: Option<i64>,
+
+        #[arg(long)]
+        scope_kind: Option<String>,
+
+        #[arg(long)]
+        scope_schema_version: Option<i64>,
+
+        #[arg(long)]
+        scope_payload_json: Option<String>,
+
+        #[arg(long)]
+        baseline_fingerprint: Option<String>,
+
+        #[arg(long)]
+        baseline_observation: Option<String>,
+    },
+    CacheRecord {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        verification: String,
+
+        #[arg(long, default_value_t = 0)]
+        resource_basis_ordinal: i64,
+
+        #[arg(long)]
+        adapter_kind: String,
+
+        #[arg(long)]
+        adapter_schema_version: i64,
+
+        #[arg(long)]
+        scope_schema_version: i64,
+
+        #[arg(long)]
+        observation_status: String,
+
+        #[arg(long)]
+        observed_fingerprint: Option<String>,
+
+        #[arg(long)]
+        observation: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        detail_json: String,
     },
 }
 
@@ -439,6 +547,37 @@ fn run(cli: Cli) -> Result<String> {
             )?;
             Ok(render_verification_requirement_create(&requirement))
         }
+        Command::Resource {
+            command: ResourceCommand::Create { store, kind },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let resource = engine.create_resource(ResourceCreateOptions::new(kind)?)?;
+            Ok(render_resource_create(&resource))
+        }
+        Command::Resource {
+            command:
+                ResourceCommand::Observe {
+                    store,
+                    resource,
+                    adapter_kind,
+                    adapter_schema_version,
+                    fingerprint,
+                    content,
+                    summary_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let fingerprint = fingerprint_from_cli(fingerprint, content)?;
+            let observation =
+                engine.record_resource_observation(ResourceObservationCreateOptions::new(
+                    ResourceId::parse_canonical(&resource)?,
+                    adapter_kind,
+                    adapter_schema_version,
+                    fingerprint,
+                    parse_cli_object("resource observation summary", &summary_json)?,
+                )?)?;
+            Ok(render_resource_observation_create(&observation))
+        }
         Command::Verification {
             command:
                 VerificationCommand::Record {
@@ -449,6 +588,14 @@ fn run(cli: Cli) -> Result<String> {
                     method,
                     acceptance_criterion,
                     verification_requirement,
+                    resource,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_kind,
+                    scope_schema_version,
+                    scope_payload_json,
+                    baseline_fingerprint,
+                    baseline_observation,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -476,8 +623,71 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(method) = method {
                 options = options.with_method(method_value(&method))?;
             }
+            if resource.is_some()
+                || adapter_kind.is_some()
+                || adapter_schema_version.is_some()
+                || scope_kind.is_some()
+                || scope_schema_version.is_some()
+                || scope_payload_json.is_some()
+                || baseline_fingerprint.is_some()
+                || baseline_observation.is_some()
+            {
+                options = options.with_resource_basis(vec![resource_basis_from_cli(
+                    ResourceBasisArgs {
+                        resource,
+                        adapter_kind,
+                        adapter_schema_version,
+                        scope_kind,
+                        scope_schema_version,
+                        scope_payload_json,
+                        baseline_fingerprint,
+                        baseline_observation,
+                    },
+                )?])?;
+            }
             let verification = engine.create_verification(options)?;
             Ok(render_verification_create(&verification))
+        }
+        Command::Verification {
+            command:
+                VerificationCommand::CacheRecord {
+                    store,
+                    branch,
+                    head,
+                    verification,
+                    resource_basis_ordinal,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_schema_version,
+                    observation_status,
+                    observed_fingerprint,
+                    observation,
+                    detail_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let stamp = applicability_stamp_from_cli(
+                resource_basis_ordinal,
+                adapter_kind,
+                adapter_schema_version,
+                scope_schema_version,
+                &observation_status,
+                observed_fingerprint,
+                observation,
+            )?;
+            let snapshot = engine.record_verification_applicability(
+                VerificationApplicabilityRecordOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    EntityId::parse_canonical(&verification)?,
+                    CommitId::parse_canonical(&head)?,
+                )?
+                .with_resource_stamps(vec![stamp])?
+                .with_detail(parse_cli_object(
+                    "verification applicability detail",
+                    &detail_json,
+                )?)?,
+            )?;
+            Ok(render_verification_applicability_cache(&snapshot))
         }
     }
 }
@@ -517,6 +727,132 @@ fn parse_verification_result(value: &str) -> Result<VerificationResult> {
             "verification result {other:?} is not in the CLI vocabulary"
         ))),
     }
+}
+
+fn parse_observation_status(value: &str) -> Result<ApplicabilityResourceObservationStatus> {
+    match value {
+        "observed" => Ok(ApplicabilityResourceObservationStatus::Observed),
+        "unavailable" => Ok(ApplicabilityResourceObservationStatus::Unavailable),
+        "error" => Ok(ApplicabilityResourceObservationStatus::Error),
+        other => Err(WorkVcsError::TaskInvalid(format!(
+            "resource observation status {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_cli_object(label: &str, json: &str) -> Result<CanonicalValue> {
+    let value = parse_canonical_json(json.as_bytes())?;
+    if matches!(value, CanonicalValue::Object(_)) {
+        Ok(value)
+    } else {
+        Err(WorkVcsError::TaskInvalid(format!(
+            "{label} must be an object"
+        )))
+    }
+}
+
+fn fingerprint_from_cli(fingerprint: Option<String>, content: Option<String>) -> Result<Digest> {
+    match (fingerprint, content) {
+        (Some(fingerprint), None) => Digest::from_hex(&fingerprint),
+        (None, Some(content)) => Ok(content_object_digest(content.as_bytes())),
+        _ => Err(WorkVcsError::TaskInvalid(
+            "expected exactly one fingerprint source".to_owned(),
+        )),
+    }
+}
+
+fn required_arg<T>(label: &str, value: Option<T>) -> Result<T> {
+    value.ok_or_else(|| WorkVcsError::TaskInvalid(format!("{label} is required")))
+}
+
+struct ResourceBasisArgs {
+    resource: Option<String>,
+    adapter_kind: Option<String>,
+    adapter_schema_version: Option<i64>,
+    scope_kind: Option<String>,
+    scope_schema_version: Option<i64>,
+    scope_payload_json: Option<String>,
+    baseline_fingerprint: Option<String>,
+    baseline_observation: Option<String>,
+}
+
+fn resource_basis_from_cli(args: ResourceBasisArgs) -> Result<VerificationResourceBasis> {
+    let mut basis = VerificationResourceBasis::new(
+        ResourceId::parse_canonical(&required_arg("--resource", args.resource)?)?,
+        required_arg("--adapter-kind", args.adapter_kind)?,
+        required_arg("--adapter-schema-version", args.adapter_schema_version)?,
+        required_arg("--scope-kind", args.scope_kind)?,
+        required_arg("--scope-schema-version", args.scope_schema_version)?,
+        parse_cli_object(
+            "resource basis scope payload",
+            &required_arg("--scope-payload-json", args.scope_payload_json)?,
+        )?,
+        Digest::from_hex(&required_arg(
+            "--baseline-fingerprint",
+            args.baseline_fingerprint,
+        )?)?,
+    )?;
+    if let Some(baseline_observation) = args.baseline_observation {
+        basis = basis.with_baseline_observation_id(ResourceObservationId::parse_canonical(
+            &baseline_observation,
+        )?)?;
+    }
+    Ok(basis)
+}
+
+fn applicability_stamp_from_cli(
+    resource_basis_ordinal: i64,
+    adapter_kind: String,
+    adapter_schema_version: i64,
+    scope_schema_version: i64,
+    observation_status: &str,
+    observed_fingerprint: Option<String>,
+    observation: Option<String>,
+) -> Result<ApplicabilityResourceStampInput> {
+    let mut stamp = match parse_observation_status(observation_status)? {
+        ApplicabilityResourceObservationStatus::Observed => {
+            ApplicabilityResourceStampInput::observed(
+                resource_basis_ordinal,
+                adapter_kind,
+                adapter_schema_version,
+                scope_schema_version,
+                Digest::from_hex(&required_arg(
+                    "--observed-fingerprint",
+                    observed_fingerprint,
+                )?)?,
+            )?
+        }
+        ApplicabilityResourceObservationStatus::Unavailable => {
+            if observed_fingerprint.is_some() || observation.is_some() {
+                return Err(WorkVcsError::TaskInvalid(
+                    "unavailable resource stamp must not include observed data".to_owned(),
+                ));
+            }
+            ApplicabilityResourceStampInput::unavailable(
+                resource_basis_ordinal,
+                adapter_kind,
+                adapter_schema_version,
+                scope_schema_version,
+            )?
+        }
+        ApplicabilityResourceObservationStatus::Error => {
+            if observed_fingerprint.is_some() || observation.is_some() {
+                return Err(WorkVcsError::TaskInvalid(
+                    "error resource stamp must not include observed data".to_owned(),
+                ));
+            }
+            ApplicabilityResourceStampInput::error(
+                resource_basis_ordinal,
+                adapter_kind,
+                adapter_schema_version,
+                scope_schema_version,
+            )?
+        }
+    };
+    if let Some(observation) = observation {
+        stamp = stamp.with_observation_id(ResourceObservationId::parse_canonical(&observation)?)?;
+    }
+    Ok(stamp)
 }
 
 fn method_value(name: &str) -> CanonicalValue {
@@ -636,6 +972,40 @@ fn render_verification_create(verification: &VerificationCreateCommit) -> String
     )
 }
 
+fn render_resource_create(resource: &ResourceCreateResult) -> String {
+    format!(
+        "resource_id={}\nresource_kind={}\ncreated_at_us={}\n",
+        resource.resource_id, resource.resource_kind, resource.created_at_us
+    )
+}
+
+fn render_resource_observation_create(observation: &ResourceObservationCreateResult) -> String {
+    format!(
+        "observation_id={}\nresource_id={}\nadapter_kind={}\nadapter_schema_version={}\nfingerprint={}\ncaptured_at_us={}\n",
+        observation.observation_id,
+        observation.resource_id,
+        observation.state.adapter_kind,
+        observation.state.adapter_schema_version,
+        observation.state.fingerprint,
+        observation.captured_at_us
+    )
+}
+
+fn render_verification_applicability_cache(
+    snapshot: &VerificationApplicabilityCacheSnapshot,
+) -> String {
+    format!(
+        "branch_id={}\nverification_entity_id={}\nevaluated_commit_id={}\napplicability={}\nreason_code={}\nevaluated_at_us={}\nresource_stamps={}\n",
+        snapshot.branch_id,
+        snapshot.verification_entity_id,
+        snapshot.evaluated_commit_id,
+        snapshot.applicability,
+        snapshot.reason_code,
+        snapshot.evaluated_at_us,
+        snapshot.resource_stamps.len()
+    )
+}
+
 fn render_history_entry(output: &mut String, entry: &HistoryEntry) {
     let parent = entry
         .parent_commit_id
@@ -700,6 +1070,7 @@ mod tests {
                 "task",
                 "ac",
                 "vr",
+                "resource",
                 "verification"
             ]
         );
@@ -852,6 +1223,214 @@ mod tests {
         .expect("parse verification"))
         .expect("record verification");
         head = value(&verification, "commit_id");
+
+        let verified = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "status",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse verified"))
+        .expect("verified status");
+        assert_eq!(verified, "status=verified\n");
+
+        let transition = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "transition",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &current_task_version,
+            "--status",
+            "done",
+            "--outcome",
+            "completed",
+        ])
+        .expect("parse transition"))
+        .expect("transition task");
+        assert!(transition.contains("status=done"));
+    }
+
+    #[test]
+    fn cli_runs_resource_backed_verification_and_cache_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Ship resource-backed CLI workflow",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "The resource-backed CLI verification is applicable.",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+        let current_task_version = value(&criterion, "task_entity_version_id");
+        head = value(&criterion, "commit_id");
+
+        let resource =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "create", store, "--kind", "git"])
+                    .expect("parse resource"),
+            )
+            .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+        let observation = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--content",
+            "baseline bytes",
+        ])
+        .expect("parse observe"))
+        .expect("record observation");
+        let observation_id = value(&observation, "observation_id");
+        let fingerprint = value(&observation, "fingerprint");
+
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--acceptance-criterion",
+            &criterion_id,
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--scope-kind",
+            "path",
+            "--scope-schema-version",
+            "1",
+            "--scope-payload-json",
+            "{\"path\":\"src/lib.rs\"}",
+            "--baseline-fingerprint",
+            &fingerprint,
+            "--baseline-observation",
+            &observation_id,
+        ])
+        .expect("parse verification"))
+        .expect("record verification");
+        let verification_id = value(&verification, "verification_entity_id");
+        head = value(&verification, "commit_id");
+
+        let stale = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "status",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse stale status"))
+        .expect("stale status");
+        assert_eq!(stale, "status=stale\n");
+
+        let cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification",
+            &verification_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--scope-schema-version",
+            "1",
+            "--observation-status",
+            "observed",
+            "--observed-fingerprint",
+            &fingerprint,
+            "--observation",
+            &observation_id,
+        ])
+        .expect("parse cache"))
+        .expect("record cache");
+        assert!(cache.contains("applicability=applicable"));
+        assert!(cache.contains("reason_code=all_basis_applicable"));
 
         let verified = run(Cli::try_parse_from([
             "workvcs",

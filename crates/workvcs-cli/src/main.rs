@@ -2831,7 +2831,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nrecords={}\n",
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nrecords={}\nrecord_relations={}\n",
         session.session_id,
         session_lifecycle_state(session.lifecycle_state),
         context.branch.workspace_id,
@@ -2850,7 +2850,8 @@ fn render_context_overview(context: &ContextOverview) -> String {
         session.context_workspaces.len(),
         context.runnable_tasks.candidates.len(),
         runnable_ready,
-        context.records.records.len()
+        context.records.records.len(),
+        context.record_relations.relations.len()
     );
     for (index, workspace_id) in session.context_workspaces.iter().enumerate() {
         let _ = writeln!(
@@ -2894,6 +2895,43 @@ fn render_context_overview(context: &ContextOverview) -> String {
             "context_record.{index}.record_statement_json={statement_json}"
         );
     }
+    for (index, relation) in context.record_relations.relations.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "context_record_relation.{index}.relation_id={}",
+            relation.relation_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record_relation.{index}.relation_version_id={}",
+            relation.relation_version_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record_relation.{index}.relation_type={}",
+            relation.relation_type
+        );
+        let _ = writeln!(
+            output,
+            "context_record_relation.{index}.relation_label={}",
+            relation.relation_label.as_deref().unwrap_or("")
+        );
+        let _ = writeln!(
+            output,
+            "context_record_relation.{index}.source_record_entity_id={}",
+            relation.source_record_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record_relation.{index}.target_record_entity_id={}",
+            relation.target_record_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record_relation.{index}.relation_state_digest={}",
+            relation.state_digest
+        );
+    }
     output
 }
 
@@ -2914,7 +2952,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_records={}\n",
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_records={}\ncontext_record_relations={}\n",
         result.claim_next.session_id,
         result.claim_next.workspace_id,
         result.claim_next.branch_id,
@@ -2925,7 +2963,8 @@ fn render_next_work(result: &NextWorkResult) -> String {
         result.context.session.context_workspaces.len(),
         result.context.runnable_tasks.candidates.len(),
         runnable_ready,
-        result.context.records.records.len()
+        result.context.records.records.len(),
+        result.context.record_relations.relations.len()
     );
     if let Some(claim) = &result.claim_next.selected {
         let _ = writeln!(output, "claim_id={}", claim.claim_id);
@@ -4095,6 +4134,7 @@ mod tests {
         assert!(context.contains("context_workspaces=1"));
         assert!(context.contains("runnable_candidates=1"));
         assert!(context.contains("records=0"));
+        assert!(context.contains("record_relations=0"));
         assert!(context.contains(&format!("candidate.0.task_entity_id={task_id}")));
 
         let runnable = run(Cli::try_parse_from([
@@ -4230,6 +4270,7 @@ mod tests {
             )
             .expect("context overview");
         assert!(context.contains("records=1"));
+        assert!(context.contains("record_relations=0"));
         assert_eq!(
             value(&context, "context_record.0.record_entity_id"),
             value(&finding, "record_entity_id")
@@ -4240,6 +4281,121 @@ mod tests {
             context.contains(
                 "context_record.0.record_statement_json=\"The context resolver should expose current findings\""
             )
+        );
+    }
+
+    #[test]
+    fn cli_context_includes_current_record_relation_summary() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let decision = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Use serialized writes",
+        ])
+        .expect("parse decision"))
+        .expect("create decision");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&decision, "commit_id"),
+            "--statement",
+            "Benchmarks support serialized writes",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-record",
+            &value(&decision, "record_entity_id"),
+            "--rationale",
+            "Finding supports the decision",
+        ])
+        .expect("parse link supports"))
+        .expect("link supports");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context =
+            run(
+                Cli::try_parse_from(["workvcs", "context", store, "--session", &session_id])
+                    .expect("parse context"),
+            )
+            .expect("context overview");
+        assert!(context.contains("records=2"));
+        assert!(context.contains("record_relations=1"));
+        assert_eq!(
+            value(&context, "context_record_relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert!(context.contains("context_record_relation.0.relation_type=supports"));
+        assert_eq!(
+            value(
+                &context,
+                "context_record_relation.0.source_record_entity_id"
+            ),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(
+                &context,
+                "context_record_relation.0.target_record_entity_id"
+            ),
+            value(&decision, "record_entity_id")
         );
     }
 

@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     ContextOverviewOptions, Engine, ErrorCategory, ErrorCode, RecordCreateOptions,
-    SessionEndOptions, SessionFocusOptions, SessionStartOptions, StoreInitOptions,
-    TaskCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
+    RecordRelationCreateOptions, RecordRelationType, SessionEndOptions, SessionFocusOptions,
+    SessionStartOptions, StoreInitOptions, TaskCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -84,6 +84,7 @@ fn context_overview_returns_active_anchor_focus_and_runnable_summary() {
     );
     assert!(context.runnable_tasks.candidates[0].runnable);
     assert!(context.records.records.is_empty());
+    assert!(context.record_relations.relations.is_empty());
 }
 
 #[test]
@@ -120,6 +121,7 @@ fn context_overview_is_read_only() {
     assert_eq!(after, before);
     assert_eq!(context.branch.head_commit_id, task.commit_id);
     assert!(context.records.records.is_empty());
+    assert!(context.record_relations.relations.is_empty());
 }
 
 #[test]
@@ -162,6 +164,79 @@ fn context_overview_includes_current_record_summaries() {
     assert_eq!(
         context.records.records[0].state.statement,
         finding.state.statement
+    );
+    assert!(context.record_relations.relations.is_empty());
+}
+
+#[test]
+fn context_overview_includes_current_record_relation_summaries() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let decision = engine
+        .create_record(
+            RecordCreateOptions::decision(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Use serialized writes",
+            )
+            .expect("decision options"),
+        )
+        .expect("create decision");
+    let finding = engine
+        .create_record(
+            RecordCreateOptions::finding(
+                workspace.initial_branch_id,
+                decision.commit_id,
+                "Benchmarks support serialized writes",
+            )
+            .expect("finding options"),
+        )
+        .expect("create finding");
+    let relation = engine
+        .create_record_relation(
+            RecordRelationCreateOptions::supports(
+                workspace.initial_branch_id,
+                finding.commit_id,
+                finding.record_entity_id,
+                decision.record_entity_id,
+                "Finding supports decision",
+            )
+            .expect("relation options"),
+        )
+        .expect("create supports relation");
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let context = engine
+        .context_overview(ContextOverviewOptions::new(session.session_id))
+        .expect("context overview");
+
+    assert_eq!(context.records.records.len(), 2);
+    assert_eq!(
+        context.record_relations.workspace_id,
+        workspace.workspace_id
+    );
+    assert_eq!(context.record_relations.commit_id, relation.commit_id);
+    assert_eq!(context.record_relations.relations.len(), 1);
+    assert_eq!(
+        context.record_relations.relations[0].relation_id,
+        relation.relation_id
+    );
+    assert_eq!(
+        context.record_relations.relations[0].relation_type,
+        RecordRelationType::Supports
+    );
+    assert_eq!(
+        context.record_relations.relations[0].source_record_entity_id,
+        finding.record_entity_id
+    );
+    assert_eq!(
+        context.record_relations.relations[0].target_record_entity_id,
+        decision.record_entity_id
     );
 }
 

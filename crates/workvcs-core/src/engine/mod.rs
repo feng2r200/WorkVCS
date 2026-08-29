@@ -50,7 +50,8 @@ use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult, MergeResolveOptions,
+    MergeAbortResult, MergeAttemptSnapshot, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
     SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
@@ -570,6 +571,13 @@ impl Engine {
         options: MergeResolveOptions,
     ) -> Result<MergeResolveResult> {
         self.store.resolve_merge_item(&options)
+    }
+
+    pub fn freeze_merge_resolutions(
+        &mut self,
+        options: MergeFreezeResolutionsOptions,
+    ) -> Result<MergeFreezeResolutionsResult> {
+        self.store.freeze_merge_resolutions(&options)
     }
 
     pub fn merge_attempt(&self, merge_id: crate::MergeId) -> Result<MergeAttemptSnapshot> {

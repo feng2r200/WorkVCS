@@ -40,7 +40,8 @@ use crate::identity::RelationId;
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult, MergeResolveOptions,
+    MergeAbortResult, MergeAttemptSnapshot, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
     SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
@@ -778,6 +779,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::resolve_merge_item(&mut self.connection, options)
+    }
+
+    pub(crate) fn freeze_merge_resolutions(
+        &mut self,
+        options: &MergeFreezeResolutionsOptions,
+    ) -> Result<MergeFreezeResolutionsResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::freeze_merge_resolutions(&mut self.connection, options)
     }
 
     pub(crate) fn merge_attempt(&self, merge_id: crate::MergeId) -> Result<MergeAttemptSnapshot> {

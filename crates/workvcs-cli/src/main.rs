@@ -15,27 +15,28 @@ use workvcs_core::{
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
     KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeId, MergeItemId,
-    MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject, MergeListOptions,
-    MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind, MergeResolveOptions,
-    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
-    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
-    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
-    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
-    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
-    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
-    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
-    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
-    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
-    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
+    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot,
+    MergeResolutionKind, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
+    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
+    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
+    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
+    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
+    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
+    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
+    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
+    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
+    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
@@ -284,6 +285,13 @@ enum MergeCommand {
 
         #[arg(long, default_value = "{}")]
         rationale_json: String,
+    },
+    Freeze {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        merge: String,
     },
     Show {
         #[arg(value_name = "STORE")]
@@ -3055,6 +3063,15 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_merge_resolve(&engine.resolve_merge_item(options)?)?)
         }
         Command::Merge {
+            command: MergeCommand::Freeze { store, merge },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let frozen = engine.freeze_merge_resolutions(MergeFreezeResolutionsOptions::new(
+                MergeId::parse_canonical(&merge)?,
+            ))?;
+            Ok(render_merge_freeze(&frozen))
+        }
+        Command::Merge {
             command: MergeCommand::Show { store, merge },
         } => {
             let engine = Engine::open(store)?;
@@ -4353,6 +4370,13 @@ fn render_merge_resolve(result: &MergeResolveResult) -> Result<String> {
     );
     render_merge_item_resolution(&mut output, "resolution", &result.resolution)?;
     Ok(output)
+}
+
+fn render_merge_freeze(result: &MergeFreezeResolutionsResult) -> String {
+    format!(
+        "merge_id={}\nworkspace_id={}\nfrozen_items={}\n",
+        result.merge_id, result.workspace_id, result.frozen_items
+    )
 }
 
 fn render_merge_attempt(merge: &MergeAttemptSnapshot) -> Result<String> {
@@ -10601,6 +10625,16 @@ mod tests {
             value(&shown, "item.0.resolution.rationale_json"),
             "{\"reason\":\"take source\"}"
         );
+
+        let frozen =
+            run(
+                Cli::try_parse_from(["workvcs", "merge", "freeze", store, "--merge", &merge_id])
+                    .expect("parse merge freeze"),
+            )
+            .expect("freeze merge resolutions");
+        assert_eq!(value(&frozen, "merge_id"), merge_id);
+        assert_eq!(value(&frozen, "workspace_id"), workspace_id);
+        assert_eq!(value(&frozen, "frozen_items"), "1");
 
         let active = run(Cli::try_parse_from([
             "workvcs",

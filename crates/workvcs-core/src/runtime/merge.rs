@@ -299,6 +299,28 @@ pub struct MergeResolveResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeFreezeResolutionsOptions {
+    merge_id: MergeId,
+}
+
+impl MergeFreezeResolutionsOptions {
+    pub fn new(merge_id: MergeId) -> Self {
+        Self { merge_id }
+    }
+
+    pub fn merge_id(&self) -> MergeId {
+        self.merge_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeFreezeResolutionsResult {
+    pub merge_id: MergeId,
+    pub workspace_id: WorkspaceId,
+    pub frozen_items: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeAbortOptions {
     merge_id: MergeId,
     abort_session_id: Option<SessionId>,
@@ -763,6 +785,7 @@ pub(crate) fn resolve_merge_item(
         .map_err(storage_error)?;
     let merge_id = load_merge_item_merge_id_for_update(&transaction, options.merge_item_id())?;
     let merge = load_active_merge_for_update(&transaction, merge_id)?;
+    ensure_merge_item_not_frozen(&transaction, merge_id, options.merge_item_id())?;
     if let Some(resolved_by_session_id) = options.resolved_by_session_id() {
         let session =
             session::load_active_session_runtime_for_update(&transaction, resolved_by_session_id)?;
@@ -821,6 +844,35 @@ pub(crate) fn resolve_merge_item(
             resolved_by_session_id: options.resolved_by_session_id(),
             resolved_at_us,
         },
+    })
+}
+
+pub(crate) fn freeze_merge_resolutions(
+    connection: &mut StoreConnection,
+    options: &MergeFreezeResolutionsOptions,
+) -> Result<MergeFreezeResolutionsResult> {
+    connection.verify_foreign_keys()?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let merge = load_active_merge_for_update(&transaction, options.merge_id())?;
+    ensure_merge_has_no_frozen_resolutions(&transaction, merge.merge_id)?;
+    let unresolved_items = count_unresolved_merge_items(&transaction, merge.merge_id)?;
+    if unresolved_items != 0 {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {} has {unresolved_items} unresolved item(s)",
+            merge.merge_id
+        )));
+    }
+    let frozen_items = copy_runtime_resolutions_to_frozen(&transaction, merge.merge_id)?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(MergeFreezeResolutionsResult {
+        merge_id: merge.merge_id,
+        workspace_id: merge.workspace_id,
+        frozen_items,
     })
 }
 
@@ -1056,6 +1108,98 @@ fn load_merge_item_merge_id_for_update(
         )));
     };
     decode_merge_id("merge_item.merge_id", bytes)
+}
+
+fn ensure_merge_item_not_frozen(
+    transaction: &Transaction<'_>,
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+) -> Result<()> {
+    let exists = transaction
+        .query_row(
+            "SELECT 1
+             FROM merge_resolution
+             WHERE merge_item_id = ?1",
+            params![&merge_item_id.raw_bytes()[..]],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .is_some();
+    if exists {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} already has a frozen resolution"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_merge_has_no_frozen_resolutions(
+    transaction: &Transaction<'_>,
+    merge_id: MergeId,
+) -> Result<()> {
+    let existing: i64 = transaction
+        .query_row(
+            "SELECT count(*)
+             FROM merge_item
+             JOIN merge_resolution
+               ON merge_resolution.merge_item_id = merge_item.merge_item_id
+             WHERE merge_item.merge_id = ?1",
+            params![&merge_id.raw_bytes()[..]],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    if existing != 0 {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} already has frozen resolution rows"
+        )));
+    }
+    Ok(())
+}
+
+fn count_unresolved_merge_items(transaction: &Transaction<'_>, merge_id: MergeId) -> Result<i64> {
+    transaction
+        .query_row(
+            "SELECT count(*)
+             FROM merge_item
+             LEFT JOIN merge_resolution_runtime
+               ON merge_resolution_runtime.merge_item_id = merge_item.merge_item_id
+             WHERE merge_item.merge_id = ?1
+               AND merge_resolution_runtime.merge_item_id IS NULL",
+            params![&merge_id.raw_bytes()[..]],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)
+}
+
+fn copy_runtime_resolutions_to_frozen(
+    transaction: &Transaction<'_>,
+    merge_id: MergeId,
+) -> Result<usize> {
+    transaction
+        .execute(
+            "INSERT INTO merge_resolution(
+                merge_item_id,
+                resolution_kind,
+                custom_payload_json,
+                rationale_json,
+                resolved_by_session_id,
+                resolved_at_us
+             )
+             SELECT merge_resolution_runtime.merge_item_id,
+                    merge_resolution_runtime.resolution_kind,
+                    merge_resolution_runtime.custom_payload_json,
+                    merge_resolution_runtime.rationale_json,
+                    merge_resolution_runtime.resolved_by_session_id,
+                    merge_resolution_runtime.resolved_at_us
+             FROM merge_item
+             JOIN merge_resolution_runtime
+               ON merge_resolution_runtime.merge_item_id = merge_item.merge_item_id
+             WHERE merge_item.merge_id = ?1
+             ORDER BY merge_item.ordinal",
+            params![&merge_id.raw_bytes()[..]],
+        )
+        .map_err(storage_error)
 }
 
 fn merge_attempt_ids(connection: &Connection, options: &MergeListOptions) -> Result<Vec<MergeId>> {

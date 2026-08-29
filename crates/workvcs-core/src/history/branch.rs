@@ -1,3 +1,4 @@
+use super::query::{self, BranchHead};
 use crate::canonical::{CanonicalValue, canonical_bytes};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{BranchId, CommitId, Digest, EventId, WorkspaceId};
@@ -141,6 +142,56 @@ pub(crate) fn fork_branch(
         event_id,
         created_at_us,
     })
+}
+
+pub(crate) fn list_branches(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+) -> Result<Vec<BranchHead>> {
+    ensure_workspace_exists(connection, workspace_id)?;
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT branch_id
+             FROM branch
+             WHERE workspace_id = ?1
+             ORDER BY name, branch_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&workspace_id.raw_bytes()[..]], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(storage_error)?;
+
+    let mut branches = Vec::new();
+    for row in rows {
+        let branch_id = decode_branch_id("branch.branch_id", row.map_err(storage_error)?)?;
+        branches.push(query::branch_head(connection, branch_id)?);
+    }
+    Ok(branches)
+}
+
+fn ensure_workspace_exists(connection: &StoreConnection, workspace_id: WorkspaceId) -> Result<()> {
+    let exists = connection
+        .inner()
+        .query_row(
+            "SELECT 1
+             FROM workspace
+             WHERE workspace_id = ?1",
+            params![&workspace_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .is_some();
+    if exists {
+        Ok(())
+    } else {
+        Err(WorkVcsError::WorkspaceNotFound(format!(
+            "workspace {workspace_id} does not exist"
+        )))
+    }
 }
 
 fn resolve_branch_source(
@@ -332,6 +383,15 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
     })?;
     CommitId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::ReplayInvalid(format!("{column} is not a valid CommitId: {error}"))
+    })
+}
+
+fn decode_branch_id(column: &str, bytes: Vec<u8>) -> Result<BranchId> {
+    let bytes = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::WorkspaceInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
+    })?;
+    BranchId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!("{column} is not a valid BranchId: {error}"))
     })
 }
 

@@ -101,6 +101,12 @@ impl Store {
         history::branch_head(&self.connection, branch_id)
     }
 
+    pub(crate) fn list_branches(&self, workspace_id: WorkspaceId) -> Result<Vec<BranchHead>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::list_branches(&self.connection, workspace_id)
+    }
+
     pub(crate) fn fork_branch(&mut self, options: &BranchForkOptions) -> Result<BranchForkResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);

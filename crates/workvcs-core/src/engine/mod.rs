@@ -82,6 +82,10 @@ impl Engine {
         self.store.branch_head(branch_id)
     }
 
+    pub fn list_branches(&self, workspace_id: WorkspaceId) -> Result<Vec<BranchHead>> {
+        self.store.list_branches(workspace_id)
+    }
+
     pub fn fork_branch(&mut self, options: BranchForkOptions) -> Result<BranchForkResult> {
         self.store.fork_branch(&options)
     }

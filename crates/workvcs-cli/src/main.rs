@@ -127,6 +127,13 @@ enum WorkspaceCommand {
 
 #[derive(Debug, Subcommand)]
 enum BranchCommand {
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        workspace: String,
+    },
     Head {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -569,6 +576,14 @@ fn run(cli: Cli) -> Result<String> {
             }
             let workspace = engine.create_workspace(options)?;
             Ok(render_workspace_info(&workspace))
+        }
+        Command::Branch {
+            command: BranchCommand::List { store, workspace },
+        } => {
+            let engine = Engine::open(store)?;
+            let branches =
+                engine.list_branches(workvcs_core::WorkspaceId::parse_canonical(&workspace)?)?;
+            Ok(render_branch_list(&branches))
         }
         Command::Branch {
             command: BranchCommand::Head { store, branch },
@@ -1163,6 +1178,34 @@ fn render_branch_head(head: &BranchHead) -> String {
     )
 }
 
+fn render_branch_list(branches: &[BranchHead]) -> String {
+    let workspace_id = branches
+        .first()
+        .map(|branch| branch.workspace_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let mut output = format!("workspace_id={workspace_id}\nbranches={}\n", branches.len());
+    for (index, branch) in branches.iter().enumerate() {
+        let _ = writeln!(output, "branch.{index}.branch_id={}", branch.branch_id);
+        let _ = writeln!(output, "branch.{index}.branch_name={}", branch.name);
+        let _ = writeln!(
+            output,
+            "branch.{index}.head_commit_id={}",
+            branch.head_commit_id
+        );
+        let _ = writeln!(
+            output,
+            "branch.{index}.lifecycle_state={}",
+            branch.lifecycle_state
+        );
+        let _ = writeln!(
+            output,
+            "branch.{index}.state_digest={}",
+            branch.state_digest
+        );
+    }
+    output
+}
+
 fn render_branch_fork(branch: &BranchForkResult) -> String {
     let source_branch_id = branch
         .source_branch_id
@@ -1703,6 +1746,19 @@ mod tests {
         let fork_branch = value(&fork, "branch_id");
         assert_eq!(value(&fork, "source_branch_id"), source_branch);
         assert_eq!(value(&fork, "head_commit_id"), source_head);
+
+        let branches = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+        ])
+        .expect("parse branch list"))
+        .expect("list branches");
+        assert!(branches.contains("branches=2"));
+        assert!(branches.contains("branch.0.branch_name=experiment"));
 
         let later_source = run(Cli::try_parse_from([
             "workvcs",

@@ -28,8 +28,8 @@ use crate::history::{
     BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
     BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeSetSnapshot,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeOperationListResult,
+    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
     CheckpointValidationResult, CommitSnapshot, DecisionRecordSupersedeCommit,
     DecisionRecordSupersedeOptions, EntityTransitionCommit, EntityTransitionOptions,
@@ -162,6 +162,13 @@ impl Engine {
 
     pub fn changeset(&self, changeset_id: ChangeSetId) -> Result<ChangeSetSnapshot> {
         self.store.changeset(changeset_id)
+    }
+
+    pub fn changeset_operations(
+        &self,
+        changeset_id: ChangeSetId,
+    ) -> Result<ChangeOperationListResult> {
+        self.store.changeset_operations(changeset_id)
     }
 
     pub fn commit(&self, commit_id: CommitId) -> Result<CommitSnapshot> {

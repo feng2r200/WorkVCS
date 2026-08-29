@@ -13,18 +13,19 @@ use workvcs_core::{
     BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
     BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue, ChangeSetId,
-    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointId,
-    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
-    CheckpointSnapshot, CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode,
-    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
-    ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot, EvidenceId,
-    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
-    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
-    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue,
+    ChangeOperationListResult, ChangeSetId, ChangeSetSnapshot, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointId, CheckpointLatestOptions, CheckpointLatestResult,
+    CheckpointListOptions, CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
+    ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult,
+    ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId,
+    CommitSnapshot, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EventId,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceId, ExposureId, ExposureTransitionId,
+    ExternalObjectId, ExternalObjectRefListOptions, ExternalObjectRefListResult,
+    ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
+    ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, HistoryEntry,
+    HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
     KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
@@ -664,6 +665,13 @@ enum ProjectionCommand {
 #[derive(Debug, Subcommand)]
 enum ChangeSetCommand {
     Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        changeset: String,
+    },
+    Operations {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -2559,6 +2567,12 @@ fn run(cli: Cli) -> Result<String> {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.changeset(ChangeSetId::parse_canonical(&changeset)?)?;
                 Ok(render_changeset_snapshot(&snapshot))
+            }
+            ChangeSetCommand::Operations { store, changeset } => {
+                let engine = Engine::open(store)?;
+                let result =
+                    engine.changeset_operations(ChangeSetId::parse_canonical(&changeset)?)?;
+                Ok(render_change_operations(&result))
             }
         },
         Command::Commit { command } => match command {
@@ -6499,6 +6513,49 @@ fn render_changeset_snapshot(changeset: &ChangeSetSnapshot) -> String {
     output
 }
 
+fn render_change_operations(result: &ChangeOperationListResult) -> String {
+    let mut output = format!(
+        "workspace_id={}\nchangeset_id={}\noperations={}\n",
+        result.workspace_id,
+        result.changeset_id,
+        result.operations.len()
+    );
+    for (index, operation) in result.operations.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "operation[{index}].operation_id={}",
+            operation.operation_id
+        );
+        let _ = writeln!(output, "operation[{index}].ordinal={}", operation.ordinal);
+        let _ = writeln!(
+            output,
+            "operation[{index}].subject_family={}",
+            operation.subject.family()
+        );
+        let _ = writeln!(
+            output,
+            "operation[{index}].subject_object_id={}",
+            operation.subject.object_id()
+        );
+        let _ = writeln!(
+            output,
+            "operation[{index}].operation_payload_digest={}",
+            operation.operation_payload_digest
+        );
+        let _ = writeln!(
+            output,
+            "operation[{index}].operation_payload_size_bytes={}",
+            operation.operation_payload_size_bytes
+        );
+        let _ = writeln!(
+            output,
+            "operation[{index}].operation_payload_json={}",
+            operation.operation_payload_json
+        );
+    }
+    output
+}
+
 fn render_commit_snapshot(commit: &CommitSnapshot) -> String {
     let origin_session_id = commit
         .origin_session_id
@@ -8192,6 +8249,7 @@ mod tests {
         .expect("create task");
         let commit_id = value(&task, "commit_id");
         let changeset_id = value(&task, "changeset_id");
+        let task_entity_id = value(&task, "task_entity_id");
 
         let shown_commit =
             run(
@@ -8232,6 +8290,29 @@ mod tests {
         assert_eq!(value(&shown_changeset, "commit[0].commit_kind"), "normal");
         assert_ne!(value(&shown_changeset, "operation_payload_json"), "");
         assert_ne!(value(&shown_changeset, "rationale_json"), "");
+
+        let operations = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+        ])
+        .expect("parse changeset operations"))
+        .expect("list changeset operations");
+        assert_eq!(value(&operations, "changeset_id"), changeset_id);
+        assert_eq!(value(&operations, "operations"), "1");
+        assert_eq!(value(&operations, "operation[0].ordinal"), "0");
+        assert_eq!(value(&operations, "operation[0].subject_family"), "entity");
+        assert_eq!(
+            value(&operations, "operation[0].subject_object_id"),
+            task_entity_id
+        );
+        assert_ne!(
+            value(&operations, "operation[0].operation_payload_json"),
+            ""
+        );
 
         let listed = run(Cli::try_parse_from([
             "workvcs",

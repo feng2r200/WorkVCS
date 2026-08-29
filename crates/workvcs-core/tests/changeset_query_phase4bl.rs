@@ -1,7 +1,7 @@
 use tempfile::TempDir;
 use workvcs_core::{
-    Engine, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, WorkspaceInfo,
-    WorkspaceInitOptions, content_object_digest,
+    ChangeOperationSubject, Engine, StoreInitOptions, TaskCreateCommit, TaskCreateOptions,
+    WorkspaceInfo, WorkspaceInitOptions, content_object_digest,
 };
 
 fn create_store() -> (TempDir, Engine, WorkspaceInfo) {
@@ -68,6 +68,34 @@ fn changeset_snapshot_exposes_payloads_counts_and_commit_ref() {
 }
 
 #[test]
+fn changeset_operations_expose_ordered_operation_payloads() {
+    let (_tempdir, mut engine, workspace) = create_store();
+    let task = create_task(&mut engine, &workspace);
+
+    let result = engine
+        .changeset_operations(task.changeset_id)
+        .expect("changeset operations");
+
+    assert_eq!(result.workspace_id, workspace.workspace_id);
+    assert_eq!(result.changeset_id, task.changeset_id);
+    assert_eq!(result.operations.len(), 1);
+    let operation = &result.operations[0];
+    assert_eq!(operation.ordinal, 0);
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Entity(task.task_entity_id)
+    );
+    assert_eq!(
+        operation.operation_payload_digest,
+        content_object_digest(operation.operation_payload_json.as_bytes())
+    );
+    assert_eq!(
+        operation.operation_payload_size_bytes,
+        i64::try_from(operation.operation_payload_json.len()).expect("operation payload size")
+    );
+}
+
+#[test]
 fn genesis_changeset_snapshot_exposes_genesis_commit_ref() {
     let (_tempdir, engine, workspace) = create_store();
 
@@ -85,4 +113,10 @@ fn genesis_changeset_snapshot_exposes_genesis_commit_ref() {
     assert_eq!(snapshot.commits[0].commit_id, workspace.genesis_commit_id);
     assert_eq!(snapshot.commits[0].commit_kind, "genesis");
     assert_eq!(snapshot.commits[0].state_digest, workspace.state_digest);
+
+    let operations = engine
+        .changeset_operations(workspace.genesis_changeset_id)
+        .expect("genesis changeset operations");
+    assert_eq!(operations.workspace_id, workspace.workspace_id);
+    assert!(operations.operations.is_empty());
 }

@@ -9,8 +9,8 @@ use crate::history::{
     BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
     BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeSetSnapshot,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeOperationListResult,
+    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
     CheckpointValidationResult, CommitSnapshot, EntityTransitionCommit, EntityTransitionOptions,
     EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
@@ -184,6 +184,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::changeset(&self.connection, changeset_id)
+    }
+
+    pub(crate) fn changeset_operations(
+        &self,
+        changeset_id: ChangeSetId,
+    ) -> Result<ChangeOperationListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::changeset_operations(&self.connection, changeset_id)
     }
 
     pub(crate) fn commit(&self, commit_id: CommitId) -> Result<CommitSnapshot> {

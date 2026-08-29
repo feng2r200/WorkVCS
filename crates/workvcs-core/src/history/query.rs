@@ -1,6 +1,9 @@
 use crate::canonical::{canonical_bytes, content_object_digest, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
-use crate::identity::{BranchId, ChangeSetId, CommitId, Digest, EventId, SessionId, WorkspaceId};
+use crate::identity::{
+    BranchId, ChangeSetId, CommitId, Digest, EntityId, EventId, OperationId, RelationId, SessionId,
+    WorkspaceId,
+};
 use crate::store::StoreConnection;
 use rusqlite::{OptionalExtension, Params, Row, params};
 use std::collections::HashSet;
@@ -10,6 +13,8 @@ const NORMAL_COMMIT_KIND: &str = "normal";
 const MERGE_COMMIT_KIND: &str = "merge";
 const PRIMARY_PARENT_ROLE: &str = "primary";
 const SECONDARY_PARENT_ROLE: &str = "secondary";
+const ENTITY_SUBJECT_FAMILY: &str = "entity";
+const RELATION_SUBJECT_FAMILY: &str = "relation";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BranchHead {
@@ -140,6 +145,45 @@ pub struct ChangeSetCommitSnapshot {
     pub commit_kind: String,
     pub state_digest: Digest,
     pub committed_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangeOperationListResult {
+    pub workspace_id: WorkspaceId,
+    pub changeset_id: ChangeSetId,
+    pub operations: Vec<ChangeOperationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangeOperationSnapshot {
+    pub operation_id: OperationId,
+    pub ordinal: i64,
+    pub subject: ChangeOperationSubject,
+    pub operation_payload_json: String,
+    pub operation_payload_digest: Digest,
+    pub operation_payload_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChangeOperationSubject {
+    Entity(EntityId),
+    Relation(RelationId),
+}
+
+impl ChangeOperationSubject {
+    pub fn family(&self) -> &'static str {
+        match self {
+            Self::Entity(_) => ENTITY_SUBJECT_FAMILY,
+            Self::Relation(_) => RELATION_SUBJECT_FAMILY,
+        }
+    }
+
+    pub fn object_id(&self) -> String {
+        match self {
+            Self::Entity(entity_id) => entity_id.to_string(),
+            Self::Relation(relation_id) => relation_id.to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -400,6 +444,76 @@ pub(crate) fn changeset(
         change_operation_count,
         event_count,
         commits: load_changeset_commits(connection, changeset_id)?,
+    })
+}
+
+pub(crate) fn changeset_operations(
+    connection: &StoreConnection,
+    changeset_id: ChangeSetId,
+) -> Result<ChangeOperationListResult> {
+    let summary = changeset(connection, changeset_id)?;
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT operation_id,
+                    ordinal,
+                    subject_family,
+                    subject_object_id,
+                    operation_payload_json
+             FROM change_operation
+             WHERE changeset_id = ?1
+             ORDER BY ordinal, operation_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&changeset_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut operations = Vec::new();
+    for row in rows {
+        let (operation_id, ordinal, subject_family, subject_object_id, operation_payload_json) =
+            row.map_err(storage_error)?;
+        validate_nonnegative("change_operation.ordinal", ordinal)?;
+        validate_canonical_json_text(
+            "change_operation.operation_payload_json",
+            &operation_payload_json,
+        )?;
+        operations.push(ChangeOperationSnapshot {
+            operation_id: decode_operation_id("change_operation.operation_id", operation_id)?,
+            ordinal,
+            subject: decode_change_operation_subject(
+                "change_operation.subject",
+                subject_family.as_str(),
+                subject_object_id,
+            )?,
+            operation_payload_digest: content_object_digest(operation_payload_json.as_bytes()),
+            operation_payload_size_bytes: usize_to_i64(
+                "change_operation.operation_payload_json size",
+                operation_payload_json.len(),
+            )?,
+            operation_payload_json,
+        });
+    }
+    let actual = usize_to_i64("change_operation result count", operations.len())?;
+    if actual != summary.change_operation_count {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ChangeSet {changeset_id} expected {} change operations, found {actual}",
+            summary.change_operation_count
+        )));
+    }
+
+    Ok(ChangeOperationListResult {
+        workspace_id: summary.workspace_id,
+        changeset_id,
+        operations,
     })
 }
 
@@ -924,6 +1038,45 @@ fn decode_changeset_id(column: &str, bytes: Vec<u8>) -> Result<ChangeSetId> {
     let bytes = decode_16(column, bytes)?;
     ChangeSetId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_operation_id(column: &str, bytes: Vec<u8>) -> Result<OperationId> {
+    let bytes = decode_16(column, bytes)?;
+    OperationId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
+    let bytes = decode_16(column, bytes)?;
+    EntityId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_relation_id(column: &str, bytes: Vec<u8>) -> Result<RelationId> {
+    let bytes = decode_16(column, bytes)?;
+    RelationId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_change_operation_subject(
+    column: &str,
+    subject_family: &str,
+    subject_object_id: Vec<u8>,
+) -> Result<ChangeOperationSubject> {
+    validate_stored_text("change_operation.subject_family", subject_family)?;
+    match subject_family {
+        ENTITY_SUBJECT_FAMILY => Ok(ChangeOperationSubject::Entity(decode_entity_id(
+            column,
+            subject_object_id,
+        )?)),
+        RELATION_SUBJECT_FAMILY => Ok(ChangeOperationSubject::Relation(decode_relation_id(
+            column,
+            subject_object_id,
+        )?)),
+        other => Err(WorkVcsError::QueryInvalid(format!(
+            "unsupported change_operation.subject_family {other:?}"
+        ))),
+    }
 }
 
 fn decode_session_id(column: &str, bytes: Vec<u8>) -> Result<SessionId> {

@@ -4894,6 +4894,20 @@ fn write_decision_supersede(
             ],
         )
         .map_err(storage_error)?;
+    if let Some((causal_record_entity_id, _, _, _, _)) = causal_relation {
+        let causal_record_entity_id_bytes = causal_record_entity_id.raw_bytes();
+        transaction
+            .execute(
+                "INSERT INTO changeset_causal_anchor(
+                    changeset_id,
+                    ordinal,
+                    anchor_object_id
+                 )
+                 VALUES (?1, 0, ?2)",
+                params![&changeset_id_bytes[..], &causal_record_entity_id_bytes[..]],
+            )
+            .map_err(storage_error)?;
+    }
     transaction
         .execute(
             "INSERT INTO change_operation(

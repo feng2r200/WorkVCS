@@ -13058,6 +13058,36 @@ mod tests {
         assert_eq!(value(&superseded, "causal_relation_type"), "derived_from");
         assert!(!value(&superseded, "causal_relation_id").is_empty());
 
+        let shown_changeset = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "show",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+        ])
+        .expect("parse changeset show"))
+        .expect("show changeset");
+        assert_eq!(value(&shown_changeset, "causal_anchors"), "1");
+
+        let anchors = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+        ])
+        .expect("parse changeset anchors"))
+        .expect("list changeset anchors");
+        assert_eq!(value(&anchors, "causal_anchors"), "1");
+        assert_eq!(value(&anchors, "anchor[0].ordinal"), "0");
+        assert_eq!(
+            value(&anchors, "anchor[0].object_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(value(&anchors, "anchor[0].object_kind"), "entity");
+
         let shown = run(Cli::try_parse_from([
             "workvcs",
             "record",

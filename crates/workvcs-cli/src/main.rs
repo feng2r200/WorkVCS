@@ -8,23 +8,24 @@ use workvcs_core::{
     BranchForkResult, BranchHead, BranchId, CanonicalValue, ClaimId, ClaimLifecycleState,
     ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
-    Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
+    NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordListOptions, RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
     RecordRelationListOptions, RecordRelationListResult, RecordRelationType, RecordSnapshot,
     RecordStatus, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
-    WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, content_object_digest,
-    parse_canonical_json,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
+    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkVcsError, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -73,6 +74,34 @@ enum Command {
 
         #[arg(long)]
         commit: String,
+    },
+    #[command(group(
+        ArgGroup::new("why-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    #[command(group(
+        ArgGroup::new("why-subject")
+            .required(true)
+            .multiple(false)
+            .args(["entity", "evidence"])
+    ))]
+    Why {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        entity: Option<String>,
+
+        #[arg(long)]
+        evidence: Option<String>,
     },
     Workspace {
         #[command(subcommand)]
@@ -798,6 +827,43 @@ fn run(cli: Cli) -> Result<String> {
             let engine = Engine::open(store)?;
             let state = engine.show_at(CommitId::parse_canonical(&commit)?)?;
             Ok(render_replayed_state(&state))
+        }
+        Command::Why {
+            store,
+            branch,
+            commit,
+            entity,
+            evidence,
+        } => {
+            let engine = Engine::open(store)?;
+            let target = match (branch, commit) {
+                (Some(branch_id), None) => {
+                    WhyQueryTarget::branch_head(BranchId::parse_canonical(&branch_id)?)
+                }
+                (None, Some(commit_id)) => {
+                    WhyQueryTarget::commit(CommitId::parse_canonical(&commit_id)?)
+                }
+                _ => {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "why requires exactly one of --branch or --commit".to_owned(),
+                    ));
+                }
+            };
+            let options = match (entity, evidence) {
+                (Some(entity_id), None) => {
+                    WhyQueryOptions::for_entity(target, EntityId::parse_canonical(&entity_id)?)
+                }
+                (None, Some(evidence_id)) => WhyQueryOptions::for_evidence(
+                    target,
+                    EvidenceId::parse_canonical(&evidence_id)?,
+                ),
+                _ => {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "why requires exactly one of --entity or --evidence".to_owned(),
+                    ));
+                }
+            };
+            Ok(render_why(&engine.why(options)?))
         }
         Command::Workspace {
             command:
@@ -2457,6 +2523,149 @@ fn render_replayed_state(state: &ReplayedState) -> String {
     output
 }
 
+fn render_why(result: &WhyQueryResult) -> String {
+    let mut output = String::new();
+    match result.target.target {
+        WhyQueryTarget::BranchHead(branch_id) => {
+            writeln!(output, "target_kind=branch_head").expect("write to String");
+            writeln!(output, "target_branch_id={branch_id}").expect("write to String");
+        }
+        WhyQueryTarget::Commit(commit_id) => {
+            writeln!(output, "target_kind=commit").expect("write to String");
+            writeln!(output, "target_commit_id={commit_id}").expect("write to String");
+        }
+    }
+    writeln!(output, "workspace_id={}", result.target.workspace_id).expect("write to String");
+    writeln!(output, "commit_id={}", result.target.commit_id).expect("write to String");
+    writeln!(output, "state_digest={}", result.target.state_digest).expect("write to String");
+    match result.subject {
+        ResolvedWhyQuerySubject::Entity {
+            entity_id,
+            entity_version_id,
+        } => {
+            writeln!(output, "subject_kind=entity").expect("write to String");
+            writeln!(output, "subject_entity_id={entity_id}").expect("write to String");
+            writeln!(output, "subject_entity_version_id={entity_version_id}")
+                .expect("write to String");
+        }
+        ResolvedWhyQuerySubject::Evidence { evidence_id } => {
+            writeln!(output, "subject_kind=evidence").expect("write to String");
+            writeln!(output, "subject_evidence_id={evidence_id}").expect("write to String");
+        }
+    }
+    writeln!(output, "relation_edges={}", result.relation_edges.len()).expect("write to String");
+    for (index, edge) in result.relation_edges.iter().enumerate() {
+        writeln!(
+            output,
+            "relation.{index}.relation_kind={}",
+            why_relation_kind(edge.relation_kind)
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.direction={}",
+            why_relation_direction(edge.direction)
+        )
+        .expect("write to String");
+        writeln!(output, "relation.{index}.relation_id={}", edge.relation_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_version_id={}",
+            edge.relation_version_id
+        )
+        .expect("write to String");
+        render_why_endpoint(&mut output, index, "source", edge.source);
+        render_why_endpoint(&mut output, index, "target", edge.target);
+        writeln!(
+            output,
+            "relation.{index}.relation_state_digest={}",
+            edge.state_digest
+        )
+        .expect("write to String");
+    }
+    writeln!(
+        output,
+        "deferred_relation_families={}",
+        result.deferred_relation_families.len()
+    )
+    .expect("write to String");
+    for (index, family) in result.deferred_relation_families.iter().enumerate() {
+        writeln!(
+            output,
+            "deferred_relation_family.{index}={}",
+            why_deferred_relation_family(*family)
+        )
+        .expect("write to String");
+    }
+    output
+}
+
+fn render_why_endpoint(
+    output: &mut String,
+    index: usize,
+    side: &str,
+    endpoint: WhyRelationEndpoint,
+) {
+    match endpoint {
+        WhyRelationEndpoint::Entity {
+            entity_kind,
+            entity_id,
+        } => {
+            writeln!(output, "relation.{index}.{side}_kind=entity").expect("write to String");
+            writeln!(
+                output,
+                "relation.{index}.{side}_entity_kind={}",
+                why_entity_kind(entity_kind)
+            )
+            .expect("write to String");
+            writeln!(output, "relation.{index}.{side}_entity_id={entity_id}")
+                .expect("write to String");
+        }
+        WhyRelationEndpoint::Evidence { evidence_id } => {
+            writeln!(output, "relation.{index}.{side}_kind=evidence").expect("write to String");
+            writeln!(output, "relation.{index}.{side}_evidence_id={evidence_id}")
+                .expect("write to String");
+        }
+    }
+}
+
+fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
+    match kind {
+        WhyRelationKind::PrimaryContainment => "primary_containment",
+        WhyRelationKind::StructuralReference => "structural_reference",
+        WhyRelationKind::Verifies => "verifies",
+        WhyRelationKind::EvidencedBy => "evidenced_by",
+        WhyRelationKind::RecordInvalidates => "record_invalidates",
+    }
+}
+
+fn why_relation_direction(direction: WhyRelationDirection) -> &'static str {
+    match direction {
+        WhyRelationDirection::Incoming => "incoming",
+        WhyRelationDirection::Outgoing => "outgoing",
+    }
+}
+
+fn why_entity_kind(kind: WhyEntityKind) -> &'static str {
+    match kind {
+        WhyEntityKind::Goal => "goal",
+        WhyEntityKind::Plan => "plan",
+        WhyEntityKind::Task => "task",
+        WhyEntityKind::AcceptanceCriterion => "acceptance_criterion",
+        WhyEntityKind::VerificationRequirement => "verification_requirement",
+        WhyEntityKind::Verification => "verification",
+        WhyEntityKind::Record => "record",
+    }
+}
+
+fn why_deferred_relation_family(family: WhyDeferredRelationFamily) -> &'static str {
+    match family {
+        WhyDeferredRelationFamily::Evolution => "evolution",
+        WhyDeferredRelationFamily::Epistemic => "epistemic",
+    }
+}
+
 fn render_work_state(output: &mut String, state: &WorkState) {
     let _ = writeln!(output, "entities={}", state.entities().len());
     for (entity_id, entity_version_id) in state.entities() {
@@ -2491,6 +2700,7 @@ mod tests {
                 "doctor",
                 "history",
                 "show-at",
+                "why",
                 "workspace",
                 "branch",
                 "task",
@@ -4162,6 +4372,48 @@ mod tests {
         assert_eq!(
             value(&listed, "relation.0.target_record_entity_id"),
             value(&assumption, "record_entity_id")
+        );
+
+        let why_finding = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--entity",
+            &value(&finding, "record_entity_id"),
+        ])
+        .expect("parse why finding"))
+        .expect("why finding");
+        assert!(why_finding.contains("target_kind=commit"));
+        assert!(why_finding.contains("subject_kind=entity"));
+        assert!(why_finding.contains("relation_edges=1"));
+        assert!(why_finding.contains("relation.0.relation_kind=record_invalidates"));
+        assert!(why_finding.contains("relation.0.direction=outgoing"));
+        assert!(why_finding.contains("relation.0.source_entity_kind=record"));
+        assert!(why_finding.contains("relation.0.target_entity_kind=record"));
+        assert_eq!(
+            value(&why_finding, "relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+
+        let why_assumption = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--entity",
+            &value(&assumption, "record_entity_id"),
+        ])
+        .expect("parse why assumption"))
+        .expect("why assumption");
+        assert!(why_assumption.contains("target_kind=branch_head"));
+        assert!(why_assumption.contains("relation.0.relation_kind=record_invalidates"));
+        assert!(why_assumption.contains("relation.0.direction=incoming"));
+        assert_eq!(
+            value(&why_assumption, "relation.0.relation_id"),
+            value(&relation, "relation_id")
         );
     }
 

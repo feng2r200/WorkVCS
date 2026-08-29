@@ -359,12 +359,51 @@ impl KnowledgeSpaceAvailableExposuresOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeSpaceSourceStaleExposuresOptions {
+    knowledge_space_id: KnowledgeSpaceId,
+    limit: usize,
+}
+
+impl KnowledgeSpaceSourceStaleExposuresOptions {
+    pub fn new(knowledge_space_id: KnowledgeSpaceId) -> Self {
+        Self {
+            knowledge_space_id,
+            limit: 50,
+        }
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Result<Self> {
+        if limit == 0 {
+            return Err(WorkVcsError::QueryInvalid(
+                "knowledge space source-stale exposures limit must be greater than zero".to_owned(),
+            ));
+        }
+        self.limit = limit;
+        Ok(self)
+    }
+
+    fn knowledge_space_id(&self) -> KnowledgeSpaceId {
+        self.knowledge_space_id
+    }
+
+    fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureListResult {
     pub exposures: Vec<KnowledgeExposureSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeSpaceAvailableExposuresResult {
+    pub knowledge_space_id: KnowledgeSpaceId,
+    pub exposures: Vec<KnowledgeExposureSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeSpaceSourceStaleExposuresResult {
     pub knowledge_space_id: KnowledgeSpaceId,
     pub exposures: Vec<KnowledgeExposureSnapshot>,
 }
@@ -756,6 +795,27 @@ pub(crate) fn knowledge_space_available_exposures(
     )?
     .exposures;
     Ok(KnowledgeSpaceAvailableExposuresResult {
+        knowledge_space_id: options.knowledge_space_id(),
+        exposures,
+    })
+}
+
+pub(crate) fn knowledge_space_source_stale_exposures(
+    connection: &StoreConnection,
+    options: KnowledgeSpaceSourceStaleExposuresOptions,
+) -> Result<KnowledgeSpaceSourceStaleExposuresResult> {
+    connection.verify_foreign_keys()?;
+    knowledge_space(connection, options.knowledge_space_id())?;
+    let exposures = knowledge_exposures(
+        connection,
+        KnowledgeExposureListOptions::new()
+            .with_limit(options.limit())?
+            .with_knowledge_space_id(options.knowledge_space_id())
+            .with_lifecycle_status(KnowledgeExposureLifecycleStatus::Active)
+            .with_source_status(KnowledgeExposureSourceStatus::Stale),
+    )?
+    .exposures;
+    Ok(KnowledgeSpaceSourceStaleExposuresResult {
         knowledge_space_id: options.knowledge_space_id(),
         exposures,
     })

@@ -77,6 +77,7 @@ pub use knowledge_exposure::{
     KnowledgeExposureSourceStatus, KnowledgeExposureSourceStatusSnapshot,
     KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
     KnowledgeSpaceAvailableExposuresOptions, KnowledgeSpaceAvailableExposuresResult,
+    KnowledgeSpaceSourceStaleExposuresOptions, KnowledgeSpaceSourceStaleExposuresResult,
 };
 pub use knowledge_space::{
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
@@ -177,8 +178,8 @@ pub(crate) use knowledge::{
 };
 pub(crate) use knowledge_exposure::{
     create_local_knowledge_exposure, knowledge_exposure, knowledge_exposures,
-    knowledge_space_available_exposures, refresh_knowledge_exposure_source_status,
-    withdraw_knowledge_exposure,
+    knowledge_space_available_exposures, knowledge_space_source_stale_exposures,
+    refresh_knowledge_exposure_source_status, withdraw_knowledge_exposure,
 };
 pub(crate) use knowledge_space::{create_knowledge_space, knowledge_space, knowledge_spaces};
 pub(crate) use lineage::{record_store_lineage, store_lineage, store_lineages};

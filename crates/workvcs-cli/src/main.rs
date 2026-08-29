@@ -35,7 +35,8 @@ use workvcs_core::{
     KnowledgeSnapshot, KnowledgeSpaceAvailableExposuresOptions,
     KnowledgeSpaceAvailableExposuresResult, KnowledgeSpaceCreateOptions,
     KnowledgeSpaceCreateResult, KnowledgeSpaceId, KnowledgeSpaceListOptions,
-    KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeStatus, KnowledgeTransitionCommit,
+    KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeSpaceSourceStaleExposuresOptions,
+    KnowledgeSpaceSourceStaleExposuresResult, KnowledgeStatus, KnowledgeTransitionCommit,
     KnowledgeTransitionOptions, LineageId, MergeAbortOptions, MergeAbortResult,
     MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
     MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
@@ -406,6 +407,17 @@ enum StoreCommand {
     },
     #[command(name = "knowledge-space-available-exposures")]
     KnowledgeSpaceAvailableExposures {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        knowledge_space: String,
+
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    #[command(name = "knowledge-space-source-stale-exposures")]
+    KnowledgeSpaceSourceStaleExposures {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -2162,6 +2174,22 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 render_knowledge_space_available_exposures(
                     &engine.knowledge_space_available_exposures(options)?,
+                )
+            }
+            StoreCommand::KnowledgeSpaceSourceStaleExposures {
+                store,
+                knowledge_space,
+                limit,
+            } => {
+                let engine = Engine::open(store)?;
+                let mut options = KnowledgeSpaceSourceStaleExposuresOptions::new(
+                    KnowledgeSpaceId::parse_canonical(&knowledge_space)?,
+                );
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                render_knowledge_space_source_stale_exposures(
+                    &engine.knowledge_space_source_stale_exposures(options)?,
                 )
             }
             StoreCommand::KnowledgeExposureCreateLocal {
@@ -6557,6 +6585,24 @@ fn render_knowledge_space_available_exposures(
     Ok(output)
 }
 
+fn render_knowledge_space_source_stale_exposures(
+    result: &KnowledgeSpaceSourceStaleExposuresResult,
+) -> Result<String> {
+    let mut output = format!(
+        "knowledge_space_id={}\nexposures={}\n",
+        result.knowledge_space_id,
+        result.exposures.len()
+    );
+    for (index, snapshot) in result.exposures.iter().enumerate() {
+        write_knowledge_exposure_snapshot_fields(
+            &mut output,
+            Some(&format!("exposure[{index}]")),
+            snapshot,
+        )?;
+    }
+    Ok(output)
+}
+
 fn write_knowledge_space_snapshot_fields(
     output: &mut String,
     prefix: Option<&str>,
@@ -8213,6 +8259,160 @@ mod tests {
             value(&current_exposure, "exposure_id")
         );
         assert_eq!(value(&available, "exposure[0].source_status"), "current");
+    }
+
+    #[test]
+    fn cli_lists_source_stale_knowledge_space_exposures() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-space-source-stale-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let current_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Current reusable knowledge",
+        ])
+        .expect("parse current knowledge create"))
+        .expect("create current knowledge");
+        let stale_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&current_knowledge, "commit_id"),
+            "--statement",
+            "Source stale reusable knowledge",
+        ])
+        .expect("parse stale knowledge create"))
+        .expect("create stale knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let current_exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&current_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&current_knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse current exposure create"))
+        .expect("create current exposure");
+        let stale_exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&stale_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&stale_knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse stale exposure create"))
+        .expect("create stale exposure");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "invalidate",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&stale_knowledge, "commit_id"),
+            "--knowledge",
+            &value(&stale_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&stale_knowledge, "knowledge_entity_version_id"),
+            "--rationale",
+            "source claim changed",
+        ])
+        .expect("parse knowledge invalidate"))
+        .expect("invalidate stale knowledge");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-refresh-source-status",
+            store,
+            "--exposure",
+            &value(&stale_exposure, "exposure_id"),
+        ])
+        .expect("parse stale exposure refresh"))
+        .expect("refresh stale exposure");
+
+        let source_stale = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-source-stale-exposures",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+        ])
+        .expect("parse knowledge-space-source-stale-exposures"))
+        .expect("list source-stale exposures");
+
+        assert_eq!(
+            value(&source_stale, "knowledge_space_id"),
+            value(&knowledge_space, "knowledge_space_id")
+        );
+        assert_eq!(value(&source_stale, "exposures"), "1");
+        assert_eq!(
+            value(&source_stale, "exposure[0].exposure_id"),
+            value(&stale_exposure, "exposure_id")
+        );
+        assert_ne!(
+            value(&source_stale, "exposure[0].exposure_id"),
+            value(&current_exposure, "exposure_id")
+        );
+        assert_eq!(value(&source_stale, "exposure[0].source_status"), "stale");
     }
 
     #[test]

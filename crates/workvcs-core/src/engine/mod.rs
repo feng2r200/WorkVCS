@@ -42,6 +42,7 @@ use crate::history::{
     KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
     KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
     KnowledgeSpaceAvailableExposuresOptions, KnowledgeSpaceAvailableExposuresResult,
+    KnowledgeSpaceSourceStaleExposuresOptions, KnowledgeSpaceSourceStaleExposuresResult,
     KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
@@ -375,6 +376,13 @@ impl Engine {
         options: KnowledgeSpaceAvailableExposuresOptions,
     ) -> Result<KnowledgeSpaceAvailableExposuresResult> {
         self.store.knowledge_space_available_exposures(options)
+    }
+
+    pub fn knowledge_space_source_stale_exposures(
+        &self,
+        options: KnowledgeSpaceSourceStaleExposuresOptions,
+    ) -> Result<KnowledgeSpaceSourceStaleExposuresResult> {
+        self.store.knowledge_space_source_stale_exposures(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

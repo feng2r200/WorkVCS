@@ -19,9 +19,9 @@ use crate::history::{
     GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
     KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeSnapshot, KnowledgeTransitionCommit,
-    KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
+    KnowledgeRelationListResult, KnowledgeRelationSnapshot, KnowledgeSnapshot,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
+    PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
     RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
@@ -169,6 +169,14 @@ impl Engine {
         options: KnowledgeRelationListOptions,
     ) -> Result<KnowledgeRelationListResult> {
         self.store.knowledge_relations_at(&options)
+    }
+
+    pub fn knowledge_relation_at(
+        &self,
+        commit_id: CommitId,
+        relation_id: RelationId,
+    ) -> Result<KnowledgeRelationSnapshot> {
+        self.store.knowledge_relation_at(commit_id, relation_id)
     }
 
     pub fn create_resource(

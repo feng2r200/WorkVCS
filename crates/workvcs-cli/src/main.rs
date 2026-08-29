@@ -12,9 +12,9 @@ use workvcs_core::{
     EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit,
-    KnowledgeTransitionOptions, NextWorkOptions, NextWorkResult, RecordCreateCommit,
-    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    KnowledgeRelationListResult, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, NextWorkOptions, NextWorkResult,
+    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
     RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
@@ -372,6 +372,25 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         prior_knowledge: Option<String>,
+    },
+    #[command(group(
+        ArgGroup::new("knowledge-relation-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    RelationShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        relation: String,
     },
 }
 
@@ -1641,6 +1660,22 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(render_knowledge_relation_list(
                 &engine.knowledge_relations_at(options)?,
+            ))
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::RelationShow {
+                    store,
+                    branch,
+                    commit,
+                    relation,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_knowledge_query_commit(&engine, branch, commit)?;
+            Ok(render_knowledge_relation_snapshot(
+                &engine
+                    .knowledge_relation_at(commit_id, RelationId::parse_canonical(&relation)?)?,
             ))
         }
         Command::Task {
@@ -3294,6 +3329,20 @@ fn render_knowledge_relation_list(result: &KnowledgeRelationListResult) -> Strin
         .expect("write to String");
     }
     output
+}
+
+fn render_knowledge_relation_snapshot(relation: &KnowledgeRelationSnapshot) -> String {
+    format!(
+        "workspace_id={}\ncommit_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nreplacement_knowledge_entity_id={}\nprior_knowledge_entity_id={}\nrelation_state_digest={}\n",
+        relation.workspace_id,
+        relation.commit_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.replacement_knowledge_entity_id,
+        relation.prior_knowledge_entity_id,
+        relation.state_digest
+    )
 }
 
 fn render_knowledge_list(result: &KnowledgeListResult) -> Result<String> {
@@ -8309,6 +8358,31 @@ mod tests {
         );
         assert_eq!(
             value(&listed, "relation.0.prior_knowledge_entity_id"),
+            value(&prior, "knowledge_entity_id")
+        );
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "relation-show",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+        ])
+        .expect("parse knowledge relation show"))
+        .expect("show knowledge relation");
+        assert_eq!(
+            value(&shown, "relation_version_id"),
+            value(&relation, "relation_version_id")
+        );
+        assert_eq!(
+            value(&shown, "replacement_knowledge_entity_id"),
+            value(&replacement, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(&shown, "prior_knowledge_entity_id"),
             value(&prior, "knowledge_entity_id")
         );
 

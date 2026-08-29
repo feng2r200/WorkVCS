@@ -9,9 +9,9 @@ use crate::history::{
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeSnapshot, KnowledgeTransitionCommit,
-    KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
+    KnowledgeRelationListResult, KnowledgeRelationSnapshot, KnowledgeSnapshot,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
+    PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
     RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
@@ -219,6 +219,16 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::knowledge_relations_at(&self.connection, options)
+    }
+
+    pub(crate) fn knowledge_relation_at(
+        &self,
+        commit_id: CommitId,
+        relation_id: RelationId,
+    ) -> Result<KnowledgeRelationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::knowledge_relation_at(&self.connection, commit_id, relation_id)
     }
 
     pub(crate) fn create_record(

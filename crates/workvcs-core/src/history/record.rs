@@ -3184,6 +3184,22 @@ pub(crate) fn record_relation_at(
         })
 }
 
+pub(crate) fn knowledge_relation_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    relation_id: RelationId,
+) -> Result<KnowledgeRelationSnapshot> {
+    knowledge_relations_at(connection, &KnowledgeRelationListOptions::new(commit_id))?
+        .relations
+        .into_iter()
+        .find(|relation| relation.relation_id == relation_id)
+        .ok_or_else(|| {
+            WorkVcsError::KnowledgeNotFound(format!(
+                "knowledge relation {relation_id} is not present at commit {commit_id}"
+            ))
+        })
+}
+
 pub(crate) fn record_knowledge_relation_at(
     connection: &StoreConnection,
     commit_id: CommitId,

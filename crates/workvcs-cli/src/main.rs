@@ -19,13 +19,16 @@ use workvcs_core::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
     ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EvidenceId, ExternalObjectId, ExternalObjectRefListOptions,
+    EntityVersionId, EvidenceId, ExposureId, ExternalObjectId, ExternalObjectRefListOptions,
     ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
     ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
     HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
-    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions, KnowledgeExposureListResult,
+    KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus, KnowledgeListOptions,
+    KnowledgeListResult, KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions,
+    KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
+    KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
     KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceId,
     KnowledgeSpaceListOptions, KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeStatus,
@@ -397,6 +400,57 @@ enum StoreCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+    },
+    #[command(name = "knowledge-exposure-create-local")]
+    KnowledgeExposureCreateLocal {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        knowledge_space: String,
+
+        #[arg(long)]
+        workspace: String,
+
+        #[arg(long)]
+        knowledge: String,
+
+        #[arg(long)]
+        knowledge_version: String,
+
+        #[arg(long, default_value = "{}")]
+        detail_json: String,
+    },
+    #[command(name = "knowledge-exposure-show")]
+    KnowledgeExposureShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        exposure: String,
+    },
+    #[command(name = "knowledge-exposure-list")]
+    KnowledgeExposureList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        limit: Option<usize>,
+
+        #[arg(long)]
+        knowledge_space: Option<String>,
+
+        #[arg(long)]
+        workspace: Option<String>,
+
+        #[arg(long)]
+        knowledge: Option<String>,
+
+        #[arg(long)]
+        lifecycle_status: Option<String>,
+
+        #[arg(long)]
+        source_status: Option<String>,
     },
 }
 
@@ -2057,6 +2111,73 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 let result = engine.knowledge_spaces(options)?;
                 Ok(render_knowledge_space_list(&result))
+            }
+            StoreCommand::KnowledgeExposureCreateLocal {
+                store,
+                knowledge_space,
+                workspace,
+                knowledge,
+                knowledge_version,
+                detail_json,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let options = KnowledgeExposureCreateLocalOptions::new(
+                    KnowledgeSpaceId::parse_canonical(&knowledge_space)?,
+                    workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
+                    EntityId::parse_canonical(&knowledge)?,
+                    EntityVersionId::parse_canonical(&knowledge_version)?,
+                )?
+                .with_detail(parse_cli_object(
+                    "knowledge exposure transition detail_json",
+                    &detail_json,
+                )?)?;
+                let result = engine.create_local_knowledge_exposure(options)?;
+                render_knowledge_exposure_create_result(&result)
+            }
+            StoreCommand::KnowledgeExposureShow { store, exposure } => {
+                let engine = Engine::open(store)?;
+                let snapshot =
+                    engine.knowledge_exposure(ExposureId::parse_canonical(&exposure)?)?;
+                render_knowledge_exposure_snapshot(&snapshot)
+            }
+            StoreCommand::KnowledgeExposureList {
+                store,
+                limit,
+                knowledge_space,
+                workspace,
+                knowledge,
+                lifecycle_status,
+                source_status,
+            } => {
+                let engine = Engine::open(store)?;
+                let mut options = KnowledgeExposureListOptions::new();
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                if let Some(knowledge_space) = knowledge_space {
+                    options = options.with_knowledge_space_id(KnowledgeSpaceId::parse_canonical(
+                        &knowledge_space,
+                    )?);
+                }
+                if let Some(workspace) = workspace {
+                    options = options
+                        .with_workspace_id(workvcs_core::WorkspaceId::parse_canonical(&workspace)?);
+                }
+                if let Some(knowledge) = knowledge {
+                    options =
+                        options.with_knowledge_entity_id(EntityId::parse_canonical(&knowledge)?);
+                }
+                if let Some(lifecycle_status) = lifecycle_status {
+                    options = options.with_lifecycle_status(
+                        KnowledgeExposureLifecycleStatus::parse(&lifecycle_status)?,
+                    );
+                }
+                if let Some(source_status) = source_status {
+                    options = options
+                        .with_source_status(KnowledgeExposureSourceStatus::parse(&source_status)?);
+                }
+                let result = engine.knowledge_exposures(options)?;
+                render_knowledge_exposure_list(&result)
             }
         },
         Command::History {
@@ -6366,6 +6487,177 @@ fn write_knowledge_space_snapshot_fields(
     .expect("write to String");
 }
 
+fn render_knowledge_exposure_create_result(
+    result: &KnowledgeExposureCreateResult,
+) -> Result<String> {
+    render_knowledge_exposure_snapshot(&result.exposure)
+}
+
+fn render_knowledge_exposure_snapshot(snapshot: &KnowledgeExposureSnapshot) -> Result<String> {
+    let mut output = String::new();
+    write_knowledge_exposure_snapshot_fields(&mut output, None, snapshot)?;
+    Ok(output)
+}
+
+fn render_knowledge_exposure_list(result: &KnowledgeExposureListResult) -> Result<String> {
+    let mut output = format!("exposures={}\n", result.exposures.len());
+    for (index, snapshot) in result.exposures.iter().enumerate() {
+        write_knowledge_exposure_snapshot_fields(
+            &mut output,
+            Some(&format!("exposure[{index}]")),
+            snapshot,
+        )?;
+    }
+    Ok(output)
+}
+
+fn write_knowledge_exposure_snapshot_fields(
+    output: &mut String,
+    prefix: Option<&str>,
+    snapshot: &KnowledgeExposureSnapshot,
+) -> Result<()> {
+    let key = |name: &str| {
+        prefix
+            .map(|prefix| format!("{prefix}.{name}"))
+            .unwrap_or_else(|| name.to_owned())
+    };
+    writeln!(output, "{}={}", key("exposure_id"), snapshot.exposure_id).expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("knowledge_space_id"),
+        snapshot.knowledge_space_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("created_at_us"),
+        snapshot.created_at_us
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("lifecycle_status"),
+        snapshot.lifecycle_status.as_str()
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("transition_id"),
+        snapshot.transition_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("previous_transition_id"),
+        render_optional_display_or_none(snapshot.previous_transition_id.as_ref())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("changed_at_us"),
+        snapshot.changed_at_us
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("transition_detail_json"),
+        canonical_cli_json(
+            "knowledge exposure transition detail",
+            &snapshot.transition_detail
+        )?
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("transition_detail_digest"),
+        snapshot.transition_detail_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("transition_detail_size_bytes"),
+        snapshot.transition_detail_size_bytes
+    )
+    .expect("write to String");
+    writeln!(output, "{}=local", key("source_kind")).expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_workspace_id"),
+        snapshot.source.workspace_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_knowledge_entity_id"),
+        snapshot.source.knowledge_entity_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_knowledge_entity_version_id"),
+        snapshot.source.knowledge_entity_version_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_knowledge_state_digest"),
+        snapshot.source.knowledge_state_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_status"),
+        snapshot.source_status.source_status.as_str()
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_status_checked_at_us"),
+        snapshot.source_status.checked_at_us
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_status_detail_json"),
+        canonical_cli_json(
+            "knowledge exposure source status detail",
+            &snapshot.source_status.detail
+        )?
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_status_detail_digest"),
+        snapshot.source_status.detail_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_status_detail_size_bytes"),
+        snapshot.source_status.detail_size_bytes
+    )
+    .expect("write to String");
+    Ok(())
+}
+
 fn render_external_object_ref_record_result(
     result: &ExternalObjectRefRecordResult,
 ) -> Result<String> {
@@ -7281,6 +7573,141 @@ mod tests {
         assert_eq!(
             value(&listed, "knowledge_space[0].knowledge_space_id"),
             knowledge_space_id
+        );
+    }
+
+    #[test]
+    fn cli_creates_shows_and_lists_local_knowledge_exposures() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-exposure-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Expose this reusable knowledge",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+            "--detail-json",
+            "{\"reason\":\"cli\"}",
+        ])
+        .expect("parse knowledge-exposure-create-local"))
+        .expect("create local exposure");
+        assert_eq!(
+            value(&exposure, "knowledge_space_id"),
+            value(&knowledge_space, "knowledge_space_id")
+        );
+        assert_eq!(value(&exposure, "lifecycle_status"), "active");
+        assert_eq!(value(&exposure, "source_kind"), "local");
+        assert_eq!(value(&exposure, "source_workspace_id"), workspace_id);
+        assert_eq!(
+            value(&exposure, "source_knowledge_entity_id"),
+            value(&knowledge, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(&exposure, "source_knowledge_entity_version_id"),
+            value(&knowledge, "knowledge_entity_version_id")
+        );
+        assert_eq!(
+            value(&exposure, "source_knowledge_state_digest"),
+            value(&knowledge, "knowledge_state_digest")
+        );
+        assert_eq!(value(&exposure, "source_status"), "current");
+        assert_eq!(
+            value(&exposure, "transition_detail_json"),
+            "{\"reason\":\"cli\"}"
+        );
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-show",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+        ])
+        .expect("parse knowledge-exposure-show"))
+        .expect("show knowledge exposure");
+        assert_eq!(
+            value(&shown, "exposure_id"),
+            value(&exposure, "exposure_id")
+        );
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-list",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--lifecycle-status",
+            "active",
+            "--source-status",
+            "current",
+        ])
+        .expect("parse knowledge-exposure-list"))
+        .expect("list knowledge exposures");
+        assert_eq!(value(&listed, "exposures"), "1");
+        assert_eq!(
+            value(&listed, "exposure[0].exposure_id"),
+            value(&exposure, "exposure_id")
         );
     }
 

@@ -10,6 +10,7 @@ mod genesis;
 mod goal;
 mod integrity;
 mod knowledge;
+mod knowledge_exposure;
 mod knowledge_space;
 mod lineage;
 mod migration;
@@ -67,6 +68,12 @@ pub use knowledge::{
     KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeSnapshot, KnowledgeState, KnowledgeStatus, KnowledgeTransitionCommit,
     KnowledgeTransitionOptions,
+};
+pub use knowledge_exposure::{
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions, KnowledgeExposureListResult,
+    KnowledgeExposureLocalSourceSnapshot, KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus,
+    KnowledgeExposureSourceStatusSnapshot,
 };
 pub use knowledge_space::{
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
@@ -161,7 +168,13 @@ pub(crate) use external::{external_object_ref, external_object_refs, record_exte
 pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
-pub(crate) use knowledge::{create_knowledge, knowledge_at, knowledges_at, transition_knowledge};
+pub(crate) use knowledge::{
+    create_knowledge, knowledge_at, knowledge_version_state_digest, knowledges_at,
+    transition_knowledge,
+};
+pub(crate) use knowledge_exposure::{
+    create_local_knowledge_exposure, knowledge_exposure, knowledge_exposures,
+};
 pub(crate) use knowledge_space::{create_knowledge_space, knowledge_space, knowledge_spaces};
 pub(crate) use lineage::{record_store_lineage, store_lineage, store_lineages};
 pub(crate) use migration::{record_store_migration, store_migration, store_migrations};

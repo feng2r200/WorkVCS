@@ -50,6 +50,10 @@ use crate::history::{
     ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
 };
 use crate::history::{
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureListOptions, KnowledgeExposureListResult, KnowledgeExposureSnapshot,
+};
+use crate::history::{
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
     KnowledgeSpaceListResult, KnowledgeSpaceSnapshot,
 };
@@ -62,7 +66,7 @@ use crate::history::{
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
 use crate::identity::{
-    CheckpointId, ExternalRefId, KnowledgeSpaceId, LineageId, MigrationId, RelationId,
+    CheckpointId, ExposureId, ExternalRefId, KnowledgeSpaceId, LineageId, MigrationId, RelationId,
 };
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
@@ -414,6 +418,33 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::knowledge_spaces(&self.connection, options)
+    }
+
+    pub(crate) fn create_local_knowledge_exposure(
+        &mut self,
+        options: KnowledgeExposureCreateLocalOptions,
+    ) -> Result<KnowledgeExposureCreateResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_local_knowledge_exposure(&mut self.connection, options)
+    }
+
+    pub(crate) fn knowledge_exposure(
+        &self,
+        exposure_id: ExposureId,
+    ) -> Result<KnowledgeExposureSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::knowledge_exposure(&self.connection, exposure_id)
+    }
+
+    pub(crate) fn knowledge_exposures(
+        &self,
+        options: KnowledgeExposureListOptions,
+    ) -> Result<KnowledgeExposureListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::knowledge_exposures(&self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

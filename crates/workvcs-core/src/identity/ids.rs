@@ -106,6 +106,8 @@ typed_uuid!(StoreId);
 typed_uuid!(WorkspaceId);
 typed_uuid!(EntityId);
 typed_uuid!(EntityVersionId);
+typed_uuid!(ExposureId);
+typed_uuid!(ExposureTransitionId);
 typed_uuid!(ExternalObjectId);
 typed_uuid!(ExternalRefId);
 typed_uuid!(ExternalVersionId);

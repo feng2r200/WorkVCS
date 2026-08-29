@@ -39,7 +39,10 @@ pub use history::{
     ExternalObjectRefSnapshot, ExternalObjectReferenceScope, GoalCreateCommit, GoalCreateOptions,
     GoalSnapshot, GoalState, GoalStatus, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry,
     HistoryQueryOptions, HistoryQueryResult, HistoryStart, IntegrityReport, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeCreateOptions, KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions, KnowledgeExposureListResult,
+    KnowledgeExposureLocalSourceSnapshot, KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus,
+    KnowledgeExposureSourceStatusSnapshot, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -88,10 +91,10 @@ pub use history::{
 };
 pub use identity::{
     BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, Digest, EntityId, EntityVersionId,
-    EventId, EvidenceId, ExternalObjectId, ExternalRefId, ExternalVersionId, ImportId,
-    KnowledgeSpaceId, LineageId, MergeId, MergeItemId, MigrationId, OperationId, RelationId,
-    RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId,
-    WorkspaceId,
+    EventId, EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalRefId,
+    ExternalVersionId, ImportId, KnowledgeSpaceId, LineageId, MergeId, MergeItemId, MigrationId,
+    OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId,
+    SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
     ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,

@@ -506,6 +506,21 @@ struct LoadedKnowledgeVersion {
     state: KnowledgeState,
 }
 
+pub(crate) fn knowledge_version_state_digest(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    knowledge_entity_id: EntityId,
+    knowledge_entity_version_id: EntityVersionId,
+) -> Result<Digest> {
+    let loaded = load_knowledge_version(
+        connection,
+        workspace_id,
+        knowledge_entity_id,
+        knowledge_entity_version_id,
+    )?;
+    Ok(loaded.state_digest)
+}
+
 fn load_knowledge_version(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,

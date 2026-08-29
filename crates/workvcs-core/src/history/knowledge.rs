@@ -186,6 +186,23 @@ impl KnowledgeTransitionOptions {
         )
     }
 
+    pub fn supersede(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        knowledge_entity_id: EntityId,
+        expected_knowledge_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            knowledge_entity_id,
+            expected_knowledge_entity_version_id,
+            KnowledgeStatus::Superseded,
+            rationale,
+        )
+    }
+
     fn new(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -663,8 +680,9 @@ fn validate_knowledge_lifecycle_transition(
 ) -> Result<()> {
     match (current, next) {
         (KnowledgeStatus::Active, KnowledgeStatus::Invalidated) => Ok(()),
+        (KnowledgeStatus::Active, KnowledgeStatus::Superseded) => Ok(()),
         (current, next) => Err(WorkVcsError::KnowledgeInvalid(format!(
-            "knowledge transition {current:?} -> {next:?} is not allowed in Phase 3BQ"
+            "knowledge transition {current:?} -> {next:?} is not allowed in this slice"
         ))),
     }
 }

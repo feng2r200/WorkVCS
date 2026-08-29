@@ -309,6 +309,25 @@ enum KnowledgeCommand {
         #[arg(long)]
         rationale: String,
     },
+    Supersede {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        knowledge: String,
+
+        #[arg(long)]
+        knowledge_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1491,6 +1510,29 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let mut engine = Engine::open(store)?;
             let options = KnowledgeTransitionOptions::invalidate(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&knowledge)?,
+                EntityVersionId::parse_canonical(&knowledge_version)?,
+                rationale,
+            )?;
+            Ok(render_knowledge_transition(
+                &engine.transition_knowledge(options)?,
+            )?)
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::Supersede {
+                    store,
+                    branch,
+                    head,
+                    knowledge,
+                    knowledge_version,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let options = KnowledgeTransitionOptions::supersede(
                 BranchId::parse_canonical(&branch)?,
                 CommitId::parse_canonical(&head)?,
                 EntityId::parse_canonical(&knowledge)?,
@@ -7826,6 +7868,98 @@ mod tests {
             )
             .expect("list historical knowledge");
         assert_eq!(value(&empty, "knowledge"), "0");
+    }
+
+    #[test]
+    fn cli_supersedes_knowledge() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Use the old context summary format",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+
+        let superseded = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "supersede",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+            "--rationale",
+            "The context summary format was replaced",
+        ])
+        .expect("parse knowledge supersede"))
+        .expect("supersede knowledge");
+        assert_eq!(value(&superseded, "previous_knowledge_status"), "active");
+        assert_eq!(value(&superseded, "knowledge_status"), "superseded");
+
+        let superseded_list = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "superseded",
+        ])
+        .expect("parse superseded knowledge list"))
+        .expect("list superseded knowledge");
+        assert_eq!(value(&superseded_list, "knowledge"), "1");
+        assert_eq!(
+            value(&superseded_list, "knowledge.0.knowledge_entity_id"),
+            value(&knowledge, "knowledge_entity_id")
+        );
+
+        let active_list = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "active",
+        ])
+        .expect("parse active knowledge list"))
+        .expect("list active knowledge");
+        assert_eq!(value(&active_list, "knowledge"), "0");
     }
 
     #[test]

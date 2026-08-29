@@ -22,12 +22,13 @@ use crate::history::{
     RecordCreateCommit, RecordCreateOptions, RecordListOptions, RecordListResult,
     RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
     RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
-    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
-    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
+    RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
+    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
+    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -315,6 +316,13 @@ impl Engine {
         options: RecordRelationRemoveOptions,
     ) -> Result<RecordRelationRemoveCommit> {
         self.store.remove_record_relation(&options)
+    }
+
+    pub fn restore_record_relation(
+        &mut self,
+        options: RecordRelationRestoreOptions,
+    ) -> Result<RecordRelationRestoreCommit> {
+        self.store.restore_record_relation(&options)
     }
 
     pub fn record_relations_at(

@@ -7,6 +7,7 @@ use super::record::{
     RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION, RECORD_DECISION_SUPERSEDE_OPERATION_TYPE,
     RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION, RECORD_RELATION_CREATE_OPERATION_TYPE,
     RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION, RECORD_RELATION_REMOVE_OPERATION_TYPE,
+    RECORD_RELATION_RESTORE_OPERATION_SCHEMA_VERSION, RECORD_RELATION_RESTORE_OPERATION_TYPE,
 };
 use super::reference::STRUCTURAL_REFERENCE_CREATE_OPERATION_TYPE;
 use crate::canonical::{
@@ -448,6 +449,13 @@ fn validate_entity_transition_changeset(
         }
         RECORD_RELATION_REMOVE_OPERATION_TYPE => {
             if operation_schema_version != RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        RECORD_RELATION_RESTORE_OPERATION_TYPE => {
+            if operation_schema_version != RECORD_RELATION_RESTORE_OPERATION_SCHEMA_VERSION {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
                     "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
                 )));

@@ -13,22 +13,22 @@ use workvcs_core::{
     NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
     RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
     RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
-    RecordRelationRemoveOptions, RecordRelationSnapshot, RecordRelationType, RecordSnapshot,
-    RecordStatus, RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId,
-    ReplayedState, ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult,
-    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
-    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
-    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
-    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
-    WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, content_object_digest,
-    parse_canonical_json,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
+    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
+    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkVcsError, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -560,6 +560,25 @@ enum RecordCommand {
         relation: String,
     },
     RelationRemove {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        relation: String,
+
+        #[arg(long)]
+        relation_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    RelationRestore {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -1623,6 +1642,27 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::RelationRestore {
+                    store,
+                    branch,
+                    head,
+                    relation,
+                    relation_version,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let restored = engine.restore_record_relation(RecordRelationRestoreOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                RelationId::parse_canonical(&relation)?,
+                RelationVersionId::parse_canonical(&relation_version)?,
+                rationale,
+            )?)?;
+            Ok(render_record_relation_restore(&restored))
+        }
+        Command::Record {
+            command:
                 RecordCommand::Assumption {
                     store,
                     branch,
@@ -2609,6 +2649,26 @@ fn render_record_relation_remove(relation: &RecordRelationRemoveCommit) -> Strin
         relation.relation_label.as_deref().unwrap_or(""),
         relation.source_record_entity_id,
         relation.target_record_entity_id,
+        relation.work_state_digest
+    )
+}
+
+fn render_record_relation_restore(relation: &RecordRelationRestoreCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nrelation_label={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.relation_label.as_deref().unwrap_or(""),
+        relation.source_record_entity_id,
+        relation.target_record_entity_id,
+        relation.relation_state_digest,
         relation.work_state_digest
     )
 }
@@ -6243,6 +6303,50 @@ mod tests {
         assert_eq!(
             value(&historical, "relation_version_id"),
             value(&relation, "relation_version_id")
+        );
+
+        let restored = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-restore",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&removed, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--relation-version",
+            &value(&relation, "relation_version_id"),
+            "--rationale",
+            "Restore support relation",
+        ])
+        .expect("parse relation restore"))
+        .expect("restore relation");
+        assert!(restored.contains("relation_type=supports"));
+        assert_eq!(
+            value(&restored, "relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&restored, "relation_version_id"),
+            value(&relation, "relation_version_id")
+        );
+
+        let listed_restored = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&restored, "commit_id"),
+        ])
+        .expect("parse relation list after restore"))
+        .expect("list after restore");
+        assert!(listed_restored.contains("relations=1"));
+        assert_eq!(
+            value(&listed_restored, "relation.0.relation_id"),
+            value(&relation, "relation_id")
         );
     }
 

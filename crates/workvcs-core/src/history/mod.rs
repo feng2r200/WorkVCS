@@ -45,8 +45,9 @@ pub use record::{
     RecordCreateOptions, RecordKind, RecordListOptions, RecordListResult,
     RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
     RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordState, RecordStatus,
-    RecordTransitionCommit, RecordTransitionOptions,
+    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
+    RecordRelationType, RecordSnapshot, RecordState, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions,
 };
 pub use reference::{
     StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
@@ -98,7 +99,8 @@ pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use query::{branch_head, query_history};
 pub(crate) use record::{
     create_record, create_record_relation, record_at, record_relation_at, record_relations_at,
-    records_at, remove_record_relation, supersede_decision_record, transition_record,
+    records_at, remove_record_relation, restore_record_relation, supersede_decision_record,
+    transition_record,
 };
 pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::state_at;

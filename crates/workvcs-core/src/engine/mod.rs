@@ -5,6 +5,7 @@ use crate::CommitId;
 use crate::EntityId;
 use crate::EvidenceId;
 use crate::ImportId;
+use crate::LineageId;
 use crate::RelationId;
 use crate::ResourceId;
 use crate::ResourceObservationId;
@@ -57,6 +58,10 @@ use crate::history::{
     WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
     WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+};
+use crate::history::{
+    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    StoreLineageRecordResult, StoreLineageSnapshot,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
@@ -229,6 +234,24 @@ impl Engine {
         options: BundleImportAttemptListOptions,
     ) -> Result<BundleImportAttemptListResult> {
         self.store.bundle_import_attempts(options)
+    }
+
+    pub fn record_store_lineage(
+        &mut self,
+        options: StoreLineageRecordOptions,
+    ) -> Result<StoreLineageRecordResult> {
+        self.store.record_store_lineage(options)
+    }
+
+    pub fn store_lineage(&self, lineage_id: LineageId) -> Result<StoreLineageSnapshot> {
+        self.store.store_lineage(lineage_id)
+    }
+
+    pub fn store_lineages(
+        &self,
+        options: StoreLineageListOptions,
+    ) -> Result<StoreLineageListResult> {
+        self.store.store_lineages(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

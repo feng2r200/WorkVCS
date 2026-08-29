@@ -25,7 +25,7 @@ use workvcs_core::{
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
     KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
+    LineageId, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
     MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
@@ -46,15 +46,16 @@ use workvcs_core::{
     RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
     RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
-    content_object_digest, parse_canonical_json,
+    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    StoreLineageRecordResult, StoreLineageSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
+    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -77,6 +78,10 @@ enum Command {
     Doctor {
         #[arg(value_name = "STORE")]
         store: PathBuf,
+    },
+    Store {
+        #[command(subcommand)]
+        command: StoreCommand,
     },
     #[command(group(
         ArgGroup::new("history-start")
@@ -225,6 +230,52 @@ enum Command {
     Merge {
         #[command(subcommand)]
         command: MergeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum StoreCommand {
+    #[command(name = "lineage-record")]
+    Record {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        source_store: String,
+
+        #[arg(long)]
+        derivation_kind: String,
+
+        #[arg(long, default_value = "{}")]
+        source_root_json: String,
+
+        #[arg(long)]
+        source_bundle_digest: Option<String>,
+    },
+    #[command(name = "lineage-show")]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        lineage: String,
+    },
+    #[command(name = "lineage-list")]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        limit: Option<usize>,
+
+        #[arg(long)]
+        source_store: Option<String>,
+
+        #[arg(long)]
+        derivation_kind: Option<String>,
+
+        #[arg(long)]
+        source_bundle_digest: Option<String>,
     },
 }
 
@@ -1686,6 +1737,61 @@ fn run(cli: Cli) -> Result<String> {
                 integrity.invalid_checkpoints
             ))
         }
+        Command::Store { command } => match command {
+            StoreCommand::Record {
+                store,
+                source_store,
+                derivation_kind,
+                source_root_json,
+                source_bundle_digest,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let source_root_descriptor =
+                    parse_cli_object("store lineage source_root_json", &source_root_json)?;
+                let mut options = StoreLineageRecordOptions::new(
+                    StoreId::parse_canonical(&source_store)?,
+                    derivation_kind,
+                    source_root_descriptor,
+                )?;
+                if let Some(source_bundle_digest) = source_bundle_digest {
+                    options =
+                        options.with_source_bundle_digest(Digest::from_hex(&source_bundle_digest)?);
+                }
+                let result = engine.record_store_lineage(options)?;
+                render_store_lineage_record_result(&result)
+            }
+            StoreCommand::Show { store, lineage } => {
+                let engine = Engine::open(store)?;
+                let snapshot = engine.store_lineage(LineageId::parse_canonical(&lineage)?)?;
+                render_store_lineage_snapshot(&snapshot)
+            }
+            StoreCommand::List {
+                store,
+                limit,
+                source_store,
+                derivation_kind,
+                source_bundle_digest,
+            } => {
+                let engine = Engine::open(store)?;
+                let mut options = StoreLineageListOptions::new();
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                if let Some(source_store) = source_store {
+                    options =
+                        options.with_source_store_id(StoreId::parse_canonical(&source_store)?);
+                }
+                if let Some(derivation_kind) = derivation_kind {
+                    options = options.with_derivation_kind(derivation_kind)?;
+                }
+                if let Some(source_bundle_digest) = source_bundle_digest {
+                    options =
+                        options.with_source_bundle_digest(Digest::from_hex(&source_bundle_digest)?);
+                }
+                let result = engine.store_lineages(options)?;
+                render_store_lineage_list(&result)
+            }
+        },
         Command::History {
             store,
             branch,
@@ -5850,6 +5956,100 @@ fn render_optional_display_or_none<T: std::fmt::Display>(value: Option<&T>) -> S
         .unwrap_or_else(|| "none".to_owned())
 }
 
+fn render_store_lineage_record_result(result: &StoreLineageRecordResult) -> Result<String> {
+    render_store_lineage_snapshot(&result.lineage)
+}
+
+fn render_store_lineage_snapshot(snapshot: &StoreLineageSnapshot) -> Result<String> {
+    let mut output = String::new();
+    write_store_lineage_snapshot_fields(&mut output, None, snapshot)?;
+    Ok(output)
+}
+
+fn render_store_lineage_list(result: &StoreLineageListResult) -> Result<String> {
+    let mut output = format!("lineages={}\n", result.lineages.len());
+    for (index, snapshot) in result.lineages.iter().enumerate() {
+        write_store_lineage_snapshot_fields(
+            &mut output,
+            Some(&format!("lineage[{index}]")),
+            snapshot,
+        )?;
+    }
+    Ok(output)
+}
+
+fn write_store_lineage_snapshot_fields(
+    output: &mut String,
+    prefix: Option<&str>,
+    snapshot: &StoreLineageSnapshot,
+) -> Result<()> {
+    let key = |name: &str| {
+        prefix
+            .map(|prefix| format!("{prefix}.{name}"))
+            .unwrap_or_else(|| name.to_owned())
+    };
+    writeln!(output, "{}={}", key("lineage_id"), snapshot.lineage_id).expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_store_id"),
+        snapshot.source_store_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("derivation_kind"),
+        snapshot.derivation_kind
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_root_descriptor_json"),
+        canonical_cli_json(
+            "store lineage source_root_descriptor",
+            &snapshot.source_root_descriptor
+        )?
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_root_descriptor_digest"),
+        snapshot.source_root_descriptor_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_root_descriptor_size_bytes"),
+        snapshot.source_root_descriptor_size_bytes
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_bundle_digest"),
+        render_optional_display_or_none(snapshot.source_bundle_digest.as_ref())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("created_at_us"),
+        snapshot.created_at_us
+    )
+    .expect("write to String");
+    Ok(())
+}
+
+fn canonical_cli_json(label: &str, value: &CanonicalValue) -> Result<String> {
+    String::from_utf8(canonical_bytes(value)?).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!("{label} was not UTF-8: {error}"))
+    })
+}
+
 fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
     format!(
         "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nactual_manifest_size_bytes={}\nproblem={}\n",
@@ -6156,6 +6356,7 @@ mod tests {
             vec![
                 "init",
                 "doctor",
+                "store",
                 "history",
                 "show-at",
                 "restore",
@@ -6230,6 +6431,98 @@ mod tests {
         assert!(doctor.contains("checked_commits=0"));
         assert!(doctor.contains("checked_checkpoints=0"));
         assert!(doctor.contains("invalid_checkpoints=0"));
+    }
+
+    #[test]
+    fn cli_records_shows_and_lists_store_lineage() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let source_path = tempdir.path().join("source.sqlite");
+        let target_path = tempdir.path().join("target.sqlite");
+        let source = source_path.to_str().expect("source path text");
+        let target = target_path.to_str().expect("target path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", source, "--display-name", "source-store"])
+                .expect("parse source init"),
+        )
+        .expect("init source");
+        let source_store_id = Engine::open(source)
+            .expect("open source")
+            .store_info()
+            .expect("source info")
+            .store_id
+            .to_string();
+        run(
+            Cli::try_parse_from(["workvcs", "init", target, "--display-name", "target-store"])
+                .expect("parse target init"),
+        )
+        .expect("init target");
+
+        let source_bundle_digest = content_object_digest(b"cli-lineage-bundle").to_string();
+        let recorded = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "lineage-record",
+            target,
+            "--source-store",
+            &source_store_id,
+            "--derivation-kind",
+            "explicit_fork",
+            "--source-root-json",
+            "{\"path\":\"/tmp/source\",\"profile\":\"workvcs-local-payload-directory-v1\"}",
+            "--source-bundle-digest",
+            &source_bundle_digest,
+        ])
+        .expect("parse store lineage-record"))
+        .expect("record store lineage");
+        assert_eq!(value(&recorded, "source_store_id"), source_store_id);
+        assert_eq!(value(&recorded, "derivation_kind"), "explicit_fork");
+        assert_eq!(
+            value(&recorded, "source_root_descriptor_json"),
+            "{\"path\":\"/tmp/source\",\"profile\":\"workvcs-local-payload-directory-v1\"}"
+        );
+        assert_eq!(
+            value(&recorded, "source_bundle_digest"),
+            source_bundle_digest
+        );
+        let lineage_id = value(&recorded, "lineage_id");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "lineage-show",
+            target,
+            "--lineage",
+            &lineage_id,
+        ])
+        .expect("parse store lineage-show"))
+        .expect("show store lineage");
+        assert_eq!(value(&shown, "lineage_id"), lineage_id);
+        assert_eq!(
+            value(&shown, "source_root_descriptor_digest"),
+            value(&recorded, "source_root_descriptor_digest")
+        );
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "lineage-list",
+            target,
+            "--source-store",
+            &source_store_id,
+            "--derivation-kind",
+            "explicit_fork",
+            "--source-bundle-digest",
+            &source_bundle_digest,
+        ])
+        .expect("parse store lineage-list"))
+        .expect("list store lineages");
+        assert_eq!(value(&listed, "lineages"), "1");
+        assert_eq!(value(&listed, "lineage[0].lineage_id"), lineage_id);
+        assert_eq!(
+            value(&listed, "lineage[0].source_bundle_digest"),
+            source_bundle_digest
+        );
     }
 
     #[test]

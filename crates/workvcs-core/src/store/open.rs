@@ -45,7 +45,11 @@ use crate::history::{
     WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
-use crate::identity::{CheckpointId, RelationId};
+use crate::history::{
+    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    StoreLineageRecordResult, StoreLineageSnapshot,
+};
+use crate::identity::{CheckpointId, LineageId, RelationId};
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
@@ -291,6 +295,30 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::bundle_import_attempts(&self.connection, options)
+    }
+
+    pub(crate) fn record_store_lineage(
+        &mut self,
+        options: StoreLineageRecordOptions,
+    ) -> Result<StoreLineageRecordResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_store_lineage(&mut self.connection, &current, options)
+    }
+
+    pub(crate) fn store_lineage(&self, lineage_id: LineageId) -> Result<StoreLineageSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::store_lineage(&self.connection, lineage_id)
+    }
+
+    pub(crate) fn store_lineages(
+        &self,
+        options: StoreLineageListOptions,
+    ) -> Result<StoreLineageListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::store_lineages(&self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

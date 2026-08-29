@@ -116,6 +116,7 @@ typed_uuid!(CommitId);
 typed_uuid!(ChangeSetId);
 typed_uuid!(CheckpointId);
 typed_uuid!(ImportId);
+typed_uuid!(LineageId);
 typed_uuid!(OperationId);
 typed_uuid!(EventId);
 typed_uuid!(SessionId);

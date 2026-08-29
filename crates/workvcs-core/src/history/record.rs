@@ -87,8 +87,10 @@ pub enum RecordStatus {
     Invalidated,
     Running,
     Succeeded,
+    Superseded,
     Unverified,
     Validated,
+    Withdrawn,
 }
 
 impl RecordStatus {
@@ -100,8 +102,10 @@ impl RecordStatus {
             Self::Invalidated => "invalidated",
             Self::Running => "running",
             Self::Succeeded => "succeeded",
+            Self::Superseded => "superseded",
             Self::Unverified => "unverified",
             Self::Validated => "validated",
+            Self::Withdrawn => "withdrawn",
         }
     }
 
@@ -113,8 +117,10 @@ impl RecordStatus {
             "invalidated" => Ok(Self::Invalidated),
             "running" => Ok(Self::Running),
             "succeeded" => Ok(Self::Succeeded),
+            "superseded" => Ok(Self::Superseded),
             "unverified" => Ok(Self::Unverified),
             "validated" => Ok(Self::Validated),
+            "withdrawn" => Ok(Self::Withdrawn),
             other => Err(WorkVcsError::RecordInvalid(format!(
                 "record status {other:?} is not in the semantic Record lifecycle vocabulary"
             ))),
@@ -285,6 +291,24 @@ impl RecordState {
         };
         Ok(next)
     }
+
+    fn transition_decision(&self, next_status: RecordStatus, rationale_text: &str) -> Result<Self> {
+        if self.kind != RecordKind::Decision {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record kind {:?} does not use the Decision lifecycle",
+                self.kind
+            )));
+        }
+        validate_transition_rationale(rationale_text)?;
+        validate_decision_lifecycle_transition(self.status, next_status)?;
+        let next = Self {
+            kind: self.kind,
+            statement: self.statement.clone(),
+            scope: self.scope.clone(),
+            status: next_status,
+        };
+        Ok(next)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -392,7 +416,62 @@ impl RecordTransitionOptions {
         )
     }
 
+    pub fn supersede_decision(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::decision_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Superseded,
+            rationale,
+        )
+    }
+
+    pub fn withdraw_decision(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::decision_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Withdrawn,
+            rationale,
+        )
+    }
+
     fn assumption_transition(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        next_status: RecordStatus,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale_text = rationale.into();
+        validate_transition_rationale(&rationale_text)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            next_status,
+            rationale: rationale_value(&rationale_text)?,
+            rationale_text,
+        })
+    }
+
+    fn decision_transition(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
         record_entity_id: EntityId,
@@ -932,6 +1011,9 @@ pub(crate) fn transition_record(
         RecordKind::Attempt => current
             .state
             .transition_attempt(options.next_status, &options.rationale_text)?,
+        RecordKind::Decision => current
+            .state
+            .transition_decision(options.next_status, &options.rationale_text)?,
         kind => {
             return Err(WorkVcsError::RecordInvalid(format!(
                 "record kind {kind:?} does not use a transition lifecycle in this slice"
@@ -2116,15 +2198,24 @@ fn validate_attempt_lifecycle_transition(current: RecordStatus, next: RecordStat
     }
 }
 
+fn validate_decision_lifecycle_transition(current: RecordStatus, next: RecordStatus) -> Result<()> {
+    match (current, next) {
+        (RecordStatus::Active, RecordStatus::Superseded | RecordStatus::Withdrawn) => Ok(()),
+        (current, next) => Err(WorkVcsError::RecordInvalid(format!(
+            "decision transition {current:?} -> {next:?} is not allowed"
+        ))),
+    }
+}
+
 fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
     match (kind, status) {
         (
-            RecordKind::Finding
-            | RecordKind::Decision
-            | RecordKind::Handoff
-            | RecordKind::Question
-            | RecordKind::Risk,
+            RecordKind::Finding | RecordKind::Handoff | RecordKind::Question | RecordKind::Risk,
             RecordStatus::Active,
+        )
+        | (
+            RecordKind::Decision,
+            RecordStatus::Active | RecordStatus::Superseded | RecordStatus::Withdrawn,
         )
         | (
             RecordKind::Attempt,

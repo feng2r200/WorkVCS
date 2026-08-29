@@ -602,6 +602,28 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    DecisionStatus {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        record: String,
+
+        #[arg(long)]
+        record_version: String,
+
+        #[arg(long)]
+        status: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
     Finding {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1659,6 +1681,47 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::DecisionStatus {
+                    store,
+                    branch,
+                    head,
+                    record,
+                    record_version,
+                    status,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let record_id = EntityId::parse_canonical(&record)?;
+            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
+            let options = match parse_decision_record_status(&status)? {
+                RecordStatus::Superseded => RecordTransitionOptions::supersede_decision(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Withdrawn => RecordTransitionOptions::withdraw_decision(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                _ => {
+                    return Err(WorkVcsError::RecordInvalid(format!(
+                        "decision status {status:?} is not a transition target"
+                    )));
+                }
+            };
+            let record = engine.transition_record(options)?;
+            Ok(render_record_transition(&record))
+        }
+        Command::Record {
+            command:
                 RecordCommand::Question {
                     store,
                     branch,
@@ -1874,6 +1937,16 @@ fn parse_attempt_record_status(value: &str) -> Result<RecordStatus> {
         "inconclusive" => Ok(RecordStatus::Inconclusive),
         other => Err(WorkVcsError::RecordInvalid(format!(
             "attempt status {other:?} is not in the CLI transition vocabulary"
+        ))),
+    }
+}
+
+fn parse_decision_record_status(value: &str) -> Result<RecordStatus> {
+    match value {
+        "superseded" => Ok(RecordStatus::Superseded),
+        "withdrawn" => Ok(RecordStatus::Withdrawn),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "decision status {other:?} is not in the CLI transition vocabulary"
         ))),
     }
 }
@@ -4072,6 +4145,83 @@ mod tests {
         assert!(record.contains("record_kind=decision"));
         assert!(record.contains("record_status=active"));
         assert!(record.contains("record_entity_id="));
+    }
+
+    #[test]
+    fn cli_runs_record_decision_lifecycle_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let decision = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Use serialized writes",
+        ])
+        .expect("parse decision"))
+        .expect("create decision");
+        let superseded = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision-status",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&decision, "commit_id"),
+            "--record",
+            &value(&decision, "record_entity_id"),
+            "--record-version",
+            &value(&decision, "record_entity_version_id"),
+            "--status",
+            "superseded",
+            "--rationale",
+            "A newer decision replaces this one",
+        ])
+        .expect("parse decision status"))
+        .expect("transition decision");
+
+        assert!(superseded.contains("record_kind=decision"));
+        assert!(superseded.contains("previous_record_status=active"));
+        assert!(superseded.contains("record_status=superseded"));
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--record",
+            &value(&superseded, "record_entity_id"),
+        ])
+        .expect("parse record show"))
+        .expect("show decision");
+        assert!(shown.contains("record_status=superseded"));
     }
 
     #[test]

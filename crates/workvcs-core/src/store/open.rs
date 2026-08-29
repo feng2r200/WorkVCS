@@ -4,10 +4,11 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
     EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot, ReplayedState,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -109,6 +110,12 @@ impl Store {
         history::commit_entity_transition(&mut self.connection, options)
     }
 
+    pub(crate) fn create_plan(&mut self, options: &PlanCreateOptions) -> Result<PlanCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_plan(&mut self.connection, options)
+    }
+
     pub(crate) fn create_task(&mut self, options: &TaskCreateOptions) -> Result<TaskCreateCommit> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
@@ -186,6 +193,16 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::task_at(&self.connection, commit_id, task_entity_id)
+    }
+
+    pub(crate) fn plan_at(
+        &self,
+        commit_id: CommitId,
+        plan_entity_id: EntityId,
+    ) -> Result<PlanSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::plan_at(&self.connection, commit_id, plan_entity_id)
     }
 
     pub(crate) fn acceptance_criterion_at(

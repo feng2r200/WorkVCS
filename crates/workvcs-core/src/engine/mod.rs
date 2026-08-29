@@ -10,10 +10,11 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
     EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, ReplayedState, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot, ReplayedState,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -83,6 +84,10 @@ impl Engine {
         self.store.commit_entity_transition(&options)
     }
 
+    pub fn create_plan(&mut self, options: PlanCreateOptions) -> Result<PlanCreateCommit> {
+        self.store.create_plan(&options)
+    }
+
     pub fn create_task(&mut self, options: TaskCreateOptions) -> Result<TaskCreateCommit> {
         self.store.create_task(&options)
     }
@@ -138,6 +143,10 @@ impl Engine {
 
     pub fn task_at(&self, commit_id: CommitId, task_entity_id: EntityId) -> Result<TaskSnapshot> {
         self.store.task_at(commit_id, task_entity_id)
+    }
+
+    pub fn plan_at(&self, commit_id: CommitId, plan_entity_id: EntityId) -> Result<PlanSnapshot> {
+        self.store.plan_at(commit_id, plan_entity_id)
     }
 
     pub fn acceptance_criterion_at(

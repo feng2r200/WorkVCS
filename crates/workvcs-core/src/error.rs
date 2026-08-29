@@ -9,6 +9,7 @@ pub enum ErrorCategory {
     Import,
     Integrity,
     Mutation,
+    Plan,
     Query,
     Replay,
     Runtime,
@@ -33,6 +34,8 @@ pub enum ErrorCode {
     ClaimNotFound,
     EntityNotFound,
     EntityTransitionInvalid,
+    PlanInvalid,
+    PlanNotFound,
     QueryInvalid,
     QueryUnsupported,
     ReplayInvalid,
@@ -87,6 +90,12 @@ pub enum WorkVcsError {
 
     #[error("entity transition invalid: {0}")]
     EntityTransitionInvalid(String),
+
+    #[error("plan invalid: {0}")]
+    PlanInvalid(String),
+
+    #[error("plan not found: {0}")]
+    PlanNotFound(String),
 
     #[error("query invalid: {0}")]
     QueryInvalid(String),
@@ -149,6 +158,8 @@ impl WorkVcsError {
             Self::ClaimNotFound(_) => ErrorCode::ClaimNotFound,
             Self::EntityNotFound(_) => ErrorCode::EntityNotFound,
             Self::EntityTransitionInvalid(_) => ErrorCode::EntityTransitionInvalid,
+            Self::PlanInvalid(_) => ErrorCode::PlanInvalid,
+            Self::PlanNotFound(_) => ErrorCode::PlanNotFound,
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
             Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
             Self::ReplayInvalid(_) => ErrorCode::ReplayInvalid,
@@ -177,6 +188,7 @@ impl WorkVcsError {
             | Self::BranchNotFound(_)
             | Self::EntityNotFound(_)
             | Self::EntityTransitionInvalid(_) => ErrorCategory::Mutation,
+            Self::PlanInvalid(_) | Self::PlanNotFound(_) => ErrorCategory::Plan,
             Self::QueryInvalid(_) | Self::QueryUnsupported(_) => ErrorCategory::Query,
             Self::CommitNotFound(_) | Self::ReplayInvalid(_) | Self::ReplayUnsupported(_) => {
                 ErrorCategory::Replay

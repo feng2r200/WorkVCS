@@ -1131,6 +1131,52 @@ pub struct KnowledgeRelationSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeRelationListOptions {
+    commit_id: CommitId,
+    replacement_knowledge_entity_id: Option<EntityId>,
+    prior_knowledge_entity_id: Option<EntityId>,
+}
+
+impl KnowledgeRelationListOptions {
+    pub fn new(commit_id: CommitId) -> Self {
+        Self {
+            commit_id,
+            replacement_knowledge_entity_id: None,
+            prior_knowledge_entity_id: None,
+        }
+    }
+
+    pub fn with_replacement_knowledge(mut self, knowledge_entity_id: EntityId) -> Self {
+        self.replacement_knowledge_entity_id = Some(knowledge_entity_id);
+        self
+    }
+
+    pub fn with_prior_knowledge(mut self, knowledge_entity_id: EntityId) -> Self {
+        self.prior_knowledge_entity_id = Some(knowledge_entity_id);
+        self
+    }
+
+    pub fn commit_id(&self) -> CommitId {
+        self.commit_id
+    }
+
+    pub fn replacement_knowledge_entity_id(&self) -> Option<EntityId> {
+        self.replacement_knowledge_entity_id
+    }
+
+    pub fn prior_knowledge_entity_id(&self) -> Option<EntityId> {
+        self.prior_knowledge_entity_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeRelationListResult {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub relations: Vec<KnowledgeRelationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecisionRecordSupersedeOptions {
     branch_id: BranchId,
     expected_head_commit_id: CommitId,
@@ -3044,8 +3090,9 @@ pub(crate) fn record_knowledge_relations_at(
 
 pub(crate) fn knowledge_relations_at(
     connection: &StoreConnection,
-    commit_id: CommitId,
-) -> Result<Vec<KnowledgeRelationSnapshot>> {
+    options: &KnowledgeRelationListOptions,
+) -> Result<KnowledgeRelationListResult> {
+    let commit_id = options.commit_id();
     let replayed = state_at(connection, commit_id)?;
     let mut relations = Vec::new();
 
@@ -3059,6 +3106,21 @@ pub(crate) fn knowledge_relations_at(
         else {
             continue;
         };
+        if options.replacement_knowledge_entity_id().is_some_and(
+            |replacement_knowledge_entity_id| {
+                relation.replacement_knowledge_entity_id != replacement_knowledge_entity_id
+            },
+        ) {
+            continue;
+        }
+        if options
+            .prior_knowledge_entity_id()
+            .is_some_and(|prior_knowledge_entity_id| {
+                relation.prior_knowledge_entity_id != prior_knowledge_entity_id
+            })
+        {
+            continue;
+        }
         let replacement = knowledge_at(
             connection,
             commit_id,
@@ -3099,7 +3161,11 @@ pub(crate) fn knowledge_relations_at(
             })
             .then_with(|| left.relation_id.cmp(&right.relation_id))
     });
-    Ok(relations)
+    Ok(KnowledgeRelationListResult {
+        workspace_id: replayed.workspace_id,
+        commit_id,
+        relations,
+    })
 }
 
 pub(crate) fn record_relation_at(

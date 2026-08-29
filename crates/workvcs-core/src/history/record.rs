@@ -952,6 +952,25 @@ pub struct RecordKnowledgeRelationCreateOptions {
 }
 
 impl RecordKnowledgeRelationCreateOptions {
+    pub fn contradicts(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_knowledge_entity_id: EntityId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::Contradicts,
+            source_record_entity_id,
+            target_knowledge_entity_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
     pub fn invalidates(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -2631,6 +2650,21 @@ fn validate_record_knowledge_relation_endpoints_for_create(
     target: &KnowledgeSnapshot,
 ) -> Result<()> {
     match relation_type {
+        RecordRelationType::Contradicts => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "contradicts source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            if target.state.status != KnowledgeStatus::Active {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "contradicts target Knowledge must be active, found {}",
+                    target.state.status
+                )));
+            }
+            Ok(())
+        }
         RecordRelationType::Invalidates => {
             if source.state.kind != RecordKind::Finding {
                 return Err(WorkVcsError::RecordInvalid(format!(
@@ -2687,6 +2721,15 @@ fn validate_record_knowledge_relation_endpoints_for_projection(
     source: &RecordSnapshot,
 ) -> Result<()> {
     match relation_type {
+        RecordRelationType::Contradicts => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "contradicts source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            Ok(())
+        }
         RecordRelationType::Invalidates => {
             if source.state.kind != RecordKind::Finding {
                 return Err(WorkVcsError::RecordInvalid(format!(
@@ -4308,7 +4351,8 @@ fn load_record_knowledge_relation_version(
     };
     if !matches!(
         relation_type,
-        RecordRelationType::Invalidates
+        RecordRelationType::Contradicts
+            | RecordRelationType::Invalidates
             | RecordRelationType::Supports
             | RecordRelationType::Validates
     ) {

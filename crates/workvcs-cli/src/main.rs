@@ -632,6 +632,25 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    LinkContradictsKnowledge {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        source_record: String,
+
+        #[arg(long)]
+        target_knowledge: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
     LinkDerivedFrom {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1845,6 +1864,29 @@ fn run(cli: Cli) -> Result<String> {
                     rationale,
                 )?)?;
             Ok(render_record_relation_create(&relation))
+        }
+        Command::Record {
+            command:
+                RecordCommand::LinkContradictsKnowledge {
+                    store,
+                    branch,
+                    head,
+                    source_record,
+                    target_knowledge,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation = engine.create_record_knowledge_relation(
+                RecordKnowledgeRelationCreateOptions::contradicts(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_knowledge)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_create(&relation))
         }
         Command::Record {
             command:
@@ -7648,6 +7690,99 @@ mod tests {
         assert_eq!(value(&why, "subject_entity_kind"), "knowledge");
         assert_eq!(value(&why, "relation_edges"), "1");
         assert_eq!(value(&why, "relation.0.relation_kind"), "record_validates");
+        assert_eq!(value(&why, "relation.0.direction"), "incoming");
+        assert_eq!(value(&why, "relation.0.target_entity_kind"), "knowledge");
+    }
+
+    #[test]
+    fn cli_links_record_contradiction_to_knowledge() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "All validation output is deterministic",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--statement",
+            "Validation output includes timestamps from external tools",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-contradicts-knowledge",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--rationale",
+            "The Finding contradicts the Knowledge statement",
+        ])
+        .expect("parse contradicts knowledge"))
+        .expect("contradict knowledge relation");
+        assert_eq!(value(&relation, "relation_type"), "contradicts");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--entity",
+            &value(&knowledge, "knowledge_entity_id"),
+        ])
+        .expect("parse why knowledge"))
+        .expect("why knowledge");
+        assert_eq!(value(&why, "subject_entity_kind"), "knowledge");
+        assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(
+            value(&why, "relation.0.relation_kind"),
+            "record_contradicts"
+        );
         assert_eq!(value(&why, "relation.0.direction"), "incoming");
         assert_eq!(value(&why, "relation.0.target_entity_kind"), "knowledge");
     }

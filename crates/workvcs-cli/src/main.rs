@@ -10,7 +10,8 @@ use workvcs_core::{
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
     EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult, KnowledgeSnapshot,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeSnapshot,
     KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions, NextWorkOptions,
     NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
     RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
@@ -327,6 +328,25 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         knowledge_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    LinkSupersedes {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        replacement_knowledge: String,
+
+        #[arg(long)]
+        prior_knowledge: String,
 
         #[arg(long)]
         rationale: String,
@@ -1552,6 +1572,28 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_knowledge_transition(
                 &engine.transition_knowledge(options)?,
             )?)
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::LinkSupersedes {
+                    store,
+                    branch,
+                    head,
+                    replacement_knowledge,
+                    prior_knowledge,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_knowledge_relation(KnowledgeRelationCreateOptions::supersedes(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&replacement_knowledge)?,
+                    EntityId::parse_canonical(&prior_knowledge)?,
+                    rationale,
+                )?)?;
+            Ok(render_knowledge_relation_create(&relation))
         }
         Command::Task {
             command:
@@ -3139,6 +3181,25 @@ fn render_knowledge_transition(knowledge: &KnowledgeTransitionCommit) -> Result<
     ))
 }
 
+fn render_knowledge_relation_create(relation: &KnowledgeRelationCreateCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nreplacement_knowledge_entity_id={}\nprior_knowledge_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.replacement_knowledge_entity_id,
+        relation.prior_knowledge_entity_id,
+        relation.relation_state_digest,
+        relation.work_state_digest
+    )
+}
+
 fn render_knowledge_list(result: &KnowledgeListResult) -> Result<String> {
     let mut output = format!(
         "workspace_id={}\ncommit_id={}\nknowledge={}\n",
@@ -4338,6 +4399,7 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::RecordSupports => "record_supports",
         WhyRelationKind::RecordSupersedes => "record_supersedes",
         WhyRelationKind::RecordValidates => "record_validates",
+        WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
     }
 }
 
@@ -8027,6 +8089,126 @@ mod tests {
         .expect("parse active knowledge list"))
         .expect("list active knowledge");
         assert_eq!(value(&active_list, "knowledge"), "0");
+    }
+
+    #[test]
+    fn cli_links_knowledge_supersession() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let prior = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Use the old context summary format",
+        ])
+        .expect("parse prior knowledge create"))
+        .expect("create prior knowledge");
+        let replacement = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&prior, "commit_id"),
+            "--statement",
+            "Use the scoped context summary format",
+        ])
+        .expect("parse replacement knowledge create"))
+        .expect("create replacement knowledge");
+        let superseded = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "supersede",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&replacement, "commit_id"),
+            "--knowledge",
+            &value(&prior, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&prior, "knowledge_entity_version_id"),
+            "--rationale",
+            "The scoped context summary format replaced it",
+        ])
+        .expect("parse knowledge supersede"))
+        .expect("supersede prior knowledge");
+
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "link-supersedes",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&superseded, "commit_id"),
+            "--replacement-knowledge",
+            &value(&replacement, "knowledge_entity_id"),
+            "--prior-knowledge",
+            &value(&prior, "knowledge_entity_id"),
+            "--rationale",
+            "The replacement Knowledge supersedes the prior statement",
+        ])
+        .expect("parse knowledge link supersedes"))
+        .expect("link knowledge supersedes");
+        assert_eq!(value(&relation, "relation_type"), "supersedes");
+        assert_eq!(
+            value(&relation, "replacement_knowledge_entity_id"),
+            value(&replacement, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(&relation, "prior_knowledge_entity_id"),
+            value(&prior, "knowledge_entity_id")
+        );
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--entity",
+            &value(&prior, "knowledge_entity_id"),
+        ])
+        .expect("parse why prior knowledge"))
+        .expect("why prior knowledge");
+        assert_eq!(value(&why, "subject_entity_kind"), "knowledge");
+        assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(
+            value(&why, "relation.0.relation_kind"),
+            "knowledge_supersedes"
+        );
+        assert_eq!(value(&why, "relation.0.direction"), "incoming");
+        assert_eq!(value(&why, "relation.0.source_entity_kind"), "knowledge");
+        assert_eq!(value(&why, "relation.0.target_entity_kind"), "knowledge");
     }
 
     #[test]

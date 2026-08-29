@@ -7,7 +7,8 @@ use crate::history::{
     EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
     GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult, KnowledgeSnapshot,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeSnapshot,
     KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
@@ -199,6 +200,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::transition_knowledge(&mut self.connection, options)
+    }
+
+    pub(crate) fn create_knowledge_relation(
+        &mut self,
+        options: &KnowledgeRelationCreateOptions,
+    ) -> Result<KnowledgeRelationCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_knowledge_relation(&mut self.connection, options)
     }
 
     pub(crate) fn create_record(

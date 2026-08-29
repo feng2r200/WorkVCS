@@ -18,23 +18,24 @@ use crate::history::{
     EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
     GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
     KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
-    KnowledgeSnapshot, KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit,
-    PlanCreateOptions, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
-    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    RecordCreateCommit, RecordCreateOptions, RecordKnowledgeRelationCreateCommit,
-    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
-    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
-    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
-    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
-    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
-    RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
-    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
-    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeSnapshot,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
+    PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
+    RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
+    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
+    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
+    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
+    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
+    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
+    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
+    RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
+    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
+    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -153,6 +154,13 @@ impl Engine {
         options: KnowledgeTransitionOptions,
     ) -> Result<KnowledgeTransitionCommit> {
         self.store.transition_knowledge(&options)
+    }
+
+    pub fn create_knowledge_relation(
+        &mut self,
+        options: KnowledgeRelationCreateOptions,
+    ) -> Result<KnowledgeRelationCreateCommit> {
+        self.store.create_knowledge_relation(&options)
     }
 
     pub fn create_resource(

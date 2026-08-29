@@ -10,24 +10,24 @@ use crate::history::{
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
-    KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeTransitionCommit,
-    KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
-    RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
-    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
-    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
+    KnowledgeSnapshot, KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit,
+    PlanCreateOptions, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    RecordCreateCommit, RecordCreateOptions, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -239,6 +239,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::remove_knowledge_relation(&mut self.connection, options)
+    }
+
+    pub(crate) fn restore_knowledge_relation(
+        &mut self,
+        options: &KnowledgeRelationRestoreOptions,
+    ) -> Result<KnowledgeRelationRestoreCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::restore_knowledge_relation(&mut self.connection, options)
     }
 
     pub(crate) fn create_record(

@@ -6,6 +6,7 @@ use super::entity::{
 use super::record::{
     KNOWLEDGE_RELATION_CREATE_OPERATION_SCHEMA_VERSION, KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE,
     KNOWLEDGE_RELATION_REMOVE_OPERATION_SCHEMA_VERSION, KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE,
+    KNOWLEDGE_RELATION_RESTORE_OPERATION_SCHEMA_VERSION, KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE,
     RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION, RECORD_DECISION_SUPERSEDE_OPERATION_TYPE,
     RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION, RECORD_RELATION_CREATE_OPERATION_TYPE,
     RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION, RECORD_RELATION_REMOVE_OPERATION_TYPE,
@@ -458,6 +459,13 @@ fn validate_entity_transition_changeset(
         }
         KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE => {
             if operation_schema_version != KNOWLEDGE_RELATION_REMOVE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE => {
+            if operation_schema_version != KNOWLEDGE_RELATION_RESTORE_OPERATION_SCHEMA_VERSION {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
                     "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
                 )));

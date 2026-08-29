@@ -13,25 +13,26 @@ use workvcs_core::{
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
-    KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit,
-    KnowledgeTransitionOptions, NextWorkOptions, NextWorkResult, RecordCreateCommit,
-    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
-    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
-    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
-    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
-    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
-    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
-    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
-    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
-    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
+    KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
+    NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
+    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
+    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
+    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
+    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
+    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
+    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
+    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
+    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
@@ -394,6 +395,25 @@ enum KnowledgeCommand {
         relation: String,
     },
     RelationRemove {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        relation: String,
+
+        #[arg(long)]
+        relation_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    RelationRestore {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -1718,6 +1738,28 @@ fn run(cli: Cli) -> Result<String> {
                 rationale,
             )?)?;
             Ok(render_knowledge_relation_remove(&removed))
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::RelationRestore {
+                    store,
+                    branch,
+                    head,
+                    relation,
+                    relation_version,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let restored =
+                engine.restore_knowledge_relation(KnowledgeRelationRestoreOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    RelationId::parse_canonical(&relation)?,
+                    RelationVersionId::parse_canonical(&relation_version)?,
+                    rationale,
+                )?)?;
+            Ok(render_knowledge_relation_restore(&restored))
         }
         Command::Task {
             command:
@@ -3400,6 +3442,25 @@ fn render_knowledge_relation_remove(relation: &KnowledgeRelationRemoveCommit) ->
         relation.relation_type,
         relation.replacement_knowledge_entity_id,
         relation.prior_knowledge_entity_id,
+        relation.work_state_digest
+    )
+}
+
+fn render_knowledge_relation_restore(relation: &KnowledgeRelationRestoreCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nreplacement_knowledge_entity_id={}\nprior_knowledge_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.replacement_knowledge_entity_id,
+        relation.prior_knowledge_entity_id,
+        relation.relation_state_digest,
         relation.work_state_digest
     )
 }
@@ -8514,6 +8575,63 @@ mod tests {
         .expect("parse why after knowledge relation remove"))
         .expect("why after knowledge relation remove");
         assert_eq!(value(&why_after_remove, "relation_edges"), "0");
+
+        let restored = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "relation-restore",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&removed, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--relation-version",
+            &value(&relation, "relation_version_id"),
+            "--rationale",
+            "Restore the corrected Knowledge lineage edge",
+        ])
+        .expect("parse knowledge relation restore"))
+        .expect("restore knowledge relation");
+        assert_eq!(value(&restored, "relation_type"), "supersedes");
+        assert_eq!(
+            value(&restored, "relation_version_id"),
+            value(&relation, "relation_version_id")
+        );
+        assert_eq!(
+            value(&restored, "relation_state_digest"),
+            value(&relation, "relation_state_digest")
+        );
+
+        let after_restore = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "relation-list",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse knowledge relation list after restore"))
+        .expect("list knowledge relations after restore");
+        assert_eq!(value(&after_restore, "relations"), "1");
+
+        let why_after_restore = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--entity",
+            &value(&prior, "knowledge_entity_id"),
+        ])
+        .expect("parse why after knowledge relation restore"))
+        .expect("why after knowledge relation restore");
+        assert_eq!(value(&why_after_restore, "relation_edges"), "1");
+        assert_eq!(
+            value(&why_after_restore, "relation.0.relation_kind"),
+            "knowledge_supersedes"
+        );
     }
 
     #[test]

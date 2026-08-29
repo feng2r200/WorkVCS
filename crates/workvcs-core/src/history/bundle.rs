@@ -348,11 +348,17 @@ pub struct BundleImportAttemptResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BundleImportAttemptListOptions {
     limit: usize,
+    source_store_id: Option<StoreId>,
+    bundle_digest: Option<Digest>,
 }
 
 impl BundleImportAttemptListOptions {
     pub fn new() -> Self {
-        Self { limit: 50 }
+        Self {
+            limit: 50,
+            source_store_id: None,
+            bundle_digest: None,
+        }
     }
 
     pub fn with_limit(mut self, limit: usize) -> Result<Self> {
@@ -365,8 +371,26 @@ impl BundleImportAttemptListOptions {
         Ok(self)
     }
 
+    pub fn with_source_store_id(mut self, source_store_id: StoreId) -> Self {
+        self.source_store_id = Some(source_store_id);
+        self
+    }
+
+    pub fn with_bundle_digest(mut self, bundle_digest: Digest) -> Self {
+        self.bundle_digest = Some(bundle_digest);
+        self
+    }
+
     fn limit(self) -> usize {
         self.limit
+    }
+
+    fn source_store_id(self) -> Option<StoreId> {
+        self.source_store_id
+    }
+
+    fn bundle_digest(self) -> Option<Digest> {
+        self.bundle_digest
     }
 }
 
@@ -929,17 +953,28 @@ pub(crate) fn bundle_import_attempts(
 ) -> Result<BundleImportAttemptListResult> {
     connection.verify_foreign_keys()?;
     let limit = usize_to_i64("bundle import attempt list limit", options.limit())?;
+    let source_store_id_bytes = options.source_store_id().map(|id| id.raw_bytes());
+    let bundle_digest_bytes = options.bundle_digest().map(|digest| *digest.as_bytes());
     let mut statement = connection
         .inner()
         .prepare(
             "SELECT import_id
              FROM import_attempt
+             WHERE (?2 IS NULL OR source_store_id = ?2)
+               AND (?3 IS NULL OR bundle_digest = ?3)
              ORDER BY started_at_us DESC, import_id DESC
              LIMIT ?1",
         )
         .map_err(storage_error)?;
     let rows = statement
-        .query_map(params![limit], |row| row.get::<_, Vec<u8>>(0))
+        .query_map(
+            params![
+                limit,
+                source_store_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                bundle_digest_bytes.as_ref().map(|bytes| &bytes[..])
+            ],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
         .map_err(storage_error)?;
 
     let mut attempts = Vec::new();

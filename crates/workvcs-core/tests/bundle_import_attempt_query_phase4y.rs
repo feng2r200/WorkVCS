@@ -174,6 +174,77 @@ fn bundle_import_attempt_list_is_newest_first_and_limitable() {
 }
 
 #[test]
+fn bundle_import_attempt_list_filters_by_source_store_and_bundle_digest() {
+    let (_first_tempdir, first_path) = store_path();
+    let (mut first_source, first_workspace) = create_workspace(&first_path, "phase4z-first-source");
+    let first_task = create_task(
+        &mut first_source,
+        first_workspace.initial_branch_id,
+        first_workspace.genesis_commit_id,
+        "First external import",
+    );
+    let first_export = first_source
+        .export_bundle_payloads(BundlePayloadExportOptions::for_commit(first_task.commit_id))
+        .expect("first export");
+
+    let (_second_tempdir, second_path) = store_path();
+    let (mut second_source, second_workspace) =
+        create_workspace(&second_path, "phase4z-second-source");
+    let second_task = create_task(
+        &mut second_source,
+        second_workspace.initial_branch_id,
+        second_workspace.genesis_commit_id,
+        "Second external import",
+    );
+    let second_export = second_source
+        .export_bundle_payloads(BundlePayloadExportOptions::for_commit(
+            second_task.commit_id,
+        ))
+        .expect("second export");
+
+    let (_target_tempdir, target_path) = store_path();
+    let mut target = init_engine(&target_path, "phase4z-target-store");
+    let first_recorded = target
+        .record_bundle_import_attempt(import_options(&first_export))
+        .expect("first import attempt");
+    let second_recorded = target
+        .record_bundle_import_attempt(import_options(&second_export))
+        .expect("second import attempt");
+
+    let first_source_only = target
+        .bundle_import_attempts(
+            BundleImportAttemptListOptions::new()
+                .with_source_store_id(first_export.manifest.store_id),
+        )
+        .expect("source filtered imports");
+    assert_eq!(first_source_only.attempts.len(), 1);
+    assert_eq!(
+        first_source_only.attempts[0].import_id,
+        first_recorded.import_id.unwrap()
+    );
+
+    let second_bundle_only = target
+        .bundle_import_attempts(
+            BundleImportAttemptListOptions::new().with_bundle_digest(second_recorded.bundle_digest),
+        )
+        .expect("bundle digest filtered imports");
+    assert_eq!(second_bundle_only.attempts.len(), 1);
+    assert_eq!(
+        second_bundle_only.attempts[0].import_id,
+        second_recorded.import_id.unwrap()
+    );
+
+    let mismatched = target
+        .bundle_import_attempts(
+            BundleImportAttemptListOptions::new()
+                .with_source_store_id(first_export.manifest.store_id)
+                .with_bundle_digest(second_recorded.bundle_digest),
+        )
+        .expect("mismatched filters");
+    assert_eq!(mismatched.attempts.len(), 0);
+}
+
+#[test]
 fn bundle_import_attempt_list_rejects_zero_limit() {
     let error = BundleImportAttemptListOptions::new()
         .with_limit(0)

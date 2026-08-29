@@ -45,7 +45,7 @@ use workvcs_core::{
     ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
     RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
     RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
     StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
@@ -399,6 +399,12 @@ enum BundleCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        source_store: Option<String>,
+
+        #[arg(long)]
+        bundle_digest: Option<String>,
     },
     ValidateManifest {
         #[arg(value_name = "STORE")]
@@ -1827,11 +1833,23 @@ fn run(cli: Cli) -> Result<String> {
                 let snapshot = engine.bundle_import_attempt(ImportId::parse_canonical(&import)?)?;
                 Ok(render_bundle_import_attempt_snapshot(&snapshot))
             }
-            BundleCommand::ImportList { store, limit } => {
+            BundleCommand::ImportList {
+                store,
+                limit,
+                source_store,
+                bundle_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let mut options = BundleImportAttemptListOptions::new();
                 if let Some(limit) = limit {
                     options = options.with_limit(limit)?;
+                }
+                if let Some(source_store) = source_store {
+                    options =
+                        options.with_source_store_id(StoreId::parse_canonical(&source_store)?);
+                }
+                if let Some(bundle_digest) = bundle_digest {
+                    options = options.with_bundle_digest(Digest::from_hex(&bundle_digest)?);
                 }
                 let result = engine.bundle_import_attempts(options)?;
                 Ok(render_bundle_import_attempt_list(&result))
@@ -6663,6 +6681,19 @@ mod tests {
             value(&listed_imports, "import[0].outcome"),
             "already_present"
         );
+
+        let listed_by_bundle = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-list",
+            store,
+            "--bundle-digest",
+            &value(&import_attempt, "bundle_digest"),
+        ])
+        .expect("parse bundle import-list bundle filter"))
+        .expect("list bundle import attempts by bundle digest");
+        assert_eq!(value(&listed_by_bundle, "imports"), "1");
+        assert_eq!(value(&listed_by_bundle, "import[0].import_id"), import_id);
     }
 
     #[test]

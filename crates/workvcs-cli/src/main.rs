@@ -26,7 +26,9 @@ use workvcs_core::{
     KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
     KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
     KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
-    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
+    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
+    KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceId,
+    KnowledgeSpaceListOptions, KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeStatus,
     KnowledgeTransitionCommit, KnowledgeTransitionOptions, LineageId, MergeAbortOptions,
     MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
     MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId, MergeItemId,
@@ -371,6 +373,30 @@ enum StoreCommand {
 
         #[arg(long)]
         scope: Option<String>,
+    },
+    #[command(name = "knowledge-space-create")]
+    KnowledgeSpaceCreate {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        name: String,
+    },
+    #[command(name = "knowledge-space-show")]
+    KnowledgeSpaceShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        knowledge_space: String,
+    },
+    #[command(name = "knowledge-space-list")]
+    KnowledgeSpaceList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -2007,6 +2033,30 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 let result = engine.external_object_refs(options)?;
                 render_external_object_ref_list(&result)
+            }
+            StoreCommand::KnowledgeSpaceCreate { store, name } => {
+                let mut engine = Engine::open(store)?;
+                let result =
+                    engine.create_knowledge_space(KnowledgeSpaceCreateOptions::new(name)?)?;
+                Ok(render_knowledge_space_create_result(&result))
+            }
+            StoreCommand::KnowledgeSpaceShow {
+                store,
+                knowledge_space,
+            } => {
+                let engine = Engine::open(store)?;
+                let snapshot =
+                    engine.knowledge_space(KnowledgeSpaceId::parse_canonical(&knowledge_space)?)?;
+                Ok(render_knowledge_space_snapshot(&snapshot))
+            }
+            StoreCommand::KnowledgeSpaceList { store, limit } => {
+                let engine = Engine::open(store)?;
+                let mut options = KnowledgeSpaceListOptions::new();
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                let result = engine.knowledge_spaces(options)?;
+                Ok(render_knowledge_space_list(&result))
             }
         },
         Command::History {
@@ -6267,6 +6317,55 @@ fn canonical_cli_json(label: &str, value: &CanonicalValue) -> Result<String> {
     })
 }
 
+fn render_knowledge_space_create_result(result: &KnowledgeSpaceCreateResult) -> String {
+    render_knowledge_space_snapshot(&result.knowledge_space)
+}
+
+fn render_knowledge_space_snapshot(snapshot: &KnowledgeSpaceSnapshot) -> String {
+    let mut output = String::new();
+    write_knowledge_space_snapshot_fields(&mut output, None, snapshot);
+    output
+}
+
+fn render_knowledge_space_list(result: &KnowledgeSpaceListResult) -> String {
+    let mut output = format!("knowledge_spaces={}\n", result.knowledge_spaces.len());
+    for (index, snapshot) in result.knowledge_spaces.iter().enumerate() {
+        write_knowledge_space_snapshot_fields(
+            &mut output,
+            Some(&format!("knowledge_space[{index}]")),
+            snapshot,
+        );
+    }
+    output
+}
+
+fn write_knowledge_space_snapshot_fields(
+    output: &mut String,
+    prefix: Option<&str>,
+    snapshot: &KnowledgeSpaceSnapshot,
+) {
+    let key = |name: &str| {
+        prefix
+            .map(|prefix| format!("{prefix}.{name}"))
+            .unwrap_or_else(|| name.to_owned())
+    };
+    writeln!(
+        output,
+        "{}={}",
+        key("knowledge_space_id"),
+        snapshot.knowledge_space_id
+    )
+    .expect("write to String");
+    writeln!(output, "{}={}", key("name"), snapshot.name).expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("created_at_us"),
+        snapshot.created_at_us
+    )
+    .expect("write to String");
+}
+
 fn render_external_object_ref_record_result(
     result: &ExternalObjectRefRecordResult,
 ) -> Result<String> {
@@ -7124,6 +7223,64 @@ mod tests {
         assert_eq!(
             value(&listed, "external_ref[0].external_ref_id"),
             external_ref_id
+        );
+    }
+
+    #[test]
+    fn cli_creates_shows_and_lists_knowledge_spaces() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-space-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+
+        let created = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        assert_eq!(value(&created, "name"), "Research");
+        let knowledge_space_id = value(&created, "knowledge_space_id");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-show",
+            store,
+            "--knowledge-space",
+            &knowledge_space_id,
+        ])
+        .expect("parse knowledge-space-show"))
+        .expect("show knowledge space");
+        assert_eq!(value(&shown, "knowledge_space_id"), knowledge_space_id);
+        assert_eq!(value(&shown, "name"), "Research");
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-list",
+            store,
+            "--limit",
+            "1",
+        ])
+        .expect("parse knowledge-space-list"))
+        .expect("list knowledge spaces");
+        assert_eq!(value(&listed, "knowledge_spaces"), "1");
+        assert_eq!(
+            value(&listed, "knowledge_space[0].knowledge_space_id"),
+            knowledge_space_id
         );
     }
 

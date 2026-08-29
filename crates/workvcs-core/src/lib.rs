@@ -43,11 +43,13 @@ pub use history::{
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
-    KnowledgeSnapshot, KnowledgeState, KnowledgeStatus, KnowledgeTransitionCommit,
-    KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanState,
-    PlanStatus, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
-    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    KnowledgeSnapshot, KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult,
+    KnowledgeSpaceListOptions, KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeState,
+    KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit,
+    PlanCreateOptions, PlanSnapshot, PlanState, PlanStatus, PlanTransitionCommit,
+    PlanTransitionOptions, PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
+    PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot, RecordCreateCommit,
+    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
     RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
@@ -86,9 +88,10 @@ pub use history::{
 };
 pub use identity::{
     BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, Digest, EntityId, EntityVersionId,
-    EventId, EvidenceId, ExternalObjectId, ExternalRefId, ExternalVersionId, ImportId, LineageId,
-    MergeId, MergeItemId, MigrationId, OperationId, RelationId, RelationVersionId, ResourceId,
-    ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkspaceId,
+    EventId, EvidenceId, ExternalObjectId, ExternalRefId, ExternalVersionId, ImportId,
+    KnowledgeSpaceId, LineageId, MergeId, MergeItemId, MigrationId, OperationId, RelationId,
+    RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId,
+    WorkspaceId,
 };
 pub use runtime::{
     ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,

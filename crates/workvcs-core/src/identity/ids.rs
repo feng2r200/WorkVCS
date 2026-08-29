@@ -112,6 +112,7 @@ typed_uuid!(ExternalVersionId);
 typed_uuid!(EvidenceId);
 typed_uuid!(ResourceId);
 typed_uuid!(ResourceObservationId);
+typed_uuid!(KnowledgeSpaceId);
 typed_uuid!(RelationId);
 typed_uuid!(RelationVersionId);
 typed_uuid!(BranchId);

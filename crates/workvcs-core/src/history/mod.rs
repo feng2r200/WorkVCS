@@ -10,6 +10,7 @@ mod genesis;
 mod goal;
 mod integrity;
 mod knowledge;
+mod knowledge_space;
 mod lineage;
 mod migration;
 mod plan;
@@ -66,6 +67,10 @@ pub use knowledge::{
     KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeSnapshot, KnowledgeState, KnowledgeStatus, KnowledgeTransitionCommit,
     KnowledgeTransitionOptions,
+};
+pub use knowledge_space::{
+    KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
+    KnowledgeSpaceListResult, KnowledgeSpaceSnapshot,
 };
 pub use lineage::{
     StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
@@ -157,6 +162,7 @@ pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use knowledge::{create_knowledge, knowledge_at, knowledges_at, transition_knowledge};
+pub(crate) use knowledge_space::{create_knowledge_space, knowledge_space, knowledge_spaces};
 pub(crate) use lineage::{record_store_lineage, store_lineage, store_lineages};
 pub(crate) use migration::{record_store_migration, store_migration, store_migrations};
 pub(crate) use plan::{create_plan, plan_at, transition_plan};

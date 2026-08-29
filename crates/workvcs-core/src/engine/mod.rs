@@ -6,6 +6,7 @@ use crate::EntityId;
 use crate::EvidenceId;
 use crate::ExternalRefId;
 use crate::ImportId;
+use crate::KnowledgeSpaceId;
 use crate::LineageId;
 use crate::MigrationId;
 use crate::RelationId;
@@ -64,6 +65,10 @@ use crate::history::{
 use crate::history::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
     ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
+};
+use crate::history::{
+    KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
+    KnowledgeSpaceListResult, KnowledgeSpaceSnapshot,
 };
 use crate::history::{
     StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
@@ -304,6 +309,27 @@ impl Engine {
         options: ExternalObjectRefListOptions,
     ) -> Result<ExternalObjectRefListResult> {
         self.store.external_object_refs(options)
+    }
+
+    pub fn create_knowledge_space(
+        &mut self,
+        options: KnowledgeSpaceCreateOptions,
+    ) -> Result<KnowledgeSpaceCreateResult> {
+        self.store.create_knowledge_space(&options)
+    }
+
+    pub fn knowledge_space(
+        &self,
+        knowledge_space_id: KnowledgeSpaceId,
+    ) -> Result<KnowledgeSpaceSnapshot> {
+        self.store.knowledge_space(knowledge_space_id)
+    }
+
+    pub fn knowledge_spaces(
+        &self,
+        options: KnowledgeSpaceListOptions,
+    ) -> Result<KnowledgeSpaceListResult> {
+        self.store.knowledge_spaces(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

@@ -50,6 +50,10 @@ use crate::history::{
     ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
 };
 use crate::history::{
+    KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
+    KnowledgeSpaceListResult, KnowledgeSpaceSnapshot,
+};
+use crate::history::{
     StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot,
 };
@@ -57,7 +61,9 @@ use crate::history::{
     StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
-use crate::identity::{CheckpointId, ExternalRefId, LineageId, MigrationId, RelationId};
+use crate::identity::{
+    CheckpointId, ExternalRefId, KnowledgeSpaceId, LineageId, MigrationId, RelationId,
+};
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
@@ -381,6 +387,33 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::external_object_refs(&self.connection, options)
+    }
+
+    pub(crate) fn create_knowledge_space(
+        &mut self,
+        options: &KnowledgeSpaceCreateOptions,
+    ) -> Result<KnowledgeSpaceCreateResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_knowledge_space(&mut self.connection, options)
+    }
+
+    pub(crate) fn knowledge_space(
+        &self,
+        knowledge_space_id: KnowledgeSpaceId,
+    ) -> Result<KnowledgeSpaceSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::knowledge_space(&self.connection, knowledge_space_id)
+    }
+
+    pub(crate) fn knowledge_spaces(
+        &self,
+        options: KnowledgeSpaceListOptions,
+    ) -> Result<KnowledgeSpaceListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::knowledge_spaces(&self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

@@ -490,36 +490,58 @@ fn load_first_parent(
                  WHERE commit_id = ?1",
                 params![&commit_id.raw_bytes()[..]],
             )?;
-            let parent = connection
-                .inner()
-                .query_row(
-                    "SELECT parent_commit_id
-                     FROM commit_parent
-                     WHERE commit_id = ?1
-                       AND parent_ordinal = 0
-                       AND parent_role = ?2",
-                    params![&commit_id.raw_bytes()[..], PRIMARY_PARENT_ROLE],
-                    |row| row.get::<_, Vec<u8>>(0),
-                )
-                .optional()
-                .map_err(storage_error)?;
-            let Some(parent) = parent else {
-                return Err(WorkVcsError::QueryInvalid(format!(
-                    "normal commit {commit_id} does not have an ordinal-0 primary parent"
-                )));
-            };
-            Ok(Some(decode_commit_id(
-                "commit_parent.parent_commit_id",
-                parent,
+            Ok(Some(load_primary_parent(
+                connection,
+                commit_id,
+                "normal commit",
             )?))
         }
-        MERGE_COMMIT_KIND => Err(WorkVcsError::QueryUnsupported(format!(
-            "merge commit history at {commit_id} is deferred"
-        ))),
+        MERGE_COMMIT_KIND => {
+            require_count(
+                connection,
+                "Merge history parents",
+                2,
+                "SELECT count(*)
+                 FROM commit_parent
+                 WHERE commit_id = ?1",
+                params![&commit_id.raw_bytes()[..]],
+            )?;
+            Ok(Some(load_primary_parent(
+                connection,
+                commit_id,
+                "merge commit",
+            )?))
+        }
         other => Err(WorkVcsError::QueryInvalid(format!(
             "unsupported WorkStateCommit kind {other:?}"
         ))),
     }
+}
+
+fn load_primary_parent(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    commit_label: &str,
+) -> Result<CommitId> {
+    let parent = connection
+        .inner()
+        .query_row(
+            "SELECT parent_commit_id
+             FROM commit_parent
+             WHERE commit_id = ?1
+               AND parent_ordinal = 0
+               AND parent_role = ?2",
+            params![&commit_id.raw_bytes()[..], PRIMARY_PARENT_ROLE],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some(parent) = parent else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{commit_label} {commit_id} does not have an ordinal-0 primary parent"
+        )));
+    };
+    decode_commit_id("commit_parent.parent_commit_id", parent)
 }
 
 fn validate_stored_text(label: &str, value: &str) -> Result<()> {

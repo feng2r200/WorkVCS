@@ -34,7 +34,8 @@ use workvcs_core::{
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
     KnowledgeSnapshot, KnowledgeSpaceAvailableExposuresOptions,
     KnowledgeSpaceAvailableExposuresResult, KnowledgeSpaceCreateOptions,
-    KnowledgeSpaceCreateResult, KnowledgeSpaceId, KnowledgeSpaceListOptions,
+    KnowledgeSpaceCreateResult, KnowledgeSpaceHistoricalExposuresOptions,
+    KnowledgeSpaceHistoricalExposuresResult, KnowledgeSpaceId, KnowledgeSpaceListOptions,
     KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeSpaceSourceStaleExposuresOptions,
     KnowledgeSpaceSourceStaleExposuresResult, KnowledgeStatus, KnowledgeTransitionCommit,
     KnowledgeTransitionOptions, LineageId, MergeAbortOptions, MergeAbortResult,
@@ -418,6 +419,17 @@ enum StoreCommand {
     },
     #[command(name = "knowledge-space-source-stale-exposures")]
     KnowledgeSpaceSourceStaleExposures {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        knowledge_space: String,
+
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    #[command(name = "knowledge-space-historical-exposures")]
+    KnowledgeSpaceHistoricalExposures {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -2190,6 +2202,22 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 render_knowledge_space_source_stale_exposures(
                     &engine.knowledge_space_source_stale_exposures(options)?,
+                )
+            }
+            StoreCommand::KnowledgeSpaceHistoricalExposures {
+                store,
+                knowledge_space,
+                limit,
+            } => {
+                let engine = Engine::open(store)?;
+                let mut options = KnowledgeSpaceHistoricalExposuresOptions::new(
+                    KnowledgeSpaceId::parse_canonical(&knowledge_space)?,
+                );
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                render_knowledge_space_historical_exposures(
+                    &engine.knowledge_space_historical_exposures(options)?,
                 )
             }
             StoreCommand::KnowledgeExposureCreateLocal {
@@ -6603,6 +6631,24 @@ fn render_knowledge_space_source_stale_exposures(
     Ok(output)
 }
 
+fn render_knowledge_space_historical_exposures(
+    result: &KnowledgeSpaceHistoricalExposuresResult,
+) -> Result<String> {
+    let mut output = format!(
+        "knowledge_space_id={}\nexposures={}\n",
+        result.knowledge_space_id,
+        result.exposures.len()
+    );
+    for (index, snapshot) in result.exposures.iter().enumerate() {
+        write_knowledge_exposure_snapshot_fields(
+            &mut output,
+            Some(&format!("exposure[{index}]")),
+            snapshot,
+        )?;
+    }
+    Ok(output)
+}
+
 fn write_knowledge_space_snapshot_fields(
     output: &mut String,
     prefix: Option<&str>,
@@ -8413,6 +8459,146 @@ mod tests {
             value(&current_exposure, "exposure_id")
         );
         assert_eq!(value(&source_stale, "exposure[0].source_status"), "stale");
+    }
+
+    #[test]
+    fn cli_lists_historical_knowledge_space_exposures() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-space-historical-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let active_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Active reusable knowledge",
+        ])
+        .expect("parse active knowledge create"))
+        .expect("create active knowledge");
+        let withdrawn_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&active_knowledge, "commit_id"),
+            "--statement",
+            "Withdrawn reusable knowledge",
+        ])
+        .expect("parse withdrawn knowledge create"))
+        .expect("create withdrawn knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let active_exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&active_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&active_knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse active exposure create"))
+        .expect("create active exposure");
+        let withdrawn_exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&withdrawn_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&withdrawn_knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse withdrawn exposure create"))
+        .expect("create withdrawn exposure");
+        let withdrawn = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-withdraw",
+            store,
+            "--exposure",
+            &value(&withdrawn_exposure, "exposure_id"),
+            "--current-transition",
+            &value(&withdrawn_exposure, "transition_id"),
+        ])
+        .expect("parse exposure withdraw"))
+        .expect("withdraw exposure");
+
+        let historical = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-historical-exposures",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+        ])
+        .expect("parse knowledge-space-historical-exposures"))
+        .expect("list historical exposures");
+
+        assert_eq!(
+            value(&historical, "knowledge_space_id"),
+            value(&knowledge_space, "knowledge_space_id")
+        );
+        assert_eq!(value(&historical, "exposures"), "1");
+        assert_eq!(
+            value(&historical, "exposure[0].exposure_id"),
+            value(&withdrawn, "exposure_id")
+        );
+        assert_ne!(
+            value(&historical, "exposure[0].exposure_id"),
+            value(&active_exposure, "exposure_id")
+        );
+        assert_eq!(
+            value(&historical, "exposure[0].lifecycle_status"),
+            "withdrawn"
+        );
     }
 
     #[test]

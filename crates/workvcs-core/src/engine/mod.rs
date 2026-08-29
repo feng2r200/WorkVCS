@@ -4,6 +4,7 @@ use crate::ClaimId;
 use crate::CommitId;
 use crate::EntityId;
 use crate::EvidenceId;
+use crate::ExternalRefId;
 use crate::ImportId;
 use crate::LineageId;
 use crate::MigrationId;
@@ -59,6 +60,10 @@ use crate::history::{
     WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
     WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+};
+use crate::history::{
+    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
+    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
 };
 use crate::history::{
     StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
@@ -278,6 +283,27 @@ impl Engine {
         options: StoreMigrationListOptions,
     ) -> Result<StoreMigrationListResult> {
         self.store.store_migrations(options)
+    }
+
+    pub fn record_external_object_ref(
+        &mut self,
+        options: ExternalObjectRefRecordOptions,
+    ) -> Result<ExternalObjectRefRecordResult> {
+        self.store.record_external_object_ref(options)
+    }
+
+    pub fn external_object_ref(
+        &self,
+        external_ref_id: ExternalRefId,
+    ) -> Result<ExternalObjectRefSnapshot> {
+        self.store.external_object_ref(external_ref_id)
+    }
+
+    pub fn external_object_refs(
+        &self,
+        options: ExternalObjectRefListOptions,
+    ) -> Result<ExternalObjectRefListResult> {
+        self.store.external_object_refs(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

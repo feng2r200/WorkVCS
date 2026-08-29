@@ -46,6 +46,10 @@ use crate::history::{
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::history::{
+    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
+    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
+};
+use crate::history::{
     StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot,
 };
@@ -53,7 +57,7 @@ use crate::history::{
     StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
-use crate::identity::{CheckpointId, LineageId, MigrationId, RelationId};
+use crate::identity::{CheckpointId, ExternalRefId, LineageId, MigrationId, RelationId};
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
@@ -350,6 +354,33 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::store_migrations(&self.connection, options)
+    }
+
+    pub(crate) fn record_external_object_ref(
+        &mut self,
+        options: ExternalObjectRefRecordOptions,
+    ) -> Result<ExternalObjectRefRecordResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_external_object_ref(&mut self.connection, &current, options)
+    }
+
+    pub(crate) fn external_object_ref(
+        &self,
+        external_ref_id: ExternalRefId,
+    ) -> Result<ExternalObjectRefSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::external_object_ref(&self.connection, external_ref_id)
+    }
+
+    pub(crate) fn external_object_refs(
+        &self,
+        options: ExternalObjectRefListOptions,
+    ) -> Result<ExternalObjectRefListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::external_object_refs(&self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

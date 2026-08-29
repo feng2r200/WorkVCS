@@ -5,6 +5,7 @@ mod containment;
 mod diff;
 mod entity;
 mod evidence;
+mod external;
 mod genesis;
 mod goal;
 mod integrity;
@@ -50,6 +51,10 @@ pub use entity::{EntityTransitionCommit, EntityTransitionOptions};
 pub use evidence::{
     EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
     EvidenceSnapshot,
+};
+pub use external::{
+    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
+    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
 };
 pub use genesis::{WorkspaceInfo, WorkspaceInitOptions};
 pub use goal::{
@@ -147,6 +152,7 @@ pub(crate) use containment::{create_primary_containment, primary_containment_rel
 pub(crate) use diff::diff_work_state;
 pub(crate) use entity::commit_entity_transition;
 pub(crate) use evidence::{create_evidence, evidence};
+pub(crate) use external::{external_object_ref, external_object_refs, record_external_object_ref};
 pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;

@@ -19,18 +19,21 @@ use workvcs_core::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
     ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, ImportId,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
-    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
-    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
-    KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    LineageId, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
-    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
-    MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
-    MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
-    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
-    NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    EntityVersionId, EvidenceId, ExternalObjectId, ExternalObjectRefListOptions,
+    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
+    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
+    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
+    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
+    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, LineageId, MergeAbortOptions,
+    MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
+    MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId, MergeItemId,
+    MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject, MergeListOptions,
+    MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind, MergeResolveOptions,
+    MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId, NextWorkOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
     RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
@@ -320,6 +323,54 @@ enum StoreCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+    },
+    #[command(name = "external-ref-record")]
+    ExternalRefRecord {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        external_store: String,
+
+        #[arg(long)]
+        external_object: String,
+
+        #[arg(long)]
+        object_kind: String,
+
+        #[arg(long)]
+        scope: String,
+
+        #[arg(long)]
+        external_version_ref: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        descriptor_json: String,
+    },
+    #[command(name = "external-ref-show")]
+    ExternalRefShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        external_ref: String,
+    },
+    #[command(name = "external-ref-list")]
+    ExternalRefList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        limit: Option<usize>,
+
+        #[arg(long)]
+        external_store: Option<String>,
+
+        #[arg(long)]
+        object_kind: Option<String>,
+
+        #[arg(long)]
+        scope: Option<String>,
     },
 }
 
@@ -1872,6 +1923,90 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 let result = engine.store_migrations(options)?;
                 render_store_migration_list(&result)
+            }
+            StoreCommand::ExternalRefRecord {
+                store,
+                external_store,
+                external_object,
+                object_kind,
+                scope,
+                external_version_ref,
+                descriptor_json,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let descriptor =
+                    parse_cli_object("external object ref descriptor_json", &descriptor_json)?;
+                let external_store_id = StoreId::parse_canonical(&external_store)?;
+                let external_object_id = ExternalObjectId::parse_canonical(&external_object)?;
+                let reference_scope = ExternalObjectReferenceScope::parse(&scope)?;
+                let options = match reference_scope {
+                    ExternalObjectReferenceScope::Object => {
+                        if external_version_ref.is_some() {
+                            return Err(WorkVcsError::QueryInvalid(
+                                "object-scope external refs cannot include --external-version-ref"
+                                    .to_owned(),
+                            ));
+                        }
+                        ExternalObjectRefRecordOptions::for_object(
+                            external_store_id,
+                            external_object_id,
+                            object_kind,
+                            descriptor,
+                        )?
+                    }
+                    ExternalObjectReferenceScope::Version => {
+                        let external_version_ref = external_version_ref.ok_or_else(|| {
+                            WorkVcsError::QueryInvalid(
+                                "version-scope external refs require --external-version-ref"
+                                    .to_owned(),
+                            )
+                        })?;
+                        ExternalObjectRefRecordOptions::for_version(
+                            external_store_id,
+                            external_object_id,
+                            object_kind,
+                            ExternalVersionId::parse_canonical(&external_version_ref)?,
+                            descriptor,
+                        )?
+                    }
+                };
+                let result = engine.record_external_object_ref(options)?;
+                render_external_object_ref_record_result(&result)
+            }
+            StoreCommand::ExternalRefShow {
+                store,
+                external_ref,
+            } => {
+                let engine = Engine::open(store)?;
+                let snapshot =
+                    engine.external_object_ref(ExternalRefId::parse_canonical(&external_ref)?)?;
+                render_external_object_ref_snapshot(&snapshot)
+            }
+            StoreCommand::ExternalRefList {
+                store,
+                limit,
+                external_store,
+                object_kind,
+                scope,
+            } => {
+                let engine = Engine::open(store)?;
+                let mut options = ExternalObjectRefListOptions::new();
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                if let Some(external_store) = external_store {
+                    options =
+                        options.with_external_store_id(StoreId::parse_canonical(&external_store)?);
+                }
+                if let Some(object_kind) = object_kind {
+                    options = options.with_object_kind(object_kind)?;
+                }
+                if let Some(scope) = scope {
+                    options =
+                        options.with_reference_scope(ExternalObjectReferenceScope::parse(&scope)?);
+                }
+                let result = engine.external_object_refs(options)?;
+                render_external_object_ref_list(&result)
             }
         },
         Command::History {
@@ -6132,6 +6267,109 @@ fn canonical_cli_json(label: &str, value: &CanonicalValue) -> Result<String> {
     })
 }
 
+fn render_external_object_ref_record_result(
+    result: &ExternalObjectRefRecordResult,
+) -> Result<String> {
+    let mut output = format!("created={}\n", result.created);
+    write_external_object_ref_snapshot_fields(&mut output, None, &result.external_ref)?;
+    Ok(output)
+}
+
+fn render_external_object_ref_snapshot(snapshot: &ExternalObjectRefSnapshot) -> Result<String> {
+    let mut output = String::new();
+    write_external_object_ref_snapshot_fields(&mut output, None, snapshot)?;
+    Ok(output)
+}
+
+fn render_external_object_ref_list(result: &ExternalObjectRefListResult) -> Result<String> {
+    let mut output = format!("external_refs={}\n", result.external_refs.len());
+    for (index, snapshot) in result.external_refs.iter().enumerate() {
+        write_external_object_ref_snapshot_fields(
+            &mut output,
+            Some(&format!("external_ref[{index}]")),
+            snapshot,
+        )?;
+    }
+    Ok(output)
+}
+
+fn write_external_object_ref_snapshot_fields(
+    output: &mut String,
+    prefix: Option<&str>,
+    snapshot: &ExternalObjectRefSnapshot,
+) -> Result<()> {
+    let key = |name: &str| {
+        prefix
+            .map(|prefix| format!("{prefix}.{name}"))
+            .unwrap_or_else(|| name.to_owned())
+    };
+    writeln!(
+        output,
+        "{}={}",
+        key("external_ref_id"),
+        snapshot.external_ref_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("external_store_id"),
+        snapshot.external_store_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("external_object_id"),
+        snapshot.external_object_id
+    )
+    .expect("write to String");
+    writeln!(output, "{}={}", key("object_kind"), snapshot.object_kind).expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("reference_scope"),
+        snapshot.reference_scope.as_str()
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("external_version_ref"),
+        render_optional_display_or_none(snapshot.external_version_ref.as_ref())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("descriptor_json"),
+        canonical_cli_json("external object ref descriptor", &snapshot.descriptor)?
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("descriptor_digest"),
+        snapshot.descriptor_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("descriptor_size_bytes"),
+        snapshot.descriptor_size_bytes
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("created_at_us"),
+        snapshot.created_at_us
+    )
+    .expect("write to String");
+    Ok(())
+}
+
 fn render_store_migration_record_result(result: &StoreMigrationRecordResult) -> Result<String> {
     render_store_migration_snapshot(&result.migration)
 }
@@ -6775,6 +7013,118 @@ mod tests {
         assert_eq!(value(&listed, "migrations"), "1");
         assert_eq!(value(&listed, "migration[0].migration_id"), migration_id);
         assert_eq!(value(&listed, "migration[0].outcome"), "completed");
+    }
+
+    #[test]
+    fn cli_records_shows_and_lists_external_object_refs() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "external-ref-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+
+        let external_store_id = StoreId::new_v7().to_string();
+        let external_object_id = ExternalObjectId::new_v7().to_string();
+        let external_version_ref = ExternalVersionId::new_v7().to_string();
+        let recorded = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "external-ref-record",
+            store,
+            "--external-store",
+            &external_store_id,
+            "--external-object",
+            &external_object_id,
+            "--object-kind",
+            "knowledge",
+            "--scope",
+            "version",
+            "--external-version-ref",
+            &external_version_ref,
+            "--descriptor-json",
+            "{\"origin\":\"bundle\",\"path\":\"knowledge/source\"}",
+        ])
+        .expect("parse external-ref-record"))
+        .expect("record external ref");
+        assert_eq!(value(&recorded, "created"), "true");
+        assert_eq!(value(&recorded, "external_store_id"), external_store_id);
+        assert_eq!(value(&recorded, "external_object_id"), external_object_id);
+        assert_eq!(value(&recorded, "reference_scope"), "version");
+        assert_eq!(
+            value(&recorded, "external_version_ref"),
+            external_version_ref
+        );
+        assert_eq!(
+            value(&recorded, "descriptor_json"),
+            "{\"origin\":\"bundle\",\"path\":\"knowledge/source\"}"
+        );
+        let external_ref_id = value(&recorded, "external_ref_id");
+
+        let idempotent = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "external-ref-record",
+            store,
+            "--external-store",
+            &external_store_id,
+            "--external-object",
+            &external_object_id,
+            "--object-kind",
+            "knowledge",
+            "--scope",
+            "version",
+            "--external-version-ref",
+            &external_version_ref,
+            "--descriptor-json",
+            "{\"origin\":\"bundle\",\"path\":\"knowledge/source\"}",
+        ])
+        .expect("parse idempotent external-ref-record"))
+        .expect("record idempotent external ref");
+        assert_eq!(value(&idempotent, "created"), "false");
+        assert_eq!(value(&idempotent, "external_ref_id"), external_ref_id);
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "external-ref-show",
+            store,
+            "--external-ref",
+            &external_ref_id,
+        ])
+        .expect("parse external-ref-show"))
+        .expect("show external ref");
+        assert_eq!(value(&shown, "external_ref_id"), external_ref_id);
+        assert_eq!(
+            value(&shown, "descriptor_digest"),
+            value(&recorded, "descriptor_digest")
+        );
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "external-ref-list",
+            store,
+            "--external-store",
+            &external_store_id,
+            "--object-kind",
+            "knowledge",
+            "--scope",
+            "version",
+        ])
+        .expect("parse external-ref-list"))
+        .expect("list external refs");
+        assert_eq!(value(&listed, "external_refs"), "1");
+        assert_eq!(
+            value(&listed, "external_ref[0].external_ref_id"),
+            external_ref_id
+        );
     }
 
     #[test]

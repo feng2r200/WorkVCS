@@ -83,6 +83,10 @@ fn list_branches_returns_workspace_branches_with_current_heads() {
         .find(|branch| branch.branch_id == alpha.branch_id)
         .expect("alpha head");
     assert_eq!(alpha_head.head_commit_id, source_task.commit_id);
+    assert_eq!(alpha_head.head_changeset_id, source_task.changeset_id);
+    assert_eq!(alpha_head.head_commit_kind, "normal");
+    assert_eq!(alpha_head.head_operation_type, "entity.transition");
+    assert_eq!(alpha_head.head_operation_schema_version, 1);
     assert_eq!(alpha_head.state_digest, source_task.work_state_digest);
 
     let zeta_head = branches
@@ -90,6 +94,10 @@ fn list_branches_returns_workspace_branches_with_current_heads() {
         .find(|branch| branch.branch_id == zeta.branch_id)
         .expect("zeta head");
     assert_eq!(zeta_head.head_commit_id, workspace.genesis_commit_id);
+    assert_eq!(zeta_head.head_changeset_id, workspace.genesis_changeset_id);
+    assert_eq!(zeta_head.head_commit_kind, "genesis");
+    assert_eq!(zeta_head.head_operation_type, "workspace.genesis");
+    assert_eq!(zeta_head.head_operation_schema_version, 1);
     assert_eq!(zeta_head.state_digest, workspace.state_digest);
 
     let later = create_task(
@@ -106,6 +114,7 @@ fn list_branches_returns_workspace_branches_with_current_heads() {
         .find(|branch| branch.branch_id == workspace.initial_branch_id)
         .expect("source head");
     assert_eq!(source_head.head_commit_id, later.commit_id);
+    assert_eq!(source_head.head_changeset_id, later.changeset_id);
     let alpha_head = updated
         .iter()
         .find(|branch| branch.branch_id == alpha.branch_id)

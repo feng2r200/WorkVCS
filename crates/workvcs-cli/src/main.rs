@@ -4720,11 +4720,17 @@ fn render_workspace_info(workspace: &WorkspaceInfo) -> String {
 
 fn render_branch_head(head: &BranchHead) -> String {
     format!(
-        "workspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nlifecycle_state={}\nstate_digest={}\n",
+        "workspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nhead_changeset_id={}\nhead_commit_kind={}\nhead_operation_type={}\nhead_operation_schema_version={}\nhead_committed_at_us={}\nhead_changeset_created_at_us={}\nlifecycle_state={}\nstate_digest={}\n",
         head.workspace_id,
         head.branch_id,
         head.name,
         head.head_commit_id,
+        head.head_changeset_id,
+        head.head_commit_kind,
+        head.head_operation_type,
+        head.head_operation_schema_version,
+        head.head_committed_at_us,
+        head.head_changeset_created_at_us,
         head.lifecycle_state,
         head.state_digest
     )
@@ -4743,6 +4749,36 @@ fn render_branch_list(branches: &[BranchHead]) -> String {
             output,
             "branch.{index}.head_commit_id={}",
             branch.head_commit_id
+        );
+        let _ = writeln!(
+            output,
+            "branch.{index}.head_changeset_id={}",
+            branch.head_changeset_id
+        );
+        let _ = writeln!(
+            output,
+            "branch.{index}.head_commit_kind={}",
+            branch.head_commit_kind
+        );
+        let _ = writeln!(
+            output,
+            "branch.{index}.head_operation_type={}",
+            branch.head_operation_type
+        );
+        let _ = writeln!(
+            output,
+            "branch.{index}.head_operation_schema_version={}",
+            branch.head_operation_schema_version
+        );
+        let _ = writeln!(
+            output,
+            "branch.{index}.head_committed_at_us={}",
+            branch.head_committed_at_us
+        );
+        let _ = writeln!(
+            output,
+            "branch.{index}.head_changeset_created_at_us={}",
+            branch.head_changeset_created_at_us
         );
         let _ = writeln!(
             output,
@@ -10281,6 +10317,7 @@ mod tests {
         assert_eq!(value(&restored, "target_commit_id"), genesis);
         assert_eq!(value(&restored, "operation_count"), "1");
         let restore_commit = value(&restored, "commit_id");
+        let restore_changeset = value(&restored, "changeset_id");
 
         let branch_head =
             run(
@@ -10289,6 +10326,12 @@ mod tests {
             )
             .expect("branch head");
         assert_eq!(value(&branch_head, "head_commit_id"), restore_commit);
+        assert_eq!(value(&branch_head, "head_changeset_id"), restore_changeset);
+        assert_eq!(value(&branch_head, "head_commit_kind"), "normal");
+        assert_eq!(
+            value(&branch_head, "head_operation_type"),
+            "workstate.restore"
+        );
 
         let state =
             run(
@@ -10872,6 +10915,7 @@ mod tests {
         .expect("parse task"))
         .expect("create task");
         source_head = value(&task, "commit_id");
+        let source_changeset = value(&task, "changeset_id");
 
         let source = run(Cli::try_parse_from([
             "workvcs",
@@ -10884,6 +10928,9 @@ mod tests {
         .expect("parse source head"))
         .expect("source head");
         assert_eq!(value(&source, "head_commit_id"), source_head);
+        assert_eq!(value(&source, "head_changeset_id"), source_changeset);
+        assert_eq!(value(&source, "head_commit_kind"), "normal");
+        assert_eq!(value(&source, "head_operation_type"), "entity.transition");
 
         let fork = run(Cli::try_parse_from([
             "workvcs",
@@ -10913,6 +10960,11 @@ mod tests {
         .expect("list branches");
         assert!(branches.contains("branches=2"));
         assert!(branches.contains("branch.0.branch_name=experiment"));
+        assert_eq!(value(&branches, "branch.0.head_commit_id"), source_head);
+        assert_eq!(
+            value(&branches, "branch.0.head_changeset_id"),
+            source_changeset
+        );
 
         let later_source = run(Cli::try_parse_from([
             "workvcs",
@@ -10942,6 +10994,7 @@ mod tests {
         .expect("fork head");
         assert_eq!(value(&fork_head, "branch_name"), "experiment");
         assert_eq!(value(&fork_head, "head_commit_id"), source_head);
+        assert_eq!(value(&fork_head, "head_changeset_id"), source_changeset);
 
         let fork_history = run(Cli::try_parse_from([
             "workvcs",

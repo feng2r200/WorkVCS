@@ -95,6 +95,13 @@ fn branch_head_reports_current_branch_head() {
     assert_eq!(genesis_head.branch_id, workspace.initial_branch_id);
     assert_eq!(genesis_head.name, workspace.initial_branch_name);
     assert_eq!(genesis_head.head_commit_id, workspace.genesis_commit_id);
+    assert_eq!(
+        genesis_head.head_changeset_id,
+        workspace.genesis_changeset_id
+    );
+    assert_eq!(genesis_head.head_commit_kind, "genesis");
+    assert_eq!(genesis_head.head_operation_type, "workspace.genesis");
+    assert_eq!(genesis_head.head_operation_schema_version, 1);
     assert_eq!(genesis_head.lifecycle_state, "active");
     assert_eq!(genesis_head.state_digest, workspace.state_digest);
 
@@ -114,6 +121,10 @@ fn branch_head_reports_current_branch_head() {
         .branch_head(workspace.initial_branch_id)
         .expect("updated branch head");
     assert_eq!(updated_head.head_commit_id, transition.commit_id);
+    assert_eq!(updated_head.head_changeset_id, transition.changeset_id);
+    assert_eq!(updated_head.head_commit_kind, "normal");
+    assert_eq!(updated_head.head_operation_type, "entity.transition");
+    assert_eq!(updated_head.head_operation_schema_version, 1);
     assert_eq!(updated_head.state_digest, transition.work_state_digest);
 }
 

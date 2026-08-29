@@ -40,10 +40,11 @@ use crate::identity::RelationId;
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
+    SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -768,6 +769,18 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::abort_merge(&mut self.connection, options)
+    }
+
+    pub(crate) fn merge_attempt(&self, merge_id: crate::MergeId) -> Result<MergeAttemptSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::merge_attempt(&self.connection, merge_id)
+    }
+
+    pub(crate) fn merge_attempts(&self, options: &MergeListOptions) -> Result<MergeListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::merge_attempts(&self.connection, options)
     }
 
     pub(crate) fn claim_task(&mut self, options: &ClaimTaskOptions) -> Result<ClaimTaskResult> {

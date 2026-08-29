@@ -3,13 +3,15 @@ use crate::canonical::{CanonicalValue, canonical_bytes, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{BranchId, CommitId, EventId, MergeId, SessionId, WorkspaceId};
 use crate::store::{StoreConnection, current_epoch_micros};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::collections::{BTreeMap, VecDeque};
 
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const ACTIVE_MERGE_RUNTIME_STATE: &str = "active";
 const ABORTED_MERGE_RUNTIME_STATE: &str = "aborted";
+const COMPLETED_MERGE_RUNTIME_STATE: &str = "completed";
 const ABORTED_MERGE_OUTCOME: &str = "aborted";
+const COMPLETED_MERGE_OUTCOME: &str = "completed";
 const MERGE_ATTEMPT_OBJECT_KIND: &str = "merge_attempt";
 const MERGE_STARTED_EVENT_KIND: &str = "merge.started";
 const MERGE_ABORTED_EVENT_KIND: &str = "merge.aborted";
@@ -18,6 +20,7 @@ const MERGE_ABORTED_EVENT_KIND: &str = "merge.aborted";
 pub enum MergeRuntimeState {
     Active,
     Aborted,
+    Completed,
 }
 
 impl MergeRuntimeState {
@@ -25,6 +28,39 @@ impl MergeRuntimeState {
         match self {
             Self::Active => ACTIVE_MERGE_RUNTIME_STATE,
             Self::Aborted => ABORTED_MERGE_RUNTIME_STATE,
+            Self::Completed => COMPLETED_MERGE_RUNTIME_STATE,
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            ACTIVE_MERGE_RUNTIME_STATE => Some(Self::Active),
+            ABORTED_MERGE_RUNTIME_STATE => Some(Self::Aborted),
+            COMPLETED_MERGE_RUNTIME_STATE => Some(Self::Completed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeOutcome {
+    Aborted,
+    Completed,
+}
+
+impl MergeOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Aborted => ABORTED_MERGE_OUTCOME,
+            Self::Completed => COMPLETED_MERGE_OUTCOME,
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            ABORTED_MERGE_OUTCOME => Some(Self::Aborted),
+            COMPLETED_MERGE_OUTCOME => Some(Self::Completed),
+            _ => None,
         }
     }
 }
@@ -132,6 +168,76 @@ pub struct MergeAbortResult {
     pub runtime_state: MergeRuntimeState,
     pub event_id: EventId,
     pub aborted_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeOutcomeSnapshot {
+    pub outcome: MergeOutcome,
+    pub result_commit_id: Option<CommitId>,
+    pub completed_at_us: i64,
+    pub detail: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeAttemptSnapshot {
+    pub merge_id: MergeId,
+    pub workspace_id: WorkspaceId,
+    pub target_branch_id: BranchId,
+    pub source_branch_id: BranchId,
+    pub merge_base_commit_id: CommitId,
+    pub target_head_commit_id: CommitId,
+    pub source_head_commit_id: CommitId,
+    pub origin_session_id: Option<SessionId>,
+    pub created_at_us: i64,
+    pub runtime_state: MergeRuntimeState,
+    pub outcome: Option<MergeOutcomeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeListOptions {
+    workspace_id: WorkspaceId,
+    target_branch_id: Option<BranchId>,
+    include_closed: bool,
+}
+
+impl MergeListOptions {
+    pub fn new(workspace_id: WorkspaceId) -> Self {
+        Self {
+            workspace_id,
+            target_branch_id: None,
+            include_closed: false,
+        }
+    }
+
+    pub fn with_target_branch(mut self, target_branch_id: BranchId) -> Self {
+        self.target_branch_id = Some(target_branch_id);
+        self
+    }
+
+    pub fn include_closed(mut self) -> Self {
+        self.include_closed = true;
+        self
+    }
+
+    pub fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+
+    pub fn target_branch_id(&self) -> Option<BranchId> {
+        self.target_branch_id
+    }
+
+    pub fn includes_closed(&self) -> bool {
+        self.include_closed
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeListResult {
+    pub workspace_id: WorkspaceId,
+    pub target_branch_id: Option<BranchId>,
+    pub include_closed: bool,
+    pub merges: Vec<MergeAttemptSnapshot>,
 }
 
 pub(crate) fn start_merge(
@@ -403,6 +509,32 @@ pub(crate) fn abort_merge(
     })
 }
 
+pub(crate) fn merge_attempt(
+    connection: &StoreConnection,
+    merge_id: MergeId,
+) -> Result<MergeAttemptSnapshot> {
+    connection.verify_foreign_keys()?;
+    load_merge_attempt_snapshot(connection.inner(), merge_id)
+}
+
+pub(crate) fn merge_attempts(
+    connection: &StoreConnection,
+    options: &MergeListOptions,
+) -> Result<MergeListResult> {
+    connection.verify_foreign_keys()?;
+    let ids = merge_attempt_ids(connection.inner(), options)?;
+    let mut merges = Vec::with_capacity(ids.len());
+    for merge_id in ids {
+        merges.push(load_merge_attempt_snapshot(connection.inner(), merge_id)?);
+    }
+    Ok(MergeListResult {
+        workspace_id: options.workspace_id(),
+        target_branch_id: options.target_branch_id(),
+        include_closed: options.includes_closed(),
+        merges,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BranchRow {
     workspace_id: WorkspaceId,
@@ -419,6 +551,7 @@ struct MergeAttemptRow {
     target_head_commit_id: CommitId,
     source_head_commit_id: CommitId,
     origin_session_id: Option<SessionId>,
+    created_at_us: i64,
 }
 
 fn load_active_branch(transaction: &Transaction<'_>, branch_id: BranchId) -> Result<BranchRow> {
@@ -498,6 +631,7 @@ fn load_active_merge_for_update(
                     merge_attempt.target_head_commit_id,
                     merge_attempt.source_head_commit_id,
                     merge_attempt.origin_session_id,
+                    merge_attempt.created_at_us,
                     merge_runtime.runtime_json,
                     merge_attempt_outcome.outcome
              FROM merge_attempt
@@ -516,8 +650,9 @@ fn load_active_merge_for_update(
                     row.get::<_, Vec<u8>>(4)?,
                     row.get::<_, Vec<u8>>(5)?,
                     row.get::<_, Option<Vec<u8>>>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
                 ))
             },
         )
@@ -532,6 +667,7 @@ fn load_active_merge_for_update(
         target_head_commit_id,
         source_head_commit_id,
         origin_session_id,
+        created_at_us,
         runtime_json,
         outcome,
     )) = row
@@ -572,6 +708,173 @@ fn load_active_merge_for_update(
         origin_session_id: origin_session_id
             .map(|bytes| decode_session_id("merge_attempt.origin_session_id", bytes))
             .transpose()?,
+        created_at_us,
+    })
+}
+
+fn merge_attempt_ids(connection: &Connection, options: &MergeListOptions) -> Result<Vec<MergeId>> {
+    let workspace_id = options.workspace_id().raw_bytes();
+    let mut ids = Vec::new();
+    if let Some(target_branch_id) = options.target_branch_id() {
+        let target_branch_id = target_branch_id.raw_bytes();
+        let sql = if options.includes_closed() {
+            "SELECT merge_attempt.merge_id
+             FROM merge_attempt
+             WHERE merge_attempt.workspace_id = ?1
+               AND merge_attempt.target_branch_id = ?2
+             ORDER BY merge_attempt.created_at_us, merge_attempt.merge_id"
+        } else {
+            "SELECT merge_attempt.merge_id
+             FROM merge_attempt
+             LEFT JOIN merge_attempt_outcome
+               ON merge_attempt_outcome.merge_id = merge_attempt.merge_id
+             WHERE merge_attempt.workspace_id = ?1
+               AND merge_attempt.target_branch_id = ?2
+               AND merge_attempt_outcome.merge_id IS NULL
+             ORDER BY merge_attempt.created_at_us, merge_attempt.merge_id"
+        };
+        let mut statement = connection.prepare(sql).map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![&workspace_id[..], &target_branch_id[..]], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })
+            .map_err(storage_error)?;
+        for row in rows {
+            ids.push(decode_merge_id(
+                "merge_attempt.merge_id",
+                row.map_err(storage_error)?,
+            )?);
+        }
+    } else {
+        let sql = if options.includes_closed() {
+            "SELECT merge_attempt.merge_id
+             FROM merge_attempt
+             WHERE merge_attempt.workspace_id = ?1
+             ORDER BY merge_attempt.created_at_us, merge_attempt.merge_id"
+        } else {
+            "SELECT merge_attempt.merge_id
+             FROM merge_attempt
+             LEFT JOIN merge_attempt_outcome
+               ON merge_attempt_outcome.merge_id = merge_attempt.merge_id
+             WHERE merge_attempt.workspace_id = ?1
+               AND merge_attempt_outcome.merge_id IS NULL
+             ORDER BY merge_attempt.created_at_us, merge_attempt.merge_id"
+        };
+        let mut statement = connection.prepare(sql).map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![&workspace_id[..]], |row| row.get::<_, Vec<u8>>(0))
+            .map_err(storage_error)?;
+        for row in rows {
+            ids.push(decode_merge_id(
+                "merge_attempt.merge_id",
+                row.map_err(storage_error)?,
+            )?);
+        }
+    }
+    Ok(ids)
+}
+
+fn load_merge_attempt_snapshot(
+    connection: &Connection,
+    merge_id: MergeId,
+) -> Result<MergeAttemptSnapshot> {
+    let row = connection
+        .query_row(
+            "SELECT merge_attempt.workspace_id,
+                    merge_attempt.target_branch_id,
+                    merge_attempt.source_branch_id,
+                    merge_attempt.merge_base_commit_id,
+                    merge_attempt.target_head_commit_id,
+                    merge_attempt.source_head_commit_id,
+                    merge_attempt.origin_session_id,
+                    merge_attempt.created_at_us,
+                    merge_runtime.runtime_json,
+                    merge_attempt_outcome.outcome,
+                    merge_attempt_outcome.result_commit_id,
+                    merge_attempt_outcome.completed_at_us,
+                    merge_attempt_outcome.detail_json
+             FROM merge_attempt
+             JOIN merge_runtime
+               ON merge_runtime.merge_id = merge_attempt.merge_id
+             LEFT JOIN merge_attempt_outcome
+               ON merge_attempt_outcome.merge_id = merge_attempt.merge_id
+             WHERE merge_attempt.merge_id = ?1",
+            params![&merge_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<Vec<u8>>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((
+        workspace_id,
+        target_branch_id,
+        source_branch_id,
+        merge_base_commit_id,
+        target_head_commit_id,
+        source_head_commit_id,
+        origin_session_id,
+        created_at_us,
+        runtime_json,
+        outcome,
+        result_commit_id,
+        completed_at_us,
+        detail_json,
+    )) = row
+    else {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} does not exist"
+        )));
+    };
+    let runtime_state = parse_runtime_state(merge_id, &runtime_json, "merge")?;
+    let outcome = match outcome {
+        Some(outcome) => Some(decode_outcome_snapshot(
+            merge_id,
+            &outcome,
+            result_commit_id,
+            completed_at_us,
+            detail_json,
+        )?),
+        None => None,
+    };
+    validate_snapshot_state(merge_id, runtime_state, outcome.as_ref())?;
+    Ok(MergeAttemptSnapshot {
+        merge_id,
+        workspace_id: decode_workspace_id("merge_attempt.workspace_id", workspace_id)?,
+        target_branch_id: decode_branch_id("merge_attempt.target_branch_id", target_branch_id)?,
+        source_branch_id: decode_branch_id("merge_attempt.source_branch_id", source_branch_id)?,
+        merge_base_commit_id: decode_commit_id(
+            "merge_attempt.merge_base_commit_id",
+            merge_base_commit_id,
+        )?,
+        target_head_commit_id: decode_commit_id(
+            "merge_attempt.target_head_commit_id",
+            target_head_commit_id,
+        )?,
+        source_head_commit_id: decode_commit_id(
+            "merge_attempt.source_head_commit_id",
+            source_head_commit_id,
+        )?,
+        origin_session_id: origin_session_id
+            .map(|bytes| decode_session_id("merge_attempt.origin_session_id", bytes))
+            .transpose()?,
+        created_at_us,
+        runtime_state,
+        outcome,
     })
 }
 
@@ -825,6 +1128,22 @@ fn validate_runtime_json(
     expected_state: MergeRuntimeState,
     label: &str,
 ) -> Result<()> {
+    let state = parse_runtime_state(merge_id, runtime_json, label)?;
+    if state == expected_state {
+        Ok(())
+    } else {
+        Err(WorkVcsError::WorkspaceInvalid(format!(
+            "{label} {merge_id} runtime_json must project lifecycle_state {}",
+            expected_state.as_str()
+        )))
+    }
+}
+
+fn parse_runtime_state(
+    merge_id: MergeId,
+    runtime_json: &str,
+    label: &str,
+) -> Result<MergeRuntimeState> {
     validate_stored_text("merge_runtime.runtime_json", runtime_json)?;
     let value = parse_canonical_json(runtime_json.as_bytes()).map_err(|error| {
         WorkVcsError::WorkspaceInvalid(format!(
@@ -842,14 +1161,75 @@ fn validate_runtime_json(
         )));
     }
     match &entries[0] {
-        (key, CanonicalValue::String(value))
-            if key == "lifecycle_state" && value == expected_state.as_str() =>
+        (key, CanonicalValue::String(value)) if key == "lifecycle_state" => {
+            MergeRuntimeState::from_str(value).ok_or_else(|| {
+                WorkVcsError::WorkspaceInvalid(format!(
+                    "{label} {merge_id} runtime_json has unsupported lifecycle_state {value:?}"
+                ))
+            })
+        }
+        _ => Err(WorkVcsError::WorkspaceInvalid(format!(
+            "{label} {merge_id} runtime_json must project lifecycle_state"
+        ))),
+    }
+}
+
+fn decode_outcome_snapshot(
+    merge_id: MergeId,
+    outcome: &str,
+    result_commit_id: Option<Vec<u8>>,
+    completed_at_us: Option<i64>,
+    detail_json: Option<String>,
+) -> Result<MergeOutcomeSnapshot> {
+    validate_stored_text("merge_attempt_outcome.outcome", outcome)?;
+    let outcome = MergeOutcome::from_str(outcome).ok_or_else(|| {
+        WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} has unsupported outcome {outcome:?}"
+        ))
+    })?;
+    let completed_at_us = completed_at_us.ok_or_else(|| {
+        WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} outcome must include completed_at_us"
+        ))
+    })?;
+    let detail_json = detail_json.ok_or_else(|| {
+        WorkVcsError::WorkspaceInvalid(format!("merge {merge_id} outcome must include detail_json"))
+    })?;
+    let detail = parse_canonical_json(detail_json.as_bytes()).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} outcome detail_json is not canonical JSON: {error}"
+        ))
+    })?;
+    require_object_value("merge outcome detail", &detail)?;
+    Ok(MergeOutcomeSnapshot {
+        outcome,
+        result_commit_id: result_commit_id
+            .map(|bytes| decode_commit_id("merge_attempt_outcome.result_commit_id", bytes))
+            .transpose()?,
+        completed_at_us,
+        detail,
+    })
+}
+
+fn validate_snapshot_state(
+    merge_id: MergeId,
+    runtime_state: MergeRuntimeState,
+    outcome: Option<&MergeOutcomeSnapshot>,
+) -> Result<()> {
+    match (runtime_state, outcome) {
+        (MergeRuntimeState::Active, None) => Ok(()),
+        (MergeRuntimeState::Aborted, Some(outcome))
+            if outcome.outcome == MergeOutcome::Aborted && outcome.result_commit_id.is_none() =>
+        {
+            Ok(())
+        }
+        (MergeRuntimeState::Completed, Some(outcome))
+            if outcome.outcome == MergeOutcome::Completed && outcome.result_commit_id.is_some() =>
         {
             Ok(())
         }
         _ => Err(WorkVcsError::WorkspaceInvalid(format!(
-            "{label} {merge_id} runtime_json must project lifecycle_state {}",
-            expected_state.as_str()
+            "merge {merge_id} runtime and outcome are inconsistent"
         ))),
     }
 }

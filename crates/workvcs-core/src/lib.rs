@@ -78,7 +78,8 @@ pub use runtime::{
 };
 pub use runtime::{ContextOverview, ContextOverviewOptions};
 pub use runtime::{
-    MergeAbortOptions, MergeAbortResult, MergeRuntimeState, MergeStartOptions, MergeStartResult,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult,
+    MergeOutcome, MergeOutcomeSnapshot, MergeRuntimeState, MergeStartOptions, MergeStartResult,
 };
 pub use runtime::{NextWorkOptions, NextWorkResult};
 pub use runtime::{

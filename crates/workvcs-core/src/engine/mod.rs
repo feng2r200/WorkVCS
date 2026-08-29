@@ -50,10 +50,11 @@ use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
+    SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -562,6 +563,14 @@ impl Engine {
 
     pub fn abort_merge(&mut self, options: MergeAbortOptions) -> Result<MergeAbortResult> {
         self.store.abort_merge(&options)
+    }
+
+    pub fn merge_attempt(&self, merge_id: crate::MergeId) -> Result<MergeAttemptSnapshot> {
+        self.store.merge_attempt(merge_id)
+    }
+
+    pub fn merge_attempts(&self, options: MergeListOptions) -> Result<MergeListResult> {
+        self.store.merge_attempts(&options)
     }
 
     pub fn claim_task(&mut self, options: ClaimTaskOptions) -> Result<ClaimTaskResult> {

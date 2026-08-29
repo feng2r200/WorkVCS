@@ -15,8 +15,9 @@ use workvcs_core::{
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
     KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    MergeAbortOptions, MergeAbortResult, MergeId, MergeStartOptions, MergeStartResult,
-    NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeId, MergeListOptions,
+    MergeListResult, MergeOutcomeSnapshot, MergeStartOptions, MergeStartResult, NextWorkOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
     RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
@@ -263,6 +264,26 @@ enum MergeCommand {
 
         #[arg(long, default_value = "{}")]
         detail_json: String,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        merge: String,
+    },
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        workspace: String,
+
+        #[arg(long)]
+        target_branch: Option<String>,
+
+        #[arg(long)]
+        include_closed: bool,
     },
 }
 
@@ -2968,6 +2989,34 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(render_merge_abort(&engine.abort_merge(options)?))
         }
+        Command::Merge {
+            command: MergeCommand::Show { store, merge },
+        } => {
+            let engine = Engine::open(store)?;
+            Ok(render_merge_attempt(
+                &engine.merge_attempt(MergeId::parse_canonical(&merge)?)?,
+            )?)
+        }
+        Command::Merge {
+            command:
+                MergeCommand::List {
+                    store,
+                    workspace,
+                    target_branch,
+                    include_closed,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options =
+                MergeListOptions::new(workvcs_core::WorkspaceId::parse_canonical(&workspace)?);
+            if let Some(target_branch) = target_branch {
+                options = options.with_target_branch(BranchId::parse_canonical(&target_branch)?);
+            }
+            if include_closed {
+                options = options.include_closed();
+            }
+            Ok(render_merge_list(&engine.merge_attempts(options)?)?)
+        }
     }
 }
 
@@ -4207,6 +4256,130 @@ fn render_merge_abort(merge: &MergeAbortResult) -> String {
         merge.aborted_at_us,
         merge.runtime_state.as_str()
     )
+}
+
+fn render_merge_attempt(merge: &MergeAttemptSnapshot) -> Result<String> {
+    let origin_session_id = merge
+        .origin_session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let mut output = format!(
+        "merge_id={}\nworkspace_id={}\ntarget_branch_id={}\nsource_branch_id={}\nmerge_base_commit_id={}\ntarget_head_commit_id={}\nsource_head_commit_id={}\norigin_session_id={}\ncreated_at_us={}\nruntime_state={}\noutcome={}\n",
+        merge.merge_id,
+        merge.workspace_id,
+        merge.target_branch_id,
+        merge.source_branch_id,
+        merge.merge_base_commit_id,
+        merge.target_head_commit_id,
+        merge.source_head_commit_id,
+        origin_session_id,
+        merge.created_at_us,
+        merge.runtime_state.as_str(),
+        merge
+            .outcome
+            .as_ref()
+            .map(|outcome| outcome.outcome.as_str())
+            .unwrap_or("none")
+    );
+    if let Some(outcome) = &merge.outcome {
+        render_merge_outcome(&mut output, "outcome", outcome)?;
+    }
+    Ok(output)
+}
+
+fn render_merge_list(result: &MergeListResult) -> Result<String> {
+    let target_branch_id = result
+        .target_branch_id
+        .map(|branch_id| branch_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let mut output = format!(
+        "workspace_id={}\ntarget_branch_id={}\ninclude_closed={}\nmerges={}\n",
+        result.workspace_id,
+        target_branch_id,
+        result.include_closed,
+        result.merges.len()
+    );
+    for (index, merge) in result.merges.iter().enumerate() {
+        let origin_session_id = merge
+            .origin_session_id
+            .map(|session_id| session_id.to_string())
+            .unwrap_or_else(|| "none".to_owned());
+        let outcome = merge
+            .outcome
+            .as_ref()
+            .map(|outcome| outcome.outcome.as_str())
+            .unwrap_or("none");
+        writeln!(output, "merge.{index}.merge_id={}", merge.merge_id).expect("write to String");
+        writeln!(
+            output,
+            "merge.{index}.target_branch_id={}",
+            merge.target_branch_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "merge.{index}.source_branch_id={}",
+            merge.source_branch_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "merge.{index}.merge_base_commit_id={}",
+            merge.merge_base_commit_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "merge.{index}.target_head_commit_id={}",
+            merge.target_head_commit_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "merge.{index}.source_head_commit_id={}",
+            merge.source_head_commit_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "merge.{index}.origin_session_id={origin_session_id}"
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "merge.{index}.runtime_state={}",
+            merge.runtime_state.as_str()
+        )
+        .expect("write to String");
+        writeln!(output, "merge.{index}.outcome={outcome}").expect("write to String");
+    }
+    Ok(output)
+}
+
+fn render_merge_outcome(
+    output: &mut String,
+    prefix: &str,
+    outcome: &MergeOutcomeSnapshot,
+) -> Result<()> {
+    let result_commit_id = outcome
+        .result_commit_id
+        .map(|commit_id| commit_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let detail_json = String::from_utf8(canonical_bytes(&outcome.detail)?).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "merge outcome detail was not UTF-8: {error}"
+        ))
+    })?;
+    writeln!(output, "{prefix}.kind={}", outcome.outcome.as_str()).expect("write to String");
+    writeln!(output, "{prefix}.result_commit_id={result_commit_id}").expect("write to String");
+    writeln!(
+        output,
+        "{prefix}.completed_at_us={}",
+        outcome.completed_at_us
+    )
+    .expect("write to String");
+    writeln!(output, "{prefix}.detail_json={detail_json}").expect("write to String");
+    Ok(())
 }
 
 fn render_claim_task(claim: &ClaimTaskResult) -> String {
@@ -10088,6 +10261,196 @@ mod tests {
         .expect("parse target head"))
         .expect("target head");
         assert_eq!(value(&head, "head_commit_id"), target_head);
+    }
+
+    #[test]
+    fn cli_shows_and_lists_merge_attempts() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let target_branch = value(&workspace, "branch_id");
+        let genesis_head = value(&workspace, "genesis_commit_id");
+
+        let base = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &target_branch,
+            "--head",
+            &genesis_head,
+            "--description",
+            "Base task",
+        ])
+        .expect("parse base task"))
+        .expect("create base task");
+        let base_commit = value(&base, "commit_id");
+
+        let source = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "fork",
+            store,
+            "--from-branch",
+            &target_branch,
+            "--name",
+            "source",
+        ])
+        .expect("parse source branch"))
+        .expect("fork source branch");
+        let source_branch = value(&source, "branch_id");
+
+        let target = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &target_branch,
+            "--head",
+            &base_commit,
+            "--description",
+            "Target work",
+        ])
+        .expect("parse target task"))
+        .expect("create target task");
+        let target_head = value(&target, "commit_id");
+
+        let source_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &source_branch,
+            "--head",
+            &base_commit,
+            "--description",
+            "Source work",
+        ])
+        .expect("parse source task"))
+        .expect("create source task");
+        let source_head = value(&source_task, "commit_id");
+
+        let merge = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "start",
+            store,
+            "--target-branch",
+            &target_branch,
+            "--source-branch",
+            &source_branch,
+        ])
+        .expect("parse merge start"))
+        .expect("start merge");
+        let merge_id = value(&merge, "merge_id");
+
+        let shown =
+            run(
+                Cli::try_parse_from(["workvcs", "merge", "show", store, "--merge", &merge_id])
+                    .expect("parse merge show"),
+            )
+            .expect("show merge");
+        assert_eq!(value(&shown, "merge_id"), merge_id);
+        assert_eq!(value(&shown, "workspace_id"), workspace_id);
+        assert_eq!(value(&shown, "target_branch_id"), target_branch);
+        assert_eq!(value(&shown, "source_branch_id"), source_branch);
+        assert_eq!(value(&shown, "merge_base_commit_id"), base_commit);
+        assert_eq!(value(&shown, "target_head_commit_id"), target_head);
+        assert_eq!(value(&shown, "source_head_commit_id"), source_head);
+        assert_eq!(value(&shown, "runtime_state"), "active");
+        assert_eq!(value(&shown, "outcome"), "none");
+
+        let active = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+        ])
+        .expect("parse active merge list"))
+        .expect("list active merges");
+        assert_eq!(value(&active, "merges"), "1");
+        assert_eq!(value(&active, "merge.0.merge_id"), merge_id);
+        assert_eq!(value(&active, "merge.0.runtime_state"), "active");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "abort",
+            store,
+            "--merge",
+            &merge_id,
+            "--detail-json",
+            "{\"reason\":\"superseded by another attempt\"}",
+        ])
+        .expect("parse merge abort"))
+        .expect("abort merge");
+
+        let hidden = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+        ])
+        .expect("parse hidden merge list"))
+        .expect("list active merges after abort");
+        assert_eq!(value(&hidden, "merges"), "0");
+
+        let closed =
+            run(
+                Cli::try_parse_from(["workvcs", "merge", "show", store, "--merge", &merge_id])
+                    .expect("parse closed merge show"),
+            )
+            .expect("show closed merge");
+        assert_eq!(value(&closed, "runtime_state"), "aborted");
+        assert_eq!(value(&closed, "outcome"), "aborted");
+        assert_eq!(value(&closed, "outcome.kind"), "aborted");
+        assert_eq!(value(&closed, "outcome.result_commit_id"), "none");
+        assert_eq!(
+            value(&closed, "outcome.detail_json"),
+            "{\"reason\":\"superseded by another attempt\"}"
+        );
+
+        let all = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--target-branch",
+            &target_branch,
+            "--include-closed",
+        ])
+        .expect("parse all merge list"))
+        .expect("list closed merges");
+        assert_eq!(value(&all, "merges"), "1");
+        assert_eq!(value(&all, "merge.0.merge_id"), merge_id);
+        assert_eq!(value(&all, "merge.0.runtime_state"), "aborted");
+        assert_eq!(value(&all, "merge.0.outcome"), "aborted");
     }
 
     fn value(output: &str, key: &str) -> String {

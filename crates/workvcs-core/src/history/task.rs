@@ -714,6 +714,13 @@ impl fmt::Display for AcceptanceCriterionEffectiveStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VerificationApplicability {
+    Applicable,
+    Stale,
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskCreateOptions {
     branch_id: BranchId,
@@ -6544,21 +6551,26 @@ fn effective_status_for_target(
     )?;
     let mut has_applicable_passed = false;
     let mut has_applicable_failed = false;
-    let mut has_stale = false;
+    let mut has_stale_or_unknown = false;
 
     for verification in verifications {
-        if verification_is_applicable(&replayed.state, &verification.state.semantic_dependencies) {
-            match verification.state.result {
+        match verification_applicability(&replayed.state, &verification.state) {
+            VerificationApplicability::Applicable => match verification.state.result {
                 VerificationResult::Passed => has_applicable_passed = true,
                 VerificationResult::Failed => has_applicable_failed = true,
                 VerificationResult::Inconclusive => {}
+            },
+            VerificationApplicability::Stale | VerificationApplicability::Unknown => {
+                has_stale_or_unknown = true;
             }
-        } else {
-            has_stale = true;
         }
     }
 
-    match (has_applicable_passed, has_applicable_failed, has_stale) {
+    match (
+        has_applicable_passed,
+        has_applicable_failed,
+        has_stale_or_unknown,
+    ) {
         (true, true, _) => Ok(AcceptanceCriterionEffectiveStatus::Conflicted),
         (_, true, _) => Ok(AcceptanceCriterionEffectiveStatus::Failed),
         (true, false, _) => Ok(AcceptanceCriterionEffectiveStatus::Verified),
@@ -6636,7 +6648,20 @@ fn load_current_verifications_for_target(
     Ok(verifications)
 }
 
-fn verification_is_applicable(
+fn verification_applicability(
+    state: &WorkState,
+    verification: &VerificationState,
+) -> VerificationApplicability {
+    if !work_state_basis_is_applicable(state, &verification.semantic_dependencies) {
+        return VerificationApplicability::Stale;
+    }
+    if !verification.resource_basis.is_empty() {
+        return VerificationApplicability::Unknown;
+    }
+    VerificationApplicability::Applicable
+}
+
+fn work_state_basis_is_applicable(
     state: &WorkState,
     dependencies: &[VerificationSemanticDependency],
 ) -> bool {

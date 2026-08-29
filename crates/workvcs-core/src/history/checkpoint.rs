@@ -87,6 +87,27 @@ pub struct CheckpointListResult {
     pub checkpoints: Vec<CheckpointSnapshot>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheckpointLatestOptions {
+    commit_id: CommitId,
+}
+
+impl CheckpointLatestOptions {
+    pub fn usable_for_commit(commit_id: CommitId) -> Self {
+        Self { commit_id }
+    }
+
+    pub fn commit_id(self) -> CommitId {
+        self.commit_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckpointLatestResult {
+    pub commit_id: CommitId,
+    pub checkpoint: Option<CheckpointSnapshot>,
+}
+
 pub(crate) fn create_checkpoint(
     connection: &mut StoreConnection,
     options: CheckpointCreateOptions,
@@ -284,6 +305,21 @@ pub(crate) fn checkpoints(
     Ok(CheckpointListResult {
         commit_id: options.commit_id(),
         checkpoints,
+    })
+}
+
+pub(crate) fn latest_usable_checkpoint(
+    connection: &StoreConnection,
+    options: CheckpointLatestOptions,
+) -> Result<CheckpointLatestResult> {
+    connection.verify_foreign_keys()?;
+    let checkpoint_id = latest_usable_checkpoint_id(connection, options.commit_id())?;
+    let checkpoint = checkpoint_id
+        .map(|checkpoint_id| load_checkpoint(connection, checkpoint_id))
+        .transpose()?;
+    Ok(CheckpointLatestResult {
+        commit_id: options.commit_id(),
+        checkpoint,
     })
 }
 
@@ -646,6 +682,32 @@ fn checkpoint_ids_for_commit(
         )?);
     }
     Ok(checkpoint_ids)
+}
+
+fn latest_usable_checkpoint_id(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Option<CheckpointId>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT checkpoint.checkpoint_id
+             FROM checkpoint
+             JOIN checkpoint_status
+               ON checkpoint_status.checkpoint_id = checkpoint.checkpoint_id
+             WHERE checkpoint.commit_id = ?1
+               AND checkpoint_status.usability_state = ?2
+             ORDER BY checkpoint_status.last_validated_at_us DESC,
+                      checkpoint.created_at_us DESC,
+                      checkpoint.checkpoint_id DESC
+             LIMIT 1",
+            params![&commit_id.raw_bytes()[..], USABILITY_STATE_USABLE],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    row.map(|bytes| decode_checkpoint_id("checkpoint.checkpoint_id", bytes))
+        .transpose()
 }
 
 fn string_field(name: &str, value: impl Into<String>) -> (String, CanonicalValue) {

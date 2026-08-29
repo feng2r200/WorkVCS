@@ -5,11 +5,12 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, CheckpointCreateOptions, CheckpointCreateResult,
-    CheckpointListOptions, CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
-    EntityTransitionCommit, EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
-    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
+    CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
+    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -204,6 +205,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::checkpoints(&self.connection, options)
+    }
+
+    pub(crate) fn latest_usable_checkpoint(
+        &self,
+        options: CheckpointLatestOptions,
+    ) -> Result<CheckpointLatestResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::latest_usable_checkpoint(&self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

@@ -16,10 +16,11 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, CheckpointCreateOptions, CheckpointCreateResult,
-    CheckpointListOptions, CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
-    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
-    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
+    CheckpointSnapshot, CheckpointValidationResult, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, EntityTransitionCommit, EntityTransitionOptions,
+    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
@@ -159,6 +160,13 @@ impl Engine {
 
     pub fn checkpoints(&self, options: CheckpointListOptions) -> Result<CheckpointListResult> {
         self.store.checkpoints(options)
+    }
+
+    pub fn latest_usable_checkpoint(
+        &self,
+        options: CheckpointLatestOptions,
+    ) -> Result<CheckpointLatestResult> {
+        self.store.latest_usable_checkpoint(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

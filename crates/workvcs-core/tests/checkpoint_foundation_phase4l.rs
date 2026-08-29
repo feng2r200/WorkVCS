@@ -1,9 +1,9 @@
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
 use workvcs_core::{
-    BranchId, CanonicalValue, CheckpointCreateOptions, CheckpointListOptions, CommitId, Digest,
-    Engine, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    BranchId, CanonicalValue, CheckpointCreateOptions, CheckpointLatestOptions,
+    CheckpointListOptions, CommitId, Digest, Engine, StoreInitOptions, TaskCreateCommit,
+    TaskCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, std::path::PathBuf) {
@@ -340,4 +340,59 @@ fn checkpoints_list_returns_only_requested_commit_checkpoints() {
             .iter()
             .all(|checkpoint| checkpoint.commit_id == task.commit_id)
     );
+}
+
+#[test]
+fn latest_usable_checkpoint_ignores_invalid_checkpoints() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = create_task(
+        &mut engine,
+        workspace.initial_branch_id,
+        workspace.genesis_commit_id,
+        "Latest usable checkpoint",
+    );
+    let usable = engine
+        .create_checkpoint(CheckpointCreateOptions::new(task.commit_id))
+        .expect("usable checkpoint");
+    let invalid = engine
+        .create_checkpoint(CheckpointCreateOptions::new(task.commit_id))
+        .expect("invalid candidate");
+    {
+        let connection = raw_connection(&path);
+        overwrite_checkpoint_state_digest(
+            &connection,
+            invalid.checkpoint.checkpoint_id,
+            Digest::raw(b"invalid latest candidate"),
+        );
+    }
+    let validation = engine
+        .validate_checkpoint(invalid.checkpoint.checkpoint_id)
+        .expect("validate invalid candidate");
+    assert!(!validation.valid);
+
+    let latest = engine
+        .latest_usable_checkpoint(CheckpointLatestOptions::usable_for_commit(task.commit_id))
+        .expect("latest usable checkpoint");
+
+    assert_eq!(latest.commit_id, task.commit_id);
+    assert_eq!(
+        latest.checkpoint.expect("usable checkpoint").checkpoint_id,
+        usable.checkpoint.checkpoint_id
+    );
+}
+
+#[test]
+fn latest_usable_checkpoint_returns_none_when_absent() {
+    let (_tempdir, path) = store_path();
+    let (engine, workspace) = create_workspace(&path);
+
+    let latest = engine
+        .latest_usable_checkpoint(CheckpointLatestOptions::usable_for_commit(
+            workspace.genesis_commit_id,
+        ))
+        .expect("latest usable checkpoint");
+
+    assert_eq!(latest.commit_id, workspace.genesis_commit_id);
+    assert_eq!(latest.checkpoint, None);
 }

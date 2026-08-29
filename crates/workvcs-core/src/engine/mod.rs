@@ -2,6 +2,7 @@ use crate::BranchId;
 use crate::ClaimId;
 use crate::CommitId;
 use crate::EntityId;
+use crate::EvidenceId;
 use crate::SessionId;
 use crate::WorkspaceId;
 use crate::error::Result;
@@ -9,16 +10,16 @@ use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
-    EntityTransitionCommit, EntityTransitionOptions, GoalCreateCommit, GoalCreateOptions,
-    GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState,
-    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions, StructuralReferenceSnapshot,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    EntityTransitionCommit, EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
+    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
+    PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    ReplayedState, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
@@ -88,6 +89,17 @@ impl Engine {
 
     pub fn validate_integrity(&self) -> Result<IntegrityReport> {
         self.store.validate_integrity()
+    }
+
+    pub fn create_evidence(
+        &mut self,
+        options: EvidenceCreateOptions,
+    ) -> Result<EvidenceCreateResult> {
+        self.store.create_evidence(&options)
+    }
+
+    pub fn evidence(&self, evidence_id: EvidenceId) -> Result<EvidenceSnapshot> {
+        self.store.evidence(evidence_id)
     }
 
     pub fn commit_entity_transition(

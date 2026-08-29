@@ -3,16 +3,16 @@ use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
-    EntityTransitionCommit, EntityTransitionOptions, GoalCreateCommit, GoalCreateOptions,
-    GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState,
-    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions, StructuralReferenceSnapshot,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    EntityTransitionCommit, EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
+    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
+    PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    ReplayedState, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
@@ -29,7 +29,9 @@ use crate::store::bootstrap::{
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
-use crate::{BranchId, ClaimId, CommitId, EntityId, SessionId, WorkspaceId, history, runtime};
+use crate::{
+    BranchId, ClaimId, CommitId, EntityId, EvidenceId, SessionId, WorkspaceId, history, runtime,
+};
 use std::path::Path;
 
 pub(crate) struct Store {
@@ -115,6 +117,21 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::validate_integrity(&self.connection)
+    }
+
+    pub(crate) fn create_evidence(
+        &mut self,
+        options: &EvidenceCreateOptions,
+    ) -> Result<EvidenceCreateResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_evidence(&mut self.connection, options)
+    }
+
+    pub(crate) fn evidence(&self, evidence_id: EvidenceId) -> Result<EvidenceSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::evidence(&self.connection, evidence_id)
     }
 
     pub(crate) fn commit_entity_transition(

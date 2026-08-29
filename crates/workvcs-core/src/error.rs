@@ -5,6 +5,7 @@ pub type Result<T> = std::result::Result<T, WorkVcsError>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCategory {
     Canonical,
+    Evidence,
     Goal,
     Identity,
     Import,
@@ -26,6 +27,8 @@ pub enum ErrorCategory {
 pub enum ErrorCode {
     CanonicalEncodingInvalid,
     DigestInvalid,
+    EvidenceInvalid,
+    EvidenceNotFound,
     IdentityInvalid,
     ImmutableImportInvalid,
     IntegrityInvalid,
@@ -65,6 +68,12 @@ pub enum WorkVcsError {
 
     #[error("digest invalid: {0}")]
     DigestInvalid(String),
+
+    #[error("evidence invalid: {0}")]
+    EvidenceInvalid(String),
+
+    #[error("evidence not found: {0}")]
+    EvidenceNotFound(String),
 
     #[error("identity invalid: {0}")]
     IdentityInvalid(String),
@@ -162,6 +171,8 @@ impl WorkVcsError {
         match self {
             Self::CanonicalEncodingInvalid(_) => ErrorCode::CanonicalEncodingInvalid,
             Self::DigestInvalid(_) => ErrorCode::DigestInvalid,
+            Self::EvidenceInvalid(_) => ErrorCode::EvidenceInvalid,
+            Self::EvidenceNotFound(_) => ErrorCode::EvidenceNotFound,
             Self::IdentityInvalid(_) => ErrorCode::IdentityInvalid,
             Self::ImmutableImportInvalid(_) => ErrorCode::ImmutableImportInvalid,
             Self::IntegrityInvalid(_) => ErrorCode::IntegrityInvalid,
@@ -198,6 +209,7 @@ impl WorkVcsError {
     pub fn category(&self) -> ErrorCategory {
         match self {
             Self::CanonicalEncodingInvalid(_) | Self::DigestInvalid(_) => ErrorCategory::Canonical,
+            Self::EvidenceInvalid(_) | Self::EvidenceNotFound(_) => ErrorCategory::Evidence,
             Self::IdentityInvalid(_) => ErrorCategory::Identity,
             Self::ImmutableImportInvalid(_) => ErrorCategory::Import,
             Self::IntegrityInvalid(_) => ErrorCategory::Integrity,

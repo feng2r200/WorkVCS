@@ -1,6 +1,7 @@
 mod containment;
 mod diff;
 mod entity;
+mod evidence;
 mod genesis;
 mod goal;
 mod integrity;
@@ -20,6 +21,10 @@ pub use diff::{
     WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
 };
 pub use entity::{EntityTransitionCommit, EntityTransitionOptions};
+pub use evidence::{
+    EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceSnapshot,
+};
 pub use genesis::{WorkspaceInfo, WorkspaceInitOptions};
 pub use goal::{
     GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalState, GoalStatus, GoalTransitionCommit,
@@ -45,7 +50,8 @@ pub use task::{
     TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSchedulingRelationType, TaskSnapshot, TaskState,
     TaskStatus, TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationCreateOptions, VerificationEvidenceRef, VerificationEvidenceRelationCreate,
+    VerificationEvidenceRelationSnapshot, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot,
     VerificationRequirementState, VerificationResult, VerificationSemanticDependency,
@@ -59,6 +65,7 @@ pub use why::{
 pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
 pub(crate) use diff::diff_work_state;
 pub(crate) use entity::commit_entity_transition;
+pub(crate) use evidence::{create_evidence, evidence};
 pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;

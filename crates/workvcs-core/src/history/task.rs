@@ -2,6 +2,7 @@ use super::entity::{
     ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION, ENTITY_TRANSITION_OPERATION_TYPE,
     canonical_json_string, entity_transition_payload_value,
 };
+use super::evidence::{EVIDENCE_OBJECT_KIND, require_evidence_exists};
 use super::goal::GOAL_ENTITY_KIND;
 use super::plan::PLAN_ENTITY_KIND;
 use super::{EntityTransitionOptions, commit_entity_transition, state_at};
@@ -11,8 +12,8 @@ use crate::canonical::{
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,
-    RelationId, RelationVersionId, WorkspaceId,
+    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, EvidenceId,
+    OperationId, RelationId, RelationVersionId, WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -44,6 +45,7 @@ const VERIFICATION_RECORD_OPERATION_TYPE: &str = "verification.record";
 const VERIFICATION_REQUIREMENT_STATE_SCHEMA_VERSION: i64 = 1;
 const VERIFICATION_STATE_SCHEMA_VERSION: i64 = 1;
 const DEPENDS_ON_RELATION_TYPE: &str = "depends_on";
+const EVIDENCED_BY_RELATION_TYPE: &str = "evidenced_by";
 const ORDERED_BEFORE_RELATION_TYPE: &str = "ordered_before";
 const VERIFIES_RELATION_TYPE: &str = "verifies";
 
@@ -448,12 +450,32 @@ impl VerificationSemanticDependency {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerificationEvidenceRef {
+    pub evidence_id: EvidenceId,
+}
+
+impl VerificationEvidenceRef {
+    pub fn new(evidence_id: EvidenceId) -> Self {
+        Self { evidence_id }
+    }
+
+    fn to_canonical_value(self) -> Result<CanonicalValue> {
+        CanonicalValue::object(vec![(
+            "evidence_id".to_owned(),
+            CanonicalValue::String(self.evidence_id.to_string()),
+        )])
+        .map_err(task_invalid_from)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerificationState {
     pub result: VerificationResult,
     pub method: CanonicalValue,
     pub verified_at_commit_id: CommitId,
     pub semantic_dependencies: Vec<VerificationSemanticDependency>,
+    pub evidence: Vec<VerificationEvidenceRef>,
 }
 
 impl VerificationState {
@@ -463,19 +485,40 @@ impl VerificationState {
         verified_at_commit_id: CommitId,
         semantic_dependencies: Vec<VerificationSemanticDependency>,
     ) -> Result<Self> {
+        Self::new_with_evidence(
+            result,
+            method,
+            verified_at_commit_id,
+            semantic_dependencies,
+            Vec::new(),
+        )
+    }
+
+    pub fn new_with_evidence(
+        result: VerificationResult,
+        method: CanonicalValue,
+        verified_at_commit_id: CommitId,
+        semantic_dependencies: Vec<VerificationSemanticDependency>,
+        evidence: Vec<VerificationEvidenceRef>,
+    ) -> Result<Self> {
         validate_verification_method(&method)?;
         validate_verification_semantic_dependencies(&semantic_dependencies)?;
+        validate_verification_evidence_refs(&evidence)?;
+        let mut evidence = evidence;
+        evidence.sort_by_key(|evidence| evidence.evidence_id.raw_bytes());
         Ok(Self {
             result,
             method,
             verified_at_commit_id,
             semantic_dependencies,
+            evidence,
         })
     }
 
     pub fn to_canonical_value(&self) -> Result<CanonicalValue> {
         validate_verification_method(&self.method)?;
         validate_verification_semantic_dependencies(&self.semantic_dependencies)?;
+        validate_verification_evidence_refs(&self.evidence)?;
         let mut dependencies = self.semantic_dependencies.clone();
         dependencies.sort_by(|left, right| {
             left.entity_id
@@ -491,6 +534,13 @@ impl VerificationState {
             .iter()
             .map(VerificationSemanticDependency::to_canonical_value)
             .collect::<Result<Vec<_>>>()?;
+        let mut evidence = self.evidence.clone();
+        evidence.sort_by_key(|evidence| evidence.evidence_id.raw_bytes());
+        let evidence = evidence
+            .iter()
+            .copied()
+            .map(VerificationEvidenceRef::to_canonical_value)
+            .collect::<Result<Vec<_>>>()?;
         CanonicalValue::object(vec![
             (
                 "basis".to_owned(),
@@ -505,7 +555,7 @@ impl VerificationState {
                     ),
                 ])?,
             ),
-            ("evidence".to_owned(), CanonicalValue::Array(Vec::new())),
+            ("evidence".to_owned(), CanonicalValue::Array(evidence)),
             ("method".to_owned(), self.method.clone()),
             (
                 "result".to_owned(),
@@ -1076,6 +1126,7 @@ pub struct VerificationCreateOptions {
     target: VerificationTarget,
     result: VerificationResult,
     method: CanonicalValue,
+    evidence: Vec<VerificationEvidenceRef>,
     rationale: CanonicalValue,
 }
 
@@ -1092,6 +1143,7 @@ impl VerificationCreateOptions {
             target,
             result,
             method: CanonicalValue::object(Vec::new())?,
+            evidence: Vec::new(),
             rationale: CanonicalValue::object(Vec::new())?,
         })
     }
@@ -1102,10 +1154,41 @@ impl VerificationCreateOptions {
         Ok(self)
     }
 
+    pub fn with_evidence<I>(mut self, evidence_ids: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = EvidenceId>,
+    {
+        let mut evidence = evidence_ids
+            .into_iter()
+            .map(VerificationEvidenceRef::new)
+            .collect::<Vec<_>>();
+        evidence.sort_by_key(|evidence| evidence.evidence_id.raw_bytes());
+        validate_verification_evidence_refs(&evidence)?;
+        self.evidence = evidence;
+        Ok(self)
+    }
+
     pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
         self.rationale = rationale;
         self
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationEvidenceRelationCreate {
+    pub evidence_id: EvidenceId,
+    pub relation_operation_id: OperationId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationEvidenceRelationSnapshot {
+    pub evidence_id: EvidenceId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub state_digest: Digest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1123,6 +1206,7 @@ pub struct VerificationCreateCommit {
     pub verifies_relation_id: RelationId,
     pub verifies_relation_version_id: RelationVersionId,
     pub verifies_relation_state_digest: Digest,
+    pub evidenced_by_relations: Vec<VerificationEvidenceRelationCreate>,
     pub work_state_digest: Digest,
     pub target: VerificationTarget,
     pub state: VerificationState,
@@ -1138,6 +1222,7 @@ pub struct VerificationSnapshot {
     pub verifies_relation_id: RelationId,
     pub verifies_relation_version_id: RelationVersionId,
     pub verifies_relation_state_digest: Digest,
+    pub evidenced_by_relations: Vec<VerificationEvidenceRelationSnapshot>,
     pub target: VerificationTarget,
     pub state: VerificationState,
 }
@@ -2233,6 +2318,10 @@ pub(crate) fn create_verification(
 ) -> Result<VerificationCreateCommit> {
     connection.verify_foreign_keys()?;
     validate_verification_method(&options.method)?;
+    validate_verification_evidence_refs(&options.evidence)?;
+    for evidence in &options.evidence {
+        require_evidence_exists(connection, evidence.evidence_id)?;
+    }
 
     let parent = state_at(connection, options.expected_head_commit_id)?;
     let semantic_dependencies = verification_semantic_dependencies_for_target(
@@ -2251,11 +2340,12 @@ pub(crate) fn create_verification(
     let verifies_relation_operation_id = OperationId::new_v7();
     let now_us = current_epoch_micros()?;
 
-    let verification_state = VerificationState::new(
+    let verification_state = VerificationState::new_with_evidence(
         options.result,
         options.method.clone(),
         options.expected_head_commit_id,
         semantic_dependencies,
+        options.evidence.clone(),
     )?;
     let verification_state_value = verification_state.to_canonical_value()?;
     let verification_state_json = canonical_json_string(&verification_state_value)?;
@@ -2263,16 +2353,39 @@ pub(crate) fn create_verification(
     let relation_state_value = CanonicalValue::object(Vec::new())?;
     let verifies_relation_state_json = canonical_json_string(&relation_state_value)?;
     let verifies_relation_state_digest = relation_version_digest(&relation_state_value)?;
+    let evidenced_by_relation_state_json = verifies_relation_state_json.clone();
+    let evidenced_by_relation_state_digest = verifies_relation_state_digest;
     let basis_json = canonical_json_string(&verification_basis_value(
         verification_state.verified_at_commit_id,
         &verification_state.semantic_dependencies,
     )?)?;
+    let mut evidenced_by_relations = Vec::new();
+    let mut evidenced_by_payload_values = Vec::new();
+    for evidence in &verification_state.evidence {
+        let relation_id = RelationId::new_v7();
+        let relation_version_id = RelationVersionId::new_v7();
+        let relation_operation_id = OperationId::new_v7();
+        let relation_payload_value =
+            relation_transition_payload_value(relation_id, None, relation_version_id)?;
+        let relation_payload_json = canonical_json_string(&relation_payload_value)?;
+        evidenced_by_payload_values.push(relation_payload_value);
+        evidenced_by_relations.push(VerificationEvidenceRelationRows {
+            evidence_id: evidence.evidence_id,
+            relation_operation_id,
+            relation_id,
+            relation_version_id,
+            relation_state_json: evidenced_by_relation_state_json.clone(),
+            relation_state_digest: evidenced_by_relation_state_digest,
+            relation_payload_json,
+        });
+    }
     let next_work_state = work_state_after_verification_create(
         &parent.state,
         verification_entity_id,
         verification_entity_version_id,
         verifies_relation_id,
         verifies_relation_version_id,
+        &evidenced_by_relations,
     )?;
     let work_state_digest = work_state_mapping_digest(&next_work_state);
     let verification_payload_value = entity_transition_payload_value(
@@ -2287,12 +2400,12 @@ pub(crate) fn create_verification(
     )?;
     let verification_payload_json = canonical_json_string(&verification_payload_value)?;
     let verifies_relation_payload_json = canonical_json_string(&verifies_relation_payload_value)?;
+    let mut operation_payload_values =
+        vec![verification_payload_value, verifies_relation_payload_value];
+    operation_payload_values.extend(evidenced_by_payload_values);
     let changeset_payload_json = canonical_json_string(&CanonicalValue::object(vec![(
         "operations".to_owned(),
-        CanonicalValue::Array(vec![
-            verification_payload_value,
-            verifies_relation_payload_value,
-        ]),
+        CanonicalValue::Array(operation_payload_values),
     )])?)?;
     let rationale_json = canonical_json_string(&options.rationale)?;
 
@@ -2329,6 +2442,7 @@ pub(crate) fn create_verification(
             verifies_relation_version_id,
             verifies_relation_state_json,
             verifies_relation_state_digest,
+            evidenced_by_relations: evidenced_by_relations.clone(),
             target: options.target,
             basis_json,
             semantic_dependencies: verification_state.semantic_dependencies.clone(),
@@ -2366,6 +2480,16 @@ pub(crate) fn create_verification(
         verifies_relation_id,
         verifies_relation_version_id,
         verifies_relation_state_digest,
+        evidenced_by_relations: evidenced_by_relations
+            .into_iter()
+            .map(|relation| VerificationEvidenceRelationCreate {
+                evidence_id: relation.evidence_id,
+                relation_operation_id: relation.relation_operation_id,
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                relation_state_digest: relation.relation_state_digest,
+            })
+            .collect(),
         work_state_digest,
         target: options.target,
         state: verification_state,
@@ -2404,6 +2528,17 @@ pub(crate) fn verification_at(
         &replayed.state,
         verification_entity_id,
     )?;
+    let evidenced_by_relations = load_current_evidenced_by_relations_for_source(
+        connection,
+        replayed.workspace_id,
+        &replayed.state,
+        verification_entity_id,
+    )?;
+    require_verification_evidence_closure(
+        verification_entity_id,
+        &loaded.state.evidence,
+        &evidenced_by_relations,
+    )?;
     Ok(VerificationSnapshot {
         workspace_id: replayed.workspace_id,
         commit_id,
@@ -2413,6 +2548,7 @@ pub(crate) fn verification_at(
         verifies_relation_id: defining_relation.relation_id,
         verifies_relation_version_id: defining_relation.relation_version_id,
         verifies_relation_state_digest: defining_relation.state_digest,
+        evidenced_by_relations,
         target: defining_relation.target,
         state: loaded.state,
     })
@@ -2491,6 +2627,14 @@ struct LoadedVerifiesRelationVersion {
     target: VerificationTarget,
 }
 
+struct LoadedEvidenceRelationVersion {
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    source_verification_entity_id: EntityId,
+    evidence_id: EvidenceId,
+    state_digest: Digest,
+}
+
 struct LoadedTaskSchedulingRelationVersion {
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
@@ -2566,6 +2710,7 @@ struct VerificationCreateRows {
     verifies_relation_version_id: RelationVersionId,
     verifies_relation_state_json: String,
     verifies_relation_state_digest: Digest,
+    evidenced_by_relations: Vec<VerificationEvidenceRelationRows>,
     target: VerificationTarget,
     basis_json: String,
     semantic_dependencies: Vec<VerificationSemanticDependency>,
@@ -2579,6 +2724,17 @@ struct VerificationCreateRows {
     rationale_json: String,
     work_state_digest: Digest,
     now_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VerificationEvidenceRelationRows {
+    evidence_id: EvidenceId,
+    relation_operation_id: OperationId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    relation_state_json: String,
+    relation_state_digest: Digest,
+    relation_payload_json: String,
 }
 
 struct TaskSchedulingRelationCreateRows {
@@ -3190,9 +3346,9 @@ fn load_verifies_relation_version(
                ON object_identity.object_id = relation.object_id
              JOIN relation_version
                ON relation_version.relation_id = relation.object_id
-             JOIN entity AS source_entity
+             LEFT JOIN entity AS source_entity
                ON source_entity.object_id = relation.source_object_id
-             JOIN entity AS target_entity
+             LEFT JOIN entity AS target_entity
                ON target_entity.object_id = relation.target_object_id
              WHERE relation.object_id = ?1
                AND relation_version.relation_version_id = ?2",
@@ -3211,8 +3367,8 @@ fn load_verifies_relation_version(
                     row.get::<_, i64>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, Vec<u8>>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
                 ))
             },
         )
@@ -3252,6 +3408,16 @@ fn load_verifies_relation_version(
     if relation_type != VERIFIES_RELATION_TYPE {
         return Ok(None);
     }
+    let source_entity_kind = source_entity_kind.ok_or_else(|| {
+        WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} source is not an entity"
+        ))
+    })?;
+    let target_entity_kind = target_entity_kind.ok_or_else(|| {
+        WorkVcsError::TaskInvalid(format!(
+            "verifies relation {relation_id} target is not an entity"
+        ))
+    })?;
     if !relation_discriminator.is_empty() {
         return Err(WorkVcsError::TaskInvalid(format!(
             "verifies relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
@@ -3311,6 +3477,149 @@ fn load_verifies_relation_version(
         )?,
         state_digest,
         target,
+    }))
+}
+
+fn load_evidenced_by_relation_version(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<Option<LoadedEvidenceRelationVersion>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    relation.workspace_id,
+                    relation.relation_type,
+                    relation.source_object_id,
+                    relation.target_object_id,
+                    relation.relation_discriminator,
+                    relation_version.state_schema_version,
+                    relation_version.metadata_json,
+                    relation_version.state_digest,
+                    source_entity.entity_kind,
+                    target_object.object_kind
+             FROM relation
+             JOIN object_identity
+               ON object_identity.object_id = relation.object_id
+             JOIN relation_version
+               ON relation_version.relation_id = relation.object_id
+             JOIN entity AS source_entity
+               ON source_entity.object_id = relation.source_object_id
+             JOIN object_identity AS target_object
+               ON target_object.object_id = relation.target_object_id
+             WHERE relation.object_id = ?1
+               AND relation_version.relation_version_id = ?2",
+            params![
+                &relation_id.raw_bytes()[..],
+                &relation_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        object_kind,
+        relation_workspace_id,
+        relation_type,
+        source_object_id,
+        target_object_id,
+        relation_discriminator,
+        state_schema_version,
+        metadata_json,
+        state_digest,
+        source_entity_kind,
+        target_object_kind,
+    )) = row
+    else {
+        return Err(WorkVcsError::TaskNotFound(format!(
+            "evidenced_by relation {relation_id} version {relation_version_id} does not exist"
+        )));
+    };
+    if object_kind != RELATION_OBJECT_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "evidenced_by relation {relation_id} has object kind {object_kind:?}"
+        )));
+    }
+    let relation_workspace_id =
+        decode_workspace_id("relation.workspace_id", relation_workspace_id)?;
+    if relation_workspace_id != workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "evidenced_by relation {relation_id} belongs to workspace {relation_workspace_id}, not {workspace_id}"
+        )));
+    }
+    if relation_type != EVIDENCED_BY_RELATION_TYPE {
+        return Ok(None);
+    }
+    if !relation_discriminator.is_empty() {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "evidenced_by relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
+        )));
+    }
+    if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "evidenced_by relation {relation_id} version {relation_version_id} has state schema version {state_schema_version}"
+        )));
+    }
+    if source_entity_kind != VERIFICATION_ENTITY_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "evidenced_by relation {relation_id} source has kind {source_entity_kind:?}, not {VERIFICATION_ENTITY_KIND:?}"
+        )));
+    }
+    if target_object_kind != EVIDENCE_OBJECT_KIND {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "evidenced_by relation {relation_id} target has object kind {target_object_kind:?}, not {EVIDENCE_OBJECT_KIND:?}"
+        )));
+    }
+
+    let state_digest = decode_digest("relation_version.state_digest", state_digest)?;
+    validate_import_fixed_point(
+        metadata_json.as_bytes(),
+        state_digest,
+        ImportDigestDomain::RelationVersion,
+    )
+    .map_err(|error| {
+        WorkVcsError::TaskInvalid(format!(
+            "evidenced_by relation {relation_id} version {relation_version_id} fixed-point validation failed: {error}"
+        ))
+    })?;
+    let metadata_value =
+        parse_canonical_json(metadata_json.as_bytes()).map_err(task_invalid_from)?;
+    let actual = relation_version_digest(&metadata_value).map_err(task_invalid_from)?;
+    if actual != state_digest {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "evidenced_by relation {relation_id} version {relation_version_id} digest does not match metadata JSON"
+        )));
+    }
+
+    let evidence_id = decode_evidence_id("relation.target_object_id", target_object_id)?;
+    require_evidence_exists(connection, evidence_id)?;
+
+    Ok(Some(LoadedEvidenceRelationVersion {
+        relation_id,
+        relation_version_id,
+        source_verification_entity_id: decode_entity_id(
+            "relation.source_object_id",
+            source_object_id,
+        )?,
+        evidence_id,
+        state_digest,
     }))
 }
 
@@ -3478,6 +3787,62 @@ fn load_current_verifies_relation_for_source(
         count => Err(WorkVcsError::TaskInvalid(format!(
             "verification entity {verification_entity_id} has {count} current defining verifies relations"
         ))),
+    }
+}
+
+fn load_current_evidenced_by_relations_for_source(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+    verification_entity_id: EntityId,
+) -> Result<Vec<VerificationEvidenceRelationSnapshot>> {
+    let mut matches = Vec::new();
+    for (relation_id, relation_version_id) in state.relations() {
+        let Some(relation) = load_evidenced_by_relation_version(
+            connection,
+            workspace_id,
+            *relation_id,
+            *relation_version_id,
+        )?
+        else {
+            continue;
+        };
+        if relation.source_verification_entity_id == verification_entity_id {
+            matches.push(VerificationEvidenceRelationSnapshot {
+                evidence_id: relation.evidence_id,
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                state_digest: relation.state_digest,
+            });
+        }
+    }
+    matches.sort_by(|left, right| {
+        left.evidence_id
+            .cmp(&right.evidence_id)
+            .then_with(|| left.relation_id.cmp(&right.relation_id))
+    });
+    Ok(matches)
+}
+
+fn require_verification_evidence_closure(
+    verification_entity_id: EntityId,
+    expected: &[VerificationEvidenceRef],
+    relations: &[VerificationEvidenceRelationSnapshot],
+) -> Result<()> {
+    let expected = expected
+        .iter()
+        .map(|entry| entry.evidence_id)
+        .collect::<Vec<_>>();
+    let actual = relations
+        .iter()
+        .map(|relation| relation.evidence_id)
+        .collect::<Vec<_>>();
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} evidence state does not match current evidenced_by relations"
+        )))
     }
 }
 
@@ -3696,6 +4061,7 @@ fn work_state_after_verification_create(
     verification_entity_version_id: EntityVersionId,
     verifies_relation_id: RelationId,
     verifies_relation_version_id: RelationVersionId,
+    evidenced_by_relations: &[VerificationEvidenceRelationRows],
 ) -> Result<WorkState> {
     let mut entities = parent_state
         .entities()
@@ -3723,6 +4089,17 @@ fn work_state_after_verification_create(
         return Err(WorkVcsError::TaskInvalid(format!(
             "verifies relation {verifies_relation_id} was expected to be absent before creation"
         )));
+    }
+    for relation in evidenced_by_relations {
+        if relations
+            .insert(relation.relation_id, relation.relation_version_id)
+            .is_some()
+        {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "evidenced_by relation {} was expected to be absent before creation",
+                relation.relation_id
+            )));
+        }
     }
 
     WorkState::new(entities, relations).map_err(task_invalid_from)
@@ -4408,6 +4785,58 @@ fn write_verification_create(
             ],
         )
         .map_err(storage_error)?;
+    for relation in &rows.evidenced_by_relations {
+        let relation_id_bytes = relation.relation_id.raw_bytes();
+        let relation_version_id_bytes = relation.relation_version_id.raw_bytes();
+        let relation_state_digest_bytes = relation.relation_state_digest.as_bytes();
+        let evidence_id_bytes = relation.evidence_id.raw_bytes();
+        transaction
+            .execute(
+                "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+                 VALUES (?1, ?2, ?3)",
+                params![&relation_id_bytes[..], RELATION_OBJECT_KIND, rows.now_us],
+            )
+            .map_err(storage_error)?;
+        transaction
+            .execute(
+                "INSERT INTO relation(
+                    object_id,
+                    workspace_id,
+                    relation_type,
+                    source_object_id,
+                    target_object_id,
+                    relation_discriminator
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, '')",
+                params![
+                    &relation_id_bytes[..],
+                    &workspace_id_bytes[..],
+                    EVIDENCED_BY_RELATION_TYPE,
+                    &verification_entity_id_bytes[..],
+                    &evidence_id_bytes[..]
+                ],
+            )
+            .map_err(storage_error)?;
+        transaction
+            .execute(
+                "INSERT INTO relation_version(
+                    relation_version_id,
+                    relation_id,
+                    state_schema_version,
+                    metadata_json,
+                    state_digest
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    &relation_version_id_bytes[..],
+                    &relation_id_bytes[..],
+                    RELATION_STATE_SCHEMA_VERSION,
+                    relation.relation_state_json,
+                    &relation_state_digest_bytes[..]
+                ],
+            )
+            .map_err(storage_error)?;
+    }
     transaction
         .execute(
             "INSERT INTO changeset(
@@ -4470,6 +4899,33 @@ fn write_verification_create(
             ],
         )
         .map_err(storage_error)?;
+    for (index, relation) in rows.evidenced_by_relations.iter().enumerate() {
+        let relation_id_bytes = relation.relation_id.raw_bytes();
+        let operation_id_bytes = relation.relation_operation_id.raw_bytes();
+        let ordinal = i64::try_from(index + 2).map_err(|_| {
+            WorkVcsError::TaskInvalid("evidenced_by operation ordinal is too large".to_owned())
+        })?;
+        transaction
+            .execute(
+                "INSERT INTO change_operation(
+                    operation_id,
+                    changeset_id,
+                    ordinal,
+                    subject_family,
+                    subject_object_id,
+                    operation_payload_json
+                 )
+                 VALUES (?1, ?2, ?3, 'relation', ?4, ?5)",
+                params![
+                    &operation_id_bytes[..],
+                    &changeset_id_bytes[..],
+                    ordinal,
+                    &relation_id_bytes[..],
+                    relation.relation_payload_json
+                ],
+            )
+            .map_err(storage_error)?;
+    }
     transaction
         .execute(
             "INSERT INTO entity_membership_change(
@@ -4506,6 +4962,29 @@ fn write_verification_create(
             ],
         )
         .map_err(storage_error)?;
+    for relation in &rows.evidenced_by_relations {
+        let relation_id_bytes = relation.relation_id.raw_bytes();
+        let relation_version_id_bytes = relation.relation_version_id.raw_bytes();
+        let operation_id_bytes = relation.relation_operation_id.raw_bytes();
+        transaction
+            .execute(
+                "INSERT INTO relation_membership_change(
+                    operation_id,
+                    relation_id,
+                    before_relation_version_id,
+                    after_relation_version_id,
+                    field_delta_json
+                 )
+                 VALUES (?1, ?2, NULL, ?3, ?4)",
+                params![
+                    &operation_id_bytes[..],
+                    &relation_id_bytes[..],
+                    &relation_version_id_bytes[..],
+                    EMPTY_FIELD_DELTA
+                ],
+            )
+            .map_err(storage_error)?;
+    }
     transaction
         .execute(
             "INSERT INTO workstate_commit(
@@ -5184,8 +5663,7 @@ fn parse_verification_state(value: CanonicalValue) -> Result<VerificationState> 
                 basis = Some(parse_verification_basis(value)?);
             }
             "evidence" => {
-                require_empty_array("verification evidence", &value)?;
-                evidence = Some(());
+                evidence = Some(parse_verification_evidence_refs(value)?);
             }
             "method" => {
                 validate_verification_method(&value)?;
@@ -5202,13 +5680,13 @@ fn parse_verification_state(value: CanonicalValue) -> Result<VerificationState> 
             }
         }
     }
-    evidence.ok_or_else(|| {
+    let evidence = evidence.ok_or_else(|| {
         WorkVcsError::TaskInvalid("verification state is missing evidence".to_owned())
     })?;
     let (verified_at_commit_id, semantic_dependencies) = basis.ok_or_else(|| {
         WorkVcsError::TaskInvalid("verification state is missing basis".to_owned())
     })?;
-    VerificationState::new(
+    VerificationState::new_with_evidence(
         result.ok_or_else(|| {
             WorkVcsError::TaskInvalid("verification state is missing result".to_owned())
         })?,
@@ -5217,7 +5695,57 @@ fn parse_verification_state(value: CanonicalValue) -> Result<VerificationState> 
         })?,
         verified_at_commit_id,
         semantic_dependencies,
+        evidence,
     )
+}
+
+fn parse_verification_evidence_refs(value: CanonicalValue) -> Result<Vec<VerificationEvidenceRef>> {
+    let CanonicalValue::Array(entries) = value else {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification evidence must be an array".to_owned(),
+        ));
+    };
+    let mut evidence = Vec::new();
+    for entry in entries {
+        let CanonicalValue::Object(fields) = entry else {
+            return Err(WorkVcsError::TaskInvalid(
+                "verification evidence entry must be an object".to_owned(),
+            ));
+        };
+        if fields.len() != 1 {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification evidence entry must contain exactly 1 field, found {}",
+                fields.len()
+            )));
+        }
+        let mut evidence_id = None;
+        for (key, value) in fields {
+            match key.as_str() {
+                "evidence_id" => {
+                    let value = require_string("evidence_id", value)?;
+                    evidence_id = Some(EvidenceId::parse_canonical(&value).map_err(|error| {
+                        WorkVcsError::TaskInvalid(format!(
+                            "verification evidence_id is not canonical: {error}"
+                        ))
+                    })?);
+                }
+                other => {
+                    return Err(WorkVcsError::TaskInvalid(format!(
+                        "verification evidence entry contains unsupported field {other:?}"
+                    )));
+                }
+            }
+        }
+        evidence.push(VerificationEvidenceRef::new(evidence_id.ok_or_else(
+            || {
+                WorkVcsError::TaskInvalid(
+                    "verification evidence entry is missing evidence_id".to_owned(),
+                )
+            },
+        )?));
+    }
+    validate_verification_evidence_refs(&evidence)?;
+    Ok(evidence)
 }
 
 fn parse_verification_basis(
@@ -5562,6 +6090,17 @@ fn load_current_verifications_for_target(
             relation.source_verification_entity_id,
             verification_entity_version_id,
         )?;
+        let evidenced_by_relations = load_current_evidenced_by_relations_for_source(
+            connection,
+            workspace_id,
+            state,
+            relation.source_verification_entity_id,
+        )?;
+        require_verification_evidence_closure(
+            relation.source_verification_entity_id,
+            &loaded.state.evidence,
+            &evidenced_by_relations,
+        )?;
         verifications.push(VerificationSnapshot {
             workspace_id,
             commit_id,
@@ -5571,6 +6110,7 @@ fn load_current_verifications_for_target(
             verifies_relation_id: relation.relation_id,
             verifies_relation_version_id: relation.relation_version_id,
             verifies_relation_state_digest: relation.state_digest,
+            evidenced_by_relations,
             target: relation.target,
             state: loaded.state,
         });
@@ -5880,6 +6420,19 @@ fn validate_verification_semantic_dependencies(
     Ok(())
 }
 
+fn validate_verification_evidence_refs(evidence: &[VerificationEvidenceRef]) -> Result<()> {
+    let mut evidence_ids = HashSet::new();
+    for entry in evidence {
+        if !evidence_ids.insert(entry.evidence_id.raw_bytes()) {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification evidence contains duplicate evidence id {}",
+                entry.evidence_id
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn require_verification_semantic_dependencies_canonical_order(
     dependencies: &[VerificationSemanticDependency],
 ) -> Result<()> {
@@ -5986,6 +6539,11 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
 fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
     let bytes = decode_16(column, bytes)?;
     EntityId::from_bytes(bytes).map_err(task_invalid_from)
+}
+
+fn decode_evidence_id(column: &str, bytes: Vec<u8>) -> Result<EvidenceId> {
+    let bytes = decode_16(column, bytes)?;
+    EvidenceId::from_bytes(bytes).map_err(task_invalid_from)
 }
 
 fn decode_entity_version_id(column: &str, bytes: Vec<u8>) -> Result<EntityVersionId> {

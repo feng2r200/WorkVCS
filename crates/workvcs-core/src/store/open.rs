@@ -13,6 +13,7 @@ use crate::history::{
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
     RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
+    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
     RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
     RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
@@ -249,6 +250,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::remove_record_relation(&mut self.connection, options)
+    }
+
+    pub(crate) fn remove_record_knowledge_relation(
+        &mut self,
+        options: &RecordKnowledgeRelationRemoveOptions,
+    ) -> Result<RecordKnowledgeRelationRemoveCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::remove_record_knowledge_relation(&mut self.connection, options)
     }
 
     pub(crate) fn restore_record_relation(

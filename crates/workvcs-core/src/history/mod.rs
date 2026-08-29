@@ -50,7 +50,8 @@ pub use record::{
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, RecordCreateCommit,
     RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
-    RecordKnowledgeRelationListResult, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
     RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
     RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
     RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
@@ -109,8 +110,8 @@ pub(crate) use query::{branch_head, query_history};
 pub(crate) use record::{
     create_record, create_record_knowledge_relation, create_record_relation, record_at,
     record_knowledge_relation_at, record_knowledge_relations_at, record_relation_at,
-    record_relations_at, records_at, remove_record_relation, restore_record_relation,
-    supersede_decision_record, transition_record,
+    record_relations_at, records_at, remove_record_knowledge_relation, remove_record_relation,
+    restore_record_relation, supersede_decision_record, transition_record,
 };
 pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::state_at;

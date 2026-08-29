@@ -29,8 +29,8 @@ use workvcs_core::{
     MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
-    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
+    NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
     RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
@@ -47,15 +47,17 @@ use workvcs_core::{
     RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
     StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
-    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
-    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
+    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
+    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
+    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
+    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateRestoreCommit,
+    WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -276,6 +278,48 @@ enum StoreCommand {
 
         #[arg(long)]
         source_bundle_digest: Option<String>,
+    },
+    #[command(name = "migration-record")]
+    MigrationRecord {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        from_store_format_version: i64,
+
+        #[arg(long)]
+        to_store_format_version: i64,
+
+        #[arg(long)]
+        from_schema_version: i64,
+
+        #[arg(long)]
+        to_schema_version: i64,
+
+        #[arg(long)]
+        tool_version: String,
+
+        #[arg(long)]
+        outcome: String,
+
+        #[arg(long, default_value = "{}")]
+        detail_json: String,
+    },
+    #[command(name = "migration-show")]
+    MigrationShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        migration: String,
+    },
+    #[command(name = "migration-list")]
+    MigrationList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -1790,6 +1834,44 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 let result = engine.store_lineages(options)?;
                 render_store_lineage_list(&result)
+            }
+            StoreCommand::MigrationRecord {
+                store,
+                from_store_format_version,
+                to_store_format_version,
+                from_schema_version,
+                to_schema_version,
+                tool_version,
+                outcome,
+                detail_json,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let detail = parse_cli_object("store migration detail_json", &detail_json)?;
+                let options = StoreMigrationRecordOptions::new(
+                    from_store_format_version,
+                    to_store_format_version,
+                    from_schema_version,
+                    to_schema_version,
+                    tool_version,
+                    outcome,
+                    detail,
+                )?;
+                let result = engine.record_store_migration(options)?;
+                render_store_migration_record_result(&result)
+            }
+            StoreCommand::MigrationShow { store, migration } => {
+                let engine = Engine::open(store)?;
+                let snapshot = engine.store_migration(MigrationId::parse_canonical(&migration)?)?;
+                render_store_migration_snapshot(&snapshot)
+            }
+            StoreCommand::MigrationList { store, limit } => {
+                let engine = Engine::open(store)?;
+                let mut options = StoreMigrationListOptions::new();
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                let result = engine.store_migrations(options)?;
+                render_store_migration_list(&result)
             }
         },
         Command::History {
@@ -6050,6 +6132,101 @@ fn canonical_cli_json(label: &str, value: &CanonicalValue) -> Result<String> {
     })
 }
 
+fn render_store_migration_record_result(result: &StoreMigrationRecordResult) -> Result<String> {
+    render_store_migration_snapshot(&result.migration)
+}
+
+fn render_store_migration_snapshot(snapshot: &StoreMigrationAttemptSnapshot) -> Result<String> {
+    let mut output = String::new();
+    write_store_migration_snapshot_fields(&mut output, None, snapshot)?;
+    Ok(output)
+}
+
+fn render_store_migration_list(result: &StoreMigrationListResult) -> Result<String> {
+    let mut output = format!("migrations={}\n", result.migrations.len());
+    for (index, snapshot) in result.migrations.iter().enumerate() {
+        write_store_migration_snapshot_fields(
+            &mut output,
+            Some(&format!("migration[{index}]")),
+            snapshot,
+        )?;
+    }
+    Ok(output)
+}
+
+fn write_store_migration_snapshot_fields(
+    output: &mut String,
+    prefix: Option<&str>,
+    snapshot: &StoreMigrationAttemptSnapshot,
+) -> Result<()> {
+    let key = |name: &str| {
+        prefix
+            .map(|prefix| format!("{prefix}.{name}"))
+            .unwrap_or_else(|| name.to_owned())
+    };
+    let (outcome, completed_at_us, detail_json, detail_digest, detail_size_bytes) =
+        if let Some(outcome) = &snapshot.outcome {
+            (
+                outcome.outcome.clone(),
+                outcome.completed_at_us.to_string(),
+                canonical_cli_json("store migration detail", &outcome.detail)?,
+                outcome.detail_digest.to_string(),
+                outcome.detail_size_bytes.to_string(),
+            )
+        } else {
+            (
+                "none".to_owned(),
+                "none".to_owned(),
+                "none".to_owned(),
+                "none".to_owned(),
+                "none".to_owned(),
+            )
+        };
+    writeln!(output, "{}={}", key("migration_id"), snapshot.migration_id).expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("from_store_format_version"),
+        snapshot.from_store_format_version
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("to_store_format_version"),
+        snapshot.to_store_format_version
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("from_schema_version"),
+        snapshot.from_schema_version
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("to_schema_version"),
+        snapshot.to_schema_version
+    )
+    .expect("write to String");
+    writeln!(output, "{}={}", key("tool_version"), snapshot.tool_version).expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("started_at_us"),
+        snapshot.started_at_us
+    )
+    .expect("write to String");
+    writeln!(output, "{}={outcome}", key("outcome")).expect("write to String");
+    writeln!(output, "{}={completed_at_us}", key("completed_at_us")).expect("write to String");
+    writeln!(output, "{}={detail_json}", key("detail_json")).expect("write to String");
+    writeln!(output, "{}={detail_digest}", key("detail_digest")).expect("write to String");
+    writeln!(output, "{}={detail_size_bytes}", key("detail_size_bytes")).expect("write to String");
+    Ok(())
+}
+
 fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
     format!(
         "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nactual_manifest_size_bytes={}\nproblem={}\n",
@@ -6523,6 +6700,81 @@ mod tests {
             value(&listed, "lineage[0].source_bundle_digest"),
             source_bundle_digest
         );
+    }
+
+    #[test]
+    fn cli_records_shows_and_lists_store_migration() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "migration-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+
+        let recorded = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-record",
+            store,
+            "--from-store-format-version",
+            "1",
+            "--to-store-format-version",
+            "2",
+            "--from-schema-version",
+            "1",
+            "--to-schema-version",
+            "2",
+            "--tool-version",
+            "workvcs-cli-test/0.1",
+            "--outcome",
+            "completed",
+            "--detail-json",
+            "{\"manifest_delta\":{},\"operator\":\"cli-test\"}",
+        ])
+        .expect("parse store migration-record"))
+        .expect("record store migration");
+        assert_eq!(value(&recorded, "from_store_format_version"), "1");
+        assert_eq!(value(&recorded, "to_store_format_version"), "2");
+        assert_eq!(value(&recorded, "tool_version"), "workvcs-cli-test/0.1");
+        assert_eq!(value(&recorded, "outcome"), "completed");
+        assert_eq!(
+            value(&recorded, "detail_json"),
+            "{\"manifest_delta\":{},\"operator\":\"cli-test\"}"
+        );
+        let migration_id = value(&recorded, "migration_id");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-show",
+            store,
+            "--migration",
+            &migration_id,
+        ])
+        .expect("parse store migration-show"))
+        .expect("show store migration");
+        assert_eq!(value(&shown, "migration_id"), migration_id);
+        assert_eq!(
+            value(&shown, "detail_digest"),
+            value(&recorded, "detail_digest")
+        );
+
+        let listed =
+            run(
+                Cli::try_parse_from(["workvcs", "store", "migration-list", store, "--limit", "1"])
+                    .expect("parse store migration-list"),
+            )
+            .expect("list store migrations");
+        assert_eq!(value(&listed, "migrations"), "1");
+        assert_eq!(value(&listed, "migration[0].migration_id"), migration_id);
+        assert_eq!(value(&listed, "migration[0].outcome"), "completed");
     }
 
     #[test]

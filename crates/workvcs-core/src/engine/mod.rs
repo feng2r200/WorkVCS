@@ -6,6 +6,7 @@ use crate::EntityId;
 use crate::EvidenceId;
 use crate::ImportId;
 use crate::LineageId;
+use crate::MigrationId;
 use crate::RelationId;
 use crate::ResourceId;
 use crate::ResourceObservationId;
@@ -62,6 +63,10 @@ use crate::history::{
 use crate::history::{
     StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot,
+};
+use crate::history::{
+    StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
+    StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
@@ -252,6 +257,27 @@ impl Engine {
         options: StoreLineageListOptions,
     ) -> Result<StoreLineageListResult> {
         self.store.store_lineages(options)
+    }
+
+    pub fn record_store_migration(
+        &mut self,
+        options: StoreMigrationRecordOptions,
+    ) -> Result<StoreMigrationRecordResult> {
+        self.store.record_store_migration(options)
+    }
+
+    pub fn store_migration(
+        &self,
+        migration_id: MigrationId,
+    ) -> Result<StoreMigrationAttemptSnapshot> {
+        self.store.store_migration(migration_id)
+    }
+
+    pub fn store_migrations(
+        &self,
+        options: StoreMigrationListOptions,
+    ) -> Result<StoreMigrationListResult> {
+        self.store.store_migrations(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

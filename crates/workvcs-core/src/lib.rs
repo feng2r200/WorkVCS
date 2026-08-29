@@ -61,7 +61,9 @@ pub use history::{
     ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
     ResourceObservationDetailInput, ResourceObservationDetailSnapshot, ResourceObservationSnapshot,
     ResourceSnapshot, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, StructuralReferenceCreateCommit,
+    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
+    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationOutcomeSnapshot,
+    StoreMigrationRecordOptions, StoreMigrationRecordResult, StructuralReferenceCreateCommit,
     StructuralReferenceCreateOptions, StructuralReferenceEndpointKind, StructuralReferenceSnapshot,
     TaskAcceptanceCriterionRef, TaskCreateCommit, TaskCreateOptions,
     TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
@@ -83,9 +85,9 @@ pub use history::{
 };
 pub use identity::{
     BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, Digest, EntityId, EntityVersionId,
-    EventId, EvidenceId, ImportId, LineageId, MergeId, MergeItemId, OperationId, RelationId,
-    RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId,
-    WorkspaceId,
+    EventId, EvidenceId, ImportId, LineageId, MergeId, MergeItemId, MigrationId, OperationId,
+    RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId,
+    StoreId, WorkspaceId,
 };
 pub use runtime::{
     ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,

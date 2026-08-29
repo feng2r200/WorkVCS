@@ -10,6 +10,7 @@ mod goal;
 mod integrity;
 mod knowledge;
 mod lineage;
+mod migration;
 mod plan;
 mod projection;
 mod query;
@@ -64,6 +65,10 @@ pub use knowledge::{
 pub use lineage::{
     StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot,
+};
+pub use migration::{
+    StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
+    StoreMigrationOutcomeSnapshot, StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
 pub use plan::{
     PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanState, PlanStatus, PlanTransitionCommit,
@@ -147,6 +152,7 @@ pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use knowledge::{create_knowledge, knowledge_at, knowledges_at, transition_knowledge};
 pub(crate) use lineage::{record_store_lineage, store_lineage, store_lineages};
+pub(crate) use migration::{record_store_migration, store_migration, store_migrations};
 pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use projection::{
     branch_projection, mark_branch_projection_not_materialized, refresh_branch_projection,

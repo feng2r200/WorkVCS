@@ -49,7 +49,11 @@ use crate::history::{
     StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot,
 };
-use crate::identity::{CheckpointId, LineageId, RelationId};
+use crate::history::{
+    StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
+    StoreMigrationRecordOptions, StoreMigrationRecordResult,
+};
+use crate::identity::{CheckpointId, LineageId, MigrationId, RelationId};
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
@@ -319,6 +323,33 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::store_lineages(&self.connection, options)
+    }
+
+    pub(crate) fn record_store_migration(
+        &mut self,
+        options: StoreMigrationRecordOptions,
+    ) -> Result<StoreMigrationRecordResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_store_migration(&mut self.connection, options)
+    }
+
+    pub(crate) fn store_migration(
+        &self,
+        migration_id: MigrationId,
+    ) -> Result<StoreMigrationAttemptSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::store_migration(&self.connection, migration_id)
+    }
+
+    pub(crate) fn store_migrations(
+        &self,
+        options: StoreMigrationListOptions,
+    ) -> Result<StoreMigrationListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::store_migrations(&self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

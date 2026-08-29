@@ -4157,7 +4157,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nknowledge={}\nrecords={}\nrecord_relations={}\nrecord_knowledge_relations={}\n",
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nknowledge={}\nknowledge_relations={}\nrecords={}\nrecord_relations={}\nrecord_knowledge_relations={}\n",
         session.session_id,
         session_lifecycle_state(session.lifecycle_state),
         context.branch.workspace_id,
@@ -4177,6 +4177,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         context.runnable_tasks.candidates.len(),
         runnable_ready,
         context.knowledge.knowledge.len(),
+        context.knowledge_relations.relations.len(),
         context.records.records.len(),
         context.record_relations.relations.len(),
         context.record_knowledge_relations.relations.len()
@@ -4226,6 +4227,38 @@ fn render_context_overview(context: &ContextOverview) -> String {
         let _ = writeln!(
             output,
             "context_knowledge.{index}.knowledge_provenance_json={provenance_json}"
+        );
+    }
+    for (index, relation) in context.knowledge_relations.relations.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "context_knowledge_relation.{index}.relation_id={}",
+            relation.relation_id
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_relation.{index}.relation_version_id={}",
+            relation.relation_version_id
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_relation.{index}.relation_type={}",
+            relation.relation_type
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_relation.{index}.replacement_knowledge_entity_id={}",
+            relation.replacement_knowledge_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_relation.{index}.prior_knowledge_entity_id={}",
+            relation.prior_knowledge_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_relation.{index}.relation_state_digest={}",
+            relation.state_digest
         );
     }
     for (index, record) in context.records.records.iter().enumerate() {
@@ -4360,7 +4393,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_knowledge={}\ncontext_records={}\ncontext_record_relations={}\ncontext_record_knowledge_relations={}\n",
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_knowledge={}\ncontext_knowledge_relations={}\ncontext_records={}\ncontext_record_relations={}\ncontext_record_knowledge_relations={}\n",
         result.claim_next.session_id,
         result.claim_next.workspace_id,
         result.claim_next.branch_id,
@@ -4372,6 +4405,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         result.context.runnable_tasks.candidates.len(),
         runnable_ready,
         result.context.knowledge.knowledge.len(),
+        result.context.knowledge_relations.relations.len(),
         result.context.records.records.len(),
         result.context.record_relations.relations.len(),
         result.context.record_knowledge_relations.relations.len()
@@ -6045,6 +6079,147 @@ mod tests {
             ),
             value(&knowledge, "knowledge_entity_id")
         );
+    }
+
+    #[test]
+    fn cli_context_includes_current_knowledge_relation_summary() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+
+        let prior = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Use the old context summary format",
+        ])
+        .expect("parse prior knowledge create"))
+        .expect("create prior knowledge");
+        let replacement = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&prior, "commit_id"),
+            "--statement",
+            "Use the scoped context summary format",
+        ])
+        .expect("parse replacement knowledge create"))
+        .expect("create replacement knowledge");
+        let superseded = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "supersede",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&replacement, "commit_id"),
+            "--knowledge",
+            &value(&prior, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&prior, "knowledge_entity_version_id"),
+            "--rationale",
+            "The context summary format was replaced",
+        ])
+        .expect("parse knowledge supersede"))
+        .expect("supersede knowledge");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "link-supersedes",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&superseded, "commit_id"),
+            "--replacement-knowledge",
+            &value(&replacement, "knowledge_entity_id"),
+            "--prior-knowledge",
+            &value(&prior, "knowledge_entity_id"),
+            "--rationale",
+            "The new Knowledge replaces the prior statement",
+        ])
+        .expect("parse link supersedes"))
+        .expect("link supersedes");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context =
+            run(
+                Cli::try_parse_from(["workvcs", "context", store, "--session", &session_id])
+                    .expect("parse context"),
+            )
+            .expect("context overview");
+        assert!(context.contains("knowledge=1"));
+        assert!(context.contains("knowledge_relations=1"));
+        assert_eq!(
+            value(&context, "context_knowledge_relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert!(context.contains("context_knowledge_relation.0.relation_type=supersedes"));
+        assert_eq!(
+            value(
+                &context,
+                "context_knowledge_relation.0.replacement_knowledge_entity_id"
+            ),
+            value(&replacement, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(
+                &context,
+                "context_knowledge_relation.0.prior_knowledge_entity_id"
+            ),
+            value(&prior, "knowledge_entity_id")
+        );
+
+        let next = run(
+            Cli::try_parse_from(["workvcs", "next", store, "--session", &session_id])
+                .expect("parse next"),
+        )
+        .expect("next work");
+        assert!(next.contains("selected=false"));
+        assert!(next.contains("context_knowledge=1"));
+        assert!(next.contains("context_knowledge_relations=1"));
     }
 
     #[test]

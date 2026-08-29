@@ -2,9 +2,10 @@ use super::runnable::{self, RunnableTasksOptions, RunnableTasksProjection};
 use super::session::{self, SessionLifecycleState, SessionSnapshot};
 use crate::error::{Result, WorkVcsError};
 use crate::history::{
-    self, BranchHead, KnowledgeListOptions, KnowledgeListResult, KnowledgeStatus,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult, RecordListOptions,
-    RecordListResult, RecordRelationListOptions, RecordRelationListResult,
+    self, BranchHead, KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
+    KnowledgeRelationListResult, KnowledgeStatus, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordListOptions, RecordListResult,
+    RecordRelationListOptions, RecordRelationListResult,
 };
 use crate::identity::{SessionId, WorkspaceId};
 use crate::store::StoreConnection;
@@ -30,6 +31,7 @@ pub struct ContextOverview {
     pub branch: BranchHead,
     pub runnable_tasks: RunnableTasksProjection,
     pub knowledge: KnowledgeListResult,
+    pub knowledge_relations: KnowledgeRelationListResult,
     pub records: RecordListResult,
     pub record_relations: RecordRelationListResult,
     pub record_knowledge_relations: RecordKnowledgeRelationListResult,
@@ -89,6 +91,18 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let knowledge_relations = history::knowledge_relations_at(
+        connection,
+        &KnowledgeRelationListOptions::new(branch.head_commit_id),
+    )?;
+    if knowledge_relations.workspace_id != active_workspace_id
+        || knowledge_relations.commit_id != branch.head_commit_id
+    {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} knowledge relation context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
     let record_relations = history::record_relations_at(
         connection,
         &RecordRelationListOptions::new(branch.head_commit_id),
@@ -119,6 +133,7 @@ pub(crate) fn context_overview(
         branch,
         runnable_tasks,
         knowledge,
+        knowledge_relations,
         records,
         record_relations,
         record_knowledge_relations,

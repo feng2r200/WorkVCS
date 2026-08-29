@@ -1,11 +1,12 @@
 use crate::error::{Result, WorkVcsError, storage_error};
-use crate::identity::{BranchId, CheckpointId, CommitId};
+use crate::identity::{BranchId, CheckpointId, CommitId, EventId};
 use crate::store::StoreConnection;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntegrityReport {
     pub checked_branches: usize,
     pub checked_commits: usize,
+    pub checked_events: usize,
     pub checked_checkpoints: usize,
     pub invalid_checkpoints: usize,
 }
@@ -51,6 +52,13 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
             integrity_error(format!("Commit {commit_id} cannot be replayed"), error)
         })?;
     }
+
+    let event_ids = load_event_ids(connection)?;
+    for event_id in &event_ids {
+        super::event(connection, *event_id)
+            .map_err(|error| integrity_error(format!("Event {event_id} is invalid"), error))?;
+    }
+
     let checkpoint_statuses = load_checkpoint_statuses(connection)?;
     let invalid_checkpoints = checkpoint_statuses
         .iter()
@@ -60,6 +68,7 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
     Ok(IntegrityReport {
         checked_branches: branch_ids.len(),
         checked_commits: commit_ids.len(),
+        checked_events: event_ids.len(),
         checked_checkpoints: checkpoint_statuses.len(),
         invalid_checkpoints,
     })
@@ -132,6 +141,24 @@ fn load_commit_ids(connection: &StoreConnection) -> Result<Vec<CommitId>> {
     Ok(commit_ids)
 }
 
+fn load_event_ids(connection: &StoreConnection) -> Result<Vec<EventId>> {
+    let mut statement = connection
+        .inner()
+        .prepare("SELECT event_id FROM event ORDER BY occurred_at_us, event_id")
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(storage_error)?;
+    let mut event_ids = Vec::new();
+    for row in rows {
+        event_ids.push(decode_event_id(
+            "event.event_id",
+            row.map_err(storage_error)?,
+        )?);
+    }
+    Ok(event_ids)
+}
+
 struct CheckpointStatusRow {
     usability_state: String,
 }
@@ -186,6 +213,13 @@ fn decode_checkpoint_id(column: &str, bytes: Vec<u8>) -> Result<CheckpointId> {
 fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
     let bytes = decode_16(column, bytes)?;
     CommitId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::IntegrityInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_event_id(column: &str, bytes: Vec<u8>) -> Result<EventId> {
+    let bytes = decode_16(column, bytes)?;
+    EventId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::IntegrityInvalid(format!("{column} is not a UUIDv7 value: {error}"))
     })
 }

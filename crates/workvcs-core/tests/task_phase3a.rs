@@ -403,6 +403,7 @@ fn task_create_reuses_branch_cas_and_rolls_back_stale_loser() {
     let report = second_engine.validate_integrity().expect("integrity");
     assert_eq!(report.checked_branches, 1);
     assert_eq!(report.checked_commits, 2);
+    assert_eq!(report.checked_events, 2);
 }
 
 #[test]

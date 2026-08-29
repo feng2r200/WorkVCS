@@ -117,7 +117,9 @@ pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use knowledge::{create_knowledge, knowledge_at, knowledges_at, transition_knowledge};
 pub(crate) use plan::{create_plan, plan_at, transition_plan};
-pub(crate) use projection::{branch_projection, refresh_branch_projection};
+pub(crate) use projection::{
+    branch_projection, mark_branch_projection_not_materialized, refresh_branch_projection,
+};
 pub(crate) use query::{branch_head, query_history};
 pub(crate) use record::{
     create_knowledge_relation, create_record, create_record_knowledge_relation,

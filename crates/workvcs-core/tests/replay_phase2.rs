@@ -352,7 +352,12 @@ fn state_at_does_not_use_events_or_projection_as_replay_truth() {
                 projection_state_digest,
                 updated_at_us
              )
-             VALUES (?1, 'complete', ?2, ?3, 3)",
+             VALUES (?1, 'complete', ?2, ?3, 3)
+             ON CONFLICT(branch_id) DO UPDATE SET
+                projection_status = excluded.projection_status,
+                projected_commit_id = excluded.projected_commit_id,
+                projection_state_digest = excluded.projection_state_digest,
+                updated_at_us = excluded.updated_at_us",
             params![&branch_id[..], &commit_id[..], &[9_u8; 32][..]],
         )
         .expect("insert inconsistent projection");

@@ -235,6 +235,7 @@ pub(crate) fn create_structural_reference(
         options.branch_id,
         options.expected_head_commit_id,
         commit_id,
+        now_us,
     )?;
     transaction.commit().map_err(storage_error)?;
 
@@ -837,6 +838,7 @@ fn move_branch_head(
     branch_id: BranchId,
     expected_head_commit_id: CommitId,
     commit_id: CommitId,
+    updated_at_us: i64,
 ) -> Result<()> {
     let moved = transaction
         .execute(
@@ -852,6 +854,7 @@ fn move_branch_head(
         )
         .map_err(storage_error)?;
     if moved == 1 {
+        super::mark_branch_projection_not_materialized(transaction, branch_id, updated_at_us)?;
         Ok(())
     } else {
         Err(WorkVcsError::BranchHeadConflict(format!(

@@ -454,7 +454,12 @@ fn why_verification_edges_are_sorted_read_only_and_ignore_projection_and_event_n
                 projection_state_digest,
                 updated_at_us
              )
-             VALUES (?1, 'complete', ?2, ?3, 7)",
+             VALUES (?1, 'complete', ?2, ?3, 7)
+             ON CONFLICT(branch_id) DO UPDATE SET
+                projection_status = excluded.projection_status,
+                projected_commit_id = excluded.projected_commit_id,
+                projection_state_digest = excluded.projection_state_digest,
+                updated_at_us = excluded.updated_at_us",
             params![&branch_id[..], &genesis_commit_id[..], &[8_u8; 32][..]],
         )
         .expect("insert projection noise");

@@ -1769,6 +1769,11 @@ fn write_merge_continue(
             merge.target_branch_id, merge.merge_id
         )));
     }
+    history::mark_branch_projection_not_materialized(
+        transaction,
+        merge.target_branch_id,
+        write.completed_at_us,
+    )?;
     transaction
         .execute(
             "UPDATE merge_runtime

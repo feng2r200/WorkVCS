@@ -399,6 +399,7 @@ fn write_restore(
             write.commit_id
         )));
     }
+    super::mark_branch_projection_not_materialized(transaction, options.branch_id(), write.now_us)?;
     transaction
         .execute(
             "INSERT INTO event(

@@ -279,17 +279,15 @@ fn projection_rows_do_not_drive_mutation_or_state_at() {
     let first_entity_version_id = first.entity_version_id.raw_bytes();
     connection
         .execute(
-            "INSERT INTO branch_projection_state(
-                branch_id,
-                projection_status,
-                projected_commit_id,
-                projection_state_digest,
-                updated_at_us
-             )
-             VALUES (?1, 'complete', ?2, ?3, 3)",
+            "UPDATE branch_projection_state
+             SET projection_status = 'complete',
+                 projected_commit_id = ?2,
+                 projection_state_digest = ?3,
+                 updated_at_us = 3
+             WHERE branch_id = ?1",
             params![&branch_id[..], &first_commit_id[..], &[9_u8; 32][..]],
         )
-        .expect("insert inconsistent projection state");
+        .expect("write inconsistent projection state");
     connection
         .execute(
             "INSERT INTO branch_entity_current(branch_id, entity_id, entity_version_id)

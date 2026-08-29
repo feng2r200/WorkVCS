@@ -194,6 +194,51 @@ pub(crate) fn branch_projection(
     })
 }
 
+pub(crate) fn mark_branch_projection_not_materialized(
+    transaction: &Transaction<'_>,
+    branch_id: BranchId,
+    updated_at_us: i64,
+) -> Result<()> {
+    let branch_id_bytes = branch_id.raw_bytes();
+    transaction
+        .execute(
+            "DELETE FROM branch_relation_current
+             WHERE branch_id = ?1",
+            params![&branch_id_bytes[..]],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "DELETE FROM branch_entity_current
+             WHERE branch_id = ?1",
+            params![&branch_id_bytes[..]],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO branch_projection_state(
+                branch_id,
+                projection_status,
+                projected_commit_id,
+                projection_state_digest,
+                updated_at_us
+             )
+             VALUES (?1, ?2, NULL, NULL, ?3)
+             ON CONFLICT(branch_id) DO UPDATE SET
+                projection_status = excluded.projection_status,
+                projected_commit_id = NULL,
+                projection_state_digest = NULL,
+                updated_at_us = excluded.updated_at_us",
+            params![
+                &branch_id_bytes[..],
+                NOT_MATERIALIZED_PROJECTION_STATUS,
+                updated_at_us
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
 fn replace_projection_rows(
     transaction: &Transaction<'_>,
     branch_id: BranchId,

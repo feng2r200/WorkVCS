@@ -5643,15 +5643,15 @@ mod tests {
         .expect("create task");
         let task_commit = value(&task, "commit_id");
 
-        let stale =
+        let not_materialized =
             run(
                 Cli::try_parse_from(["workvcs", "projection", "show", store, "--branch", &branch])
-                    .expect("parse stale projection show"),
+                    .expect("parse not-materialized projection show"),
             )
-            .expect("show stale projection");
-        assert_eq!(value(&stale, "status"), "stale");
-        assert_eq!(value(&stale, "projected_commit_id"), genesis);
-        assert_eq!(value(&stale, "head_commit_id"), task_commit);
+            .expect("show not-materialized projection");
+        assert_eq!(value(&not_materialized, "status"), "not_materialized");
+        assert_eq!(value(&not_materialized, "projected_commit_id"), "");
+        assert_eq!(value(&not_materialized, "head_commit_id"), task_commit);
 
         let refreshed = run(Cli::try_parse_from([
             "workvcs",

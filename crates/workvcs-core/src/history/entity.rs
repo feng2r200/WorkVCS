@@ -181,6 +181,7 @@ pub(crate) fn commit_entity_transition(
             options.branch_id, commit_id
         )));
     }
+    super::mark_branch_projection_not_materialized(&transaction, options.branch_id, now_us)?;
 
     transaction.commit().map_err(storage_error)?;
 

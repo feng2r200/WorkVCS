@@ -186,7 +186,7 @@ fn refresh_materializes_current_entities_and_relations() {
 }
 
 #[test]
-fn projection_reports_stale_after_branch_head_moves() {
+fn projection_reports_not_materialized_after_branch_head_moves() {
     let (_tempdir, path) = store_path();
     let (mut engine, workspace) = create_workspace(&path);
     let refreshed = engine
@@ -204,15 +204,19 @@ fn projection_reports_stale_after_branch_head_moves() {
         workspace.genesis_commit_id,
         "Move head",
     );
-    let stale = engine
+    let not_materialized = engine
         .branch_projection(workspace.initial_branch_id)
-        .expect("stale projection");
-    assert_eq!(stale.status, BranchProjectionStatus::Stale);
-    assert!(!stale.is_current());
-    assert_eq!(stale.projected_commit_id, Some(workspace.genesis_commit_id));
-    assert_eq!(stale.head_commit_id, task.commit_id);
-    assert_eq!(stale.entity_count, 0);
-    assert_eq!(stale.relation_count, 0);
+        .expect("not materialized projection");
+    assert_eq!(
+        not_materialized.status,
+        BranchProjectionStatus::NotMaterialized
+    );
+    assert!(!not_materialized.is_current());
+    assert_eq!(not_materialized.projected_commit_id, None);
+    assert_eq!(not_materialized.projection_state_digest, None);
+    assert_eq!(not_materialized.head_commit_id, task.commit_id);
+    assert_eq!(not_materialized.entity_count, 0);
+    assert_eq!(not_materialized.relation_count, 0);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use crate::identity::{
 };
 use crate::store::{StoreConnection, StoreInfo, StoreManifest};
 use rusqlite::{OptionalExtension, params};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
 const BUNDLE_EXPORT_MANIFEST_PROFILE: &str = "workvcs-local-export-manifest-v1";
@@ -45,6 +45,58 @@ impl BundlePayloadExportOptions {
 
     pub fn commit_id(self) -> CommitId {
         self.commit_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundlePayloadValidationOptions {
+    commit_id: CommitId,
+    manifest_bytes: Vec<u8>,
+    payload_index_bytes: Vec<u8>,
+    payloads: Vec<BundlePayloadInput>,
+}
+
+impl BundlePayloadValidationOptions {
+    pub fn from_parts(
+        commit_id: CommitId,
+        manifest_bytes: impl Into<Vec<u8>>,
+        payload_index_bytes: impl Into<Vec<u8>>,
+        payloads: Vec<BundlePayloadInput>,
+    ) -> Result<Self> {
+        let manifest_bytes = manifest_bytes.into();
+        if manifest_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle manifest bytes cannot be empty".to_owned(),
+            ));
+        }
+        let payload_index_bytes = payload_index_bytes.into();
+        if payload_index_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle payload index bytes cannot be empty".to_owned(),
+            ));
+        }
+        Ok(Self {
+            commit_id,
+            manifest_bytes,
+            payload_index_bytes,
+            payloads,
+        })
+    }
+
+    pub fn commit_id(&self) -> CommitId {
+        self.commit_id
+    }
+
+    fn manifest_bytes(&self) -> &[u8] {
+        &self.manifest_bytes
+    }
+
+    fn payload_index_bytes(&self) -> &[u8] {
+        &self.payload_index_bytes
+    }
+
+    fn payloads(&self) -> &[BundlePayloadInput] {
+        &self.payloads
     }
 }
 
@@ -134,6 +186,43 @@ pub struct BundlePayloadReference {
     pub content_digest: Digest,
     pub size_bytes: i64,
     pub owner: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundlePayloadInput {
+    pub relative_path: String,
+    pub bytes: Vec<u8>,
+}
+
+impl BundlePayloadInput {
+    pub fn new(relative_path: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Result<Self> {
+        let relative_path = relative_path.into();
+        validate_payload_relative_path(&relative_path)?;
+        let bytes = bytes.into();
+        if bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle payload bytes cannot be empty".to_owned(),
+            ));
+        }
+        Ok(Self {
+            relative_path,
+            bytes,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundlePayloadValidationResult {
+    pub commit_id: CommitId,
+    pub valid: bool,
+    pub expected_manifest_digest: Digest,
+    pub actual_manifest_digest: Digest,
+    pub expected_payload_index_digest: Digest,
+    pub actual_payload_index_digest: Digest,
+    pub expected_payload_files: usize,
+    pub actual_payload_files: usize,
+    pub expected_payload_references: usize,
+    pub problem: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -348,6 +437,35 @@ pub(crate) fn export_bundle_payloads(
     }
 
     build_payload_export(manifest, manifest_bytes, candidates)
+}
+
+pub(crate) fn validate_bundle_payloads(
+    connection: &StoreConnection,
+    store_info: &StoreInfo,
+    options: BundlePayloadValidationOptions,
+) -> Result<BundlePayloadValidationResult> {
+    connection.verify_foreign_keys()?;
+    let expected = export_bundle_payloads(
+        connection,
+        store_info,
+        BundlePayloadExportOptions::for_commit(options.commit_id()),
+    )?;
+    let actual_manifest_digest = content_object_digest(options.manifest_bytes());
+    let actual_payload_index_digest = content_object_digest(options.payload_index_bytes());
+    let problem = bundle_payload_validation_problem(&expected, &options)?;
+
+    Ok(BundlePayloadValidationResult {
+        commit_id: options.commit_id(),
+        valid: problem.is_none(),
+        expected_manifest_digest: expected.manifest.manifest_digest,
+        actual_manifest_digest,
+        expected_payload_index_digest: expected.payload_index_digest,
+        actual_payload_index_digest,
+        expected_payload_files: expected.payload_files.len(),
+        actual_payload_files: options.payloads().len(),
+        expected_payload_references: expected.payload_references.len(),
+        problem,
+    })
 }
 
 fn commit_closure_refs(
@@ -969,6 +1087,78 @@ fn build_payload_export(
     })
 }
 
+fn bundle_payload_validation_problem(
+    expected: &BundlePayloadExport,
+    options: &BundlePayloadValidationOptions,
+) -> Result<Option<String>> {
+    if let Some(problem) =
+        bundle_manifest_validation_problem(&expected.manifest, options.manifest_bytes())?
+    {
+        return Ok(Some(format!("bundle manifest is invalid: {problem}")));
+    }
+
+    let payload_index = match parse_canonical_json(options.payload_index_bytes()) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(Some(format!(
+                "bundle payload index JSON is invalid: {error}"
+            )));
+        }
+    };
+    let payload_index_bytes = canonical_bytes(&payload_index)?;
+    if payload_index_bytes != options.payload_index_bytes() {
+        return Ok(Some(
+            "bundle payload index bytes are not fixed-point canonical JSON".to_owned(),
+        ));
+    }
+    if payload_index_bytes != expected.payload_index_bytes {
+        return Ok(Some(
+            "bundle payload index content does not match expected export payload index".to_owned(),
+        ));
+    }
+
+    let mut expected_by_path = expected
+        .payload_files
+        .iter()
+        .map(|payload| (payload.relative_path.clone(), payload))
+        .collect::<HashMap<_, _>>();
+    let mut seen_paths = HashSet::new();
+    for payload in options.payloads() {
+        validate_payload_relative_path(&payload.relative_path)?;
+        if !seen_paths.insert(payload.relative_path.clone()) {
+            return Ok(Some(format!(
+                "bundle payload path {} appears more than once",
+                payload.relative_path
+            )));
+        }
+        let Some(expected_payload) = expected_by_path.remove(&payload.relative_path) else {
+            return Ok(Some(format!(
+                "bundle payload path {} is not expected by payload index",
+                payload.relative_path
+            )));
+        };
+        let actual_digest = content_object_digest(&payload.bytes);
+        if actual_digest != expected_payload.content_digest {
+            return Ok(Some(format!(
+                "bundle payload {} digest does not match expected content digest",
+                payload.relative_path
+            )));
+        }
+        if payload.bytes != expected_payload.bytes {
+            return Ok(Some(format!(
+                "bundle payload {} bytes do not match expected export payload",
+                payload.relative_path
+            )));
+        }
+    }
+    if let Some(missing_path) = expected_by_path.keys().min() {
+        return Ok(Some(format!(
+            "bundle payload path {missing_path} is missing"
+        )));
+    }
+    Ok(None)
+}
+
 fn bundle_manifest_validation_problem(
     expected: &BundleExportManifest,
     manifest_bytes: &[u8],
@@ -1431,6 +1621,21 @@ fn validate_subject_family(label: &str, value: &str) -> Result<()> {
             "{label} must be entity or relation"
         ))),
     }
+}
+
+fn validate_payload_relative_path(relative_path: &str) -> Result<()> {
+    let Some(digest_hex) = relative_path
+        .strip_prefix("payloads/")
+        .and_then(|value| value.strip_suffix(".json"))
+    else {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle payload path must match payloads/<digest>.json".to_owned(),
+        ));
+    };
+    Digest::from_hex(digest_hex).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!("bundle payload path digest is invalid: {error}"))
+    })?;
+    Ok(())
 }
 
 fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {

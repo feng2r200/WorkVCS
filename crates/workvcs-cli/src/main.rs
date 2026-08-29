@@ -9,12 +9,13 @@ use workvcs_core::{
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
     BundleExportOptions, BundleManifestValidationOptions, BundleManifestValidationResult,
-    BundlePayloadExport, BundlePayloadExportOptions, CanonicalValue, CheckpointCreateOptions,
-    CheckpointCreateResult, CheckpointId, CheckpointLatestOptions, CheckpointLatestResult,
-    CheckpointListOptions, CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
-    ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult,
-    ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId,
-    ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
+    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
+    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
+    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
+    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
+    CommitId, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
     DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EvidenceId,
     HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit, KnowledgeCreateOptions,
     KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
@@ -357,6 +358,16 @@ enum BundleCommand {
 
         #[arg(long)]
         output_dir: PathBuf,
+    },
+    ValidateDir {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+
+        #[arg(long)]
+        input_dir: PathBuf,
     },
     ValidateManifest {
         #[arg(value_name = "STORE")]
@@ -1735,6 +1746,24 @@ fn run(cli: Cli) -> Result<String> {
                 )?;
                 write_bundle_payload_export_directory(&output_dir, &export)?;
                 Ok(render_bundle_payload_export(&export, &output_dir))
+            }
+            BundleCommand::ValidateDir {
+                store,
+                commit,
+                input_dir,
+            } => {
+                let engine = Engine::open(store)?;
+                let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
+                let payload_index_bytes = read_bundle_file(&input_dir.join("payload-index.json"))?;
+                let payloads = read_bundle_payload_inputs(&input_dir)?;
+                let validation =
+                    engine.validate_bundle_payloads(BundlePayloadValidationOptions::from_parts(
+                        CommitId::parse_canonical(&commit)?,
+                        manifest_bytes,
+                        payload_index_bytes,
+                        payloads,
+                    )?)?;
+                Ok(render_bundle_payload_validation(&validation))
             }
             BundleCommand::ValidateManifest {
                 store,
@@ -5498,6 +5527,57 @@ fn write_new_file(path: PathBuf, bytes: &[u8]) -> Result<()> {
         })
 }
 
+fn read_bundle_file(path: &Path) -> Result<Vec<u8>> {
+    fs::read(path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "failed to read bundle file {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn read_bundle_payload_inputs(input_dir: &Path) -> Result<Vec<BundlePayloadInput>> {
+    let payload_dir = input_dir.join("payloads");
+    let entries = fs::read_dir(&payload_dir).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "failed to read bundle payload directory {}: {error}",
+            payload_dir.display()
+        ))
+    })?;
+    let mut payloads = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "failed to read bundle payload directory entry {}: {error}",
+                payload_dir.display()
+            ))
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "failed to inspect bundle payload file {}: {error}",
+                entry.path().display()
+            ))
+        })?;
+        if !file_type.is_file() {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle payload path {} is not a file",
+                entry.path().display()
+            )));
+        }
+        let file_name = entry.file_name().into_string().map_err(|_| {
+            WorkVcsError::QueryInvalid(format!(
+                "bundle payload file name {} is not valid UTF-8",
+                entry.path().display()
+            ))
+        })?;
+        let relative_path = format!("payloads/{file_name}");
+        let bytes = read_bundle_file(&entry.path())?;
+        payloads.push(BundlePayloadInput::new(relative_path, bytes)?);
+    }
+    payloads.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(payloads)
+}
+
 fn render_bundle_payload_export(export: &BundlePayloadExport, output_dir: &Path) -> String {
     format!(
         "bundle_payload_export_profile={}\nbundle_payload_index_version={}\noutput_dir={}\ncommit_id={}\nmanifest_digest={}\npayload_index_digest={}\npayload_index_size_bytes={}\npayload_files={}\npayload_references={}\n",
@@ -5510,6 +5590,22 @@ fn render_bundle_payload_export(export: &BundlePayloadExport, output_dir: &Path)
         export.payload_index_size_bytes,
         export.payload_files.len(),
         export.payload_references.len()
+    )
+}
+
+fn render_bundle_payload_validation(result: &BundlePayloadValidationResult) -> String {
+    format!(
+        "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nexpected_payload_index_digest={}\nactual_payload_index_digest={}\nexpected_payload_files={}\nactual_payload_files={}\nexpected_payload_references={}\nproblem={}\n",
+        result.commit_id,
+        result.valid,
+        result.expected_manifest_digest,
+        result.actual_manifest_digest,
+        result.expected_payload_index_digest,
+        result.actual_payload_index_digest,
+        result.expected_payload_files,
+        result.actual_payload_files,
+        result.expected_payload_references,
+        result.problem.as_deref().unwrap_or("none")
     )
 }
 
@@ -6248,6 +6344,25 @@ mod tests {
         let payload_index =
             fs::read(export_dir.join("payload-index.json")).expect("payload index file");
         parse_canonical_json(&payload_index).expect("payload index is canonical JSON");
+
+        let validated_dir = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-dir",
+            store,
+            "--commit",
+            &genesis,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse bundle validate-dir"))
+        .expect("validate bundle directory");
+        assert_eq!(value(&validated_dir, "commit_id"), genesis);
+        assert_eq!(value(&validated_dir, "valid"), "true");
+        assert_eq!(value(&validated_dir, "expected_payload_files"), "1");
+        assert_eq!(value(&validated_dir, "actual_payload_files"), "1");
+        assert_eq!(value(&validated_dir, "expected_payload_references"), "2");
+        assert_eq!(value(&validated_dir, "problem"), "none");
     }
 
     #[test]

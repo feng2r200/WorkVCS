@@ -19,6 +19,7 @@ const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
     Assumption,
+    Attempt,
     Decision,
     Finding,
     Question,
@@ -29,6 +30,7 @@ impl RecordKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Assumption => "assumption",
+            Self::Attempt => "attempt",
             Self::Decision => "decision",
             Self::Finding => "finding",
             Self::Question => "question",
@@ -39,6 +41,7 @@ impl RecordKind {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "assumption" => Ok(Self::Assumption),
+            "attempt" => Ok(Self::Attempt),
             "decision" => Ok(Self::Decision),
             "finding" => Ok(Self::Finding),
             "question" => Ok(Self::Question),
@@ -60,6 +63,7 @@ impl fmt::Display for RecordKind {
 pub enum RecordStatus {
     Active,
     Invalidated,
+    Running,
     Unverified,
     Validated,
 }
@@ -69,6 +73,7 @@ impl RecordStatus {
         match self {
             Self::Active => "active",
             Self::Invalidated => "invalidated",
+            Self::Running => "running",
             Self::Unverified => "unverified",
             Self::Validated => "validated",
         }
@@ -78,6 +83,7 @@ impl RecordStatus {
         match value {
             "active" => Ok(Self::Active),
             "invalidated" => Ok(Self::Invalidated),
+            "running" => Ok(Self::Running),
             "unverified" => Ok(Self::Unverified),
             "validated" => Ok(Self::Validated),
             other => Err(WorkVcsError::RecordInvalid(format!(
@@ -102,6 +108,17 @@ pub struct RecordState {
 }
 
 impl RecordState {
+    pub fn attempt(statement: impl Into<String>) -> Result<Self> {
+        let statement = statement.into();
+        validate_statement(&statement)?;
+        Ok(Self {
+            kind: RecordKind::Attempt,
+            statement,
+            scope: CanonicalValue::object(Vec::new())?,
+            status: RecordStatus::Running,
+        })
+    }
+
     pub fn question(statement: impl Into<String>) -> Result<Self> {
         let statement = statement.into();
         validate_statement(&statement)?;
@@ -294,6 +311,19 @@ impl RecordTransitionOptions {
 }
 
 impl RecordCreateOptions {
+    pub fn attempt(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        statement: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            state: RecordState::attempt(statement)?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
     pub fn question(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -820,6 +850,7 @@ fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Re
             RecordKind::Finding | RecordKind::Decision | RecordKind::Question | RecordKind::Risk,
             RecordStatus::Active,
         )
+        | (RecordKind::Attempt, RecordStatus::Running)
         | (
             RecordKind::Assumption,
             RecordStatus::Unverified | RecordStatus::Validated | RecordStatus::Invalidated,

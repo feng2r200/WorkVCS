@@ -367,6 +367,22 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    Attempt {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+    },
     AssumptionStatus {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1074,6 +1090,28 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::Attempt {
+                    store,
+                    branch,
+                    head,
+                    statement,
+                    scope_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::attempt(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        Command::Record {
+            command:
                 RecordCommand::AssumptionStatus {
                     store,
                     branch,
@@ -1370,6 +1408,7 @@ fn parse_assumption_record_status(value: &str) -> Result<RecordStatus> {
 fn parse_record_kind(value: &str) -> Result<RecordKind> {
     match value {
         "assumption" => Ok(RecordKind::Assumption),
+        "attempt" => Ok(RecordKind::Attempt),
         "decision" => Ok(RecordKind::Decision),
         "finding" => Ok(RecordKind::Finding),
         "question" => Ok(RecordKind::Question),
@@ -3511,6 +3550,80 @@ mod tests {
             value(&show, "record_entity_version_id"),
             value(&record, "record_entity_version_id")
         );
+    }
+
+    #[test]
+    fn cli_runs_attempt_record_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let record = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "attempt",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Run the next validation command",
+        ])
+        .expect("parse attempt"))
+        .expect("create attempt");
+        assert!(record.contains("record_kind=attempt"));
+        assert!(record.contains("record_status=running"));
+
+        let list = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&record, "commit_id"),
+            "--kind",
+            "attempt",
+        ])
+        .expect("parse attempt list"))
+        .expect("list attempt records");
+        assert_eq!(value(&list, "records"), "1");
+        assert!(list.contains("record_kind=attempt"));
+        assert!(list.contains("record_status=running"));
+
+        let show = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--commit",
+            &value(&record, "commit_id"),
+            "--record",
+            &value(&record, "record_entity_id"),
+        ])
+        .expect("parse attempt show"))
+        .expect("show attempt record");
+        assert!(show.contains("record_kind=attempt"));
+        assert!(show.contains("record_status=running"));
+        assert!(show.contains("record_statement_json=\"Run the next validation command\""));
     }
 
     fn value(output: &str, key: &str) -> String {

@@ -1,7 +1,8 @@
-use super::session;
+use super::session::{self, SessionFocus};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history::{
-    self, TaskSchedulingRelationSnapshot, TaskSchedulingRelationType, TaskSnapshot, TaskStatus,
+    self, PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
+    TaskSchedulingRelationSnapshot, TaskSchedulingRelationType, TaskSnapshot, TaskStatus,
 };
 use crate::identity::{BranchId, ClaimId, CommitId, EntityId, SessionId, WorkspaceId};
 use crate::store::StoreConnection;
@@ -75,11 +76,12 @@ pub enum RunnableTaskBlockedReason {
     ClaimBlocked,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ProjectionAnchor {
     workspace_id: WorkspaceId,
     branch_id: BranchId,
     head_commit_id: CommitId,
+    focus: Option<SessionFocus>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,24 +101,55 @@ impl DependencyReadiness {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CandidateScope {
+    task_entity_ids: Option<BTreeSet<EntityId>>,
+    focused: bool,
+}
+
+impl CandidateScope {
+    fn workspace_wide() -> Self {
+        Self {
+            task_entity_ids: None,
+            focused: false,
+        }
+    }
+
+    fn focused(task_entity_ids: BTreeSet<EntityId>) -> Self {
+        Self {
+            task_entity_ids: Some(task_entity_ids),
+            focused: true,
+        }
+    }
+
+    fn includes(&self, task_entity_id: EntityId) -> bool {
+        self.task_entity_ids
+            .as_ref()
+            .is_none_or(|task_entity_ids| task_entity_ids.contains(&task_entity_id))
+    }
+}
+
 pub(crate) fn runnable_tasks(
     connection: &StoreConnection,
     options: &RunnableTasksOptions,
 ) -> Result<RunnableTasksProjection> {
     connection.verify_foreign_keys()?;
     let anchor = projection_anchor(connection, options.session_id())?;
-    let tasks = history::tasks_at(connection, anchor.head_commit_id)?;
+    let all_tasks = history::tasks_at(connection, anchor.head_commit_id)?;
     let scheduling_relations =
         history::task_scheduling_relations_at(connection, anchor.head_commit_id)?;
-    let dependency_readiness = dependency_readiness_by_task(&tasks, &scheduling_relations)?;
+    let dependency_readiness = dependency_readiness_by_task(&all_tasks, &scheduling_relations)?;
+    let candidate_scope =
+        candidate_scope_for_focus(connection, anchor.head_commit_id, anchor.focus.as_ref())?;
     let claim_coordination = load_active_claim_coordination(
         connection,
         anchor.workspace_id,
         anchor.branch_id,
         options.session_id(),
     )?;
-    let mut candidates = tasks
+    let mut candidates = all_tasks
         .into_iter()
+        .filter(|task| candidate_scope.includes(task.task_entity_id))
         .map(|task| {
             let dependency_readiness = dependency_readiness
                 .get(&task.task_entity_id)
@@ -130,14 +163,14 @@ pub(crate) fn runnable_tasks(
         })
         .collect::<Vec<_>>();
     sort_candidates(&mut candidates);
-    ensure_projection_anchor_unchanged(connection, options.session_id(), anchor)?;
+    ensure_projection_anchor_unchanged(connection, options.session_id(), &anchor)?;
 
     Ok(RunnableTasksProjection {
         session_id: options.session_id(),
         workspace_id: anchor.workspace_id,
         branch_id: anchor.branch_id,
         head_commit_id: anchor.head_commit_id,
-        deferred_dimensions: deferred_dimensions(),
+        deferred_dimensions: deferred_dimensions(candidate_scope.focused),
         candidates,
     })
 }
@@ -294,6 +327,200 @@ fn collect_dependency_closure(
     Ok(())
 }
 
+fn candidate_scope_for_focus(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    focus: Option<&SessionFocus>,
+) -> Result<CandidateScope> {
+    let Some(focus) = focus else {
+        return Ok(CandidateScope::workspace_wide());
+    };
+
+    let relations = history::primary_containment_relations_at(connection, commit_id)?;
+    validate_primary_containment_graph(&relations)?;
+    validate_focus_path(focus, &relations)?;
+    let focus_kind = focus_kind_at(connection, commit_id, focus.focus_entity_id)?;
+    Ok(CandidateScope::focused(focused_task_entity_ids(
+        focus.focus_entity_id,
+        focus_kind,
+        &relations,
+    )))
+}
+
+fn focus_kind_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    focus_entity_id: EntityId,
+) -> Result<PrimaryContainmentEndpointKind> {
+    match history::plan_at(connection, commit_id, focus_entity_id) {
+        Ok(_) => Ok(PrimaryContainmentEndpointKind::Plan),
+        Err(plan_error) => match history::task_at(connection, commit_id, focus_entity_id) {
+            Ok(_) => Ok(PrimaryContainmentEndpointKind::Task),
+            Err(task_error) => Err(WorkVcsError::SessionInvalid(format!(
+                "focus entity {focus_entity_id} is not a current Plan or Task at branch head {commit_id}: {plan_error}; {task_error}"
+            ))),
+        },
+    }
+}
+
+fn focused_task_entity_ids(
+    focus_entity_id: EntityId,
+    focus_kind: PrimaryContainmentEndpointKind,
+    relations: &[PrimaryContainmentSnapshot],
+) -> BTreeSet<EntityId> {
+    let mut task_entity_ids = BTreeSet::new();
+    if focus_kind == PrimaryContainmentEndpointKind::Task {
+        task_entity_ids.insert(focus_entity_id);
+    }
+
+    let mut stack = vec![focus_entity_id];
+    let mut visited = HashSet::new();
+    while let Some(parent_entity_id) = stack.pop() {
+        if !visited.insert(parent_entity_id) {
+            continue;
+        }
+        for relation in relations
+            .iter()
+            .filter(|relation| relation.parent_entity_id == parent_entity_id)
+        {
+            if relation.child_kind == PrimaryContainmentEndpointKind::Task {
+                task_entity_ids.insert(relation.child_entity_id);
+            }
+            stack.push(relation.child_entity_id);
+        }
+    }
+
+    task_entity_ids
+}
+
+fn validate_focus_path(
+    focus: &SessionFocus,
+    relations: &[PrimaryContainmentSnapshot],
+) -> Result<()> {
+    if focus.path.is_empty() {
+        return Ok(());
+    }
+    if focus.path.last().map(|entry| entry.path_entity_id) != Some(focus.focus_entity_id) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "focused runnable projection requires focus path to end at focus entity {}",
+            focus.focus_entity_id
+        )));
+    }
+
+    let relation_by_id = relations
+        .iter()
+        .map(|relation| (relation.relation_id, relation))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen_path_entities = HashSet::new();
+    for (index, entry) in focus.path.iter().enumerate() {
+        if !seen_path_entities.insert(entry.path_entity_id) {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "focused runnable projection path repeats entity {}",
+                entry.path_entity_id
+            )));
+        }
+        if index == 0 {
+            if entry.incoming_relation_id.is_some() {
+                return Err(WorkVcsError::SessionInvalid(
+                    "first focused runnable projection path entry cannot have an incoming relation"
+                        .to_owned(),
+                ));
+            }
+            continue;
+        }
+
+        let incoming_relation_id = entry.incoming_relation_id.ok_or_else(|| {
+            WorkVcsError::SessionInvalid(format!(
+                "focused runnable projection path entry {} has no incoming primary containment relation",
+                entry.path_entity_id
+            ))
+        })?;
+        let relation = relation_by_id.get(&incoming_relation_id).ok_or_else(|| {
+            WorkVcsError::SessionInvalid(format!(
+                "focused runnable projection path relation {incoming_relation_id} is not a current primary containment relation"
+            ))
+        })?;
+        let previous_entity_id = focus.path[index - 1].path_entity_id;
+        if relation.parent_entity_id != previous_entity_id
+            || relation.child_entity_id != entry.path_entity_id
+        {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "focused runnable projection path relation {incoming_relation_id} does not connect {previous_entity_id} to {}",
+                entry.path_entity_id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_primary_containment_graph(relations: &[PrimaryContainmentSnapshot]) -> Result<()> {
+    let mut parent_by_child = BTreeMap::new();
+    let mut children_by_parent = BTreeMap::<EntityId, Vec<EntityId>>::new();
+    for relation in relations {
+        if relation.parent_entity_id == relation.child_entity_id {
+            return Err(WorkVcsError::RelationInvalid(format!(
+                "current primary containment relation {} is a self edge",
+                relation.relation_id
+            )));
+        }
+        if let Some(existing_parent) =
+            parent_by_child.insert(relation.child_entity_id, relation.parent_entity_id)
+        {
+            return Err(WorkVcsError::RelationInvalid(format!(
+                "entity {} has multiple current primary containment parents: {existing_parent} and {}",
+                relation.child_entity_id, relation.parent_entity_id
+            )));
+        }
+        children_by_parent
+            .entry(relation.parent_entity_id)
+            .or_default()
+            .push(relation.child_entity_id);
+    }
+
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    for entity_id in children_by_parent.keys().copied().collect::<Vec<_>>() {
+        validate_primary_containment_acyclic(
+            entity_id,
+            &children_by_parent,
+            &mut visiting,
+            &mut visited,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_primary_containment_acyclic(
+    entity_id: EntityId,
+    children_by_parent: &BTreeMap<EntityId, Vec<EntityId>>,
+    visiting: &mut HashSet<EntityId>,
+    visited: &mut HashSet<EntityId>,
+) -> Result<()> {
+    if visited.contains(&entity_id) {
+        return Ok(());
+    }
+    if !visiting.insert(entity_id) {
+        return Err(WorkVcsError::RelationInvalid(format!(
+            "current primary containment graph contains a cycle at entity {entity_id}"
+        )));
+    }
+    if let Some(children) = children_by_parent.get(&entity_id) {
+        for child_entity_id in children {
+            validate_primary_containment_acyclic(
+                *child_entity_id,
+                children_by_parent,
+                visiting,
+                visited,
+            )?;
+        }
+    }
+    visiting.remove(&entity_id);
+    visited.insert(entity_id);
+    Ok(())
+}
+
 fn sort_candidates(candidates: &mut [RunnableTaskCandidate]) {
     candidates.sort_by(|left, right| {
         right
@@ -307,32 +534,46 @@ fn projection_anchor(
     connection: &StoreConnection,
     session_id: SessionId,
 ) -> Result<ProjectionAnchor> {
-    let active = session::active_session_projection(connection, session_id)?;
-    let branch_head = history::branch_head(connection, active.active_branch_id)?;
-    if branch_head.workspace_id != active.active_workspace_id {
+    let snapshot = session::session_snapshot(connection, session_id)?;
+    if snapshot.lifecycle_state != session::SessionLifecycleState::Active {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {session_id} is not active"
+        )));
+    }
+    let active_workspace_id = snapshot.active_workspace_id.ok_or_else(|| {
+        WorkVcsError::SessionInvalid(format!(
+            "active session {session_id} has no active workspace"
+        ))
+    })?;
+    let active_branch_id = snapshot.active_branch_id.ok_or_else(|| {
+        WorkVcsError::SessionInvalid(format!("active session {session_id} has no active branch"))
+    })?;
+    let branch_head = history::branch_head(connection, active_branch_id)?;
+    if branch_head.workspace_id != active_workspace_id {
         return Err(WorkVcsError::SessionInvalid(format!(
             "session {session_id} active branch {} belongs to workspace {}, not active workspace {}",
-            active.active_branch_id, branch_head.workspace_id, active.active_workspace_id
+            active_branch_id, branch_head.workspace_id, active_workspace_id
         )));
     }
     if branch_head.lifecycle_state != ACTIVE_BRANCH_LIFECYCLE_STATE {
         return Err(WorkVcsError::SessionInvalid(format!(
             "session {session_id} active branch {} has lifecycle state {:?}",
-            active.active_branch_id, branch_head.lifecycle_state
+            active_branch_id, branch_head.lifecycle_state
         )));
     }
 
     Ok(ProjectionAnchor {
-        workspace_id: active.active_workspace_id,
-        branch_id: active.active_branch_id,
+        workspace_id: active_workspace_id,
+        branch_id: active_branch_id,
         head_commit_id: branch_head.head_commit_id,
+        focus: snapshot.focus,
     })
 }
 
 fn ensure_projection_anchor_unchanged(
     connection: &StoreConnection,
     session_id: SessionId,
-    anchor: ProjectionAnchor,
+    anchor: &ProjectionAnchor,
 ) -> Result<()> {
     let refreshed = projection_anchor(connection, session_id)?;
     if refreshed.workspace_id != anchor.workspace_id || refreshed.branch_id != anchor.branch_id {
@@ -344,6 +585,11 @@ fn ensure_projection_anchor_unchanged(
         return Err(WorkVcsError::BranchHeadConflict(format!(
             "branch {} head changed before runnable projection completed",
             anchor.branch_id
+        )));
+    }
+    if refreshed.focus != anchor.focus {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {session_id} focus changed before runnable projection completed"
         )));
     }
     Ok(())
@@ -446,11 +692,13 @@ fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {
     })
 }
 
-fn deferred_dimensions() -> Vec<RunnableTaskProjectionDimension> {
-    vec![
-        RunnableTaskProjectionDimension::ActiveScopePlanPath,
-        RunnableTaskProjectionDimension::ExecutableTaskDescendants,
-        RunnableTaskProjectionDimension::ExplicitManualOrder,
-        RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker,
-    ]
+fn deferred_dimensions(focused: bool) -> Vec<RunnableTaskProjectionDimension> {
+    let mut dimensions = Vec::new();
+    if !focused {
+        dimensions.push(RunnableTaskProjectionDimension::ActiveScopePlanPath);
+        dimensions.push(RunnableTaskProjectionDimension::ExecutableTaskDescendants);
+    }
+    dimensions.push(RunnableTaskProjectionDimension::ExplicitManualOrder);
+    dimensions.push(RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker);
+    dimensions
 }

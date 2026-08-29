@@ -459,6 +459,22 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    Handoff {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+    },
     Question {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1247,6 +1263,28 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::Handoff {
+                    store,
+                    branch,
+                    head,
+                    statement,
+                    scope_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::handoff(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        Command::Record {
+            command:
                 RecordCommand::Decision {
                     store,
                     branch,
@@ -1494,6 +1532,7 @@ fn parse_record_kind(value: &str) -> Result<RecordKind> {
         "attempt" => Ok(RecordKind::Attempt),
         "decision" => Ok(RecordKind::Decision),
         "finding" => Ok(RecordKind::Finding),
+        "handoff" => Ok(RecordKind::Handoff),
         "question" => Ok(RecordKind::Question),
         "risk" => Ok(RecordKind::Risk),
         other => Err(WorkVcsError::RecordInvalid(format!(
@@ -3745,6 +3784,80 @@ mod tests {
         .expect("show terminal attempt record");
         assert!(terminal_show.contains("record_kind=attempt"));
         assert!(terminal_show.contains("record_status=failed"));
+    }
+
+    #[test]
+    fn cli_runs_handoff_record_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let record = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "handoff",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Continue with the next runnable task",
+            "--scope-json",
+            r#"{"focus":"task:next"}"#,
+        ])
+        .expect("parse handoff"))
+        .expect("create handoff");
+        assert!(record.contains("record_kind=handoff"));
+        assert!(record.contains("record_status=active"));
+
+        let list = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&record, "commit_id"),
+            "--kind",
+            "handoff",
+        ])
+        .expect("parse handoff list"))
+        .expect("list handoff records");
+        assert_eq!(value(&list, "records"), "1");
+        assert!(list.contains("record_kind=handoff"));
+
+        let show = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--commit",
+            &value(&record, "commit_id"),
+            "--record",
+            &value(&record, "record_entity_id"),
+        ])
+        .expect("parse handoff show"))
+        .expect("show handoff");
+        assert!(show.contains("record_kind=handoff"));
+        assert!(show.contains("record_scope_json={\"focus\":\"task:next\"}"));
     }
 
     fn value(output: &str, key: &str) -> String {

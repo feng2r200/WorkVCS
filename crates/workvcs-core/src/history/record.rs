@@ -22,6 +22,7 @@ pub enum RecordKind {
     Attempt,
     Decision,
     Finding,
+    Handoff,
     Question,
     Risk,
 }
@@ -33,6 +34,7 @@ impl RecordKind {
             Self::Attempt => "attempt",
             Self::Decision => "decision",
             Self::Finding => "finding",
+            Self::Handoff => "handoff",
             Self::Question => "question",
             Self::Risk => "risk",
         }
@@ -44,6 +46,7 @@ impl RecordKind {
             "attempt" => Ok(Self::Attempt),
             "decision" => Ok(Self::Decision),
             "finding" => Ok(Self::Finding),
+            "handoff" => Ok(Self::Handoff),
             "question" => Ok(Self::Question),
             "risk" => Ok(Self::Risk),
             other => Err(WorkVcsError::RecordInvalid(format!(
@@ -117,6 +120,17 @@ pub struct RecordState {
 }
 
 impl RecordState {
+    pub fn handoff(statement: impl Into<String>) -> Result<Self> {
+        let statement = statement.into();
+        validate_statement(&statement)?;
+        Ok(Self {
+            kind: RecordKind::Handoff,
+            statement,
+            scope: CanonicalValue::object(Vec::new())?,
+            status: RecordStatus::Active,
+        })
+    }
+
     pub fn attempt(statement: impl Into<String>) -> Result<Self> {
         let statement = statement.into();
         validate_statement(&statement)?;
@@ -410,6 +424,19 @@ impl RecordTransitionOptions {
 }
 
 impl RecordCreateOptions {
+    pub fn handoff(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        statement: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            state: RecordState::handoff(statement)?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
     pub fn attempt(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -968,7 +995,11 @@ fn validate_attempt_lifecycle_transition(current: RecordStatus, next: RecordStat
 fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
     match (kind, status) {
         (
-            RecordKind::Finding | RecordKind::Decision | RecordKind::Question | RecordKind::Risk,
+            RecordKind::Finding
+            | RecordKind::Decision
+            | RecordKind::Handoff
+            | RecordKind::Question
+            | RecordKind::Risk,
             RecordStatus::Active,
         )
         | (

@@ -52,6 +52,7 @@ use crate::history::{
 use crate::history::{
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
     KnowledgeExposureListOptions, KnowledgeExposureListResult, KnowledgeExposureSnapshot,
+    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
 };
 use crate::history::{
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
@@ -445,6 +446,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::knowledge_exposures(&self.connection, options)
+    }
+
+    pub(crate) fn withdraw_knowledge_exposure(
+        &mut self,
+        options: KnowledgeExposureWithdrawOptions,
+    ) -> Result<KnowledgeExposureWithdrawResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::withdraw_knowledge_exposure(&mut self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

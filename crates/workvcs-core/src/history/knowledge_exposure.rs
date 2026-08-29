@@ -134,7 +134,50 @@ impl KnowledgeExposureCreateLocalOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureWithdrawOptions {
+    exposure_id: ExposureId,
+    expected_transition_id: ExposureTransitionId,
+    detail: CanonicalValue,
+}
+
+impl KnowledgeExposureWithdrawOptions {
+    pub fn new(
+        exposure_id: ExposureId,
+        expected_transition_id: ExposureTransitionId,
+    ) -> Result<Self> {
+        Ok(Self {
+            exposure_id,
+            expected_transition_id,
+            detail: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_detail(mut self, detail: CanonicalValue) -> Result<Self> {
+        require_object_value("knowledge exposure withdrawal detail", &detail)?;
+        self.detail = detail;
+        Ok(self)
+    }
+
+    fn exposure_id(&self) -> ExposureId {
+        self.exposure_id
+    }
+
+    fn expected_transition_id(&self) -> ExposureTransitionId {
+        self.expected_transition_id
+    }
+
+    fn detail(&self) -> &CanonicalValue {
+        &self.detail
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureCreateResult {
+    pub exposure: KnowledgeExposureSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureWithdrawResult {
     pub exposure: KnowledgeExposureSnapshot,
 }
 
@@ -440,6 +483,90 @@ pub(crate) fn create_local_knowledge_exposure(
     })
 }
 
+pub(crate) fn withdraw_knowledge_exposure(
+    connection: &mut StoreConnection,
+    options: KnowledgeExposureWithdrawOptions,
+) -> Result<KnowledgeExposureWithdrawResult> {
+    connection.verify_foreign_keys()?;
+    let detail_json =
+        canonical_object_json("knowledge exposure withdrawal detail", options.detail())?;
+    let exposure_id_bytes = options.exposure_id().raw_bytes();
+    let expected_transition_id_bytes = options.expected_transition_id().raw_bytes();
+    let transition_id = ExposureTransitionId::new_v7();
+    let transition_id_bytes = transition_id.raw_bytes();
+    let changed_at_us = current_epoch_micros()?;
+    let withdrawn = KnowledgeExposureLifecycleStatus::Withdrawn;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let (current_transition_id, current_status) =
+        load_current_transition(&transaction, options.exposure_id())?.ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "KnowledgeExposure {} has no current transition",
+                options.exposure_id()
+            ))
+        })?;
+    if current_transition_id != options.expected_transition_id() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} expected transition {}, found {}",
+            options.exposure_id(),
+            options.expected_transition_id(),
+            current_transition_id
+        )));
+    }
+    if current_status != KnowledgeExposureLifecycleStatus::Active {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} is already {}",
+            options.exposure_id(),
+            current_status.as_str()
+        )));
+    }
+    transaction
+        .execute(
+            "INSERT INTO knowledge_exposure_transition(
+                transition_id,
+                exposure_id,
+                previous_transition_id,
+                lifecycle_status,
+                changed_at_us,
+                event_id,
+                detail_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            params![
+                &transition_id_bytes[..],
+                &exposure_id_bytes[..],
+                &expected_transition_id_bytes[..],
+                withdrawn.as_str(),
+                changed_at_us,
+                detail_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "UPDATE knowledge_exposure_current
+             SET transition_id = ?2,
+                 lifecycle_status = ?3,
+                 updated_at_us = ?4
+             WHERE exposure_id = ?1",
+            params![
+                &exposure_id_bytes[..],
+                &transition_id_bytes[..],
+                withdrawn.as_str(),
+                changed_at_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(KnowledgeExposureWithdrawResult {
+        exposure: knowledge_exposure(connection, options.exposure_id())?,
+    })
+}
+
 pub(crate) fn knowledge_exposure(
     connection: &StoreConnection,
     exposure_id: ExposureId,
@@ -545,6 +672,32 @@ fn ensure_local_source_available(
     } else {
         Ok(())
     }
+}
+
+fn load_current_transition(
+    transaction: &Transaction<'_>,
+    exposure_id: ExposureId,
+) -> Result<Option<(ExposureTransitionId, KnowledgeExposureLifecycleStatus)>> {
+    let row = transaction
+        .query_row(
+            "SELECT transition_id, lifecycle_status
+             FROM knowledge_exposure_current
+             WHERE exposure_id = ?1",
+            params![&exposure_id.raw_bytes()[..]],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    row.map(|(transition_id, lifecycle_status)| {
+        Ok((
+            decode_exposure_transition_id(
+                "knowledge_exposure_current.transition_id",
+                transition_id,
+            )?,
+            KnowledgeExposureLifecycleStatus::parse(&lifecycle_status)?,
+        ))
+    })
+    .transpose()
 }
 
 fn load_knowledge_exposure_snapshot(

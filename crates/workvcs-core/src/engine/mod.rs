@@ -35,9 +35,10 @@ use crate::history::{
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
     KnowledgeExposureListOptions, KnowledgeExposureListResult, KnowledgeExposureSnapshot,
-    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
-    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult, KnowledgeListOptions,
+    KnowledgeListResult, KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions,
+    KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
+    KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
     KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
     KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
@@ -351,6 +352,13 @@ impl Engine {
         options: KnowledgeExposureListOptions,
     ) -> Result<KnowledgeExposureListResult> {
         self.store.knowledge_exposures(options)
+    }
+
+    pub fn withdraw_knowledge_exposure(
+        &mut self,
+        options: KnowledgeExposureWithdrawOptions,
+    ) -> Result<KnowledgeExposureWithdrawResult> {
+        self.store.withdraw_knowledge_exposure(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

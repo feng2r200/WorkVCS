@@ -19,13 +19,14 @@ use workvcs_core::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
     ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EvidenceId, ExposureId, ExternalObjectId, ExternalObjectRefListOptions,
-    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
-    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions, KnowledgeExposureListResult,
-    KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus, KnowledgeListOptions,
+    EntityVersionId, EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId,
+    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
+    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
+    ExternalRefId, ExternalVersionId, HistoryEntry, HistoryQueryOptions, ImportId,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions,
+    KnowledgeExposureListResult, KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus,
+    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult, KnowledgeListOptions,
     KnowledgeListResult, KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions,
     KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
     KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
@@ -428,6 +429,20 @@ enum StoreCommand {
 
         #[arg(long)]
         exposure: String,
+    },
+    #[command(name = "knowledge-exposure-withdraw")]
+    KnowledgeExposureWithdraw {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        exposure: String,
+
+        #[arg(long)]
+        current_transition: String,
+
+        #[arg(long, default_value = "{}")]
+        detail_json: String,
     },
     #[command(name = "knowledge-exposure-list")]
     KnowledgeExposureList {
@@ -2139,6 +2154,24 @@ fn run(cli: Cli) -> Result<String> {
                 let snapshot =
                     engine.knowledge_exposure(ExposureId::parse_canonical(&exposure)?)?;
                 render_knowledge_exposure_snapshot(&snapshot)
+            }
+            StoreCommand::KnowledgeExposureWithdraw {
+                store,
+                exposure,
+                current_transition,
+                detail_json,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let options = KnowledgeExposureWithdrawOptions::new(
+                    ExposureId::parse_canonical(&exposure)?,
+                    ExposureTransitionId::parse_canonical(&current_transition)?,
+                )?
+                .with_detail(parse_cli_object(
+                    "knowledge exposure withdrawal detail_json",
+                    &detail_json,
+                )?)?;
+                let result = engine.withdraw_knowledge_exposure(options)?;
+                render_knowledge_exposure_withdraw_result(&result)
             }
             StoreCommand::KnowledgeExposureList {
                 store,
@@ -6493,6 +6526,12 @@ fn render_knowledge_exposure_create_result(
     render_knowledge_exposure_snapshot(&result.exposure)
 }
 
+fn render_knowledge_exposure_withdraw_result(
+    result: &KnowledgeExposureWithdrawResult,
+) -> Result<String> {
+    render_knowledge_exposure_snapshot(&result.exposure)
+}
+
 fn render_knowledge_exposure_snapshot(snapshot: &KnowledgeExposureSnapshot) -> Result<String> {
     let mut output = String::new();
     write_knowledge_exposure_snapshot_fields(&mut output, None, snapshot)?;
@@ -7707,6 +7746,136 @@ mod tests {
         assert_eq!(value(&listed, "exposures"), "1");
         assert_eq!(
             value(&listed, "exposure[0].exposure_id"),
+            value(&exposure, "exposure_id")
+        );
+    }
+
+    #[test]
+    fn cli_withdraws_local_knowledge_exposure() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-exposure-withdraw-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Withdraw this reusable knowledge exposure",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse knowledge-exposure-create-local"))
+        .expect("create local exposure");
+
+        let withdrawn = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-withdraw",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--current-transition",
+            &value(&exposure, "transition_id"),
+            "--detail-json",
+            "{\"reason\":\"cli-withdraw\"}",
+        ])
+        .expect("parse knowledge-exposure-withdraw"))
+        .expect("withdraw exposure");
+        assert_eq!(
+            value(&withdrawn, "exposure_id"),
+            value(&exposure, "exposure_id")
+        );
+        assert_eq!(value(&withdrawn, "lifecycle_status"), "withdrawn");
+        assert_eq!(
+            value(&withdrawn, "previous_transition_id"),
+            value(&exposure, "transition_id")
+        );
+        assert_eq!(
+            value(&withdrawn, "transition_detail_json"),
+            "{\"reason\":\"cli-withdraw\"}"
+        );
+        assert_eq!(value(&withdrawn, "source_workspace_id"), workspace_id);
+
+        let active = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-list",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--lifecycle-status",
+            "active",
+        ])
+        .expect("parse active list"))
+        .expect("list active exposures");
+        assert_eq!(value(&active, "exposures"), "0");
+
+        let withdrawn_list = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-list",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--lifecycle-status",
+            "withdrawn",
+        ])
+        .expect("parse withdrawn list"))
+        .expect("list withdrawn exposures");
+        assert_eq!(value(&withdrawn_list, "exposures"), "1");
+        assert_eq!(
+            value(&withdrawn_list, "exposure[0].exposure_id"),
             value(&exposure, "exposure_id")
         );
     }

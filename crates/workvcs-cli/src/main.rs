@@ -368,6 +368,22 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    Decision {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+    },
     Finding {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1027,6 +1043,28 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let mut engine = Engine::open(store)?;
             let mut options = RecordCreateOptions::finding(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        Command::Record {
+            command:
+                RecordCommand::Decision {
+                    store,
+                    branch,
+                    head,
+                    statement,
+                    scope_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::decision(
                 BranchId::parse_canonical(&branch)?,
                 CommitId::parse_canonical(&head)?,
                 statement,
@@ -3021,6 +3059,52 @@ mod tests {
         .expect("transition assumption");
         assert!(transition.contains("previous_record_status=unverified"));
         assert!(transition.contains("record_status=validated"));
+    }
+
+    #[test]
+    fn cli_runs_record_decision_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let record = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Use SQLite for V0.1 storage",
+            "--scope-json",
+            r#"{"decision_scope":"storage"}"#,
+        ])
+        .expect("parse record decision"))
+        .expect("create decision record");
+
+        assert!(record.contains("record_kind=decision"));
+        assert!(record.contains("record_status=active"));
+        assert!(record.contains("record_entity_id="));
     }
 
     fn value(output: &str, key: &str) -> String {

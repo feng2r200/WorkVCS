@@ -19,6 +19,7 @@ const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
     Assumption,
+    Decision,
     Finding,
 }
 
@@ -26,6 +27,7 @@ impl RecordKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Assumption => "assumption",
+            Self::Decision => "decision",
             Self::Finding => "finding",
         }
     }
@@ -33,6 +35,7 @@ impl RecordKind {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "assumption" => Ok(Self::Assumption),
+            "decision" => Ok(Self::Decision),
             "finding" => Ok(Self::Finding),
             other => Err(WorkVcsError::RecordInvalid(format!(
                 "record kind {other:?} is not implemented by the semantic Record API"
@@ -93,6 +96,17 @@ pub struct RecordState {
 }
 
 impl RecordState {
+    pub fn decision(statement: impl Into<String>) -> Result<Self> {
+        let statement = statement.into();
+        validate_statement(&statement)?;
+        Ok(Self {
+            kind: RecordKind::Decision,
+            statement,
+            scope: CanonicalValue::object(Vec::new())?,
+            status: RecordStatus::Active,
+        })
+    }
+
     pub fn assumption(statement: impl Into<String>) -> Result<Self> {
         let statement = statement.into();
         validate_statement(&statement)?;
@@ -252,6 +266,19 @@ impl RecordTransitionOptions {
 }
 
 impl RecordCreateOptions {
+    pub fn decision(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        statement: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            state: RecordState::decision(statement)?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
     pub fn assumption(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -641,7 +668,7 @@ fn validate_assumption_lifecycle_transition(
 
 fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
     match (kind, status) {
-        (RecordKind::Finding, RecordStatus::Active)
+        (RecordKind::Finding | RecordKind::Decision, RecordStatus::Active)
         | (
             RecordKind::Assumption,
             RecordStatus::Unverified | RecordStatus::Validated | RecordStatus::Invalidated,

@@ -324,6 +324,17 @@ impl Engine {
             .acceptance_criterion_effective_status(commit_id, acceptance_criterion_entity_id)
     }
 
+    pub fn acceptance_criterion_effective_status_for_branch(
+        &self,
+        branch_id: BranchId,
+        acceptance_criterion_entity_id: EntityId,
+    ) -> Result<AcceptanceCriterionEffectiveStatus> {
+        self.store.acceptance_criterion_effective_status_for_branch(
+            branch_id,
+            acceptance_criterion_entity_id,
+        )
+    }
+
     pub fn start_session(&mut self, options: SessionStartOptions) -> Result<SessionStartResult> {
         self.store.start_session(&options)
     }

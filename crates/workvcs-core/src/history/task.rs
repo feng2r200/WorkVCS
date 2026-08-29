@@ -6,7 +6,7 @@ use super::evidence::{EVIDENCE_OBJECT_KIND, require_evidence_exists};
 use super::goal::GOAL_ENTITY_KIND;
 use super::plan::PLAN_ENTITY_KIND;
 use super::resource::{resource, resource_observation};
-use super::{EntityTransitionOptions, commit_entity_transition, state_at};
+use super::{EntityTransitionOptions, branch_head, commit_entity_transition, state_at};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, entity_version_digest, parse_canonical_json,
     relation_version_digest, validate_import_fixed_point, work_state_mapping_digest,
@@ -1673,6 +1673,7 @@ pub(crate) fn transition_task(
     if options.next_status == TaskStatus::Done {
         require_mandatory_acceptance_criteria_verified(
             connection,
+            options.branch_id,
             options.expected_head_commit_id,
             &current,
         )?;
@@ -3167,11 +3168,61 @@ pub(crate) fn acceptance_criterion_effective_status(
     commit_id: CommitId,
     acceptance_criterion_entity_id: EntityId,
 ) -> Result<AcceptanceCriterionEffectiveStatus> {
+    acceptance_criterion_effective_status_at(
+        connection,
+        commit_id,
+        None,
+        acceptance_criterion_entity_id,
+    )
+}
+
+pub(crate) fn acceptance_criterion_effective_status_for_branch(
+    connection: &StoreConnection,
+    branch_id: BranchId,
+    acceptance_criterion_entity_id: EntityId,
+) -> Result<AcceptanceCriterionEffectiveStatus> {
+    let branch = branch_head(connection, branch_id)?;
+    acceptance_criterion_effective_status_at(
+        connection,
+        branch.head_commit_id,
+        Some(branch_id),
+        acceptance_criterion_entity_id,
+    )
+}
+
+fn acceptance_criterion_effective_status_for_branch_commit(
+    connection: &StoreConnection,
+    branch_id: BranchId,
+    commit_id: CommitId,
+    acceptance_criterion_entity_id: EntityId,
+) -> Result<AcceptanceCriterionEffectiveStatus> {
+    let branch = branch_head(connection, branch_id)?;
+    if branch.head_commit_id != commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {branch_id} expected head {commit_id}, found {}",
+            branch.head_commit_id
+        )));
+    }
+    acceptance_criterion_effective_status_at(
+        connection,
+        commit_id,
+        Some(branch_id),
+        acceptance_criterion_entity_id,
+    )
+}
+
+fn acceptance_criterion_effective_status_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    branch_id: Option<BranchId>,
+    acceptance_criterion_entity_id: EntityId,
+) -> Result<AcceptanceCriterionEffectiveStatus> {
     let criterion = acceptance_criterion_at(connection, commit_id, acceptance_criterion_entity_id)?;
     if criterion.state.verification_requirements.is_empty() {
         return effective_status_for_target(
             connection,
             commit_id,
+            branch_id,
             VerificationTarget::AcceptanceCriterion(acceptance_criterion_entity_id),
         );
     }
@@ -3194,6 +3245,7 @@ pub(crate) fn acceptance_criterion_effective_status(
         let status = effective_status_for_target(
             connection,
             commit_id,
+            branch_id,
             VerificationTarget::VerificationRequirement(
                 requirement_ref.verification_requirement_entity_id,
             ),
@@ -7083,6 +7135,7 @@ fn verification_semantic_dependencies_for_target(
 fn effective_status_for_target(
     connection: &StoreConnection,
     commit_id: CommitId,
+    branch_id: Option<BranchId>,
     target: VerificationTarget,
 ) -> Result<AcceptanceCriterionEffectiveStatus> {
     let replayed = state_at(connection, commit_id)?;
@@ -7098,7 +7151,13 @@ fn effective_status_for_target(
     let mut has_stale_or_unknown = false;
 
     for verification in verifications {
-        match verification_applicability(&replayed.state, &verification.state) {
+        match verification_applicability_for_effective_status(
+            connection,
+            branch_id,
+            commit_id,
+            &replayed.state,
+            &verification,
+        )? {
             VerificationApplicability::Applicable => match verification.state.result {
                 VerificationResult::Passed => has_applicable_passed = true,
                 VerificationResult::Failed => has_applicable_failed = true,
@@ -7203,6 +7262,38 @@ fn verification_applicability(
         return VerificationApplicability::Unknown;
     }
     VerificationApplicability::Applicable
+}
+
+fn verification_applicability_for_effective_status(
+    connection: &StoreConnection,
+    branch_id: Option<BranchId>,
+    commit_id: CommitId,
+    state: &WorkState,
+    verification: &VerificationSnapshot,
+) -> Result<VerificationApplicability> {
+    let base_applicability = verification_applicability(state, &verification.state);
+    if base_applicability == VerificationApplicability::Stale
+        || verification.state.resource_basis.is_empty()
+    {
+        return Ok(base_applicability);
+    }
+
+    let Some(branch_id) = branch_id else {
+        return Ok(base_applicability);
+    };
+    let Some(cache) = verification_applicability_cache(
+        connection,
+        branch_id,
+        verification.verification_entity_id,
+    )?
+    else {
+        return Ok(VerificationApplicability::Unknown);
+    };
+    if cache.evaluated_commit_id == commit_id {
+        Ok(cache.applicability)
+    } else {
+        Ok(VerificationApplicability::Unknown)
+    }
 }
 
 fn work_state_basis_is_applicable(
@@ -7447,6 +7538,7 @@ fn legacy_verification_basis_value(
 
 fn require_mandatory_acceptance_criteria_verified(
     connection: &StoreConnection,
+    branch_id: BranchId,
     commit_id: CommitId,
     task: &TaskSnapshot,
 ) -> Result<()> {
@@ -7465,8 +7557,9 @@ fn require_mandatory_acceptance_criteria_verified(
             )));
         }
         if criterion.state.classification == AcceptanceCriterionClassification::Required {
-            let status = acceptance_criterion_effective_status(
+            let status = acceptance_criterion_effective_status_for_branch_commit(
                 connection,
+                branch_id,
                 commit_id,
                 criterion.acceptance_criterion_entity_id,
             )?;

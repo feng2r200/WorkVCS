@@ -91,12 +91,13 @@ pub(crate) use resource::{
     resource, resource_observation,
 };
 pub(crate) use task::{
-    acceptance_criterion_at, acceptance_criterion_effective_status, create_acceptance_criterion,
-    create_task, create_task_scheduling_relation, create_verification,
-    create_verification_requirement, record_verification_applicability,
-    reject_reserved_semantic_entity_transition, revise_acceptance_criterion,
-    revise_verification_requirement, task_at, task_scheduling_relations_at, tasks_at,
-    transition_task, verification_applicability_cache, verification_at,
-    verification_evidence_relations_at, verification_relations_at, verification_requirement_at,
+    acceptance_criterion_at, acceptance_criterion_effective_status,
+    acceptance_criterion_effective_status_for_branch, create_acceptance_criterion, create_task,
+    create_task_scheduling_relation, create_verification, create_verification_requirement,
+    record_verification_applicability, reject_reserved_semantic_entity_transition,
+    revise_acceptance_criterion, revise_verification_requirement, task_at,
+    task_scheduling_relations_at, tasks_at, transition_task, verification_applicability_cache,
+    verification_at, verification_evidence_relations_at, verification_relations_at,
+    verification_requirement_at,
 };
 pub(crate) use why::explain_why;

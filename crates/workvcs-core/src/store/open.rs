@@ -448,6 +448,20 @@ impl Store {
         )
     }
 
+    pub(crate) fn acceptance_criterion_effective_status_for_branch(
+        &self,
+        branch_id: BranchId,
+        acceptance_criterion_entity_id: EntityId,
+    ) -> Result<AcceptanceCriterionEffectiveStatus> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::acceptance_criterion_effective_status_for_branch(
+            &self.connection,
+            branch_id,
+            acceptance_criterion_entity_id,
+        )
+    }
+
     pub(crate) fn start_session(
         &mut self,
         options: &SessionStartOptions,

@@ -395,12 +395,6 @@ pub(crate) fn set_session_focus(
     validate_focus_against_work_state(&replayed.state, options)?;
 
     let now_us = current_epoch_micros()?;
-    let event_id = EventId::new_v7();
-    let event_payload_json = session_focus_set_payload_json(options)?;
-    let event_id_bytes = event_id.raw_bytes();
-    let session_id_bytes = options.session_id().raw_bytes();
-    let workspace_id_bytes = active.active_workspace_id.raw_bytes();
-
     let transaction = connection
         .inner_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -433,39 +427,18 @@ pub(crate) fn set_session_focus(
         )));
     }
 
-    clear_focus_rows(&transaction, options.session_id())?;
-    insert_focus_rows(
+    let focus = SessionFocus {
+        focus_entity_id: options.focus_entity_id(),
+        path: options.path().to_vec(),
+    };
+    replace_session_focus_with_event(
         &transaction,
         options.session_id(),
-        &SessionFocus {
-            focus_entity_id: options.focus_entity_id(),
-            path: options.path().to_vec(),
-        },
+        active.active_workspace_id,
+        &focus,
+        now_us,
     )?;
-
     update_session_activity(&transaction, options.session_id(), now_us)?;
-    transaction
-        .execute(
-            "INSERT INTO event(
-                event_id,
-                workspace_id,
-                changeset_id,
-                session_id,
-                event_kind,
-                occurred_at_us,
-                payload_json
-             )
-             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
-            params![
-                &event_id_bytes[..],
-                &workspace_id_bytes[..],
-                &session_id_bytes[..],
-                SESSION_FOCUS_SET_EVENT_KIND,
-                now_us,
-                event_payload_json
-            ],
-        )
-        .map_err(storage_error)?;
 
     transaction.commit().map_err(storage_error)?;
 
@@ -1305,6 +1278,42 @@ fn insert_focus_rows(
     Ok(())
 }
 
+pub(super) fn replace_session_focus_with_event(
+    transaction: &Transaction<'_>,
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    focus: &SessionFocus,
+    occurred_at_us: i64,
+) -> Result<()> {
+    clear_focus_rows(transaction, session_id)?;
+    insert_focus_rows(transaction, session_id, focus)?;
+    let event_id = EventId::new_v7();
+    let payload_json = session_focus_payload_json(session_id, focus.focus_entity_id, &focus.path)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
+            params![
+                &event_id.raw_bytes()[..],
+                &workspace_id.raw_bytes()[..],
+                &session_id.raw_bytes()[..],
+                SESSION_FOCUS_SET_EVENT_KIND,
+                occurred_at_us,
+                payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
 fn active_runtime_json() -> Result<String> {
     canonical_json_string(&CanonicalValue::object(vec![(
         "lifecycle_state".to_owned(),
@@ -1359,19 +1368,23 @@ fn session_started_payload_json(
     ])?)
 }
 
-fn session_focus_set_payload_json(options: &SessionFocusOptions) -> Result<String> {
+fn session_focus_payload_json(
+    session_id: SessionId,
+    focus_entity_id: EntityId,
+    path: &[SessionFocusPathEntry],
+) -> Result<String> {
     canonical_json_string(&CanonicalValue::object(vec![
         (
             "focus_entity_id".to_owned(),
-            CanonicalValue::String(options.focus_entity_id().to_string()),
+            CanonicalValue::String(focus_entity_id.to_string()),
         ),
         (
             "path".to_owned(),
-            CanonicalValue::Array(focus_path_payload_values(options.path())?),
+            CanonicalValue::Array(focus_path_payload_values(path)?),
         ),
         (
             "session_id".to_owned(),
-            CanonicalValue::String(options.session_id().to_string()),
+            CanonicalValue::String(session_id.to_string()),
         ),
     ])?)
 }

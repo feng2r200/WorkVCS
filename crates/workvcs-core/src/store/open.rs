@@ -23,10 +23,11 @@ use crate::history::{
     WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::runtime::{
-    ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
+    ClaimTaskOptions, ClaimTaskResult, RunnableTasksOptions, RunnableTasksProjection,
+    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -521,6 +522,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::claim_task(&mut self.connection, options)
+    }
+
+    pub(crate) fn claim_next_task(
+        &mut self,
+        options: &ClaimNextOptions,
+    ) -> Result<ClaimNextResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::claim_next_task(&mut self.connection, options)
     }
 
     pub(crate) fn claim_snapshot(&self, claim_id: ClaimId) -> Result<ClaimSnapshot> {

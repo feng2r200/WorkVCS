@@ -6,19 +6,20 @@ use workvcs_core::{
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, CanonicalValue, ClaimId, ClaimLifecycleState,
-    ClaimMode, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
-    CommitId, Digest, Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions,
-    ReplayedState, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
-    WorkspaceInfo, WorkspaceInitOptions, content_object_digest, parse_canonical_json,
+    ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
+    ClaimTaskOptions, ClaimTaskResult, CommitId, Digest, Engine, EntityId, EntityVersionId,
+    HistoryEntry, HistoryQueryOptions, ReplayedState, ResourceCreateOptions, ResourceCreateResult,
+    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
+    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WorkState, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
+    content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -345,6 +346,13 @@ enum SessionCommand {
 
 #[derive(Debug, Subcommand)]
 enum ClaimCommand {
+    Next {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+    },
     Task {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -908,6 +916,14 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_session_end(&ended))
         }
         Command::Claim {
+            command: ClaimCommand::Next { store, session },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let claimed = engine
+                .claim_next_task(ClaimNextOptions::new(SessionId::parse_canonical(&session)?))?;
+            Ok(render_claim_next(&claimed))
+        }
+        Command::Claim {
             command:
                 ClaimCommand::Task {
                     store,
@@ -1347,6 +1363,30 @@ fn render_claim_task(claim: &ClaimTaskResult) -> String {
         claim.claimed_at_us,
         claim_lifecycle_state(claim.state.lifecycle_state)
     )
+}
+
+fn render_claim_next(result: &ClaimNextResult) -> String {
+    let mut output = format!(
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\n",
+        result.session_id,
+        result.workspace_id,
+        result.branch_id,
+        result.head_commit_id,
+        result.inspected_candidates,
+        result.selected.is_some()
+    );
+    if let Some(claim) = &result.selected {
+        let _ = writeln!(output, "claim_id={}", claim.claim_id);
+        let _ = writeln!(output, "task_entity_id={}", claim.task_entity_id);
+        let _ = writeln!(output, "mode={}", claim_mode(claim.mode));
+        let _ = writeln!(output, "claimed_at_us={}", claim.claimed_at_us);
+        let _ = writeln!(
+            output,
+            "lifecycle_state={}",
+            claim_lifecycle_state(claim.state.lifecycle_state)
+        );
+    }
+    output
 }
 
 fn render_claim_release(claim: &ClaimReleaseResult) -> String {
@@ -1828,6 +1868,104 @@ mod tests {
         assert!(runnable.contains("candidates=1"));
         assert!(runnable.contains(&format!("candidate.0.task_entity_id={task_id}")));
         assert!(runnable.contains("candidate.0.claim=unclaimed"));
+    }
+
+    #[test]
+    fn cli_runs_claim_next_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let first = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "First CLI next task",
+        ])
+        .expect("parse first task"))
+        .expect("create first task");
+        head = value(&first, "commit_id");
+        let second = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Second CLI next task",
+        ])
+        .expect("parse second task"))
+        .expect("create second task");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let claimed =
+            run(
+                Cli::try_parse_from(["workvcs", "claim", "next", store, "--session", &session_id])
+                    .expect("parse claim next"),
+            )
+            .expect("claim next");
+        assert_eq!(value(&claimed, "selected"), "true");
+        assert!(claimed.contains("claim_id="));
+        assert!(claimed.contains("lifecycle_state=active"));
+        let selected_task = value(&claimed, "task_entity_id");
+        assert!(
+            selected_task == value(&first, "task_entity_id")
+                || selected_task == value(&second, "task_entity_id")
+        );
+
+        let runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse runnable"))
+        .expect("runnable after claim next");
+        assert!(runnable.contains(&format!("candidate.0.task_entity_id={selected_task}")));
+        assert!(runnable.contains("candidate.0.claim=claimed_by_session:"));
     }
 
     #[test]

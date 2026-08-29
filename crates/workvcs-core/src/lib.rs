@@ -58,8 +58,8 @@ pub use identity::{
     SessionDiffId, SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
-    ClaimLifecycleState, ClaimMode, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
-    ClaimTaskOptions, ClaimTaskResult,
+    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
 };
 pub use runtime::{
     RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,

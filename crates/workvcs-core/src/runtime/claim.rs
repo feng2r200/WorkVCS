@@ -1,4 +1,5 @@
-use super::session;
+use super::runnable::{self, RunnableTaskClaimCoordination, RunnableTasksOptions};
+use super::session::{self, SessionFocus};
 use crate::canonical::{CanonicalValue, canonical_bytes};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history;
@@ -80,6 +81,21 @@ impl ClaimReleaseOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimNextOptions {
+    session_id: SessionId,
+}
+
+impl ClaimNextOptions {
+    pub fn new(session_id: SessionId) -> Self {
+        Self { session_id }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimTaskResult {
     pub claim_id: ClaimId,
     pub session_id: SessionId,
@@ -100,6 +116,16 @@ pub struct ClaimReleaseResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimNextResult {
+    pub session_id: SessionId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub head_commit_id: CommitId,
+    pub inspected_candidates: usize,
+    pub selected: Option<ClaimTaskResult>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimSnapshot {
     pub claim_id: ClaimId,
     pub lifecycle_state: ClaimLifecycleState,
@@ -110,6 +136,183 @@ pub struct ClaimSnapshot {
     pub mode: ClaimMode,
     pub created_at_us: i64,
     pub last_activity_at_us: Option<i64>,
+}
+
+pub(crate) fn claim_next_task(
+    connection: &mut StoreConnection,
+    options: &ClaimNextOptions,
+) -> Result<ClaimNextResult> {
+    connection.verify_foreign_keys()?;
+    let projection =
+        runnable::runnable_tasks(connection, &RunnableTasksOptions::new(options.session_id()))?;
+    let selected_candidate = projection
+        .candidates
+        .iter()
+        .find(|candidate| {
+            candidate.runnable
+                && matches!(
+                    candidate.claim_coordination,
+                    RunnableTaskClaimCoordination::Unclaimed
+                )
+        })
+        .cloned();
+    let Some(selected_candidate) = selected_candidate else {
+        return Ok(ClaimNextResult {
+            session_id: options.session_id(),
+            workspace_id: projection.workspace_id,
+            branch_id: projection.branch_id,
+            head_commit_id: projection.head_commit_id,
+            inspected_candidates: projection.candidates.len(),
+            selected: None,
+        });
+    };
+
+    let claim_id = ClaimId::new_v7();
+    let event_id = EventId::new_v7();
+    let now_us = current_epoch_micros()?;
+    let event_payload_json = claim_created_payload_json(
+        claim_id,
+        options.session_id(),
+        projection.workspace_id,
+        projection.branch_id,
+        selected_candidate.task.task_entity_id,
+    )?;
+
+    let claim_id_bytes = claim_id.raw_bytes();
+    let event_id_bytes = event_id.raw_bytes();
+    let session_id_bytes = options.session_id().raw_bytes();
+    let workspace_id_bytes = projection.workspace_id.raw_bytes();
+    let branch_id_bytes = projection.branch_id.raw_bytes();
+    let task_entity_id_bytes = selected_candidate.task.task_entity_id.raw_bytes();
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let current_runtime =
+        session::load_active_session_runtime_for_update(&transaction, options.session_id())?;
+    if current_runtime.active_workspace_id != projection.workspace_id
+        || current_runtime.active_branch_id != projection.branch_id
+    {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} active target changed before claim-next could be written",
+            options.session_id()
+        )));
+    }
+    let current_branch = load_active_branch(&transaction, projection.branch_id)?;
+    if current_branch.workspace_id != projection.workspace_id {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} active branch {} belongs to workspace {}, not active workspace {}",
+            options.session_id(),
+            projection.branch_id,
+            current_branch.workspace_id,
+            projection.workspace_id
+        )));
+    }
+    if current_branch.head_commit_id != projection.head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} head changed before claim-next {} could be written",
+            projection.branch_id, claim_id
+        )));
+    }
+    ensure_no_active_claim_conflict(
+        &transaction,
+        projection.workspace_id,
+        projection.branch_id,
+        selected_candidate.task.task_entity_id,
+    )?;
+
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![&claim_id_bytes[..], CLAIM_OBJECT_KIND, now_us],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO claim(
+                claim_id,
+                session_id,
+                workspace_id,
+                branch_id,
+                task_entity_id,
+                mode,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &claim_id_bytes[..],
+                &session_id_bytes[..],
+                &workspace_id_bytes[..],
+                &branch_id_bytes[..],
+                &task_entity_id_bytes[..],
+                EXCLUSIVE_CLAIM_MODE,
+                now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO claim_runtime(claim_id, last_activity_at_us)
+             VALUES (?1, ?2)",
+            params![&claim_id_bytes[..], now_us],
+        )
+        .map_err(storage_error)?;
+    session::replace_session_focus_with_event(
+        &transaction,
+        options.session_id(),
+        projection.workspace_id,
+        &SessionFocus {
+            focus_entity_id: selected_candidate.task.task_entity_id,
+            path: Vec::new(),
+        },
+        now_us,
+    )?;
+    session::update_session_activity(&transaction, options.session_id(), now_us)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
+            params![
+                &event_id_bytes[..],
+                &workspace_id_bytes[..],
+                &session_id_bytes[..],
+                CLAIM_CREATED_EVENT_KIND,
+                now_us,
+                event_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    transaction.commit().map_err(storage_error)?;
+
+    let state = claim_snapshot(connection, claim_id)?;
+    Ok(ClaimNextResult {
+        session_id: options.session_id(),
+        workspace_id: projection.workspace_id,
+        branch_id: projection.branch_id,
+        head_commit_id: projection.head_commit_id,
+        inspected_candidates: projection.candidates.len(),
+        selected: Some(ClaimTaskResult {
+            claim_id,
+            session_id: options.session_id(),
+            workspace_id: projection.workspace_id,
+            branch_id: projection.branch_id,
+            task_entity_id: selected_candidate.task.task_entity_id,
+            mode: ClaimMode::Exclusive,
+            claimed_at_us: now_us,
+            state,
+        }),
+    })
 }
 
 pub(crate) fn release_claim(

@@ -57,6 +57,7 @@ recorded as Accepted ADRs:
 - [ADR-0029: Phase 3O Goal Lifecycle Transition](decisions/adr/0029-phase-3o-goal-lifecycle-transition.md)
 - [ADR-0030: Phase 3P Plan Lifecycle Transition](decisions/adr/0030-phase-3p-plan-lifecycle-transition.md)
 - [ADR-0031: Phase 3Q Goal-Focused Runnable Projection](decisions/adr/0031-phase-3q-goal-focused-runnable-projection.md)
+- [ADR-0032: Phase 3R Structural References Relations](decisions/adr/0032-phase-3r-structural-references-relations.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

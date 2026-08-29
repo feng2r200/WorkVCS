@@ -5,6 +5,7 @@ mod goal;
 mod integrity;
 mod plan;
 mod query;
+mod reference;
 mod replay;
 mod task;
 
@@ -24,6 +25,10 @@ pub use plan::{
     PlanTransitionOptions,
 };
 pub use query::{BranchHead, HistoryEntry, HistoryQueryOptions, HistoryQueryResult, HistoryStart};
+pub use reference::{
+    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceEndpointKind, StructuralReferenceSnapshot,
+};
 pub use replay::ReplayedState;
 pub use task::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
@@ -48,6 +53,7 @@ pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use query::{branch_head, query_history};
+pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::state_at;
 pub(crate) use task::{
     acceptance_criterion_at, acceptance_criterion_effective_status, create_acceptance_criterion,

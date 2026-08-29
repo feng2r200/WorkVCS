@@ -13,10 +13,12 @@ use crate::history::{
     GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
     HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
     PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState,
+    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions, StructuralReferenceSnapshot,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -133,6 +135,13 @@ impl Engine {
         self.store.create_primary_containment(&options)
     }
 
+    pub fn create_structural_reference(
+        &mut self,
+        options: StructuralReferenceCreateOptions,
+    ) -> Result<StructuralReferenceCreateCommit> {
+        self.store.create_structural_reference(&options)
+    }
+
     pub fn create_acceptance_criterion(
         &mut self,
         options: AcceptanceCriterionCreateOptions,
@@ -219,6 +228,13 @@ impl Engine {
         commit_id: CommitId,
     ) -> Result<Vec<PrimaryContainmentSnapshot>> {
         self.store.primary_containment_relations_at(commit_id)
+    }
+
+    pub fn structural_references_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<StructuralReferenceSnapshot>> {
+        self.store.structural_references_at(commit_id)
     }
 
     pub fn acceptance_criterion_effective_status(

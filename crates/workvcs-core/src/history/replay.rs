@@ -3,6 +3,7 @@ use super::entity::{
     ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION, ENTITY_TRANSITION_OPERATION_TYPE,
     canonical_json_string, entity_transition_payload_json,
 };
+use super::reference::STRUCTURAL_REFERENCE_CREATE_OPERATION_TYPE;
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, canonical_bytes, entity_version_digest,
     parse_canonical_json, relation_version_digest, validate_import_fixed_point,
@@ -25,6 +26,7 @@ const MERGE_COMMIT_KIND: &str = "merge";
 const PRIMARY_CONTAINMENT_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
 const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
+const STRUCTURAL_REFERENCE_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
 const TASK_SCHEDULING_RELATION_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
 const TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE: &str = "task.scheduling_relation.create";
 const VERIFICATION_RECORD_OPERATION_SCHEMA_VERSION: i64 = 1;
@@ -434,6 +436,13 @@ fn validate_entity_transition_changeset(
         }
         PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE => {
             if operation_schema_version != PRIMARY_CONTAINMENT_CREATE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        STRUCTURAL_REFERENCE_CREATE_OPERATION_TYPE => {
+            if operation_schema_version != STRUCTURAL_REFERENCE_CREATE_OPERATION_SCHEMA_VERSION {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
                     "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
                 )));

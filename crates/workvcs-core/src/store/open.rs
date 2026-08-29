@@ -7,10 +7,12 @@ use crate::history::{
     GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
     HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
     PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState,
+    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions, StructuralReferenceSnapshot,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -175,6 +177,15 @@ impl Store {
         history::create_primary_containment(&mut self.connection, options)
     }
 
+    pub(crate) fn create_structural_reference(
+        &mut self,
+        options: &StructuralReferenceCreateOptions,
+    ) -> Result<StructuralReferenceCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_structural_reference(&mut self.connection, options)
+    }
+
     pub(crate) fn create_acceptance_criterion(
         &mut self,
         options: &AcceptanceCriterionCreateOptions,
@@ -304,6 +315,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::primary_containment_relations_at(&self.connection, commit_id)
+    }
+
+    pub(crate) fn structural_references_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<StructuralReferenceSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::structural_references_at(&self.connection, commit_id)
     }
 
     pub(crate) fn acceptance_criterion_effective_status(

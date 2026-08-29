@@ -7517,6 +7517,12 @@ fn render_why_endpoint(
             writeln!(output, "relation.{index}.{side}_evidence_id={evidence_id}")
                 .expect("write to String");
         }
+        WhyRelationEndpoint::KnowledgeExposure { exposure_id } => {
+            writeln!(output, "relation.{index}.{side}_kind=knowledge_exposure")
+                .expect("write to String");
+            writeln!(output, "relation.{index}.{side}_exposure_id={exposure_id}")
+                .expect("write to String");
+        }
     }
 }
 
@@ -7533,6 +7539,7 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::RecordSupports => "record_supports",
         WhyRelationKind::RecordSupersedes => "record_supersedes",
         WhyRelationKind::RecordValidates => "record_validates",
+        WhyRelationKind::KnowledgeExposureDerivedFrom => "knowledge_exposure_derived_from",
         WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
     }
 }
@@ -9284,6 +9291,121 @@ mod tests {
         let provenance = value(&adoption, "adopted_knowledge_provenance_json");
         assert!(provenance.contains("\"knowledge_exposure_adoption_v1\""));
         assert!(provenance.contains("\"source_provenance\":{\"source\":\"cli\"}"));
+    }
+
+    #[test]
+    fn cli_why_shows_knowledge_exposure_adoption_provenance() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "why-knowledge-exposure-provenance-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Reusable why adoption knowledge",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse exposure create"))
+        .expect("create exposure");
+        let adoption = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-adopt",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--rationale",
+            "adopt current exposure",
+        ])
+        .expect("parse adoption"))
+        .expect("adopt exposure");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--entity",
+            &value(&adoption, "adopted_knowledge_entity_id"),
+        ])
+        .expect("parse why"))
+        .expect("why adopted knowledge");
+
+        assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(
+            value(&why, "relation.0.relation_kind"),
+            "knowledge_exposure_derived_from"
+        );
+        assert_eq!(value(&why, "relation.0.direction"), "outgoing");
+        assert_eq!(value(&why, "relation.0.source_kind"), "entity");
+        assert_eq!(value(&why, "relation.0.source_entity_kind"), "knowledge");
+        assert_eq!(
+            value(&why, "relation.0.source_entity_id"),
+            value(&adoption, "adopted_knowledge_entity_id")
+        );
+        assert_eq!(value(&why, "relation.0.target_kind"), "knowledge_exposure");
+        assert_eq!(
+            value(&why, "relation.0.target_exposure_id"),
+            value(&exposure, "exposure_id")
+        );
     }
 
     #[test]

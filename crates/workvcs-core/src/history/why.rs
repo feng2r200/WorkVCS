@@ -16,13 +16,15 @@ use super::{
 };
 use crate::error::{Result, WorkVcsError};
 use crate::identity::{
-    BranchId, CommitId, Digest, EntityId, EntityVersionId, EvidenceId, RelationId,
+    BranchId, CommitId, Digest, EntityId, EntityVersionId, EvidenceId, ExposureId, RelationId,
     RelationVersionId, WorkspaceId,
 };
 use crate::store::StoreConnection;
 use rusqlite::{OptionalExtension, params};
 
 const ENTITY_OBJECT_KIND: &str = "entity";
+const DERIVED_FROM_RELATION_TYPE: &str = "derived_from";
+const KNOWLEDGE_EXPOSURE_OBJECT_KIND: &str = "knowledge_exposure";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WhyQueryTarget {
@@ -177,6 +179,7 @@ pub enum WhyRelationKind {
     RecordSupports,
     RecordSupersedes,
     RecordValidates,
+    KnowledgeExposureDerivedFrom,
     KnowledgeSupersedes,
 }
 
@@ -207,6 +210,9 @@ pub enum WhyRelationEndpoint {
     Evidence {
         evidence_id: EvidenceId,
     },
+    KnowledgeExposure {
+        exposure_id: ExposureId,
+    },
 }
 
 impl WhyRelationEndpoint {
@@ -219,6 +225,10 @@ impl WhyRelationEndpoint {
 
     pub fn evidence(evidence_id: EvidenceId) -> Self {
         Self::Evidence { evidence_id }
+    }
+
+    pub fn knowledge_exposure(exposure_id: ExposureId) -> Self {
+        Self::KnowledgeExposure { exposure_id }
     }
 }
 
@@ -412,6 +422,27 @@ pub(crate) fn explain_why(
             });
         }
     }
+    for relation in knowledge_exposure_derived_from_relations_at(connection, &resolved)? {
+        let source = WhyRelationEndpoint::entity(
+            relation.source_knowledge_entity_id,
+            WhyEntityKind::Knowledge,
+        );
+        let target = WhyRelationEndpoint::knowledge_exposure(relation.exposure_id);
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
+        {
+            relation_edges.push(WhyRelationEdge {
+                relation_kind: WhyRelationKind::KnowledgeExposureDerivedFrom,
+                direction: relation_direction(options.subject(), source, target),
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                relation_label: None,
+                source,
+                target,
+                state_digest: relation.state_digest,
+            });
+        }
+    }
     relation_edges.sort_by(|left, right| {
         left.relation_kind
             .cmp(&right.relation_kind)
@@ -431,6 +462,94 @@ pub(crate) fn explain_why(
             WhyDeferredRelationFamily::Epistemic,
         ],
     })
+}
+
+struct KnowledgeExposureDerivedFromRelationRow {
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    source_knowledge_entity_id: EntityId,
+    exposure_id: ExposureId,
+    state_digest: Digest,
+}
+
+fn knowledge_exposure_derived_from_relations_at(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+) -> Result<Vec<KnowledgeExposureDerivedFromRelationRow>> {
+    let mut relations = Vec::new();
+    for (relation_id, relation_version_id) in resolved.state.relations() {
+        if let Some(relation) = load_knowledge_exposure_derived_from_relation(
+            connection,
+            resolved.target.workspace_id,
+            *relation_id,
+            *relation_version_id,
+        )? {
+            relations.push(relation);
+        }
+    }
+    Ok(relations)
+}
+
+fn load_knowledge_exposure_derived_from_relation(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<Option<KnowledgeExposureDerivedFromRelationRow>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT relation.source_object_id,
+                    relation.target_object_id,
+                    relation_version.state_digest
+             FROM relation
+             JOIN relation_version
+               ON relation_version.relation_id = relation.object_id
+             JOIN object_identity AS target_identity
+               ON target_identity.object_id = relation.target_object_id
+             JOIN knowledge_exposure
+               ON knowledge_exposure.exposure_id = relation.target_object_id
+             JOIN entity AS source_entity
+               ON source_entity.object_id = relation.source_object_id
+             WHERE relation.object_id = ?1
+               AND relation_version.relation_version_id = ?2
+               AND relation.workspace_id = ?3
+               AND relation.relation_type = ?4
+               AND relation.relation_discriminator = ''
+               AND target_identity.object_kind = ?5
+               AND source_entity.workspace_id = ?3
+               AND source_entity.entity_kind = ?6",
+            params![
+                &relation_id.raw_bytes()[..],
+                &relation_version_id.raw_bytes()[..],
+                &workspace_id.raw_bytes()[..],
+                DERIVED_FROM_RELATION_TYPE,
+                KNOWLEDGE_EXPOSURE_OBJECT_KIND,
+                KNOWLEDGE_ENTITY_KIND,
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(crate::error::storage_error)?;
+    let Some((source_knowledge_entity_id, exposure_id, state_digest)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(KnowledgeExposureDerivedFromRelationRow {
+        relation_id,
+        relation_version_id,
+        source_knowledge_entity_id: decode_entity_id(
+            "relation.source_object_id",
+            source_knowledge_entity_id,
+        )?,
+        exposure_id: decode_exposure_id("relation.target_object_id", exposure_id)?,
+        state_digest: decode_digest("relation_version.state_digest", state_digest)?,
+    }))
 }
 
 struct ResolvedWhyTargetWithState {
@@ -631,8 +750,25 @@ fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
     WorkspaceId::from_bytes(bytes).map_err(|error| WorkVcsError::QueryInvalid(error.to_string()))
 }
 
+fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
+    let bytes = decode_16(column, bytes)?;
+    EntityId::from_bytes(bytes).map_err(|error| WorkVcsError::QueryInvalid(error.to_string()))
+}
+
+fn decode_exposure_id(column: &str, bytes: Vec<u8>) -> Result<ExposureId> {
+    let bytes = decode_16(column, bytes)?;
+    ExposureId::from_bytes(bytes).map_err(|error| WorkVcsError::QueryInvalid(error.to_string()))
+}
+
 fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {
     bytes.try_into().map_err(|bytes: Vec<u8>| {
         WorkVcsError::QueryInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
     })
+}
+
+fn decode_digest(column: &str, bytes: Vec<u8>) -> Result<Digest> {
+    let bytes = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::QueryInvalid(format!("{column} must be 32 bytes, found {}", bytes.len()))
+    })?;
+    Ok(Digest::from_bytes(bytes))
 }

@@ -15,7 +15,8 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
-    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions, CheckpointCreateOptions,
+    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
+    BundleManifestValidationOptions, BundleManifestValidationResult, CheckpointCreateOptions,
     CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
     CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
@@ -174,6 +175,13 @@ impl Engine {
         options: BundleExportOptions,
     ) -> Result<BundleExportManifest> {
         self.store.export_bundle_manifest(options)
+    }
+
+    pub fn validate_bundle_manifest(
+        &self,
+        options: BundleManifestValidationOptions,
+    ) -> Result<BundleManifestValidationResult> {
+        self.store.validate_bundle_manifest(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

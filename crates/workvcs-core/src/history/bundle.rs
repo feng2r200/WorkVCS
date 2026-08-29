@@ -47,6 +47,45 @@ pub struct BundleExportManifest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleManifestValidationOptions {
+    commit_id: CommitId,
+    manifest_bytes: Vec<u8>,
+}
+
+impl BundleManifestValidationOptions {
+    pub fn from_bytes(commit_id: CommitId, manifest_bytes: impl Into<Vec<u8>>) -> Result<Self> {
+        let manifest_bytes = manifest_bytes.into();
+        if manifest_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle manifest bytes cannot be empty".to_owned(),
+            ));
+        }
+        Ok(Self {
+            commit_id,
+            manifest_bytes,
+        })
+    }
+
+    pub fn commit_id(&self) -> CommitId {
+        self.commit_id
+    }
+
+    fn manifest_bytes(&self) -> &[u8] {
+        &self.manifest_bytes
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleManifestValidationResult {
+    pub commit_id: CommitId,
+    pub valid: bool,
+    pub expected_manifest_digest: Digest,
+    pub actual_manifest_digest: Digest,
+    pub actual_manifest_size_bytes: i64,
+    pub problem: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleCheckpointCandidate {
     pub checkpoint_id: CheckpointId,
     pub content_digest: Digest,
@@ -146,6 +185,31 @@ pub(crate) fn export_bundle_manifest(
         commit_count: commits.len(),
         checkpoint_candidates,
         manifest,
+    })
+}
+
+pub(crate) fn validate_bundle_manifest(
+    connection: &StoreConnection,
+    store_info: &StoreInfo,
+    options: BundleManifestValidationOptions,
+) -> Result<BundleManifestValidationResult> {
+    connection.verify_foreign_keys()?;
+    let expected = export_bundle_manifest(
+        connection,
+        store_info,
+        BundleExportOptions::for_commit(options.commit_id()),
+    )?;
+    let actual_manifest_digest = content_object_digest(options.manifest_bytes());
+    let actual_manifest_size_bytes =
+        usize_to_i64("actual_manifest_size_bytes", options.manifest_bytes().len())?;
+    let problem = bundle_manifest_validation_problem(&expected, options.manifest_bytes())?;
+    Ok(BundleManifestValidationResult {
+        commit_id: options.commit_id(),
+        valid: problem.is_none(),
+        expected_manifest_digest: expected.manifest_digest,
+        actual_manifest_digest,
+        actual_manifest_size_bytes,
+        problem,
     })
 }
 
@@ -301,6 +365,31 @@ fn load_commit_parent_refs(
         });
     }
     Ok(parents)
+}
+
+fn bundle_manifest_validation_problem(
+    expected: &BundleExportManifest,
+    manifest_bytes: &[u8],
+) -> Result<Option<String>> {
+    let actual = match parse_canonical_json(manifest_bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(Some(format!("bundle manifest JSON is invalid: {error}")));
+        }
+    };
+    let reencoded = canonical_bytes(&actual)?;
+    if reencoded != manifest_bytes {
+        return Ok(Some(
+            "bundle manifest bytes are not fixed-point canonical JSON".to_owned(),
+        ));
+    }
+    let expected_bytes = canonical_bytes(&expected.manifest)?;
+    if reencoded != expected_bytes {
+        return Ok(Some(
+            "bundle manifest content does not match expected export manifest".to_owned(),
+        ));
+    }
+    Ok(None)
 }
 
 fn manifest_value(

@@ -4,7 +4,8 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
-    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions, CheckpointCreateOptions,
+    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
+    BundleManifestValidationOptions, BundleManifestValidationResult, CheckpointCreateOptions,
     CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
     CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
     EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
@@ -223,6 +224,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::export_bundle_manifest(&self.connection, &current, options)
+    }
+
+    pub(crate) fn validate_bundle_manifest(
+        &self,
+        options: BundleManifestValidationOptions,
+    ) -> Result<BundleManifestValidationResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::validate_bundle_manifest(&self.connection, &current, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

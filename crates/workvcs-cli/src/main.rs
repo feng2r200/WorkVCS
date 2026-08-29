@@ -1,5 +1,6 @@
 use clap::{ArgGroup, Parser, Subcommand};
 use std::fmt::Write as _;
+use std::fs;
 use std::path::PathBuf;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
@@ -7,14 +8,15 @@ use workvcs_core::{
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
-    BundleExportOptions, CanonicalValue, CheckpointCreateOptions, CheckpointCreateResult,
-    CheckpointId, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, ClaimId,
-    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
-    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview,
-    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
-    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    BundleExportOptions, BundleManifestValidationOptions, BundleManifestValidationResult,
+    CanonicalValue, CheckpointCreateOptions, CheckpointCreateResult, CheckpointId,
+    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
+    CheckpointSnapshot, CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode,
+    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
+    ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
+    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -338,6 +340,23 @@ enum BundleCommand {
 
         #[arg(long)]
         commit: String,
+    },
+    ExportJson {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+    },
+    ValidateManifest {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+
+        #[arg(long)]
+        manifest_file: PathBuf,
     },
 }
 
@@ -1687,6 +1706,33 @@ fn run(cli: Cli) -> Result<String> {
                     CommitId::parse_canonical(&commit)?,
                 ))?;
                 Ok(render_bundle_export_manifest(&manifest))
+            }
+            BundleCommand::ExportJson { store, commit } => {
+                let engine = Engine::open(store)?;
+                let manifest = engine.export_bundle_manifest(BundleExportOptions::for_commit(
+                    CommitId::parse_canonical(&commit)?,
+                ))?;
+                render_bundle_export_manifest_json(&manifest)
+            }
+            BundleCommand::ValidateManifest {
+                store,
+                commit,
+                manifest_file,
+            } => {
+                let engine = Engine::open(store)?;
+                let manifest_bytes = fs::read(&manifest_file).map_err(|error| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "failed to read bundle manifest file {}: {error}",
+                        manifest_file.display()
+                    ))
+                })?;
+                let validation = engine.validate_bundle_manifest(
+                    BundleManifestValidationOptions::from_bytes(
+                        CommitId::parse_canonical(&commit)?,
+                        manifest_bytes,
+                    )?,
+                )?;
+                Ok(render_bundle_manifest_validation(&validation))
             }
         },
         Command::Checkpoint { command } => match command {
@@ -5379,6 +5425,26 @@ fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
     output
 }
 
+fn render_bundle_export_manifest_json(manifest: &BundleExportManifest) -> Result<String> {
+    String::from_utf8(canonical_bytes(&manifest.manifest)?).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "bundle export manifest JSON was not UTF-8: {error}"
+        ))
+    })
+}
+
+fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
+    format!(
+        "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nactual_manifest_size_bytes={}\nproblem={}\n",
+        result.commit_id,
+        result.valid,
+        result.expected_manifest_digest,
+        result.actual_manifest_digest,
+        result.actual_manifest_size_bytes,
+        result.problem.as_deref().unwrap_or("none")
+    )
+}
+
 fn render_checkpoint_create(result: &CheckpointCreateResult) -> String {
     let mut output = render_checkpoint_snapshot(&result.checkpoint);
     writeln!(output, "entity_count={}", result.entity_count).expect("write to String");
@@ -6041,6 +6107,36 @@ mod tests {
         assert_eq!(value(&exported, "entities"), "0");
         assert_eq!(value(&exported, "checkpoint_candidates"), "1");
         assert_eq!(value(&exported, "checkpoint_candidate[0].id"), checkpoint);
+
+        let manifest_json = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export-json",
+            store,
+            "--commit",
+            &genesis,
+        ])
+        .expect("parse bundle export-json"))
+        .expect("export bundle manifest JSON");
+        parse_canonical_json(manifest_json.trim_end().as_bytes())
+            .expect("export-json emits canonical semantic JSON");
+        let manifest_file = tempdir.path().join("bundle-manifest.json");
+        fs::write(&manifest_file, manifest_json.as_bytes()).expect("write manifest file");
+        let validation = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-manifest",
+            store,
+            "--commit",
+            &genesis,
+            "--manifest-file",
+            manifest_file.to_str().expect("manifest file path"),
+        ])
+        .expect("parse bundle validate-manifest"))
+        .expect("validate bundle manifest");
+        assert_eq!(value(&validation, "commit_id"), genesis);
+        assert_eq!(value(&validation, "valid"), "true");
+        assert_eq!(value(&validation, "problem"), "none");
     }
 
     #[test]

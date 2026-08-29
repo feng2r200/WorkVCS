@@ -9,7 +9,7 @@ use super::task::{
 use super::{
     KnowledgeRelationListOptions, PrimaryContainmentEndpointKind,
     RecordKnowledgeRelationListOptions, RecordRelationListOptions, RecordRelationType,
-    StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence,
+    StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence, knowledge_exposure,
     knowledge_relations_at, primary_containment_relations_at, record_knowledge_relations_at,
     record_relations_at, state_at, structural_references_at, verification_evidence_relations_at,
     verification_relations_at,
@@ -46,6 +46,7 @@ impl WhyQueryTarget {
 pub enum WhyQuerySubject {
     Entity(EntityId),
     Evidence(EvidenceId),
+    KnowledgeExposure(ExposureId),
 }
 
 impl WhyQuerySubject {
@@ -55,6 +56,10 @@ impl WhyQuerySubject {
 
     pub fn evidence(evidence_id: EvidenceId) -> Self {
         Self::Evidence(evidence_id)
+    }
+
+    pub fn knowledge_exposure(exposure_id: ExposureId) -> Self {
+        Self::KnowledgeExposure(exposure_id)
     }
 }
 
@@ -83,6 +88,13 @@ impl WhyQueryOptions {
         }
     }
 
+    pub fn for_knowledge_exposure(target: WhyQueryTarget, subject_exposure_id: ExposureId) -> Self {
+        Self {
+            target,
+            subject: WhyQuerySubject::KnowledgeExposure(subject_exposure_id),
+        }
+    }
+
     pub fn target(&self) -> WhyQueryTarget {
         self.target
     }
@@ -94,7 +106,7 @@ impl WhyQueryOptions {
     pub fn subject_entity_id(&self) -> Option<EntityId> {
         match self.subject {
             WhyQuerySubject::Entity(entity_id) => Some(entity_id),
-            WhyQuerySubject::Evidence(_) => None,
+            WhyQuerySubject::Evidence(_) | WhyQuerySubject::KnowledgeExposure(_) => None,
         }
     }
 
@@ -102,6 +114,14 @@ impl WhyQueryOptions {
         match self.subject {
             WhyQuerySubject::Entity(_) => None,
             WhyQuerySubject::Evidence(evidence_id) => Some(evidence_id),
+            WhyQuerySubject::KnowledgeExposure(_) => None,
+        }
+    }
+
+    pub fn subject_exposure_id(&self) -> Option<ExposureId> {
+        match self.subject {
+            WhyQuerySubject::Entity(_) | WhyQuerySubject::Evidence(_) => None,
+            WhyQuerySubject::KnowledgeExposure(exposure_id) => Some(exposure_id),
         }
     }
 }
@@ -132,13 +152,16 @@ pub enum ResolvedWhyQuerySubject {
     Evidence {
         evidence_id: EvidenceId,
     },
+    KnowledgeExposure {
+        exposure_id: ExposureId,
+    },
 }
 
 impl ResolvedWhyQuerySubject {
     pub fn entity_id(self) -> Option<EntityId> {
         match self {
             Self::Entity { entity_id, .. } => Some(entity_id),
-            Self::Evidence { .. } => None,
+            Self::Evidence { .. } | Self::KnowledgeExposure { .. } => None,
         }
     }
 
@@ -147,14 +170,14 @@ impl ResolvedWhyQuerySubject {
             Self::Entity {
                 entity_version_id, ..
             } => Some(entity_version_id),
-            Self::Evidence { .. } => None,
+            Self::Evidence { .. } | Self::KnowledgeExposure { .. } => None,
         }
     }
 
     pub fn entity_kind(self) -> Option<WhyEntityKind> {
         match self {
             Self::Entity { entity_kind, .. } => Some(entity_kind),
-            Self::Evidence { .. } => None,
+            Self::Evidence { .. } | Self::KnowledgeExposure { .. } => None,
         }
     }
 
@@ -162,6 +185,14 @@ impl ResolvedWhyQuerySubject {
         match self {
             Self::Entity { .. } => None,
             Self::Evidence { evidence_id } => Some(evidence_id),
+            Self::KnowledgeExposure { .. } => None,
+        }
+    }
+
+    pub fn exposure_id(self) -> Option<ExposureId> {
+        match self {
+            Self::Entity { .. } | Self::Evidence { .. } => None,
+            Self::KnowledgeExposure { exposure_id } => Some(exposure_id),
         }
     }
 }
@@ -610,6 +641,10 @@ fn resolve_subject(
             evidence(connection, evidence_id)?;
             Ok(ResolvedWhyQuerySubject::Evidence { evidence_id })
         }
+        WhyQuerySubject::KnowledgeExposure(exposure_id) => {
+            knowledge_exposure(connection, exposure_id)?;
+            Ok(ResolvedWhyQuerySubject::KnowledgeExposure { exposure_id })
+        }
     }
 }
 
@@ -638,6 +673,10 @@ fn endpoint_matches_subject(subject: WhyQuerySubject, endpoint: WhyRelationEndpo
             WhyQuerySubject::Evidence(subject_evidence_id),
             WhyRelationEndpoint::Evidence { evidence_id },
         ) => subject_evidence_id == evidence_id,
+        (
+            WhyQuerySubject::KnowledgeExposure(subject_exposure_id),
+            WhyRelationEndpoint::KnowledgeExposure { exposure_id },
+        ) => subject_exposure_id == exposure_id,
         _ => false,
     }
 }

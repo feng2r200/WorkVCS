@@ -155,7 +155,7 @@ enum Command {
         ArgGroup::new("why-subject")
             .required(true)
             .multiple(false)
-            .args(["entity", "evidence"])
+            .args(["entity", "evidence", "exposure"])
     ))]
     Why {
         #[arg(value_name = "STORE")]
@@ -172,6 +172,9 @@ enum Command {
 
         #[arg(long)]
         evidence: Option<String>,
+
+        #[arg(long)]
+        exposure: Option<String>,
     },
     Workspace {
         #[command(subcommand)]
@@ -2669,6 +2672,7 @@ fn run(cli: Cli) -> Result<String> {
             commit,
             entity,
             evidence,
+            exposure,
         } => {
             let engine = Engine::open(store)?;
             let target = match (branch, commit) {
@@ -2684,17 +2688,22 @@ fn run(cli: Cli) -> Result<String> {
                     ));
                 }
             };
-            let options = match (entity, evidence) {
-                (Some(entity_id), None) => {
+            let options = match (entity, evidence, exposure) {
+                (Some(entity_id), None, None) => {
                     WhyQueryOptions::for_entity(target, EntityId::parse_canonical(&entity_id)?)
                 }
-                (None, Some(evidence_id)) => WhyQueryOptions::for_evidence(
+                (None, Some(evidence_id), None) => WhyQueryOptions::for_evidence(
                     target,
                     EvidenceId::parse_canonical(&evidence_id)?,
                 ),
+                (None, None, Some(exposure_id)) => WhyQueryOptions::for_knowledge_exposure(
+                    target,
+                    ExposureId::parse_canonical(&exposure_id)?,
+                ),
                 _ => {
                     return Err(WorkVcsError::QueryInvalid(
-                        "why requires exactly one of --entity or --evidence".to_owned(),
+                        "why requires exactly one of --entity, --evidence, or --exposure"
+                            .to_owned(),
                     ));
                 }
             };
@@ -7436,6 +7445,10 @@ fn render_why(result: &WhyQueryResult) -> String {
             writeln!(output, "subject_kind=evidence").expect("write to String");
             writeln!(output, "subject_evidence_id={evidence_id}").expect("write to String");
         }
+        ResolvedWhyQuerySubject::KnowledgeExposure { exposure_id } => {
+            writeln!(output, "subject_kind=knowledge_exposure").expect("write to String");
+            writeln!(output, "subject_exposure_id={exposure_id}").expect("write to String");
+        }
     }
     writeln!(output, "relation_edges={}", result.relation_edges.len()).expect("write to String");
     for (index, edge) in result.relation_edges.iter().enumerate() {
@@ -9395,6 +9408,126 @@ mod tests {
             "knowledge_exposure_derived_from"
         );
         assert_eq!(value(&why, "relation.0.direction"), "outgoing");
+        assert_eq!(value(&why, "relation.0.source_kind"), "entity");
+        assert_eq!(value(&why, "relation.0.source_entity_kind"), "knowledge");
+        assert_eq!(
+            value(&why, "relation.0.source_entity_id"),
+            value(&adoption, "adopted_knowledge_entity_id")
+        );
+        assert_eq!(value(&why, "relation.0.target_kind"), "knowledge_exposure");
+        assert_eq!(
+            value(&why, "relation.0.target_exposure_id"),
+            value(&exposure, "exposure_id")
+        );
+    }
+
+    #[test]
+    fn cli_why_accepts_knowledge_exposure_subject() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "why-knowledge-exposure-subject-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Reusable exposure subject knowledge",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse exposure create"))
+        .expect("create exposure");
+        let adoption = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-adopt",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--rationale",
+            "adopt current exposure",
+        ])
+        .expect("parse adoption"))
+        .expect("adopt exposure");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+        ])
+        .expect("parse why"))
+        .expect("why exposure");
+
+        assert_eq!(value(&why, "subject_kind"), "knowledge_exposure");
+        assert_eq!(
+            value(&why, "subject_exposure_id"),
+            value(&exposure, "exposure_id")
+        );
+        assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(
+            value(&why, "relation.0.relation_kind"),
+            "knowledge_exposure_derived_from"
+        );
+        assert_eq!(value(&why, "relation.0.direction"), "incoming");
         assert_eq!(value(&why, "relation.0.source_kind"), "entity");
         assert_eq!(value(&why, "relation.0.source_entity_kind"), "knowledge");
         assert_eq!(

@@ -10,7 +10,9 @@ pub use claim::{
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
 };
 pub use context::{ContextOverview, ContextOverviewOptions};
-pub use merge::{MergeRuntimeState, MergeStartOptions, MergeStartResult};
+pub use merge::{
+    MergeAbortOptions, MergeAbortResult, MergeRuntimeState, MergeStartOptions, MergeStartResult,
+};
 pub use next::{NextWorkOptions, NextWorkResult};
 pub use runnable::{
     RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
@@ -24,7 +26,7 @@ pub use session::{
 
 pub(crate) use claim::{claim_next_task, claim_snapshot, claim_task, release_claim};
 pub(crate) use context::context_overview;
-pub(crate) use merge::start_merge;
+pub(crate) use merge::{abort_merge, start_merge};
 pub(crate) use next::next_work;
 pub(crate) use runnable::runnable_tasks;
 pub(crate) use session::{

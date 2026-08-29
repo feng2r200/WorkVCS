@@ -49,11 +49,11 @@ use crate::history::{
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
-    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
-    SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult,
+    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
+    MergeAbortResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -558,6 +558,10 @@ impl Engine {
 
     pub fn start_merge(&mut self, options: MergeStartOptions) -> Result<MergeStartResult> {
         self.store.start_merge(&options)
+    }
+
+    pub fn abort_merge(&mut self, options: MergeAbortOptions) -> Result<MergeAbortResult> {
+        self.store.abort_merge(&options)
     }
 
     pub fn claim_task(&mut self, options: ClaimTaskOptions) -> Result<ClaimTaskResult> {

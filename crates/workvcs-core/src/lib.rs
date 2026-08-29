@@ -77,7 +77,9 @@ pub use runtime::{
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
 };
 pub use runtime::{ContextOverview, ContextOverviewOptions};
-pub use runtime::{MergeRuntimeState, MergeStartOptions, MergeStartResult};
+pub use runtime::{
+    MergeAbortOptions, MergeAbortResult, MergeRuntimeState, MergeStartOptions, MergeStartResult,
+};
 pub use runtime::{NextWorkOptions, NextWorkResult};
 pub use runtime::{
     RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,

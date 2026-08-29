@@ -18,21 +18,24 @@ const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
+    Assumption,
     Finding,
 }
 
 impl RecordKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Assumption => "assumption",
             Self::Finding => "finding",
         }
     }
 
     fn parse(value: &str) -> Result<Self> {
         match value {
+            "assumption" => Ok(Self::Assumption),
             "finding" => Ok(Self::Finding),
             other => Err(WorkVcsError::RecordInvalid(format!(
-                "record kind {other:?} is not implemented by the Phase 3AL semantic API"
+                "record kind {other:?} is not implemented by the semantic Record API"
             ))),
         }
     }
@@ -47,20 +50,23 @@ impl fmt::Display for RecordKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordStatus {
     Active,
+    Unverified,
 }
 
 impl RecordStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
+            Self::Unverified => "unverified",
         }
     }
 
     fn parse(value: &str) -> Result<Self> {
         match value {
             "active" => Ok(Self::Active),
+            "unverified" => Ok(Self::Unverified),
             other => Err(WorkVcsError::RecordInvalid(format!(
-                "record status {other:?} is not in the Phase 3AL lifecycle vocabulary"
+                "record status {other:?} is not in the semantic Record lifecycle vocabulary"
             ))),
         }
     }
@@ -81,6 +87,17 @@ pub struct RecordState {
 }
 
 impl RecordState {
+    pub fn assumption(statement: impl Into<String>) -> Result<Self> {
+        let statement = statement.into();
+        validate_statement(&statement)?;
+        Ok(Self {
+            kind: RecordKind::Assumption,
+            statement,
+            scope: CanonicalValue::object(Vec::new())?,
+            status: RecordStatus::Unverified,
+        })
+    }
+
     pub fn finding(statement: impl Into<String>) -> Result<Self> {
         let statement = statement.into();
         validate_statement(&statement)?;
@@ -101,6 +118,7 @@ impl RecordState {
     pub fn to_canonical_value(&self) -> Result<CanonicalValue> {
         validate_statement(&self.statement)?;
         require_object_value("record scope", &self.scope)?;
+        validate_record_status_for_kind(self.kind, self.status)?;
         CanonicalValue::object(vec![
             (
                 "kind".to_owned(),
@@ -128,6 +146,19 @@ pub struct RecordCreateOptions {
 }
 
 impl RecordCreateOptions {
+    pub fn assumption(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        statement: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            state: RecordState::assumption(statement)?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
     pub fn finding(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -397,6 +428,10 @@ fn parse_record_state(value: CanonicalValue) -> Result<RecordState> {
         statement: statement.ok_or_else(|| missing_field("statement"))?,
         status: status.ok_or_else(|| missing_field("status"))?,
     })
+    .and_then(|state| {
+        validate_record_status_for_kind(state.kind, state.status)?;
+        Ok(state)
+    })
 }
 
 fn validate_statement(value: &str) -> Result<()> {
@@ -406,6 +441,16 @@ fn validate_statement(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
+    match (kind, status) {
+        (RecordKind::Finding, RecordStatus::Active)
+        | (RecordKind::Assumption, RecordStatus::Unverified) => Ok(()),
+        (kind, status) => Err(WorkVcsError::RecordInvalid(format!(
+            "record kind {kind:?} cannot use status {status:?}"
+        ))),
+    }
 }
 
 fn require_string(field: &str, value: CanonicalValue) -> Result<String> {

@@ -329,6 +329,22 @@ enum ResourceCommand {
 
 #[derive(Debug, Subcommand)]
 enum RecordCommand {
+    Assumption {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+    },
     Finding {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -912,6 +928,28 @@ fn run(cli: Cli) -> Result<String> {
                 )?)?,
             )?;
             Ok(render_verification_applicability_cache(&snapshot))
+        }
+        Command::Record {
+            command:
+                RecordCommand::Assumption {
+                    store,
+                    branch,
+                    head,
+                    statement,
+                    scope_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::assumption(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
         }
         Command::Record {
             command:
@@ -2822,6 +2860,50 @@ mod tests {
         assert!(record.contains("record_status=active"));
         assert!(record.contains("record_entity_id="));
         assert!(record.contains("commit_id="));
+    }
+
+    #[test]
+    fn cli_runs_record_assumption_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let record = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "assumption",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Serialized writes are sufficient",
+        ])
+        .expect("parse record assumption"))
+        .expect("create assumption record");
+
+        assert!(record.contains("record_kind=assumption"));
+        assert!(record.contains("record_status=unverified"));
+        assert!(record.contains("record_entity_id="));
     }
 
     fn value(output: &str, key: &str) -> String {

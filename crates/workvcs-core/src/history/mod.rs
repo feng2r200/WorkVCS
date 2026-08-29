@@ -27,17 +27,19 @@ mod why;
 
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
-    BundleBranchHeadRef, BundleCheckpointCandidate, BundleEntityMembershipChangeRef,
-    BundleEntityVersionRef, BundleExportManifest, BundleExportOptions, BundleImportApplyOptions,
-    BundleImportApplyResult, BundleImportAttemptListOptions, BundleImportAttemptListResult,
-    BundleImportAttemptOptions, BundleImportAttemptOutcomeSnapshot, BundleImportAttemptResult,
-    BundleImportAttemptSnapshot, BundleImportPreflightOptions, BundleImportPreflightResult,
+    BundleAcceptanceCriterionIdentityRef, BundleBranchHeadRef, BundleCheckpointCandidate,
+    BundleEntityMembershipChangeRef, BundleEntityVersionRef, BundleExportManifest,
+    BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
+    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
+    BundleImportAttemptOutcomeSnapshot, BundleImportAttemptResult, BundleImportAttemptSnapshot,
+    BundleImportPreflightOptions, BundleImportPreflightResult,
     BundleKnowledgeExposureLocalSourceRef, BundleKnowledgeExposureRef,
     BundleKnowledgeExposureSourceStatusRef, BundleKnowledgeExposureTransitionRef,
     BundleKnowledgeSpaceRef, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput,
     BundlePayloadReference, BundlePayloadValidationOptions, BundlePayloadValidationResult,
     BundleRelationMembershipChangeRef, BundleRelationVersionRef,
+    BundleVerificationRequirementIdentityRef,
 };
 pub use checkpoint::{
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,

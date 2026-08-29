@@ -1,3 +1,6 @@
+use super::task::{
+    ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_REQUIREMENT_ENTITY_KIND,
+};
 use crate::canonical::{
     CanonicalValue, WorkState, canonical_bytes, content_object_digest, entity_version_digest,
     parse_canonical_json, relation_version_digest, work_state_mapping_digest,
@@ -242,6 +245,8 @@ pub struct BundleExportManifest {
     pub commit_count: usize,
     pub exported_branch_heads: Vec<BundleBranchHeadRef>,
     pub entity_versions: Vec<BundleEntityVersionRef>,
+    pub acceptance_criterion_identities: Vec<BundleAcceptanceCriterionIdentityRef>,
+    pub verification_requirement_identities: Vec<BundleVerificationRequirementIdentityRef>,
     pub relation_versions: Vec<BundleRelationVersionRef>,
     pub knowledge_spaces: Vec<BundleKnowledgeSpaceRef>,
     pub knowledge_exposures: Vec<BundleKnowledgeExposureRef>,
@@ -409,6 +414,8 @@ pub struct BundleImportApplyResult {
     pub preflight: BundleImportPreflightResult,
     pub imported_commits: usize,
     pub imported_entity_versions: usize,
+    pub imported_acceptance_criterion_identities: usize,
+    pub imported_verification_requirement_identities: usize,
     pub updated_branch_heads: usize,
 }
 
@@ -522,6 +529,20 @@ pub struct BundleEntityVersionRef {
     pub state_digest: Digest,
     pub state_json_digest: Digest,
     pub state_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleAcceptanceCriterionIdentityRef {
+    pub entity_id: EntityId,
+    pub owner_entity_id: EntityId,
+    pub local_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleVerificationRequirementIdentityRef {
+    pub entity_id: EntityId,
+    pub owner_entity_id: EntityId,
+    pub local_key: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -710,6 +731,8 @@ struct BundleSameStoreApplyDocument {
     commits: Vec<BundleCommitRef>,
     exported_branch_heads: Vec<BundleBranchHeadSummary>,
     entity_versions: Vec<BundleEntityVersionRef>,
+    acceptance_criterion_identities: Vec<BundleAcceptanceCriterionIdentityRef>,
+    verification_requirement_identities: Vec<BundleVerificationRequirementIdentityRef>,
     entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
 }
 
@@ -783,6 +806,10 @@ pub(crate) fn export_bundle_manifest(
         &replayed.state,
         &entity_membership_changes,
     )?;
+    let acceptance_criterion_identities =
+        acceptance_criterion_identity_refs(connection, &entity_versions)?;
+    let verification_requirement_identities =
+        verification_requirement_identity_refs(connection, &entity_versions)?;
     let relation_versions = relation_version_closure_refs(
         connection,
         replayed.workspace_id,
@@ -821,6 +848,8 @@ pub(crate) fn export_bundle_manifest(
         commits: &commits,
         exported_branch_heads: &exported_branch_heads,
         entity_versions: &entity_versions,
+        acceptance_criterion_identities: &acceptance_criterion_identities,
+        verification_requirement_identities: &verification_requirement_identities,
         relation_versions: &relation_versions,
         knowledge_spaces: &knowledge_spaces,
         knowledge_exposures: &knowledge_exposures,
@@ -849,6 +878,8 @@ pub(crate) fn export_bundle_manifest(
         commit_count: commits.len(),
         exported_branch_heads,
         entity_versions,
+        acceptance_criterion_identities,
+        verification_requirement_identities,
         relation_versions,
         knowledge_spaces,
         knowledge_exposures,
@@ -1222,6 +1253,8 @@ pub(crate) fn apply_bundle_import(
             preflight,
             imported_commits: 0,
             imported_entity_versions: 0,
+            imported_acceptance_criterion_identities: 0,
+            imported_verification_requirement_identities: 0,
             updated_branch_heads: 0,
         });
     }
@@ -1257,7 +1290,11 @@ pub(crate) fn apply_bundle_import(
         .map_err(storage_error)?;
 
     let imported_entity_versions =
-        apply_task_entity_versions(&transaction, &document, &payload_lookup, now_us)?;
+        apply_entity_versions(&transaction, &document, &payload_lookup, now_us)?;
+    let imported_acceptance_criterion_identities =
+        apply_acceptance_criterion_identities(&transaction, &document)?;
+    let imported_verification_requirement_identities =
+        apply_verification_requirement_identities(&transaction, &document)?;
     let imported_commits = apply_task_commit_closure(&transaction, &document, &payload_lookup)?;
     let updated_branch_heads =
         apply_same_store_branch_fast_forwards(&transaction, &document, now_us)?;
@@ -1267,6 +1304,8 @@ pub(crate) fn apply_bundle_import(
         &preflight,
         imported_commits,
         imported_entity_versions,
+        imported_acceptance_criterion_identities,
+        imported_verification_requirement_identities,
         updated_branch_heads,
     )?;
     insert_import_attempt_outcome(
@@ -1295,6 +1334,8 @@ pub(crate) fn apply_bundle_import(
         preflight,
         imported_commits,
         imported_entity_versions,
+        imported_acceptance_criterion_identities,
+        imported_verification_requirement_identities,
         updated_branch_heads,
     })
 }
@@ -1655,6 +1696,104 @@ fn load_entity_version_ref(
         state_json_digest: content_object_digest(state_json.as_bytes()),
         state_json_size_bytes: usize_to_i64("entity_version.state_json size", state_json.len())?,
     })
+}
+
+fn acceptance_criterion_identity_refs(
+    connection: &StoreConnection,
+    entity_versions: &[BundleEntityVersionRef],
+) -> Result<Vec<BundleAcceptanceCriterionIdentityRef>> {
+    let entity_ids = typed_entity_ids(entity_versions, ACCEPTANCE_CRITERION_ENTITY_KIND);
+    entity_ids
+        .into_iter()
+        .map(|entity_id| load_acceptance_criterion_identity_ref(connection, entity_id))
+        .collect()
+}
+
+fn load_acceptance_criterion_identity_ref(
+    connection: &StoreConnection,
+    entity_id: EntityId,
+) -> Result<BundleAcceptanceCriterionIdentityRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT owner_entity_id, local_key
+             FROM acceptance_criterion_identity
+             WHERE entity_id = ?1",
+            params![&entity_id.raw_bytes()[..]],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((owner_entity_id, local_key)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "AcceptanceCriterion identity for entity {entity_id} does not exist"
+        )));
+    };
+    validate_stored_text("acceptance_criterion_identity.local_key", &local_key)?;
+    Ok(BundleAcceptanceCriterionIdentityRef {
+        entity_id,
+        owner_entity_id: decode_entity_id(
+            "acceptance_criterion_identity.owner_entity_id",
+            owner_entity_id,
+        )?,
+        local_key,
+    })
+}
+
+fn verification_requirement_identity_refs(
+    connection: &StoreConnection,
+    entity_versions: &[BundleEntityVersionRef],
+) -> Result<Vec<BundleVerificationRequirementIdentityRef>> {
+    let entity_ids = typed_entity_ids(entity_versions, VERIFICATION_REQUIREMENT_ENTITY_KIND);
+    entity_ids
+        .into_iter()
+        .map(|entity_id| load_verification_requirement_identity_ref(connection, entity_id))
+        .collect()
+}
+
+fn load_verification_requirement_identity_ref(
+    connection: &StoreConnection,
+    entity_id: EntityId,
+) -> Result<BundleVerificationRequirementIdentityRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT owner_entity_id, local_key
+             FROM verification_requirement_identity
+             WHERE entity_id = ?1",
+            params![&entity_id.raw_bytes()[..]],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((owner_entity_id, local_key)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "VerificationRequirement identity for entity {entity_id} does not exist"
+        )));
+    };
+    validate_stored_text("verification_requirement_identity.local_key", &local_key)?;
+    Ok(BundleVerificationRequirementIdentityRef {
+        entity_id,
+        owner_entity_id: decode_entity_id(
+            "verification_requirement_identity.owner_entity_id",
+            owner_entity_id,
+        )?,
+        local_key,
+    })
+}
+
+fn typed_entity_ids(
+    entity_versions: &[BundleEntityVersionRef],
+    entity_kind: &str,
+) -> Vec<EntityId> {
+    entity_versions
+        .iter()
+        .filter_map(|entity_version| {
+            (entity_version.entity_kind == entity_kind).then_some(entity_version.entity_id)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn relation_version_closure_refs(
@@ -3127,6 +3266,8 @@ struct BundleManifestValueInput<'a> {
     commits: &'a [BundleCommitRef],
     exported_branch_heads: &'a [BundleBranchHeadRef],
     entity_versions: &'a [BundleEntityVersionRef],
+    acceptance_criterion_identities: &'a [BundleAcceptanceCriterionIdentityRef],
+    verification_requirement_identities: &'a [BundleVerificationRequirementIdentityRef],
     relation_versions: &'a [BundleRelationVersionRef],
     knowledge_spaces: &'a [BundleKnowledgeSpaceRef],
     knowledge_exposures: &'a [BundleKnowledgeExposureRef],
@@ -3206,6 +3347,26 @@ fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue>
                     .entity_versions
                     .iter()
                     .map(entity_version_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "acceptance_criterion_identities".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .acceptance_criterion_identities
+                    .iter()
+                    .map(acceptance_criterion_identity_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "verification_requirement_identities".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .verification_requirement_identities
+                    .iter()
+                    .map(verification_requirement_identity_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
@@ -3447,6 +3608,36 @@ fn entity_version_ref_value(entity_version: &BundleEntityVersionRef) -> Result<C
             "state_json_size_bytes",
             entity_version.state_json_size_bytes,
         )?,
+    ])
+}
+
+fn acceptance_criterion_identity_ref_value(
+    identity: &BundleAcceptanceCriterionIdentityRef,
+) -> Result<CanonicalValue> {
+    validate_portable_text(
+        "acceptance_criterion_identity.local_key",
+        &identity.local_key,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    CanonicalValue::object(vec![
+        string_field("entity_id", identity.entity_id.to_string()),
+        string_field("owner_entity_id", identity.owner_entity_id.to_string()),
+        string_field("local_key", identity.local_key.clone()),
+    ])
+}
+
+fn verification_requirement_identity_ref_value(
+    identity: &BundleVerificationRequirementIdentityRef,
+) -> Result<CanonicalValue> {
+    validate_portable_text(
+        "verification_requirement_identity.local_key",
+        &identity.local_key,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    CanonicalValue::object(vec![
+        string_field("entity_id", identity.entity_id.to_string()),
+        string_field("owner_entity_id", identity.owner_entity_id.to_string()),
+        string_field("local_key", identity.local_key.clone()),
     ])
 }
 
@@ -3812,6 +4003,8 @@ fn bundle_import_apply_detail_json(
     preflight: &BundleImportPreflightResult,
     imported_commits: usize,
     imported_entity_versions: usize,
+    imported_acceptance_criterion_identities: usize,
+    imported_verification_requirement_identities: usize,
     updated_branch_heads: usize,
 ) -> Result<String> {
     let value = CanonicalValue::object(vec![
@@ -3848,6 +4041,20 @@ fn bundle_import_apply_detail_json(
         integer_field(
             "imported_entity_versions",
             usize_to_i64("imported_entity_versions", imported_entity_versions)?,
+        )?,
+        integer_field(
+            "imported_acceptance_criterion_identities",
+            usize_to_i64(
+                "imported_acceptance_criterion_identities",
+                imported_acceptance_criterion_identities,
+            )?,
+        )?,
+        integer_field(
+            "imported_verification_requirement_identities",
+            usize_to_i64(
+                "imported_verification_requirement_identities",
+                imported_verification_requirement_identities,
+            )?,
         )?,
         integer_field(
             "updated_branch_heads",
@@ -3911,7 +4118,7 @@ fn insert_import_attempt_outcome(
     Ok(())
 }
 
-fn apply_task_entity_versions(
+fn apply_entity_versions(
     transaction: &Transaction<'_>,
     document: &BundleSameStoreApplyDocument,
     payload_lookup: &BundlePayloadLookup,
@@ -3919,9 +4126,9 @@ fn apply_task_entity_versions(
 ) -> Result<usize> {
     let mut imported = 0;
     for entity_version in &document.entity_versions {
-        if entity_version.entity_kind != "task" {
+        if !same_store_entity_kind_supported(&entity_version.entity_kind) {
             return Err(WorkVcsError::QueryInvalid(format!(
-                "bundle entity {} kind {} is outside same-Store task-only apply scope",
+                "bundle entity {} kind {} is outside same-Store typed-entity apply scope",
                 entity_version.entity_id, entity_version.entity_kind
             )));
         }
@@ -3947,7 +4154,7 @@ fn apply_task_entity_versions(
             )));
         }
 
-        ensure_task_entity_identity(
+        ensure_entity_identity(
             transaction,
             document.workspace_id,
             entity_version.entity_id,
@@ -3955,6 +4162,55 @@ fn apply_task_entity_versions(
             entity_created_at_us(document, entity_version.entity_id).unwrap_or(now_us),
         )?;
         if ensure_entity_version_row(transaction, entity_version, &state_json)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn same_store_entity_kind_supported(entity_kind: &str) -> bool {
+    matches!(
+        entity_kind,
+        TASK_ENTITY_KIND | ACCEPTANCE_CRITERION_ENTITY_KIND | VERIFICATION_REQUIREMENT_ENTITY_KIND
+    )
+}
+
+fn apply_acceptance_criterion_identities(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+) -> Result<usize> {
+    let mut imported = 0;
+    for identity in &document.acceptance_criterion_identities {
+        require_entity_kind(
+            transaction,
+            identity.entity_id,
+            ACCEPTANCE_CRITERION_ENTITY_KIND,
+        )?;
+        require_entity_kind(transaction, identity.owner_entity_id, TASK_ENTITY_KIND)?;
+        if ensure_acceptance_criterion_identity_row(transaction, identity)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_verification_requirement_identities(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+) -> Result<usize> {
+    let mut imported = 0;
+    for identity in &document.verification_requirement_identities {
+        require_entity_kind(
+            transaction,
+            identity.entity_id,
+            VERIFICATION_REQUIREMENT_ENTITY_KIND,
+        )?;
+        require_entity_kind(
+            transaction,
+            identity.owner_entity_id,
+            ACCEPTANCE_CRITERION_ENTITY_KIND,
+        )?;
+        if ensure_verification_requirement_identity_row(transaction, identity)? {
             imported += 1;
         }
     }
@@ -4104,7 +4360,7 @@ fn apply_same_store_branch_fast_forwards(
     Ok(updated)
 }
 
-fn ensure_task_entity_identity(
+fn ensure_entity_identity(
     transaction: &Transaction<'_>,
     workspace_id: WorkspaceId,
     entity_id: EntityId,
@@ -4174,6 +4430,133 @@ fn ensure_task_entity_identity(
         }
     }
     Ok(())
+}
+
+fn require_entity_kind(
+    transaction: &Transaction<'_>,
+    entity_id: EntityId,
+    expected_entity_kind: &str,
+) -> Result<()> {
+    let entity_id_bytes = entity_id.raw_bytes();
+    let actual = transaction
+        .query_row(
+            "SELECT entity_kind
+             FROM entity
+             WHERE object_id = ?1",
+            params![&entity_id_bytes[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!(
+                "entity {entity_id} is missing before typed identity import"
+            ))
+        })?;
+    if actual != expected_entity_kind {
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "entity {entity_id} has kind {actual}, expected {expected_entity_kind}"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_acceptance_criterion_identity_row(
+    transaction: &Transaction<'_>,
+    identity: &BundleAcceptanceCriterionIdentityRef,
+) -> Result<bool> {
+    ensure_typed_identity_row(
+        transaction,
+        "acceptance_criterion_identity",
+        "AcceptanceCriterion",
+        identity.entity_id,
+        identity.owner_entity_id,
+        &identity.local_key,
+    )
+}
+
+fn ensure_verification_requirement_identity_row(
+    transaction: &Transaction<'_>,
+    identity: &BundleVerificationRequirementIdentityRef,
+) -> Result<bool> {
+    ensure_typed_identity_row(
+        transaction,
+        "verification_requirement_identity",
+        "VerificationRequirement",
+        identity.entity_id,
+        identity.owner_entity_id,
+        &identity.local_key,
+    )
+}
+
+fn ensure_typed_identity_row(
+    transaction: &Transaction<'_>,
+    table_name: &str,
+    label: &str,
+    entity_id: EntityId,
+    owner_entity_id: EntityId,
+    local_key: &str,
+) -> Result<bool> {
+    validate_portable_text(&format!("{table_name}.local_key"), local_key)
+        .map_err(WorkVcsError::ImmutableImportInvalid)?;
+    let entity_id_bytes = entity_id.raw_bytes();
+    let owner_entity_id_bytes = owner_entity_id.raw_bytes();
+    let existing = transaction
+        .query_row(
+            &format!(
+                "SELECT owner_entity_id, local_key
+                 FROM {table_name}
+                 WHERE entity_id = ?1"
+            ),
+            params![&entity_id_bytes[..]],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((existing_owner_entity_id, existing_local_key)) = existing {
+        let existing_owner_entity_id = decode_entity_id(
+            &format!("{table_name}.owner_entity_id"),
+            existing_owner_entity_id,
+        )?;
+        if existing_owner_entity_id != owner_entity_id || existing_local_key != local_key {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "{label} identity for entity {entity_id} exists with different content"
+            )));
+        }
+        return Ok(false);
+    }
+
+    let existing_for_local_key = transaction
+        .query_row(
+            &format!(
+                "SELECT entity_id
+                 FROM {table_name}
+                 WHERE owner_entity_id = ?1
+                   AND local_key = ?2"
+            ),
+            params![&owner_entity_id_bytes[..], local_key],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(existing_entity_id) = existing_for_local_key {
+        let existing_entity_id =
+            decode_entity_id(&format!("{table_name}.entity_id"), existing_entity_id)?;
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "{label} owner {owner_entity_id} local key {local_key:?} already belongs to entity {existing_entity_id}"
+        )));
+    }
+
+    transaction
+        .execute(
+            &format!(
+                "INSERT INTO {table_name}(entity_id, owner_entity_id, local_key)
+                 VALUES (?1, ?2, ?3)"
+            ),
+            params![&entity_id_bytes[..], &owner_entity_id_bytes[..], local_key],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
 }
 
 fn ensure_entity_version_row(
@@ -4658,17 +5041,67 @@ fn bundle_manifest_supports_same_store_apply(
             return Ok(false);
         }
     }
+    let mut expected_acceptance_criterion_ids = BTreeSet::new();
+    let mut expected_verification_requirement_ids = BTreeSet::new();
+    let mut entity_kinds_by_id = BTreeMap::new();
     for entity_version in array_field_ref(value, "bundle manifest", "entity_versions")? {
+        let entity_id = parse_entity_id_field(
+            entity_version,
+            "bundle manifest entity version",
+            "entity_id",
+        )?;
         let entity_kind = string_field_value(
             entity_version,
             "bundle manifest entity version",
             "entity_kind",
         )?;
-        if entity_kind != "task" {
-            return Ok(false);
+        if let Some(existing_kind) = entity_kinds_by_id.insert(entity_id, entity_kind.to_owned())
+            && existing_kind != entity_kind
+        {
+            return Err(format!(
+                "bundle manifest entity {entity_id} has inconsistent entity kinds"
+            ));
+        }
+        match entity_kind {
+            TASK_ENTITY_KIND => {}
+            ACCEPTANCE_CRITERION_ENTITY_KIND => {
+                expected_acceptance_criterion_ids.insert(entity_id);
+            }
+            VERIFICATION_REQUIREMENT_ENTITY_KIND => {
+                expected_verification_requirement_ids.insert(entity_id);
+            }
+            _ => return Ok(false),
         }
     }
-    Ok(true)
+    let acceptance_criterion_identities =
+        optional_array_field_ref(value, "bundle manifest", "acceptance_criterion_identities")?
+            .iter()
+            .map(|identity| {
+                parse_bundle_acceptance_criterion_identity_ref(identity)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    let acceptance_criterion_ids =
+        unique_acceptance_criterion_identity_ids(&acceptance_criterion_identities)
+            .map_err(|error| error.to_string())?;
+    let verification_requirement_identities = optional_array_field_ref(
+        value,
+        "bundle manifest",
+        "verification_requirement_identities",
+    )?
+    .iter()
+    .map(|identity| {
+        parse_bundle_verification_requirement_identity_ref(identity)
+            .map_err(|error| error.to_string())
+    })
+    .collect::<std::result::Result<Vec<_>, _>>()?;
+    let verification_requirement_ids =
+        unique_verification_requirement_identity_ids(&verification_requirement_identities)
+            .map_err(|error| error.to_string())?;
+    Ok(
+        acceptance_criterion_ids == expected_acceptance_criterion_ids
+            && verification_requirement_ids == expected_verification_requirement_ids,
+    )
 }
 
 fn validate_bundle_manifest_summary_integrity(
@@ -5009,6 +5442,21 @@ fn parse_bundle_same_store_apply_document(
         .iter()
         .map(parse_bundle_entity_version_ref)
         .collect::<Result<Vec<_>>>()?;
+    let acceptance_criterion_identities =
+        optional_array_field_ref(value, "bundle manifest", "acceptance_criterion_identities")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_acceptance_criterion_identity_ref)
+            .collect::<Result<Vec<_>>>()?;
+    let verification_requirement_identities = optional_array_field_ref(
+        value,
+        "bundle manifest",
+        "verification_requirement_identities",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .iter()
+    .map(parse_bundle_verification_requirement_identity_ref)
+    .collect::<Result<Vec<_>>>()?;
     let entity_membership_changes =
         array_field_ref(value, "bundle manifest", "entity_membership_changes")
             .map_err(WorkVcsError::QueryInvalid)?
@@ -5016,7 +5464,7 @@ fn parse_bundle_same_store_apply_document(
             .map(parse_bundle_entity_membership_change_ref)
             .collect::<Result<Vec<_>>>()?;
 
-    Ok(BundleSameStoreApplyDocument {
+    let document = BundleSameStoreApplyDocument {
         source_store_id: summary.source_store_id,
         workspace_id: summary.workspace_id,
         commit_id: summary.commit_id,
@@ -5024,8 +5472,12 @@ fn parse_bundle_same_store_apply_document(
         commits,
         exported_branch_heads: summary.exported_branch_heads,
         entity_versions,
+        acceptance_criterion_identities,
+        verification_requirement_identities,
         entity_membership_changes,
-    })
+    };
+    validate_same_store_apply_identity_coverage(&document)?;
+    Ok(document)
 }
 
 fn parse_bundle_commit_ref(value: &CanonicalValue) -> Result<BundleCommitRef> {
@@ -5167,6 +5619,171 @@ fn parse_bundle_entity_version_ref(value: &CanonicalValue) -> Result<BundleEntit
     })
 }
 
+fn parse_bundle_acceptance_criterion_identity_ref(
+    value: &CanonicalValue,
+) -> Result<BundleAcceptanceCriterionIdentityRef> {
+    let local_key = string_field_value(
+        value,
+        "bundle manifest acceptance criterion identity",
+        "local_key",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_portable_text("bundle manifest acceptance criterion local_key", &local_key)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    Ok(BundleAcceptanceCriterionIdentityRef {
+        entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest acceptance criterion identity",
+            "entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        owner_entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest acceptance criterion identity",
+            "owner_entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        local_key,
+    })
+}
+
+fn parse_bundle_verification_requirement_identity_ref(
+    value: &CanonicalValue,
+) -> Result<BundleVerificationRequirementIdentityRef> {
+    let local_key = string_field_value(
+        value,
+        "bundle manifest verification requirement identity",
+        "local_key",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_portable_text(
+        "bundle manifest verification requirement local_key",
+        &local_key,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    Ok(BundleVerificationRequirementIdentityRef {
+        entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest verification requirement identity",
+            "entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        owner_entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest verification requirement identity",
+            "owner_entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        local_key,
+    })
+}
+
+fn validate_same_store_apply_identity_coverage(
+    document: &BundleSameStoreApplyDocument,
+) -> Result<()> {
+    let mut entity_kinds_by_id = BTreeMap::new();
+    let mut expected_acceptance_criterion_ids = BTreeSet::new();
+    let mut expected_verification_requirement_ids = BTreeSet::new();
+    for entity_version in &document.entity_versions {
+        if let Some(existing_kind) =
+            entity_kinds_by_id.insert(entity_version.entity_id, entity_version.entity_kind.clone())
+            && existing_kind != entity_version.entity_kind
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle manifest entity {} has inconsistent entity kinds",
+                entity_version.entity_id
+            )));
+        }
+        match entity_version.entity_kind.as_str() {
+            TASK_ENTITY_KIND => {}
+            ACCEPTANCE_CRITERION_ENTITY_KIND => {
+                expected_acceptance_criterion_ids.insert(entity_version.entity_id);
+            }
+            VERIFICATION_REQUIREMENT_ENTITY_KIND => {
+                expected_verification_requirement_ids.insert(entity_version.entity_id);
+            }
+            _ => {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "bundle entity {} kind {} is outside same-Store typed-entity apply scope",
+                    entity_version.entity_id, entity_version.entity_kind
+                )));
+            }
+        }
+    }
+    let acceptance_criterion_ids =
+        unique_acceptance_criterion_identity_ids(&document.acceptance_criterion_identities)?;
+    let verification_requirement_ids = unique_verification_requirement_identity_ids(
+        &document.verification_requirement_identities,
+    )?;
+    if acceptance_criterion_ids != expected_acceptance_criterion_ids {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle acceptance criterion identities do not cover acceptance criterion entity versions"
+                .to_owned(),
+        ));
+    }
+    if verification_requirement_ids != expected_verification_requirement_ids {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle verification requirement identities do not cover verification requirement entity versions"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn unique_acceptance_criterion_identity_ids(
+    identities: &[BundleAcceptanceCriterionIdentityRef],
+) -> Result<BTreeSet<EntityId>> {
+    let mut ids = BTreeSet::new();
+    let mut by_owner_local_key = BTreeMap::new();
+    for identity in identities {
+        if !ids.insert(identity.entity_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle acceptance criterion identity {} appears more than once",
+                identity.entity_id
+            )));
+        }
+        if let Some(existing_entity_id) = by_owner_local_key.insert(
+            (identity.owner_entity_id, identity.local_key.clone()),
+            identity.entity_id,
+        ) && existing_entity_id != identity.entity_id
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle acceptance criterion identity owner {} local key {:?} maps to multiple entities",
+                identity.owner_entity_id, identity.local_key
+            )));
+        }
+    }
+    Ok(ids)
+}
+
+fn unique_verification_requirement_identity_ids(
+    identities: &[BundleVerificationRequirementIdentityRef],
+) -> Result<BTreeSet<EntityId>> {
+    let mut ids = BTreeSet::new();
+    let mut by_owner_local_key = BTreeMap::new();
+    for identity in identities {
+        if !ids.insert(identity.entity_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification requirement identity {} appears more than once",
+                identity.entity_id
+            )));
+        }
+        if let Some(existing_entity_id) = by_owner_local_key.insert(
+            (identity.owner_entity_id, identity.local_key.clone()),
+            identity.entity_id,
+        ) && existing_entity_id != identity.entity_id
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification requirement identity owner {} local key {:?} maps to multiple entities",
+                identity.owner_entity_id, identity.local_key
+            )));
+        }
+    }
+    Ok(ids)
+}
+
 fn parse_bundle_entity_membership_change_ref(
     value: &CanonicalValue,
 ) -> Result<BundleEntityMembershipChangeRef> {
@@ -5244,6 +5861,27 @@ fn array_field_ref<'a>(
     field: &str,
 ) -> std::result::Result<&'a [CanonicalValue], String> {
     match object_field_ref(value, label, field)? {
+        CanonicalValue::Array(values) => Ok(values),
+        _ => Err(format!("{label} field {field} must be an array")),
+    }
+}
+
+fn optional_array_field_ref<'a>(
+    value: &'a CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<&'a [CanonicalValue], String> {
+    let fields = match value {
+        CanonicalValue::Object(fields) => fields,
+        _ => return Err(format!("{label} must be an object")),
+    };
+    let Some(value) = fields
+        .iter()
+        .find_map(|(candidate, value)| (candidate == field).then_some(value))
+    else {
+        return Ok(&[]);
+    };
+    match value {
         CanonicalValue::Array(values) => Ok(values),
         _ => Err(format!("{label} field {field} must be an array")),
     }

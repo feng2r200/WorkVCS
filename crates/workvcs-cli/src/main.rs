@@ -6359,7 +6359,7 @@ fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> Str
 
 fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
     let mut output = format!(
-        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nrelation_versions={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
+        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nacceptance_criterion_identities={}\nverification_requirement_identities={}\nrelation_versions={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
         manifest.manifest_profile,
         manifest.manifest_version,
         manifest.store_id,
@@ -6373,6 +6373,8 @@ fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
         manifest.entity_count,
         manifest.relation_count,
         manifest.entity_versions.len(),
+        manifest.acceptance_criterion_identities.len(),
+        manifest.verification_requirement_identities.len(),
         manifest.relation_versions.len(),
         manifest.knowledge_spaces.len(),
         manifest.knowledge_exposures.len(),
@@ -6607,7 +6609,7 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
 
 fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
     format!(
-        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nupdated_branch_heads={}\nproblem={}\n",
+        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nupdated_branch_heads={}\nproblem={}\n",
         result.applied,
         render_optional_display_or_none(result.import_id.as_ref()),
         result.bundle_digest,
@@ -6632,6 +6634,8 @@ fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
         result.preflight.branch_heads_diverged,
         result.imported_commits,
         result.imported_entity_versions,
+        result.imported_acceptance_criterion_identities,
+        result.imported_verification_requirement_identities,
         result.updated_branch_heads,
         result.preflight.problem.as_deref().unwrap_or("none")
     )

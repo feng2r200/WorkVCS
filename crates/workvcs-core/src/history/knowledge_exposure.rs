@@ -425,6 +425,39 @@ impl KnowledgeSpaceHistoricalExposuresOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeSpaceRefreshSourceStatusesOptions {
+    knowledge_space_id: KnowledgeSpaceId,
+    limit: usize,
+}
+
+impl KnowledgeSpaceRefreshSourceStatusesOptions {
+    pub fn new(knowledge_space_id: KnowledgeSpaceId) -> Self {
+        Self {
+            knowledge_space_id,
+            limit: 50,
+        }
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Result<Self> {
+        if limit == 0 {
+            return Err(WorkVcsError::QueryInvalid(
+                "knowledge space source-status refresh limit must be greater than zero".to_owned(),
+            ));
+        }
+        self.limit = limit;
+        Ok(self)
+    }
+
+    fn knowledge_space_id(&self) -> KnowledgeSpaceId {
+        self.knowledge_space_id
+    }
+
+    fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureListResult {
     pub exposures: Vec<KnowledgeExposureSnapshot>,
 }
@@ -445,6 +478,16 @@ pub struct KnowledgeSpaceSourceStaleExposuresResult {
 pub struct KnowledgeSpaceHistoricalExposuresResult {
     pub knowledge_space_id: KnowledgeSpaceId,
     pub exposures: Vec<KnowledgeExposureSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeSpaceRefreshSourceStatusesResult {
+    pub knowledge_space_id: KnowledgeSpaceId,
+    pub refreshed_exposures: Vec<KnowledgeExposureSnapshot>,
+    pub current_count: usize,
+    pub stale_count: usize,
+    pub unknown_count: usize,
+    pub unresolved_count: usize,
 }
 
 pub(crate) fn create_local_knowledge_exposure(
@@ -877,6 +920,54 @@ pub(crate) fn knowledge_space_historical_exposures(
     Ok(KnowledgeSpaceHistoricalExposuresResult {
         knowledge_space_id: options.knowledge_space_id(),
         exposures,
+    })
+}
+
+pub(crate) fn refresh_knowledge_space_source_statuses(
+    connection: &mut StoreConnection,
+    options: KnowledgeSpaceRefreshSourceStatusesOptions,
+) -> Result<KnowledgeSpaceRefreshSourceStatusesResult> {
+    connection.verify_foreign_keys()?;
+    knowledge_space(connection, options.knowledge_space_id())?;
+    let active_exposures = knowledge_exposures(
+        connection,
+        KnowledgeExposureListOptions::new()
+            .with_limit(options.limit())?
+            .with_knowledge_space_id(options.knowledge_space_id())
+            .with_lifecycle_status(KnowledgeExposureLifecycleStatus::Active),
+    )?
+    .exposures;
+
+    let mut refreshed_exposures = Vec::with_capacity(active_exposures.len());
+    for exposure in active_exposures {
+        let refreshed = refresh_knowledge_exposure_source_status(
+            connection,
+            KnowledgeExposureRefreshSourceStatusOptions::new(exposure.exposure_id),
+        )?
+        .exposure;
+        refreshed_exposures.push(refreshed);
+    }
+
+    let mut current_count = 0;
+    let mut stale_count = 0;
+    let mut unknown_count = 0;
+    let mut unresolved_count = 0;
+    for exposure in &refreshed_exposures {
+        match exposure.source_status.source_status {
+            KnowledgeExposureSourceStatus::Current => current_count += 1,
+            KnowledgeExposureSourceStatus::Stale => stale_count += 1,
+            KnowledgeExposureSourceStatus::Unknown => unknown_count += 1,
+            KnowledgeExposureSourceStatus::Unresolved => unresolved_count += 1,
+        }
+    }
+
+    Ok(KnowledgeSpaceRefreshSourceStatusesResult {
+        knowledge_space_id: options.knowledge_space_id(),
+        refreshed_exposures,
+        current_count,
+        stale_count,
+        unknown_count,
+        unresolved_count,
     })
 }
 

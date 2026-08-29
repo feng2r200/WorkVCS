@@ -28,6 +28,7 @@ const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
 const RECORD_RELATION_CREATE_EVENT_KIND: &str = "record.relation.created";
 const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
+const VALIDATES_RELATION_TYPE: &str = "validates";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
@@ -619,18 +620,21 @@ pub struct RecordListResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecordRelationType {
     Invalidates,
+    Validates,
 }
 
 impl RecordRelationType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Invalidates => INVALIDATES_RELATION_TYPE,
+            Self::Validates => VALIDATES_RELATION_TYPE,
         }
     }
 
     fn parse(value: &str) -> Option<Self> {
         match value {
             INVALIDATES_RELATION_TYPE => Some(Self::Invalidates),
+            VALIDATES_RELATION_TYPE => Some(Self::Validates),
             _ => None,
         }
     }
@@ -666,6 +670,25 @@ impl RecordRelationCreateOptions {
             branch_id,
             expected_head_commit_id,
             relation_type: RecordRelationType::Invalidates,
+            source_record_entity_id,
+            target_record_entity_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn validates(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_record_entity_id: EntityId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::Validates,
             source_record_entity_id,
             target_record_entity_id,
             rationale: rationale_value(&rationale)?,
@@ -1200,6 +1223,27 @@ fn validate_record_relation_endpoints(
             if target.state.status != RecordStatus::Invalidated {
                 return Err(WorkVcsError::RecordInvalid(format!(
                     "invalidates target Assumption must be invalidated, found {}",
+                    target.state.status
+                )));
+            }
+            Ok(())
+        }
+        RecordRelationType::Validates => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "validates source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            if target.state.kind != RecordKind::Assumption {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "validates target must be an Assumption Record, found {}",
+                    target.state.kind
+                )));
+            }
+            if target.state.status != RecordStatus::Validated {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "validates target Assumption must be validated, found {}",
                     target.state.status
                 )));
             }

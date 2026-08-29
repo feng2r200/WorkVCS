@@ -150,6 +150,7 @@ pub enum WhyRelationKind {
     Verifies,
     EvidencedBy,
     RecordInvalidates,
+    RecordValidates,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -431,6 +432,7 @@ fn endpoint_matches_subject(subject: WhyQuerySubject, endpoint: WhyRelationEndpo
 fn record_relation_kind(relation_type: RecordRelationType) -> WhyRelationKind {
     match relation_type {
         RecordRelationType::Invalidates => WhyRelationKind::RecordInvalidates,
+        RecordRelationType::Validates => WhyRelationKind::RecordValidates,
     }
 }
 

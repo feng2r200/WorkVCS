@@ -764,6 +764,7 @@ struct BundleCommitRef {
     operation_type: String,
     operation_schema_version: i64,
     changeset_created_at_us: i64,
+    origin_session_id: Option<SessionId>,
     operation_payload_digest: Digest,
     rationale_digest: Digest,
     change_operation_count: i64,
@@ -979,7 +980,8 @@ pub(crate) fn export_bundle_manifest(
     let resources = resource_closure_refs(connection, &verification_resource_bases)?;
     let resource_observations =
         resource_observation_closure_refs(connection, &verification_resource_bases)?;
-    let sessions = session_provenance_refs(connection, &evidences, &resource_observations)?;
+    let sessions =
+        session_provenance_refs(connection, &commits, &evidences, &resource_observations)?;
     let session_diffs = session_diff_refs(connection, &sessions)?;
     let content_objects = content_object_closure_refs(
         connection,
@@ -1674,6 +1676,7 @@ fn load_commit_ref(connection: &StoreConnection, commit_id: CommitId) -> Result<
                     changeset.operation_payload_json,
                     changeset.rationale_json,
                     changeset.created_at_us,
+                    changeset.origin_session_id,
                     (
                         SELECT count(*)
                         FROM change_operation
@@ -1697,7 +1700,8 @@ fn load_commit_ref(connection: &StoreConnection, commit_id: CommitId) -> Result<
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
                     row.get::<_, i64>(9)?,
-                    row.get::<_, i64>(10)?,
+                    row.get::<_, Option<Vec<u8>>>(10)?,
+                    row.get::<_, i64>(11)?,
                 ))
             },
         )
@@ -1715,6 +1719,7 @@ fn load_commit_ref(connection: &StoreConnection, commit_id: CommitId) -> Result<
         operation_payload_json,
         rationale_json,
         changeset_created_at_us,
+        origin_session_id,
         change_operation_count,
     )) = row
     else {
@@ -1745,6 +1750,10 @@ fn load_commit_ref(connection: &StoreConnection, commit_id: CommitId) -> Result<
         operation_type,
         operation_schema_version,
         changeset_created_at_us,
+        origin_session_id: decode_optional_session_id(
+            "changeset.origin_session_id",
+            origin_session_id,
+        )?,
         operation_payload_digest: content_object_digest(operation_payload_json.as_bytes()),
         rationale_digest: content_object_digest(rationale_json.as_bytes()),
         change_operation_count,
@@ -2677,13 +2686,19 @@ fn load_resource_observation_ref(
 
 fn session_provenance_refs(
     connection: &StoreConnection,
+    commits: &[BundleCommitRef],
     evidences: &[BundleEvidenceRef],
     resource_observations: &[BundleResourceObservationRef],
 ) -> Result<Vec<BundleSessionRef>> {
-    let mut session_ids = evidences
+    let mut session_ids = commits
         .iter()
-        .filter_map(|evidence| evidence.source_session_id)
+        .filter_map(|commit| commit.origin_session_id)
         .collect::<BTreeSet<_>>();
+    session_ids.extend(
+        evidences
+            .iter()
+            .filter_map(|evidence| evidence.source_session_id),
+    );
     session_ids.extend(
         resource_observations
             .iter()
@@ -4844,6 +4859,10 @@ fn commit_ref_value(commit: &BundleCommitRef) -> Result<CanonicalValue> {
         string_field("operation_type", commit.operation_type.clone()),
         integer_field("operation_schema_version", commit.operation_schema_version)?,
         integer_field("changeset_created_at_us", commit.changeset_created_at_us)?,
+        optional_string_field(
+            "origin_session_id",
+            commit.origin_session_id.map(|id| id.to_string()).as_deref(),
+        ),
         string_field(
             "operation_payload_digest",
             commit.operation_payload_digest.to_string(),
@@ -7686,6 +7705,10 @@ fn insert_changeset_row(
     validate_canonical_json_text("bundle changeset rationale_json", rationale_json)?;
     let changeset_id_bytes = commit.changeset_id.raw_bytes();
     let workspace_id_bytes = workspace_id.raw_bytes();
+    let origin_session_id_bytes = commit.origin_session_id.map(|id| id.raw_bytes());
+    if let Some(origin_session_id) = commit.origin_session_id {
+        require_session_row(transaction, origin_session_id)?;
+    }
     transaction
         .execute(
             "INSERT INTO changeset(
@@ -7698,7 +7721,7 @@ fn insert_changeset_row(
                 origin_session_id,
                 created_at_us
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 &changeset_id_bytes[..],
                 &workspace_id_bytes[..],
@@ -7706,6 +7729,7 @@ fn insert_changeset_row(
                 commit.operation_schema_version,
                 operation_payload_json,
                 rationale_json,
+                origin_session_id_bytes.as_ref().map(|bytes| &bytes[..]),
                 commit.changeset_created_at_us,
             ],
         )
@@ -8238,6 +8262,13 @@ fn bundle_manifest_supports_same_store_apply(
             .collect::<std::result::Result<Vec<_>, _>>()?;
     let verification_basis_ids =
         unique_verification_basis_ids(&verification_bases).map_err(|error| error.to_string())?;
+    let commit_origin_session_ids = array_field_ref(value, "bundle manifest", "commit_closure")?
+        .iter()
+        .map(|commit| {
+            parse_optional_session_field(commit, "bundle manifest commit", "origin_session_id")
+                .map_err(|error| error.to_string())
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let evidences = optional_array_field_ref(value, "bundle manifest", "evidences")?
         .iter()
         .map(|evidence| parse_bundle_evidence_ref(evidence).map_err(|error| error.to_string()))
@@ -8250,9 +8281,14 @@ fn bundle_manifest_supports_same_store_apply(
                     .map_err(|error| error.to_string())
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-    let source_session_ids = evidences
-        .iter()
-        .filter_map(|evidence| evidence.source_session_id)
+    let source_session_ids = commit_origin_session_ids
+        .into_iter()
+        .flatten()
+        .chain(
+            evidences
+                .iter()
+                .filter_map(|evidence| evidence.source_session_id),
+        )
         .chain(
             resource_observations
                 .iter()
@@ -8794,6 +8830,11 @@ fn parse_bundle_commit_ref(value: &CanonicalValue) -> Result<BundleCommitRef> {
         operation_type,
         operation_schema_version,
         changeset_created_at_us,
+        origin_session_id: parse_optional_session_field(
+            value,
+            "bundle manifest commit",
+            "origin_session_id",
+        )?,
         operation_payload_digest: parse_digest_field(
             value,
             "bundle manifest commit",
@@ -9088,6 +9129,24 @@ fn validate_same_store_apply_provenance_coverage(
         .map(|basis| basis.verification_entity_id)
         .collect::<BTreeSet<_>>();
 
+    for commit in &document.commits {
+        if let Some(session_id) = commit.origin_session_id
+            && !session_ids.contains(&session_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle commit {} references missing origin session {}",
+                commit.commit_id, session_id
+            )));
+        }
+        if let Some(session_id) = commit.origin_session_id
+            && !session_diff_session_ids.contains(&session_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle commit {} origin session {} is not ended in bundle provenance",
+                commit.commit_id, session_id
+            )));
+        }
+    }
     for evidence in &document.evidences {
         if let Some(session_id) = evidence.source_session_id
             && !session_ids.contains(&session_id)

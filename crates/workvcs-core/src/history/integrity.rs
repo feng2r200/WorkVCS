@@ -8,6 +8,7 @@ pub struct IntegrityReport {
     pub checked_commits: usize,
     pub checked_changesets: usize,
     pub checked_change_operations: usize,
+    pub checked_changeset_causal_anchors: usize,
     pub checked_events: usize,
     pub checked_checkpoints: usize,
     pub invalid_checkpoints: usize,
@@ -57,6 +58,7 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
 
     let changeset_ids = load_changeset_ids(connection)?;
     let mut checked_change_operations = 0usize;
+    let mut checked_changeset_causal_anchors = 0usize;
     for changeset_id in &changeset_ids {
         let changeset = super::changeset(connection, *changeset_id).map_err(|error| {
             integrity_error(format!("ChangeSet {changeset_id} is invalid"), error)
@@ -74,7 +76,21 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
                 operations.workspace_id, changeset.workspace_id
             )));
         }
+        let anchors =
+            super::changeset_causal_anchors(connection, *changeset_id).map_err(|error| {
+                integrity_error(
+                    format!("ChangeSet {changeset_id} anchors are invalid"),
+                    error,
+                )
+            })?;
+        if anchors.workspace_id != changeset.workspace_id {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "ChangeSet {changeset_id} anchor list belongs to workspace {}, not {}",
+                anchors.workspace_id, changeset.workspace_id
+            )));
+        }
         checked_change_operations += operations.operations.len();
+        checked_changeset_causal_anchors += anchors.anchors.len();
     }
 
     let event_ids = load_event_ids(connection)?;
@@ -94,6 +110,7 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
         checked_commits: commit_ids.len(),
         checked_changesets: changeset_ids.len(),
         checked_change_operations,
+        checked_changeset_causal_anchors,
         checked_events: event_ids.len(),
         checked_checkpoints: checkpoint_statuses.len(),
         invalid_checkpoints,

@@ -47,6 +47,7 @@ fn doctor_counts_changesets_and_change_operations() {
     assert_eq!(report.checked_commits, 2);
     assert_eq!(report.checked_changesets, 2);
     assert_eq!(report.checked_change_operations, 1);
+    assert_eq!(report.checked_changeset_causal_anchors, 0);
     assert_eq!(report.checked_events, 2);
 }
 

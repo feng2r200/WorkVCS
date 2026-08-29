@@ -2117,7 +2117,7 @@ fn run(cli: Cli) -> Result<String> {
             let info = engine.store_info()?;
             let integrity = engine.validate_integrity()?;
             Ok(format!(
-                "ok store_id={} schema_version={} canonical_json_profile={} checked_branches={} checked_commits={} checked_changesets={} checked_change_operations={} checked_events={} checked_checkpoints={} invalid_checkpoints={}\n",
+                "ok store_id={} schema_version={} canonical_json_profile={} checked_branches={} checked_commits={} checked_changesets={} checked_change_operations={} checked_changeset_causal_anchors={} checked_events={} checked_checkpoints={} invalid_checkpoints={}\n",
                 info.store_id,
                 info.manifest.schema_version,
                 info.manifest.canonical_json_profile,
@@ -2125,6 +2125,7 @@ fn run(cli: Cli) -> Result<String> {
                 integrity.checked_commits,
                 integrity.checked_changesets,
                 integrity.checked_change_operations,
+                integrity.checked_changeset_causal_anchors,
                 integrity.checked_events,
                 integrity.checked_checkpoints,
                 integrity.invalid_checkpoints
@@ -8248,6 +8249,7 @@ mod tests {
         assert!(doctor.contains("checked_commits=0"));
         assert!(doctor.contains("checked_changesets=0"));
         assert!(doctor.contains("checked_change_operations=0"));
+        assert!(doctor.contains("checked_changeset_causal_anchors=0"));
         assert!(doctor.contains("checked_events=0"));
         assert!(doctor.contains("checked_checkpoints=0"));
         assert!(doctor.contains("invalid_checkpoints=0"));
@@ -13087,6 +13089,10 @@ mod tests {
             value(&finding, "record_entity_id")
         );
         assert_eq!(value(&anchors, "anchor[0].object_kind"), "entity");
+
+        let doctor = run(Cli::try_parse_from(["workvcs", "doctor", store]).expect("parse doctor"))
+            .expect("run doctor");
+        assert!(doctor.contains("checked_changeset_causal_anchors=1"));
 
         let shown = run(Cli::try_parse_from([
             "workvcs",

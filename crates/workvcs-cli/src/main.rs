@@ -10,18 +10,19 @@ use workvcs_core::{
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
     Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
     NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
-    RecordListResult, RecordStatus, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
-    WorkspaceInfo, WorkspaceInitOptions, content_object_digest, parse_canonical_json,
+    RecordListResult, RecordSnapshot, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions, ReplayedState, ResourceCreateOptions, ResourceCreateResult,
+    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
+    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WorkState, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
+    canonical_bytes, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -330,6 +331,16 @@ enum ResourceCommand {
 
 #[derive(Debug, Subcommand)]
 enum RecordCommand {
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+
+        #[arg(long)]
+        record: String,
+    },
     List {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1009,6 +1020,20 @@ fn run(cli: Cli) -> Result<String> {
                 )?)?,
             )?;
             Ok(render_verification_applicability_cache(&snapshot))
+        }
+        Command::Record {
+            command:
+                RecordCommand::Show {
+                    store,
+                    commit,
+                    record,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            render_record_show(&engine.record_at(
+                CommitId::parse_canonical(&commit)?,
+                EntityId::parse_canonical(&record)?,
+            )?)
         }
         Command::Record {
             command:
@@ -1726,6 +1751,27 @@ fn render_record_transition(record: &RecordTransitionCommit) -> String {
         record.previous_state.status,
         record.state.status
     )
+}
+
+fn render_record_show(record: &RecordSnapshot) -> Result<String> {
+    let statement_json = serde_json::to_string(&record.state.statement).map_err(|error| {
+        WorkVcsError::RecordInvalid(format!("record statement encode failed: {error}"))
+    })?;
+    let scope_json = String::from_utf8(canonical_bytes(&record.state.scope)?).map_err(|error| {
+        WorkVcsError::RecordInvalid(format!("record scope encode produced non-UTF-8: {error}"))
+    })?;
+    Ok(format!(
+        "workspace_id={}\ncommit_id={}\nrecord_entity_id={}\nrecord_entity_version_id={}\nrecord_state_digest={}\nrecord_kind={}\nrecord_status={}\nrecord_statement_json={}\nrecord_scope_json={}\n",
+        record.workspace_id,
+        record.commit_id,
+        record.record_entity_id,
+        record.record_entity_version_id,
+        record.state_digest,
+        record.state.kind,
+        record.state.status,
+        statement_json,
+        scope_json
+    ))
 }
 
 fn render_record_list(result: &RecordListResult) -> String {
@@ -3402,6 +3448,69 @@ mod tests {
         assert_eq!(value(&filtered, "records"), "1");
         assert!(filtered.contains("record_kind=assumption"));
         assert!(!filtered.contains("record_kind=finding"));
+    }
+
+    #[test]
+    fn cli_shows_record_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let record = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Line one\nLine two",
+            "--scope-json",
+            r#"{"b":2,"a":1}"#,
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let show = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--commit",
+            &value(&record, "commit_id"),
+            "--record",
+            &value(&record, "record_entity_id"),
+        ])
+        .expect("parse record show"))
+        .expect("show record");
+
+        assert!(show.contains("record_kind=finding"));
+        assert!(show.contains("record_status=active"));
+        assert!(show.contains("record_statement_json=\"Line one\\nLine two\""));
+        assert!(show.contains("record_scope_json={\"a\":1,\"b\":2}"));
+        assert_eq!(
+            value(&show, "record_entity_version_id"),
+            value(&record, "record_entity_version_id")
+        );
     }
 
     fn value(output: &str, key: &str) -> String {

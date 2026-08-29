@@ -151,6 +151,7 @@ pub enum WhyRelationKind {
     EvidencedBy,
     RecordContradicts,
     RecordInvalidates,
+    RecordRelatedTo,
     RecordSupports,
     RecordValidates,
 }
@@ -208,6 +209,7 @@ pub struct WhyRelationEdge {
     pub direction: WhyRelationDirection,
     pub relation_id: RelationId,
     pub relation_version_id: RelationVersionId,
+    pub relation_label: Option<String>,
     pub source: WhyRelationEndpoint,
     pub target: WhyRelationEndpoint,
     pub state_digest: Digest,
@@ -234,6 +236,7 @@ pub(crate) fn explain_why(
                 direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
+                relation_label: None,
                 source,
                 target,
                 state_digest: relation.state_digest,
@@ -253,6 +256,7 @@ pub(crate) fn explain_why(
                 direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
+                relation_label: None,
                 source,
                 target,
                 state_digest: relation.state_digest,
@@ -274,6 +278,7 @@ pub(crate) fn explain_why(
                 direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
+                relation_label: None,
                 source,
                 target,
                 state_digest: relation.state_digest,
@@ -294,6 +299,7 @@ pub(crate) fn explain_why(
                 direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
+                relation_label: None,
                 source,
                 target,
                 state_digest: relation.state_digest,
@@ -318,6 +324,7 @@ pub(crate) fn explain_why(
                 direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
+                relation_label: relation.relation_label.clone(),
                 source,
                 target,
                 state_digest: relation.state_digest,
@@ -330,6 +337,7 @@ pub(crate) fn explain_why(
             .then_with(|| left.direction.cmp(&right.direction))
             .then_with(|| left.source.cmp(&right.source))
             .then_with(|| left.target.cmp(&right.target))
+            .then_with(|| left.relation_label.cmp(&right.relation_label))
             .then_with(|| left.relation_id.cmp(&right.relation_id))
     });
 
@@ -435,6 +443,7 @@ fn record_relation_kind(relation_type: RecordRelationType) -> WhyRelationKind {
     match relation_type {
         RecordRelationType::Contradicts => WhyRelationKind::RecordContradicts,
         RecordRelationType::Invalidates => WhyRelationKind::RecordInvalidates,
+        RecordRelationType::RelatedTo => WhyRelationKind::RecordRelatedTo,
         RecordRelationType::Supports => WhyRelationKind::RecordSupports,
         RecordRelationType::Validates => WhyRelationKind::RecordValidates,
     }

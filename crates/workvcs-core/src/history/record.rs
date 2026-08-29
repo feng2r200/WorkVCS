@@ -27,6 +27,7 @@ const NORMAL_COMMIT_KIND: &str = "normal";
 const PRIMARY_PARENT_ROLE: &str = "primary";
 const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
 const RECORD_RELATION_CREATE_EVENT_KIND: &str = "record.relation.created";
+const RELATED_TO_RELATION_TYPE: &str = "related_to";
 const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
 const SUPPORTS_RELATION_TYPE: &str = "supports";
@@ -623,6 +624,7 @@ pub struct RecordListResult {
 pub enum RecordRelationType {
     Contradicts,
     Invalidates,
+    RelatedTo,
     Supports,
     Validates,
 }
@@ -632,6 +634,7 @@ impl RecordRelationType {
         match self {
             Self::Contradicts => CONTRADICTS_RELATION_TYPE,
             Self::Invalidates => INVALIDATES_RELATION_TYPE,
+            Self::RelatedTo => RELATED_TO_RELATION_TYPE,
             Self::Supports => SUPPORTS_RELATION_TYPE,
             Self::Validates => VALIDATES_RELATION_TYPE,
         }
@@ -641,6 +644,7 @@ impl RecordRelationType {
         match value {
             CONTRADICTS_RELATION_TYPE => Some(Self::Contradicts),
             INVALIDATES_RELATION_TYPE => Some(Self::Invalidates),
+            RELATED_TO_RELATION_TYPE => Some(Self::RelatedTo),
             SUPPORTS_RELATION_TYPE => Some(Self::Supports),
             VALIDATES_RELATION_TYPE => Some(Self::Validates),
             _ => None,
@@ -661,6 +665,7 @@ pub struct RecordRelationCreateOptions {
     relation_type: RecordRelationType,
     source_record_entity_id: EntityId,
     target_record_entity_id: EntityId,
+    relation_label: Option<String>,
     rationale: CanonicalValue,
 }
 
@@ -680,6 +685,7 @@ impl RecordRelationCreateOptions {
             relation_type: RecordRelationType::Contradicts,
             source_record_entity_id,
             target_record_entity_id,
+            relation_label: None,
             rationale: rationale_value(&rationale)?,
         })
     }
@@ -699,6 +705,29 @@ impl RecordRelationCreateOptions {
             relation_type: RecordRelationType::Invalidates,
             source_record_entity_id,
             target_record_entity_id,
+            relation_label: None,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn related_to(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_record_entity_id: EntityId,
+        label: impl Into<String>,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let label = normalize_relation_label(&label.into())?;
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::RelatedTo,
+            source_record_entity_id,
+            target_record_entity_id,
+            relation_label: Some(label),
             rationale: rationale_value(&rationale)?,
         })
     }
@@ -718,6 +747,7 @@ impl RecordRelationCreateOptions {
             relation_type: RecordRelationType::Supports,
             source_record_entity_id,
             target_record_entity_id,
+            relation_label: None,
             rationale: rationale_value(&rationale)?,
         })
     }
@@ -737,6 +767,7 @@ impl RecordRelationCreateOptions {
             relation_type: RecordRelationType::Validates,
             source_record_entity_id,
             target_record_entity_id,
+            relation_label: None,
             rationale: rationale_value(&rationale)?,
         })
     }
@@ -758,6 +789,7 @@ pub struct RecordRelationCreateCommit {
     pub relation_id: RelationId,
     pub relation_version_id: RelationVersionId,
     pub relation_type: RecordRelationType,
+    pub relation_label: Option<String>,
     pub source_record_entity_id: EntityId,
     pub target_record_entity_id: EntityId,
     pub relation_state_digest: Digest,
@@ -768,6 +800,7 @@ pub struct RecordRelationCreateCommit {
 pub struct RecordRelationListOptions {
     commit_id: CommitId,
     relation_type: Option<RecordRelationType>,
+    relation_label: Option<String>,
     source_record_entity_id: Option<EntityId>,
     target_record_entity_id: Option<EntityId>,
 }
@@ -777,6 +810,7 @@ impl RecordRelationListOptions {
         Self {
             commit_id,
             relation_type: None,
+            relation_label: None,
             source_record_entity_id: None,
             target_record_entity_id: None,
         }
@@ -785,6 +819,11 @@ impl RecordRelationListOptions {
     pub fn with_relation_type(mut self, relation_type: RecordRelationType) -> Self {
         self.relation_type = Some(relation_type);
         self
+    }
+
+    pub fn with_relation_label(mut self, label: impl Into<String>) -> Result<Self> {
+        self.relation_label = Some(normalize_relation_label(&label.into())?);
+        Ok(self)
     }
 
     pub fn with_source_record(mut self, record_entity_id: EntityId) -> Self {
@@ -805,6 +844,10 @@ impl RecordRelationListOptions {
         self.relation_type
     }
 
+    pub fn relation_label(&self) -> Option<&str> {
+        self.relation_label.as_deref()
+    }
+
     pub fn source_record_entity_id(&self) -> Option<EntityId> {
         self.source_record_entity_id
     }
@@ -821,6 +864,7 @@ pub struct RecordRelationSnapshot {
     pub relation_id: RelationId,
     pub relation_version_id: RelationVersionId,
     pub relation_type: RecordRelationType,
+    pub relation_label: Option<String>,
     pub source_record_entity_id: EntityId,
     pub target_record_entity_id: EntityId,
     pub state_digest: Digest,
@@ -997,6 +1041,7 @@ pub(crate) fn create_record_relation(
         options.relation_type,
         options.source_record_entity_id,
         options.target_record_entity_id,
+        relation_discriminator(options),
     )?;
     write_record_relation_create(
         &transaction,
@@ -1008,6 +1053,7 @@ pub(crate) fn create_record_relation(
             relation_state_json,
             relation_state_digest,
             relation_type: options.relation_type,
+            relation_discriminator: relation_discriminator(options).to_owned(),
             source_record_entity_id: options.source_record_entity_id,
             target_record_entity_id: options.target_record_entity_id,
             changeset_id,
@@ -1037,6 +1083,7 @@ pub(crate) fn create_record_relation(
         relation_id,
         relation_version_id,
         relation_type: options.relation_type,
+        relation_label: options.relation_label.clone(),
         source_record_entity_id: options.source_record_entity_id,
         target_record_entity_id: options.target_record_entity_id,
         relation_state_digest,
@@ -1150,6 +1197,12 @@ pub(crate) fn record_relations_at(
             continue;
         }
         if options
+            .relation_label()
+            .is_some_and(|label| relation.relation_label.as_deref() != Some(label))
+        {
+            continue;
+        }
+        if options
             .source_record_entity_id()
             .is_some_and(|source_record_entity_id| {
                 relation.source_record_entity_id != source_record_entity_id
@@ -1188,6 +1241,7 @@ pub(crate) fn record_relations_at(
             relation_id: relation.relation_id,
             relation_version_id: relation.relation_version_id,
             relation_type: relation.relation_type,
+            relation_label: relation.relation_label,
             source_record_entity_id: relation.source_record_entity_id,
             target_record_entity_id: relation.target_record_entity_id,
             state_digest: relation.state_digest,
@@ -1197,6 +1251,7 @@ pub(crate) fn record_relations_at(
     relations.sort_by(|left, right| {
         left.relation_type
             .cmp(&right.relation_type)
+            .then_with(|| left.relation_label.cmp(&right.relation_label))
             .then_with(|| {
                 left.source_record_entity_id
                     .cmp(&right.source_record_entity_id)
@@ -1238,6 +1293,7 @@ struct RecordRelationCreateRows {
     relation_state_json: String,
     relation_state_digest: Digest,
     relation_type: RecordRelationType,
+    relation_discriminator: String,
     source_record_entity_id: EntityId,
     target_record_entity_id: EntityId,
     changeset_id: ChangeSetId,
@@ -1253,6 +1309,7 @@ struct LoadedRecordRelationVersion {
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
     relation_type: RecordRelationType,
+    relation_label: Option<String>,
     source_record_entity_id: EntityId,
     target_record_entity_id: EntityId,
     state_digest: Digest,
@@ -1311,6 +1368,7 @@ fn validate_record_relation_endpoints(
             }
             Ok(())
         }
+        RecordRelationType::RelatedTo => Ok(()),
         RecordRelationType::Supports => {
             if source.state.kind != RecordKind::Finding {
                 return Err(WorkVcsError::RecordInvalid(format!(
@@ -1362,6 +1420,7 @@ fn ensure_record_relation_logical_key_available(
     relation_type: RecordRelationType,
     source_record_entity_id: EntityId,
     target_record_entity_id: EntityId,
+    relation_discriminator: &str,
 ) -> Result<()> {
     let existing = transaction
         .query_row(
@@ -1371,12 +1430,13 @@ fn ensure_record_relation_logical_key_available(
                AND relation_type = ?2
                AND source_object_id = ?3
                AND target_object_id = ?4
-               AND relation_discriminator = ''",
+               AND relation_discriminator = ?5",
             params![
                 &workspace_id.raw_bytes()[..],
                 relation_type.as_str(),
                 &source_record_entity_id.raw_bytes()[..],
                 &target_record_entity_id.raw_bytes()[..],
+                relation_discriminator,
             ],
             |row| row.get::<_, i64>(0),
         )
@@ -1385,7 +1445,7 @@ fn ensure_record_relation_logical_key_available(
         Ok(())
     } else {
         Err(WorkVcsError::RecordInvalid(format!(
-            "record relation {relation_type} from {source_record_entity_id} to {target_record_entity_id} already exists in workspace {workspace_id}"
+            "record relation {relation_type} from {source_record_entity_id} to {target_record_entity_id} with label {relation_discriminator:?} already exists in workspace {workspace_id}"
         )))
     }
 }
@@ -1478,13 +1538,14 @@ fn write_record_relation_create(
                 target_object_id,
                 relation_discriminator
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, '')",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 &relation_id_bytes[..],
                 &workspace_id_bytes[..],
                 rows.relation_type.as_str(),
                 &source_record_entity_id_bytes[..],
-                &target_record_entity_id_bytes[..]
+                &target_record_entity_id_bytes[..],
+                rows.relation_discriminator.as_str()
             ],
         )
         .map_err(storage_error)?;
@@ -1889,11 +1950,15 @@ fn load_record_relation_version(
     let Some(relation_type) = RecordRelationType::parse(&relation_type) else {
         return Ok(None);
     };
-    if !relation_discriminator.is_empty() {
-        return Err(WorkVcsError::RecordInvalid(format!(
-            "record relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
-        )));
-    }
+    let relation_label = match relation_type {
+        RecordRelationType::RelatedTo => Some(normalize_relation_label(&relation_discriminator)?),
+        _ if relation_discriminator.is_empty() => None,
+        _ => {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
+            )));
+        }
+    };
     if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
         return Err(WorkVcsError::RecordInvalid(format!(
             "record relation {relation_id} version {relation_version_id} has state schema version {state_schema_version}"
@@ -1929,6 +1994,7 @@ fn load_record_relation_version(
         relation_id,
         relation_version_id,
         relation_type,
+        relation_label,
         source_record_entity_id: decode_entity_id("relation.source_object_id", source_object_id)?,
         target_record_entity_id: decode_entity_id("relation.target_object_id", target_object_id)?,
         state_digest,
@@ -2117,6 +2183,29 @@ fn rationale_value(reason: &str) -> Result<CanonicalValue> {
         "reason".to_owned(),
         CanonicalValue::String(reason.to_owned()),
     )])
+}
+
+fn relation_discriminator(options: &RecordRelationCreateOptions) -> &str {
+    options.relation_label.as_deref().unwrap_or("")
+}
+
+fn normalize_relation_label(value: &str) -> Result<String> {
+    if value.trim().is_empty() {
+        return Err(WorkVcsError::RecordInvalid(
+            "record relation label must not be empty".to_owned(),
+        ));
+    }
+    if value.trim() != value {
+        return Err(WorkVcsError::RecordInvalid(
+            "record relation label must not have leading or trailing whitespace".to_owned(),
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(WorkVcsError::RecordInvalid(
+            "record relation label must not contain control characters".to_owned(),
+        ));
+    }
+    Ok(value.to_owned())
 }
 
 fn record_invalid_from(error: WorkVcsError) -> WorkVcsError {

@@ -459,6 +459,28 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    LinkRelatedTo {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        source_record: String,
+
+        #[arg(long)]
+        target_record: String,
+
+        #[arg(long)]
+        label: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
     RelationList {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -468,6 +490,9 @@ enum RecordCommand {
 
         #[arg(long = "type")]
         relation_type: Option<String>,
+
+        #[arg(long)]
+        label: Option<String>,
 
         #[arg(long)]
         source_record: Option<String>,
@@ -1364,10 +1389,35 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::LinkRelatedTo {
+                    store,
+                    branch,
+                    head,
+                    source_record,
+                    target_record,
+                    label,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_record_relation(RecordRelationCreateOptions::related_to(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_record)?,
+                    label,
+                    rationale,
+                )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        Command::Record {
+            command:
                 RecordCommand::RelationList {
                     store,
                     commit,
                     relation_type,
+                    label,
                     source_record,
                     target_record,
                 },
@@ -1376,6 +1426,9 @@ fn run(cli: Cli) -> Result<String> {
             let mut options = RecordRelationListOptions::new(CommitId::parse_canonical(&commit)?);
             if let Some(relation_type) = relation_type {
                 options = options.with_relation_type(parse_record_relation_type(&relation_type)?);
+            }
+            if let Some(label) = label {
+                options = options.with_relation_label(label)?;
             }
             if let Some(source_record) = source_record {
                 options = options.with_source_record(EntityId::parse_canonical(&source_record)?);
@@ -1844,6 +1897,7 @@ fn parse_record_relation_type(value: &str) -> Result<RecordRelationType> {
     match value {
         "contradicts" => Ok(RecordRelationType::Contradicts),
         "invalidates" => Ok(RecordRelationType::Invalidates),
+        "related_to" => Ok(RecordRelationType::RelatedTo),
         "supports" => Ok(RecordRelationType::Supports),
         "validates" => Ok(RecordRelationType::Validates),
         other => Err(WorkVcsError::RecordInvalid(format!(
@@ -2286,7 +2340,7 @@ fn render_record_list(result: &RecordListResult) -> String {
 
 fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> String {
     format!(
-        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nrelation_label={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
         relation.workspace_id,
         relation.branch_id,
         relation.previous_head_commit_id,
@@ -2296,6 +2350,7 @@ fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> Strin
         relation.relation_id,
         relation.relation_version_id,
         relation.relation_type,
+        relation.relation_label.as_deref().unwrap_or(""),
         relation.source_record_entity_id,
         relation.target_record_entity_id,
         relation.relation_state_digest,
@@ -2331,6 +2386,12 @@ fn render_record_relation_list(result: &RecordRelationListResult) -> String {
         .expect("write to String");
         writeln!(
             output,
+            "relation.{index}.relation_label={}",
+            relation.relation_label.as_deref().unwrap_or("")
+        )
+        .expect("write to String");
+        writeln!(
+            output,
             "relation.{index}.source_record_entity_id={}",
             relation.source_record_entity_id
         )
@@ -2353,12 +2414,13 @@ fn render_record_relation_list(result: &RecordRelationListResult) -> String {
 
 fn render_record_relation_snapshot(relation: &RecordRelationSnapshot) -> String {
     format!(
-        "workspace_id={}\ncommit_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nrelation_state_digest={}\n",
+        "workspace_id={}\ncommit_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nrelation_label={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nrelation_state_digest={}\n",
         relation.workspace_id,
         relation.commit_id,
         relation.relation_id,
         relation.relation_version_id,
         relation.relation_type,
+        relation.relation_label.as_deref().unwrap_or(""),
         relation.source_record_entity_id,
         relation.target_record_entity_id,
         relation.state_digest
@@ -2741,6 +2803,12 @@ fn render_why(result: &WhyQueryResult) -> String {
             edge.relation_version_id
         )
         .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_label={}",
+            edge.relation_label.as_deref().unwrap_or("")
+        )
+        .expect("write to String");
         render_why_endpoint(&mut output, index, "source", edge.source);
         render_why_endpoint(&mut output, index, "target", edge.target);
         writeln!(
@@ -2804,6 +2872,7 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::EvidencedBy => "evidenced_by",
         WhyRelationKind::RecordContradicts => "record_contradicts",
         WhyRelationKind::RecordInvalidates => "record_invalidates",
+        WhyRelationKind::RecordRelatedTo => "record_related_to",
         WhyRelationKind::RecordSupports => "record_supports",
         WhyRelationKind::RecordValidates => "record_validates",
     }
@@ -4954,6 +5023,133 @@ mod tests {
         assert!(why_decision.contains("relation_edges=1"));
         assert!(why_decision.contains("relation.0.relation_kind=record_contradicts"));
         assert!(why_decision.contains("relation.0.direction=incoming"));
+    }
+
+    #[test]
+    fn cli_links_custom_related_records_with_label() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Concurrent write tests fail without serialization",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let decision = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--statement",
+            "Use serialized writes",
+        ])
+        .expect("parse decision"))
+        .expect("create decision");
+
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-related-to",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&decision, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-record",
+            &value(&decision, "record_entity_id"),
+            "--label",
+            "caused_by",
+            "--rationale",
+            "Finding caused the decision",
+        ])
+        .expect("parse link related_to"))
+        .expect("link related_to");
+        assert!(relation.contains("relation_type=related_to"));
+        assert!(relation.contains("relation_label=caused_by"));
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--type",
+            "related_to",
+            "--label",
+            "caused_by",
+        ])
+        .expect("parse relation list"))
+        .expect("list related_to relations");
+        assert!(listed.contains("relations=1"));
+        assert_eq!(
+            value(&listed, "relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert!(listed.contains("relation.0.relation_label=caused_by"));
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-show",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+        ])
+        .expect("parse relation show"))
+        .expect("show related_to relation");
+        assert!(shown.contains("relation_type=related_to"));
+        assert!(shown.contains("relation_label=caused_by"));
+
+        let why_decision = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--entity",
+            &value(&decision, "record_entity_id"),
+        ])
+        .expect("parse why decision"))
+        .expect("why decision");
+        assert!(why_decision.contains("relation.0.relation_kind=record_related_to"));
+        assert!(why_decision.contains("relation.0.relation_label=caused_by"));
     }
 
     fn value(output: &str, key: &str) -> String {

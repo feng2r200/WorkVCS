@@ -79,8 +79,9 @@ pub use runtime::{
 pub use runtime::{ContextOverview, ContextOverviewOptions};
 pub use runtime::{
     MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeItemClassification,
-    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcome,
-    MergeOutcomeSnapshot, MergeRuntimeState, MergeStartOptions, MergeStartResult,
+    MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject, MergeListOptions,
+    MergeListResult, MergeOutcome, MergeOutcomeSnapshot, MergeResolutionKind, MergeResolveOptions,
+    MergeResolveResult, MergeRuntimeState, MergeStartOptions, MergeStartResult,
 };
 pub use runtime::{NextWorkOptions, NextWorkResult};
 pub use runtime::{

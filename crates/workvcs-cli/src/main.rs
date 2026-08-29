@@ -15,26 +15,27 @@ use workvcs_core::{
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
     KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeId, MergeItemSnapshot,
-    MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
-    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeId, MergeItemId,
+    MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject, MergeListOptions,
+    MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind, MergeResolveOptions,
+    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
+    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
+    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
@@ -264,6 +265,25 @@ enum MergeCommand {
 
         #[arg(long, default_value = "{}")]
         detail_json: String,
+    },
+    Resolve {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        item: String,
+
+        #[arg(long)]
+        kind: String,
+
+        #[arg(long)]
+        session: Option<String>,
+
+        #[arg(long)]
+        custom_payload_json: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        rationale_json: String,
     },
     Show {
         #[arg(value_name = "STORE")]
@@ -2990,6 +3010,51 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_merge_abort(&engine.abort_merge(options)?))
         }
         Command::Merge {
+            command:
+                MergeCommand::Resolve {
+                    store,
+                    item,
+                    kind,
+                    session,
+                    custom_payload_json,
+                    rationale_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let merge_item_id = MergeItemId::parse_canonical(&item)?;
+            let kind = parse_merge_resolution_kind(&kind)?;
+            let mut options = match kind {
+                MergeResolutionKind::Ours => {
+                    reject_custom_payload_for_non_custom(custom_payload_json.as_ref())?;
+                    MergeResolveOptions::ours(merge_item_id)?
+                }
+                MergeResolutionKind::Theirs => {
+                    reject_custom_payload_for_non_custom(custom_payload_json.as_ref())?;
+                    MergeResolveOptions::theirs(merge_item_id)?
+                }
+                MergeResolutionKind::Custom => {
+                    let custom_payload_json = custom_payload_json.ok_or_else(|| {
+                        WorkVcsError::TaskInvalid(
+                            "custom merge resolution requires --custom-payload-json".to_owned(),
+                        )
+                    })?;
+                    MergeResolveOptions::custom(
+                        merge_item_id,
+                        parse_cli_object("merge custom resolution payload", &custom_payload_json)?,
+                    )?
+                }
+            }
+            .with_rationale(parse_cli_object(
+                "merge resolution rationale",
+                &rationale_json,
+            )?)?;
+            if let Some(session) = session {
+                options =
+                    options.with_resolved_by_session_id(SessionId::parse_canonical(&session)?);
+            }
+            Ok(render_merge_resolve(&engine.resolve_merge_item(options)?)?)
+        }
+        Command::Merge {
             command: MergeCommand::Show { store, merge },
         } => {
             let engine = Engine::open(store)?;
@@ -3032,6 +3097,26 @@ fn parse_task_status(value: &str) -> Result<TaskStatus> {
             "task status {other:?} is not in the CLI vocabulary"
         ))),
     }
+}
+
+fn parse_merge_resolution_kind(value: &str) -> Result<MergeResolutionKind> {
+    match value {
+        "ours" => Ok(MergeResolutionKind::Ours),
+        "theirs" => Ok(MergeResolutionKind::Theirs),
+        "custom" => Ok(MergeResolutionKind::Custom),
+        other => Err(WorkVcsError::TaskInvalid(format!(
+            "merge resolution kind {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn reject_custom_payload_for_non_custom(custom_payload_json: Option<&String>) -> Result<()> {
+    if custom_payload_json.is_some() {
+        return Err(WorkVcsError::TaskInvalid(
+            "--custom-payload-json is only valid with --kind custom".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_acceptance_criterion_classification(
@@ -4258,6 +4343,18 @@ fn render_merge_abort(merge: &MergeAbortResult) -> String {
     )
 }
 
+fn render_merge_resolve(result: &MergeResolveResult) -> Result<String> {
+    let mut output = format!(
+        "merge_id={}\nmerge_item_id={}\nworkspace_id={}\nresolution={}\n",
+        result.merge_id,
+        result.merge_item_id,
+        result.workspace_id,
+        result.resolution.resolution_kind.as_str()
+    );
+    render_merge_item_resolution(&mut output, "resolution", &result.resolution)?;
+    Ok(output)
+}
+
 fn render_merge_attempt(merge: &MergeAttemptSnapshot) -> Result<String> {
     let origin_session_id = merge
         .origin_session_id
@@ -4311,6 +4408,63 @@ fn render_merge_item(output: &mut String, prefix: &str, item: &MergeItemSnapshot
     writeln!(output, "{prefix}.subject_kind={subject_kind}").expect("write to String");
     writeln!(output, "{prefix}.subject_id={subject_id}").expect("write to String");
     writeln!(output, "{prefix}.payload_json={payload_json}").expect("write to String");
+    let resolution = item
+        .resolution
+        .as_ref()
+        .map(|resolution| resolution.resolution_kind.as_str())
+        .unwrap_or("none");
+    writeln!(output, "{prefix}.resolution={resolution}").expect("write to String");
+    if let Some(resolution) = &item.resolution {
+        render_merge_item_resolution(output, &format!("{prefix}.resolution"), resolution)?;
+    }
+    Ok(())
+}
+
+fn render_merge_item_resolution(
+    output: &mut String,
+    prefix: &str,
+    resolution: &MergeItemResolutionSnapshot,
+) -> Result<()> {
+    let custom_payload_json = match &resolution.custom_payload {
+        Some(custom_payload) => {
+            String::from_utf8(canonical_bytes(custom_payload)?).map_err(|error| {
+                WorkVcsError::CanonicalEncodingInvalid(format!(
+                    "merge custom resolution payload was not UTF-8: {error}"
+                ))
+            })?
+        }
+        None => "none".to_owned(),
+    };
+    let rationale_json =
+        String::from_utf8(canonical_bytes(&resolution.rationale)?).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "merge resolution rationale was not UTF-8: {error}"
+            ))
+        })?;
+    let resolved_by_session_id = resolution
+        .resolved_by_session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    writeln!(
+        output,
+        "{prefix}.kind={}",
+        resolution.resolution_kind.as_str()
+    )
+    .expect("write to String");
+    writeln!(output, "{prefix}.custom_payload_json={custom_payload_json}")
+        .expect("write to String");
+    writeln!(output, "{prefix}.rationale_json={rationale_json}").expect("write to String");
+    writeln!(
+        output,
+        "{prefix}.resolved_by_session_id={resolved_by_session_id}"
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{prefix}.resolved_at_us={}",
+        resolution.resolved_at_us
+    )
+    .expect("write to String");
     Ok(())
 }
 
@@ -10411,7 +10565,42 @@ mod tests {
         assert_eq!(value(&shown, "item.0.classification"), "AUTO");
         assert_eq!(value(&shown, "item.0.subject_kind"), "entity");
         assert_eq!(value(&shown, "item.0.subject_id"), source_task_id);
+        assert_eq!(value(&shown, "item.0.resolution"), "none");
         assert_eq!(value(&shown, "outcome"), "none");
+        let merge_item_id = value(&shown, "item.0.merge_item_id");
+
+        let resolved = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "resolve",
+            store,
+            "--item",
+            &merge_item_id,
+            "--kind",
+            "theirs",
+            "--rationale-json",
+            "{\"reason\":\"take source\"}",
+        ])
+        .expect("parse merge resolve"))
+        .expect("resolve merge item");
+        assert_eq!(value(&resolved, "merge_id"), merge_id);
+        assert_eq!(value(&resolved, "merge_item_id"), merge_item_id);
+        assert_eq!(value(&resolved, "resolution"), "theirs");
+        assert_eq!(value(&resolved, "resolution.kind"), "theirs");
+        assert_eq!(value(&resolved, "resolution.custom_payload_json"), "none");
+
+        let shown =
+            run(
+                Cli::try_parse_from(["workvcs", "merge", "show", store, "--merge", &merge_id])
+                    .expect("parse resolved merge show"),
+            )
+            .expect("show resolved merge");
+        assert_eq!(value(&shown, "item.0.resolution"), "theirs");
+        assert_eq!(value(&shown, "item.0.resolution.kind"), "theirs");
+        assert_eq!(
+            value(&shown, "item.0.resolution.rationale_json"),
+            "{\"reason\":\"take source\"}"
+        );
 
         let active = run(Cli::try_parse_from([
             "workvcs",

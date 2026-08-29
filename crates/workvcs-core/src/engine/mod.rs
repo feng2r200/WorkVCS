@@ -50,11 +50,11 @@ use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
-    SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult,
+    MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult, MergeResolveOptions,
+    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -563,6 +563,13 @@ impl Engine {
 
     pub fn abort_merge(&mut self, options: MergeAbortOptions) -> Result<MergeAbortResult> {
         self.store.abort_merge(&options)
+    }
+
+    pub fn resolve_merge_item(
+        &mut self,
+        options: MergeResolveOptions,
+    ) -> Result<MergeResolveResult> {
+        self.store.resolve_merge_item(&options)
     }
 
     pub fn merge_attempt(&self, merge_id: crate::MergeId) -> Result<MergeAttemptSnapshot> {

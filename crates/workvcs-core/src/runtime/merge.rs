@@ -19,6 +19,9 @@ const COMPLETED_MERGE_OUTCOME: &str = "completed";
 const AUTO_MERGE_ITEM_CLASSIFICATION: &str = "AUTO";
 const CONFLICT_MERGE_ITEM_CLASSIFICATION: &str = "CONFLICT";
 const REVIEW_MERGE_ITEM_CLASSIFICATION: &str = "REVIEW";
+const OURS_MERGE_RESOLUTION_KIND: &str = "ours";
+const THEIRS_MERGE_RESOLUTION_KIND: &str = "theirs";
+const CUSTOM_MERGE_RESOLUTION_KIND: &str = "custom";
 const ENTITY_MERGE_ITEM_SUBJECT_KIND: &str = "entity";
 const RELATION_MERGE_ITEM_SUBJECT_KIND: &str = "relation";
 const MERGE_ATTEMPT_OBJECT_KIND: &str = "merge_attempt";
@@ -95,6 +98,32 @@ impl MergeItemClassification {
             AUTO_MERGE_ITEM_CLASSIFICATION => Some(Self::Auto),
             CONFLICT_MERGE_ITEM_CLASSIFICATION => Some(Self::Conflict),
             REVIEW_MERGE_ITEM_CLASSIFICATION => Some(Self::Review),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeResolutionKind {
+    Ours,
+    Theirs,
+    Custom,
+}
+
+impl MergeResolutionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ours => OURS_MERGE_RESOLUTION_KIND,
+            Self::Theirs => THEIRS_MERGE_RESOLUTION_KIND,
+            Self::Custom => CUSTOM_MERGE_RESOLUTION_KIND,
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            OURS_MERGE_RESOLUTION_KIND => Some(Self::Ours),
+            THEIRS_MERGE_RESOLUTION_KIND => Some(Self::Theirs),
+            CUSTOM_MERGE_RESOLUTION_KIND => Some(Self::Custom),
             _ => None,
         }
     }
@@ -179,6 +208,97 @@ pub struct MergeStartResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeResolveOptions {
+    merge_item_id: MergeItemId,
+    resolution_kind: MergeResolutionKind,
+    custom_payload: Option<CanonicalValue>,
+    rationale: CanonicalValue,
+    resolved_by_session_id: Option<SessionId>,
+}
+
+impl MergeResolveOptions {
+    pub fn ours(merge_item_id: MergeItemId) -> Result<Self> {
+        Self::new(merge_item_id, MergeResolutionKind::Ours, None)
+    }
+
+    pub fn theirs(merge_item_id: MergeItemId) -> Result<Self> {
+        Self::new(merge_item_id, MergeResolutionKind::Theirs, None)
+    }
+
+    pub fn custom(merge_item_id: MergeItemId, custom_payload: CanonicalValue) -> Result<Self> {
+        require_object_value("merge custom resolution payload", &custom_payload)?;
+        Self::new(
+            merge_item_id,
+            MergeResolutionKind::Custom,
+            Some(custom_payload),
+        )
+    }
+
+    fn new(
+        merge_item_id: MergeItemId,
+        resolution_kind: MergeResolutionKind,
+        custom_payload: Option<CanonicalValue>,
+    ) -> Result<Self> {
+        if resolution_kind == MergeResolutionKind::Custom && custom_payload.is_none() {
+            return Err(WorkVcsError::WorkspaceInvalid(
+                "custom merge resolution requires custom_payload_json".to_owned(),
+            ));
+        }
+        if resolution_kind != MergeResolutionKind::Custom && custom_payload.is_some() {
+            return Err(WorkVcsError::WorkspaceInvalid(
+                "ours/theirs merge resolution must not include custom_payload_json".to_owned(),
+            ));
+        }
+        Ok(Self {
+            merge_item_id,
+            resolution_kind,
+            custom_payload,
+            rationale: CanonicalValue::object(Vec::new())?,
+            resolved_by_session_id: None,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Result<Self> {
+        require_object_value("merge resolution rationale", &rationale)?;
+        self.rationale = rationale;
+        Ok(self)
+    }
+
+    pub fn with_resolved_by_session_id(mut self, resolved_by_session_id: SessionId) -> Self {
+        self.resolved_by_session_id = Some(resolved_by_session_id);
+        self
+    }
+
+    pub fn merge_item_id(&self) -> MergeItemId {
+        self.merge_item_id
+    }
+
+    pub fn resolution_kind(&self) -> MergeResolutionKind {
+        self.resolution_kind
+    }
+
+    pub fn custom_payload(&self) -> Option<&CanonicalValue> {
+        self.custom_payload.as_ref()
+    }
+
+    pub fn rationale(&self) -> &CanonicalValue {
+        &self.rationale
+    }
+
+    pub fn resolved_by_session_id(&self) -> Option<SessionId> {
+        self.resolved_by_session_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeResolveResult {
+    pub merge_id: MergeId,
+    pub merge_item_id: MergeItemId,
+    pub workspace_id: WorkspaceId,
+    pub resolution: MergeItemResolutionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeAbortOptions {
     merge_id: MergeId,
     abort_session_id: Option<SessionId>,
@@ -243,12 +363,22 @@ pub struct MergeOutcomeSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeItemResolutionSnapshot {
+    pub resolution_kind: MergeResolutionKind,
+    pub custom_payload: Option<CanonicalValue>,
+    pub rationale: CanonicalValue,
+    pub resolved_by_session_id: Option<SessionId>,
+    pub resolved_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeItemSnapshot {
     pub merge_item_id: MergeItemId,
     pub ordinal: i64,
     pub classification: MergeItemClassification,
     pub subject: Option<MergeItemSubject>,
     pub payload: CanonicalValue,
+    pub resolution: Option<MergeItemResolutionSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -614,6 +744,86 @@ pub(crate) fn abort_merge(
     })
 }
 
+pub(crate) fn resolve_merge_item(
+    connection: &mut StoreConnection,
+    options: &MergeResolveOptions,
+) -> Result<MergeResolveResult> {
+    connection.verify_foreign_keys()?;
+
+    let resolved_at_us = current_epoch_micros()?;
+    let custom_payload_json = options
+        .custom_payload()
+        .map(canonical_json_string)
+        .transpose()?;
+    let rationale_json = canonical_json_string(options.rationale())?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let merge_id = load_merge_item_merge_id_for_update(&transaction, options.merge_item_id())?;
+    let merge = load_active_merge_for_update(&transaction, merge_id)?;
+    if let Some(resolved_by_session_id) = options.resolved_by_session_id() {
+        let session =
+            session::load_active_session_runtime_for_update(&transaction, resolved_by_session_id)?;
+        if session.active_workspace_id != merge.workspace_id {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "merge resolution session {resolved_by_session_id} belongs to workspace {}, not {}",
+                session.active_workspace_id, merge.workspace_id
+            )));
+        }
+        session::update_session_activity(&transaction, resolved_by_session_id, resolved_at_us)?;
+    }
+
+    let merge_item_id_bytes = options.merge_item_id().raw_bytes();
+    let resolved_by_session_id_bytes = options
+        .resolved_by_session_id()
+        .map(|session_id| session_id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO merge_resolution_runtime(
+                merge_item_id,
+                resolution_kind,
+                custom_payload_json,
+                rationale_json,
+                resolved_by_session_id,
+                resolved_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(merge_item_id) DO UPDATE SET
+                resolution_kind = excluded.resolution_kind,
+                custom_payload_json = excluded.custom_payload_json,
+                rationale_json = excluded.rationale_json,
+                resolved_by_session_id = excluded.resolved_by_session_id,
+                resolved_at_us = excluded.resolved_at_us",
+            params![
+                &merge_item_id_bytes[..],
+                options.resolution_kind().as_str(),
+                custom_payload_json.as_deref(),
+                rationale_json,
+                resolved_by_session_id_bytes
+                    .as_ref()
+                    .map(|bytes| &bytes[..]),
+                resolved_at_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(MergeResolveResult {
+        merge_id,
+        merge_item_id: options.merge_item_id(),
+        workspace_id: merge.workspace_id,
+        resolution: MergeItemResolutionSnapshot {
+            resolution_kind: options.resolution_kind(),
+            custom_payload: options.custom_payload().cloned(),
+            rationale: options.rationale().clone(),
+            resolved_by_session_id: options.resolved_by_session_id(),
+            resolved_at_us,
+        },
+    })
+}
+
 pub(crate) fn merge_attempt(
     connection: &StoreConnection,
     merge_id: MergeId,
@@ -824,6 +1034,28 @@ fn load_active_merge_for_update(
             .transpose()?,
         created_at_us,
     })
+}
+
+fn load_merge_item_merge_id_for_update(
+    transaction: &Transaction<'_>,
+    merge_item_id: MergeItemId,
+) -> Result<MergeId> {
+    let row = transaction
+        .query_row(
+            "SELECT merge_id
+             FROM merge_item
+             WHERE merge_item_id = ?1",
+            params![&merge_item_id.raw_bytes()[..]],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some(bytes) = row else {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge item {merge_item_id} does not exist"
+        )));
+    };
+    decode_merge_id("merge_item.merge_id", bytes)
 }
 
 fn merge_attempt_ids(connection: &Connection, options: &MergeListOptions) -> Result<Vec<MergeId>> {
@@ -1216,10 +1448,17 @@ fn load_merge_items(connection: &Connection, merge_id: MergeId) -> Result<Vec<Me
                     merge_item.classification,
                     merge_item.subject_object_id,
                     object_identity.object_kind,
-                    merge_item.item_payload_json
+                    merge_item.item_payload_json,
+                    merge_resolution_runtime.resolution_kind,
+                    merge_resolution_runtime.custom_payload_json,
+                    merge_resolution_runtime.rationale_json,
+                    merge_resolution_runtime.resolved_by_session_id,
+                    merge_resolution_runtime.resolved_at_us
              FROM merge_item
              LEFT JOIN object_identity
                ON object_identity.object_id = merge_item.subject_object_id
+             LEFT JOIN merge_resolution_runtime
+               ON merge_resolution_runtime.merge_item_id = merge_item.merge_item_id
              WHERE merge_item.merge_id = ?1
              ORDER BY merge_item.ordinal",
         )
@@ -1233,6 +1472,11 @@ fn load_merge_items(connection: &Connection, merge_id: MergeId) -> Result<Vec<Me
                 row.get::<_, Option<Vec<u8>>>(3)?,
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<Vec<u8>>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
             ))
         })
         .map_err(storage_error)?;
@@ -1246,7 +1490,13 @@ fn load_merge_items(connection: &Connection, merge_id: MergeId) -> Result<Vec<Me
             subject_object_id,
             object_kind,
             item_payload_json,
+            resolution_kind,
+            custom_payload_json,
+            rationale_json,
+            resolved_by_session_id,
+            resolved_at_us,
         ) = row.map_err(storage_error)?;
+        let merge_item_id = decode_merge_item_id("merge_item.merge_item_id", merge_item_id)?;
         validate_stored_text("merge_item.classification", &classification)?;
         let classification =
             MergeItemClassification::from_str(&classification).ok_or_else(|| {
@@ -1261,12 +1511,22 @@ fn load_merge_items(connection: &Connection, merge_id: MergeId) -> Result<Vec<Me
             ))
         })?;
         require_object_value("merge item payload", &payload)?;
+        let resolution = decode_merge_item_resolution_snapshot(
+            merge_id,
+            merge_item_id,
+            resolution_kind,
+            custom_payload_json,
+            rationale_json,
+            resolved_by_session_id,
+            resolved_at_us,
+        )?;
         items.push(MergeItemSnapshot {
-            merge_item_id: decode_merge_item_id("merge_item.merge_item_id", merge_item_id)?,
+            merge_item_id,
             ordinal,
             classification,
             subject,
             payload,
+            resolution,
         });
     }
     Ok(items)
@@ -1300,6 +1560,86 @@ fn decode_merge_item_subject(
             "merge {merge_id} item has object kind {object_kind:?} without subject_object_id"
         ))),
     }
+}
+
+fn decode_merge_item_resolution_snapshot(
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+    resolution_kind: Option<String>,
+    custom_payload_json: Option<String>,
+    rationale_json: Option<String>,
+    resolved_by_session_id: Option<Vec<u8>>,
+    resolved_at_us: Option<i64>,
+) -> Result<Option<MergeItemResolutionSnapshot>> {
+    let Some(resolution_kind) = resolution_kind else {
+        if custom_payload_json.is_some()
+            || rationale_json.is_some()
+            || resolved_by_session_id.is_some()
+            || resolved_at_us.is_some()
+        {
+            return Err(WorkVcsError::WorkspaceInvalid(format!(
+                "merge {merge_id} item {merge_item_id} has partial resolution runtime"
+            )));
+        }
+        return Ok(None);
+    };
+    validate_stored_text("merge_resolution_runtime.resolution_kind", &resolution_kind)?;
+    let resolution_kind = MergeResolutionKind::from_str(&resolution_kind).ok_or_else(|| {
+        WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} has unsupported resolution_kind {resolution_kind:?}"
+        ))
+    })?;
+    let rationale_json = rationale_json.ok_or_else(|| {
+        WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} resolution is missing rationale_json"
+        ))
+    })?;
+    let rationale = parse_canonical_json(rationale_json.as_bytes()).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} rationale_json is not canonical JSON: {error}"
+        ))
+    })?;
+    require_object_value("merge resolution rationale", &rationale)?;
+    let custom_payload = custom_payload_json
+        .map(|json| {
+            let value = parse_canonical_json(json.as_bytes()).map_err(|error| {
+                WorkVcsError::WorkspaceInvalid(format!(
+                    "merge {merge_id} item {merge_item_id} custom_payload_json is not canonical JSON: {error}"
+                ))
+            })?;
+            require_object_value("merge custom resolution payload", &value)?;
+            Ok(value)
+        })
+        .transpose()?;
+    match (resolution_kind, custom_payload.as_ref()) {
+        (MergeResolutionKind::Custom, Some(_)) => {}
+        (MergeResolutionKind::Custom, None) => {
+            return Err(WorkVcsError::WorkspaceInvalid(format!(
+                "merge {merge_id} item {merge_item_id} custom resolution is missing custom_payload_json"
+            )));
+        }
+        (MergeResolutionKind::Ours | MergeResolutionKind::Theirs, None) => {}
+        (MergeResolutionKind::Ours | MergeResolutionKind::Theirs, Some(_)) => {
+            return Err(WorkVcsError::WorkspaceInvalid(format!(
+                "merge {merge_id} item {merge_item_id} ours/theirs resolution must not include custom_payload_json"
+            )));
+        }
+    }
+    Ok(Some(MergeItemResolutionSnapshot {
+        resolution_kind,
+        custom_payload,
+        rationale,
+        resolved_by_session_id: resolved_by_session_id
+            .map(|bytes| {
+                decode_session_id("merge_resolution_runtime.resolved_by_session_id", bytes)
+            })
+            .transpose()?,
+        resolved_at_us: resolved_at_us.ok_or_else(|| {
+            WorkVcsError::WorkspaceInvalid(format!(
+                "merge {merge_id} item {merge_item_id} resolution is missing resolved_at_us"
+            ))
+        })?,
+    }))
 }
 
 fn find_merge_base(

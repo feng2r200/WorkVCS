@@ -1,7 +1,7 @@
 use super::containment::PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE;
 use super::entity::{
     ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION, ENTITY_TRANSITION_OPERATION_TYPE,
-    canonical_json_string, entity_transition_payload_json,
+    canonical_json_string,
 };
 use super::record::{
     KNOWLEDGE_RELATION_CREATE_OPERATION_SCHEMA_VERSION, KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE,
@@ -35,6 +35,8 @@ const MERGE_COMMIT_KIND: &str = "merge";
 const MERGE_CONTINUE_OPERATION_SCHEMA_VERSION: i64 = 1;
 const MERGE_CONTINUE_OPERATION_TYPE: &str = "merge.continue";
 const PRIMARY_CONTAINMENT_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
+const RESTORE_OPERATION_SCHEMA_VERSION: i64 = 1;
+const RESTORE_OPERATION_TYPE: &str = "workstate.restore";
 const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
 const STRUCTURAL_REFERENCE_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
@@ -423,7 +425,7 @@ fn apply_replayable_changeset(
             "ChangeSet {changeset_id} has no ChangeOperations"
         )));
     }
-    if changeset.operation_type != MERGE_CONTINUE_OPERATION_TYPE
+    if !uses_summary_changeset_payload(&changeset.operation_type)
         && operations.len() == 1
         && changeset.operation_payload_json != operations[0].operation_payload_json
     {
@@ -616,6 +618,13 @@ fn validate_entity_transition_changeset(
                 )));
             }
         }
+        RESTORE_OPERATION_TYPE => {
+            if operation_schema_version != RESTORE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "restore ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
         _ => {
             return Err(WorkVcsError::ReplayUnsupported(format!(
                 "normal ChangeSet {changeset_id} operation type {operation_type:?} is deferred"
@@ -633,6 +642,13 @@ fn validate_entity_transition_changeset(
 struct ChangeSetRow {
     operation_type: String,
     operation_payload_json: String,
+}
+
+fn uses_summary_changeset_payload(operation_type: &str) -> bool {
+    matches!(
+        operation_type,
+        MERGE_CONTINUE_OPERATION_TYPE | RESTORE_OPERATION_TYPE
+    )
 }
 
 struct OperationRow {
@@ -707,14 +723,10 @@ fn apply_entity_operation(
         &change.field_delta_json,
     )?;
 
-    let expected_payload = entity_transition_payload_json(
+    let expected_payload = entity_membership_payload_json(
         subject_entity_id,
         change.before_entity_version_id,
-        change.after_entity_version_id.ok_or_else(|| {
-            WorkVcsError::ReplayUnsupported(format!(
-                "entity removal for {subject_entity_id} is deferred"
-            ))
-        })?,
+        change.after_entity_version_id,
     )?;
     if operation.operation_payload_json != expected_payload {
         return Err(WorkVcsError::ReplayInvalid(format!(
@@ -724,22 +736,53 @@ fn apply_entity_operation(
     }
 
     let current = entities.get(&subject_entity_id).copied();
-    if current != change.before_entity_version_id {
-        return Err(WorkVcsError::ReplayInvalid(format!(
-            "entity {subject_entity_id} expected replay version {:?}, found {:?}",
-            change.before_entity_version_id, current
-        )));
+    match (
+        change.before_entity_version_id,
+        change.after_entity_version_id,
+    ) {
+        (None, Some(after_entity_version_id)) => {
+            if current.is_some() {
+                return Err(WorkVcsError::ReplayInvalid(format!(
+                    "entity {subject_entity_id} was expected to be absent before creation, found {current:?}"
+                )));
+            }
+            validate_entity_version(
+                connection,
+                workspace_id,
+                subject_entity_id,
+                after_entity_version_id,
+            )?;
+            entities.insert(subject_entity_id, after_entity_version_id);
+            Ok(())
+        }
+        (Some(before_entity_version_id), Some(after_entity_version_id)) => {
+            if current != Some(before_entity_version_id) {
+                return Err(WorkVcsError::ReplayInvalid(format!(
+                    "entity {subject_entity_id} expected replay version {before_entity_version_id}, found {current:?}"
+                )));
+            }
+            validate_entity_version(
+                connection,
+                workspace_id,
+                subject_entity_id,
+                after_entity_version_id,
+            )?;
+            entities.insert(subject_entity_id, after_entity_version_id);
+            Ok(())
+        }
+        (Some(before_entity_version_id), None) => {
+            if current != Some(before_entity_version_id) {
+                return Err(WorkVcsError::ReplayInvalid(format!(
+                    "entity {subject_entity_id} expected replay version {before_entity_version_id}, found {current:?}"
+                )));
+            }
+            entities.remove(&subject_entity_id);
+            Ok(())
+        }
+        (None, None) => Err(WorkVcsError::ReplayInvalid(format!(
+            "entity {subject_entity_id} membership change has no before or after version"
+        ))),
     }
-
-    let after_entity_version_id = change.after_entity_version_id.expect("checked above");
-    validate_entity_version(
-        connection,
-        workspace_id,
-        subject_entity_id,
-        after_entity_version_id,
-    )?;
-    entities.insert(subject_entity_id, after_entity_version_id);
-    Ok(())
 }
 
 fn apply_relation_operation(
@@ -1101,6 +1144,29 @@ fn canonical_empty_object_json() -> Result<String> {
             "canonical empty object JSON was not UTF-8: {error}"
         ))
     })
+}
+
+fn entity_membership_payload_json(
+    entity_id: EntityId,
+    before_entity_version_id: Option<EntityVersionId>,
+    after_entity_version_id: Option<EntityVersionId>,
+) -> Result<String> {
+    let before_value = match before_entity_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    let after_value = match after_entity_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    canonical_json_string(&CanonicalValue::object(vec![
+        ("after_entity_version_id".to_owned(), after_value),
+        ("before_entity_version_id".to_owned(), before_value),
+        (
+            "entity_id".to_owned(),
+            CanonicalValue::String(entity_id.to_string()),
+        ),
+    ])?)
 }
 
 fn relation_transition_payload_json(

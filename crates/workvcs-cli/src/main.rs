@@ -42,8 +42,9 @@ use workvcs_core::{
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
     WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkVcsError, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
+    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateRestoreCommit,
+    WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -92,6 +93,22 @@ enum Command {
 
         #[arg(long)]
         commit: String,
+    },
+    Restore {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        target_commit: String,
+
+        #[arg(long, default_value = "{}")]
+        rationale_json: String,
     },
     #[command(group(
         ArgGroup::new("why-target")
@@ -1544,6 +1561,24 @@ fn run(cli: Cli) -> Result<String> {
             let engine = Engine::open(store)?;
             let state = engine.show_at(CommitId::parse_canonical(&commit)?)?;
             Ok(render_replayed_state(&state))
+        }
+        Command::Restore {
+            store,
+            branch,
+            head,
+            target_commit,
+            rationale_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let options = WorkStateRestoreOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                CommitId::parse_canonical(&target_commit)?,
+            )?
+            .with_rationale(parse_cli_object("restore rationale", &rationale_json)?)?;
+            Ok(render_work_state_restore(
+                &engine.restore_work_state(options)?,
+            ))
         }
         Command::Why {
             store,
@@ -5114,6 +5149,20 @@ fn render_replayed_state(state: &ReplayedState) -> String {
     output
 }
 
+fn render_work_state_restore(restore: &WorkStateRestoreCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ntarget_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_count={}\nwork_state_digest={}\n",
+        restore.workspace_id,
+        restore.branch_id,
+        restore.previous_head_commit_id,
+        restore.target_commit_id,
+        restore.commit_id,
+        restore.changeset_id,
+        restore.operation_count,
+        restore.work_state_digest
+    )
+}
+
 fn render_why(result: &WhyQueryResult) -> String {
     let mut output = String::new();
     match result.target.target {
@@ -5312,6 +5361,7 @@ mod tests {
                 "doctor",
                 "history",
                 "show-at",
+                "restore",
                 "why",
                 "workspace",
                 "branch",
@@ -5378,6 +5428,85 @@ mod tests {
         assert!(doctor.contains("canonical_json_profile=workvcs-jcs-v1"));
         assert!(doctor.contains("checked_branches=0"));
         assert!(doctor.contains("checked_commits=0"));
+    }
+
+    #[test]
+    fn cli_restores_branch_to_historical_work_state() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Temporary work",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let head = value(&task, "commit_id");
+
+        let restored = run(Cli::try_parse_from([
+            "workvcs",
+            "restore",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--target-commit",
+            &genesis,
+            "--rationale-json",
+            "{\"reason\":\"return to baseline\"}",
+        ])
+        .expect("parse restore"))
+        .expect("restore");
+        assert_eq!(value(&restored, "branch_id"), branch);
+        assert_eq!(value(&restored, "previous_head_commit_id"), head);
+        assert_eq!(value(&restored, "target_commit_id"), genesis);
+        assert_eq!(value(&restored, "operation_count"), "1");
+        let restore_commit = value(&restored, "commit_id");
+
+        let branch_head =
+            run(
+                Cli::try_parse_from(["workvcs", "branch", "head", store, "--branch", &branch])
+                    .expect("parse branch head"),
+            )
+            .expect("branch head");
+        assert_eq!(value(&branch_head, "head_commit_id"), restore_commit);
+
+        let state =
+            run(
+                Cli::try_parse_from(["workvcs", "show-at", store, "--commit", &restore_commit])
+                    .expect("parse show-at restore"),
+            )
+            .expect("show restore state");
+        assert_eq!(value(&state, "entities"), "0");
+        assert_eq!(value(&state, "relations"), "0");
     }
 
     #[test]

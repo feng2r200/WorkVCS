@@ -33,8 +33,9 @@ use crate::history::{
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
-    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
-    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
+    WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::identity::RelationId;
 use crate::runtime::{
@@ -141,6 +142,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::diff_work_state(&self.connection, options)
+    }
+
+    pub(crate) fn restore_work_state(
+        &mut self,
+        options: &WorkStateRestoreOptions,
+    ) -> Result<WorkStateRestoreCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::restore_work_state(&mut self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

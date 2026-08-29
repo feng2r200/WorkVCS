@@ -64,8 +64,9 @@ pub use history::{
     WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQuerySubject,
     WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind,
     WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
-    WorkspaceInfo, WorkspaceInitOptions, WorkspaceResourceAssociationOptions,
-    WorkspaceResourceAssociationResult, WorkspaceResourceAssociationSnapshot,
+    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WorkspaceResourceAssociationSnapshot,
 };
 pub use identity::{
     BranchId, ChangeSetId, ClaimId, CommitId, Digest, EntityId, EntityVersionId, EventId,

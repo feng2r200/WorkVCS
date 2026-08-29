@@ -43,8 +43,9 @@ use crate::history::{
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
-    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
-    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
+    WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
@@ -114,6 +115,13 @@ impl Engine {
 
     pub fn diff(&self, options: WorkStateDiffOptions) -> Result<WorkStateDiff> {
         self.store.diff(&options)
+    }
+
+    pub fn restore_work_state(
+        &mut self,
+        options: WorkStateRestoreOptions,
+    ) -> Result<WorkStateRestoreCommit> {
+        self.store.restore_work_state(&options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

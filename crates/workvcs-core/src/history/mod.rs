@@ -13,6 +13,7 @@ mod record;
 mod reference;
 mod replay;
 mod resource;
+mod restore;
 mod task;
 mod why;
 
@@ -74,6 +75,7 @@ pub use resource::{
     ResourceSnapshot, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
     WorkspaceResourceAssociationSnapshot,
 };
+pub use restore::{WorkStateRestoreCommit, WorkStateRestoreOptions};
 pub use task::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
@@ -125,6 +127,7 @@ pub(crate) use resource::{
     associate_workspace_resource, bind_resource, create_resource, record_resource_observation,
     resource, resource_observation,
 };
+pub(crate) use restore::restore_work_state;
 pub(crate) use task::{
     acceptance_criterion_at, acceptance_criterion_effective_status,
     acceptance_criterion_effective_status_for_branch, create_acceptance_criterion, create_task,

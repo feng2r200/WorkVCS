@@ -1,4 +1,5 @@
 use super::evidence::EVIDENCE_OBJECT_KIND;
+use super::knowledge::KNOWLEDGE_ENTITY_KIND;
 use super::resource::{RESOURCE_OBJECT_KIND, RESOURCE_OBSERVATION_OBJECT_KIND};
 use super::task::{
     ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_ENTITY_KIND,
@@ -30,6 +31,8 @@ const EVIDENCED_BY_RELATION_TYPE: &str = "evidenced_by";
 const RELATION_OBJECT_KIND: &str = "relation";
 const SESSION_OBJECT_KIND: &str = "session";
 const SESSION_DIFF_OBJECT_KIND: &str = "session_diff";
+const KNOWLEDGE_SPACE_OBJECT_KIND: &str = "knowledge_space";
+const KNOWLEDGE_EXPOSURE_OBJECT_KIND: &str = "knowledge_exposure";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BundleExportOptions {
@@ -441,6 +444,11 @@ pub struct BundleImportApplyResult {
     pub imported_resources: usize,
     pub imported_resource_observations: usize,
     pub imported_verification_bases: usize,
+    pub imported_knowledge_spaces: usize,
+    pub imported_knowledge_exposures: usize,
+    pub imported_knowledge_exposure_local_sources: usize,
+    pub imported_knowledge_exposure_transitions: usize,
+    pub imported_knowledge_exposure_source_statuses: usize,
     pub imported_relation_versions: usize,
     pub updated_branch_heads: usize,
 }
@@ -869,6 +877,11 @@ struct BundleSameStoreApplyDocument {
     verification_bases: Vec<BundleVerificationBasisRef>,
     verification_resource_bases: Vec<BundleVerificationResourceBasisRef>,
     verification_semantic_dependencies: Vec<BundleVerificationSemanticDependencyRef>,
+    knowledge_spaces: Vec<BundleKnowledgeSpaceRef>,
+    knowledge_exposures: Vec<BundleKnowledgeExposureRef>,
+    knowledge_exposure_local_sources: Vec<BundleKnowledgeExposureLocalSourceRef>,
+    knowledge_exposure_transitions: Vec<BundleKnowledgeExposureTransitionRef>,
+    knowledge_exposure_source_statuses: Vec<BundleKnowledgeExposureSourceStatusRef>,
     entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
     relation_membership_changes: Vec<BundleRelationMembershipChangeRef>,
 }
@@ -910,8 +923,22 @@ struct BundleImportApplyCounts {
     imported_resources: usize,
     imported_resource_observations: usize,
     imported_verification_bases: usize,
+    imported_knowledge_spaces: usize,
+    imported_knowledge_exposures: usize,
+    imported_knowledge_exposure_local_sources: usize,
+    imported_knowledge_exposure_transitions: usize,
+    imported_knowledge_exposure_source_statuses: usize,
     imported_relation_versions: usize,
     updated_branch_heads: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BundleKnowledgeExposureApplyCounts {
+    imported_knowledge_spaces: usize,
+    imported_knowledge_exposures: usize,
+    imported_knowledge_exposure_local_sources: usize,
+    imported_knowledge_exposure_transitions: usize,
+    imported_knowledge_exposure_source_statuses: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1476,6 +1503,11 @@ pub(crate) fn apply_bundle_import(
             imported_resources: 0,
             imported_resource_observations: 0,
             imported_verification_bases: 0,
+            imported_knowledge_spaces: 0,
+            imported_knowledge_exposures: 0,
+            imported_knowledge_exposure_local_sources: 0,
+            imported_knowledge_exposure_transitions: 0,
+            imported_knowledge_exposure_source_statuses: 0,
             imported_relation_versions: 0,
             updated_branch_heads: 0,
         });
@@ -1526,6 +1558,8 @@ pub(crate) fn apply_bundle_import(
     let imported_evidences = apply_evidences(&transaction, &document, &payload_lookup)?;
     let imported_verification_bases =
         apply_verification_bases(&transaction, &document, &payload_lookup)?;
+    let imported_knowledge_exposures =
+        apply_knowledge_exposure_closure(&transaction, &document, &payload_lookup)?;
     let imported_relation_versions =
         apply_relation_versions(&transaction, &document, &payload_lookup, now_us)?;
     let imported_commits = apply_commit_closure(&transaction, &document, &payload_lookup)?;
@@ -1545,6 +1579,14 @@ pub(crate) fn apply_bundle_import(
         imported_resources,
         imported_resource_observations,
         imported_verification_bases,
+        imported_knowledge_spaces: imported_knowledge_exposures.imported_knowledge_spaces,
+        imported_knowledge_exposures: imported_knowledge_exposures.imported_knowledge_exposures,
+        imported_knowledge_exposure_local_sources: imported_knowledge_exposures
+            .imported_knowledge_exposure_local_sources,
+        imported_knowledge_exposure_transitions: imported_knowledge_exposures
+            .imported_knowledge_exposure_transitions,
+        imported_knowledge_exposure_source_statuses: imported_knowledge_exposures
+            .imported_knowledge_exposure_source_statuses,
         imported_relation_versions,
         updated_branch_heads,
     };
@@ -1585,6 +1627,12 @@ pub(crate) fn apply_bundle_import(
         imported_resources: counts.imported_resources,
         imported_resource_observations: counts.imported_resource_observations,
         imported_verification_bases: counts.imported_verification_bases,
+        imported_knowledge_spaces: counts.imported_knowledge_spaces,
+        imported_knowledge_exposures: counts.imported_knowledge_exposures,
+        imported_knowledge_exposure_local_sources: counts.imported_knowledge_exposure_local_sources,
+        imported_knowledge_exposure_transitions: counts.imported_knowledge_exposure_transitions,
+        imported_knowledge_exposure_source_statuses: counts
+            .imported_knowledge_exposure_source_statuses,
         imported_relation_versions: counts.imported_relation_versions,
         updated_branch_heads: counts.updated_branch_heads,
     })
@@ -5656,6 +5704,41 @@ fn bundle_import_apply_detail_json(
             )?,
         )?,
         integer_field(
+            "imported_knowledge_spaces",
+            usize_to_i64(
+                "imported_knowledge_spaces",
+                counts.imported_knowledge_spaces,
+            )?,
+        )?,
+        integer_field(
+            "imported_knowledge_exposures",
+            usize_to_i64(
+                "imported_knowledge_exposures",
+                counts.imported_knowledge_exposures,
+            )?,
+        )?,
+        integer_field(
+            "imported_knowledge_exposure_local_sources",
+            usize_to_i64(
+                "imported_knowledge_exposure_local_sources",
+                counts.imported_knowledge_exposure_local_sources,
+            )?,
+        )?,
+        integer_field(
+            "imported_knowledge_exposure_transitions",
+            usize_to_i64(
+                "imported_knowledge_exposure_transitions",
+                counts.imported_knowledge_exposure_transitions,
+            )?,
+        )?,
+        integer_field(
+            "imported_knowledge_exposure_source_statuses",
+            usize_to_i64(
+                "imported_knowledge_exposure_source_statuses",
+                counts.imported_knowledge_exposure_source_statuses,
+            )?,
+        )?,
+        integer_field(
             "imported_relation_versions",
             usize_to_i64(
                 "imported_relation_versions",
@@ -5781,6 +5864,7 @@ fn same_store_entity_kind_supported(entity_kind: &str) -> bool {
             | ACCEPTANCE_CRITERION_ENTITY_KIND
             | VERIFICATION_REQUIREMENT_ENTITY_KIND
             | VERIFICATION_ENTITY_KIND
+            | KNOWLEDGE_ENTITY_KIND
     )
 }
 
@@ -6106,6 +6190,152 @@ fn apply_verification_bases(
         }
     }
     Ok(imported)
+}
+
+fn apply_knowledge_exposure_closure(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<BundleKnowledgeExposureApplyCounts> {
+    let mut counts = BundleKnowledgeExposureApplyCounts::default();
+
+    for space in &document.knowledge_spaces {
+        ensure_object_identity_row(
+            transaction,
+            "knowledge_space",
+            &space.knowledge_space_id.raw_bytes(),
+            KNOWLEDGE_SPACE_OBJECT_KIND,
+            space.created_at_us,
+        )?;
+        if ensure_knowledge_space_row(transaction, space)? {
+            counts.imported_knowledge_spaces += 1;
+        }
+    }
+
+    for exposure in &document.knowledge_exposures {
+        require_knowledge_space_row(transaction, exposure.knowledge_space_id)?;
+        ensure_object_identity_row(
+            transaction,
+            "knowledge_exposure",
+            &exposure.exposure_id.raw_bytes(),
+            KNOWLEDGE_EXPOSURE_OBJECT_KIND,
+            exposure.created_at_us,
+        )?;
+        if ensure_knowledge_exposure_row(transaction, exposure)? {
+            counts.imported_knowledge_exposures += 1;
+        }
+    }
+
+    for source in &document.knowledge_exposure_local_sources {
+        require_knowledge_exposure_row(transaction, source.exposure_id)?;
+        require_workspace_row(transaction, source.source_workspace_id)?;
+        require_entity_kind(
+            transaction,
+            source.source_knowledge_entity_id,
+            KNOWLEDGE_ENTITY_KIND,
+        )?;
+        require_entity_version_row(
+            transaction,
+            source.source_knowledge_entity_id,
+            source.source_knowledge_entity_version_id,
+        )?;
+        let owner = CanonicalValue::object(vec![
+            string_field("exposure_id", source.exposure_id.to_string()),
+            string_field(
+                "source_workspace_id",
+                source.source_workspace_id.to_string(),
+            ),
+            string_field(
+                "source_knowledge_entity_id",
+                source.source_knowledge_entity_id.to_string(),
+            ),
+            string_field(
+                "source_knowledge_entity_version_id",
+                source.source_knowledge_entity_version_id.to_string(),
+            ),
+        ])?;
+        let source_knowledge_state_json = payload_lookup.required_json(
+            "knowledge_exposure_source_knowledge_state",
+            owner,
+            Some(source.source_knowledge_state_json_digest),
+            Some(source.source_knowledge_state_json_size_bytes),
+        )?;
+        let source_knowledge_state_value = validate_canonical_json_value(
+            "bundle knowledge_exposure source Knowledge state_json",
+            &source_knowledge_state_json,
+        )?;
+        if entity_version_digest(&source_knowledge_state_value)?
+            != source.source_knowledge_state_digest
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "bundle KnowledgeExposure {} source KnowledgeVersion digest does not match payload",
+                source.exposure_id
+            )));
+        }
+        if ensure_knowledge_exposure_local_source_row(transaction, source)? {
+            counts.imported_knowledge_exposure_local_sources += 1;
+        }
+    }
+
+    for exposure in &document.knowledge_exposures {
+        let ordered_transitions =
+            ordered_knowledge_exposure_transitions(document, exposure.exposure_id)?;
+        for transition in &ordered_transitions {
+            if transition.event_id.is_some() {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "bundle KnowledgeExposure {} transition {} with event_id is outside same-Store apply scope",
+                    transition.exposure_id, transition.transition_id
+                )));
+            }
+            let owner = CanonicalValue::object(vec![
+                string_field("exposure_id", transition.exposure_id.to_string()),
+                string_field("transition_id", transition.transition_id.to_string()),
+            ])?;
+            let detail_json = payload_lookup.required_json(
+                "knowledge_exposure_transition_detail",
+                owner,
+                Some(transition.detail_digest),
+                Some(transition.detail_size_bytes),
+            )?;
+            require_canonical_object_json(
+                "bundle knowledge_exposure_transition.detail_json",
+                &detail_json,
+            )?;
+            if ensure_knowledge_exposure_transition_row(transaction, transition, &detail_json)? {
+                counts.imported_knowledge_exposure_transitions += 1;
+            }
+        }
+        let current = ordered_transitions.last().copied().ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {} has no transitions",
+                exposure.exposure_id
+            ))
+        })?;
+        ensure_knowledge_exposure_current_row(transaction, current)?;
+    }
+
+    for source_status in &document.knowledge_exposure_source_statuses {
+        require_knowledge_exposure_row(transaction, source_status.exposure_id)?;
+        let owner = CanonicalValue::object(vec![string_field(
+            "exposure_id",
+            source_status.exposure_id.to_string(),
+        )])?;
+        let detail_json = payload_lookup.required_json(
+            "knowledge_exposure_source_status_detail",
+            owner,
+            Some(source_status.detail_digest),
+            Some(source_status.detail_size_bytes),
+        )?;
+        require_canonical_object_json(
+            "bundle knowledge_exposure_source_status.detail_json",
+            &detail_json,
+        )?;
+        if ensure_knowledge_exposure_source_status_row(transaction, source_status, &detail_json)? {
+            counts.imported_knowledge_exposure_source_statuses += 1;
+        }
+    }
+
+    Ok(counts)
 }
 
 fn apply_relation_versions(
@@ -7340,6 +7570,420 @@ fn ensure_verification_resource_basis_row(
     Ok(())
 }
 
+fn require_workspace_row(transaction: &Transaction<'_>, workspace_id: WorkspaceId) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM workspace
+             WHERE workspace_id = ?1",
+            params![&workspace_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!("Workspace {workspace_id} is missing"))
+        })
+}
+
+fn ensure_knowledge_space_row(
+    transaction: &Transaction<'_>,
+    space: &BundleKnowledgeSpaceRef,
+) -> Result<bool> {
+    let existing = transaction
+        .query_row(
+            "SELECT name, created_at_us
+             FROM knowledge_space
+             WHERE knowledge_space_id = ?1",
+            params![&space.knowledge_space_id.raw_bytes()[..]],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((name, created_at_us)) = existing {
+        if name != space.name || created_at_us != space.created_at_us {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "KnowledgeSpace {} exists with different content",
+                space.knowledge_space_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    let existing_for_name = transaction
+        .query_row(
+            "SELECT knowledge_space_id
+             FROM knowledge_space
+             WHERE name = ?1",
+            params![space.name],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(existing_knowledge_space_id) = existing_for_name {
+        let existing_knowledge_space_id = decode_knowledge_space_id(
+            "knowledge_space.knowledge_space_id",
+            existing_knowledge_space_id,
+        )?;
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "KnowledgeSpace name {:?} already belongs to {}",
+            space.name, existing_knowledge_space_id
+        )));
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO knowledge_space(knowledge_space_id, name, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &space.knowledge_space_id.raw_bytes()[..],
+                space.name,
+                space.created_at_us,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn require_knowledge_space_row(
+    transaction: &Transaction<'_>,
+    knowledge_space_id: KnowledgeSpaceId,
+) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM knowledge_space
+             WHERE knowledge_space_id = ?1",
+            params![&knowledge_space_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!(
+                "KnowledgeSpace {knowledge_space_id} is missing"
+            ))
+        })
+}
+
+fn ensure_knowledge_exposure_row(
+    transaction: &Transaction<'_>,
+    exposure: &BundleKnowledgeExposureRef,
+) -> Result<bool> {
+    let existing = transaction
+        .query_row(
+            "SELECT knowledge_space_id, created_at_us
+             FROM knowledge_exposure
+             WHERE exposure_id = ?1",
+            params![&exposure.exposure_id.raw_bytes()[..]],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((knowledge_space_id, created_at_us)) = existing {
+        if decode_knowledge_space_id("knowledge_exposure.knowledge_space_id", knowledge_space_id)?
+            != exposure.knowledge_space_id
+            || created_at_us != exposure.created_at_us
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "KnowledgeExposure {} exists with different content",
+                exposure.exposure_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO knowledge_exposure(exposure_id, knowledge_space_id, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &exposure.exposure_id.raw_bytes()[..],
+                &exposure.knowledge_space_id.raw_bytes()[..],
+                exposure.created_at_us,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn require_knowledge_exposure_row(
+    transaction: &Transaction<'_>,
+    exposure_id: ExposureId,
+) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM knowledge_exposure
+             WHERE exposure_id = ?1",
+            params![&exposure_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!(
+                "KnowledgeExposure {exposure_id} is missing"
+            ))
+        })
+}
+
+fn ensure_knowledge_exposure_local_source_row(
+    transaction: &Transaction<'_>,
+    source: &BundleKnowledgeExposureLocalSourceRef,
+) -> Result<bool> {
+    let existing = transaction
+        .query_row(
+            "SELECT workspace_id, knowledge_entity_id, knowledge_entity_version_id
+             FROM knowledge_exposure_local_source
+             WHERE exposure_id = ?1",
+            params![&source.exposure_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((workspace_id, knowledge_entity_id, knowledge_entity_version_id)) = existing {
+        if decode_workspace_id("knowledge_exposure_local_source.workspace_id", workspace_id)?
+            != source.source_workspace_id
+            || decode_entity_id(
+                "knowledge_exposure_local_source.knowledge_entity_id",
+                knowledge_entity_id,
+            )? != source.source_knowledge_entity_id
+            || decode_entity_version_id(
+                "knowledge_exposure_local_source.knowledge_entity_version_id",
+                knowledge_entity_version_id,
+            )? != source.source_knowledge_entity_version_id
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "KnowledgeExposure {} local source exists with different content",
+                source.exposure_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO knowledge_exposure_local_source(
+                exposure_id,
+                workspace_id,
+                knowledge_entity_id,
+                knowledge_entity_version_id
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &source.exposure_id.raw_bytes()[..],
+                &source.source_workspace_id.raw_bytes()[..],
+                &source.source_knowledge_entity_id.raw_bytes()[..],
+                &source.source_knowledge_entity_version_id.raw_bytes()[..],
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn ensure_knowledge_exposure_transition_row(
+    transaction: &Transaction<'_>,
+    transition: &BundleKnowledgeExposureTransitionRef,
+    detail_json: &str,
+) -> Result<bool> {
+    let existing = transaction
+        .query_row(
+            "SELECT exposure_id,
+                    previous_transition_id,
+                    lifecycle_status,
+                    changed_at_us,
+                    event_id,
+                    detail_json
+             FROM knowledge_exposure_transition
+             WHERE transition_id = ?1",
+            params![&transition.transition_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((
+        exposure_id,
+        previous_transition_id,
+        lifecycle_status,
+        changed_at_us,
+        event_id,
+        stored_detail_json,
+    )) = existing
+    {
+        if decode_exposure_id("knowledge_exposure_transition.exposure_id", exposure_id)?
+            != transition.exposure_id
+            || decode_optional_exposure_transition_id(
+                "knowledge_exposure_transition.previous_transition_id",
+                previous_transition_id,
+            )? != transition.previous_transition_id
+            || lifecycle_status != transition.lifecycle_status
+            || changed_at_us != transition.changed_at_us
+            || decode_optional_event_id("knowledge_exposure_transition.event_id", event_id)?
+                != transition.event_id
+            || stored_detail_json != detail_json
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "KnowledgeExposure {} transition {} exists with different content",
+                transition.exposure_id, transition.transition_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    let previous_transition_id_bytes = transition.previous_transition_id.map(|id| id.raw_bytes());
+    let event_id_bytes = transition.event_id.map(|id| id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO knowledge_exposure_transition(
+                transition_id,
+                exposure_id,
+                previous_transition_id,
+                lifecycle_status,
+                changed_at_us,
+                event_id,
+                detail_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &transition.transition_id.raw_bytes()[..],
+                &transition.exposure_id.raw_bytes()[..],
+                previous_transition_id_bytes
+                    .as_ref()
+                    .map(|bytes| &bytes[..]),
+                transition.lifecycle_status,
+                transition.changed_at_us,
+                event_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                detail_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn ensure_knowledge_exposure_current_row(
+    transaction: &Transaction<'_>,
+    current: &BundleKnowledgeExposureTransitionRef,
+) -> Result<()> {
+    let existing = transaction
+        .query_row(
+            "SELECT transition_id, lifecycle_status, updated_at_us
+             FROM knowledge_exposure_current
+             WHERE exposure_id = ?1",
+            params![&current.exposure_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((transition_id, lifecycle_status, updated_at_us)) = existing {
+        if decode_exposure_transition_id("knowledge_exposure_current.transition_id", transition_id)?
+            != current.transition_id
+            || lifecycle_status != current.lifecycle_status
+            || updated_at_us != current.changed_at_us
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "KnowledgeExposure {} current projection exists with different content",
+                current.exposure_id
+            )));
+        }
+        return Ok(());
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO knowledge_exposure_current(
+                exposure_id,
+                transition_id,
+                lifecycle_status,
+                updated_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &current.exposure_id.raw_bytes()[..],
+                &current.transition_id.raw_bytes()[..],
+                current.lifecycle_status,
+                current.changed_at_us,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn ensure_knowledge_exposure_source_status_row(
+    transaction: &Transaction<'_>,
+    source_status: &BundleKnowledgeExposureSourceStatusRef,
+    detail_json: &str,
+) -> Result<bool> {
+    let existing = transaction
+        .query_row(
+            "SELECT source_status, checked_at_us, detail_json
+             FROM knowledge_exposure_source_status
+             WHERE exposure_id = ?1",
+            params![&source_status.exposure_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((stored_source_status, checked_at_us, stored_detail_json)) = existing {
+        if stored_source_status != source_status.source_status
+            || checked_at_us != source_status.checked_at_us
+            || stored_detail_json != detail_json
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "KnowledgeExposure {} source status exists with different content",
+                source_status.exposure_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO knowledge_exposure_source_status(
+                exposure_id,
+                source_status,
+                checked_at_us,
+                detail_json
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &source_status.exposure_id.raw_bytes()[..],
+                source_status.source_status,
+                source_status.checked_at_us,
+                detail_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
 fn ensure_relation_object_identity(
     transaction: &Transaction<'_>,
     relation_id: RelationId,
@@ -8049,6 +8693,74 @@ fn relation_created_at_us(
         .min()
 }
 
+fn ordered_knowledge_exposure_transitions(
+    document: &BundleSameStoreApplyDocument,
+    exposure_id: ExposureId,
+) -> Result<Vec<&BundleKnowledgeExposureTransitionRef>> {
+    let transitions = document
+        .knowledge_exposure_transitions
+        .iter()
+        .filter(|transition| transition.exposure_id == exposure_id)
+        .collect::<Vec<_>>();
+    if transitions.is_empty() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "bundle KnowledgeExposure {exposure_id} has no transitions"
+        )));
+    }
+
+    let mut by_id = BTreeMap::new();
+    let mut child_by_previous = BTreeMap::new();
+    let mut root = None;
+    for transition in transitions {
+        if by_id.insert(transition.transition_id, transition).is_some() {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {exposure_id} transition {} appears more than once",
+                transition.transition_id
+            )));
+        }
+        if let Some(previous_transition_id) = transition.previous_transition_id {
+            if child_by_previous
+                .insert(previous_transition_id, transition.transition_id)
+                .is_some()
+            {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "bundle KnowledgeExposure {exposure_id} transition {previous_transition_id} has multiple successors"
+                )));
+            }
+        } else if root.replace(transition.transition_id).is_some() {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {exposure_id} has multiple initial transitions"
+            )));
+        }
+    }
+
+    let mut ordered = Vec::new();
+    let mut current_transition_id = root.ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "bundle KnowledgeExposure {exposure_id} has no initial transition"
+        ))
+    })?;
+    loop {
+        let transition = by_id.get(&current_transition_id).copied().ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {exposure_id} transition {current_transition_id} is missing"
+            ))
+        })?;
+        ordered.push(transition);
+        let Some(next_transition_id) = child_by_previous.get(&current_transition_id).copied()
+        else {
+            break;
+        };
+        current_transition_id = next_transition_id;
+    }
+    if ordered.len() != by_id.len() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "bundle KnowledgeExposure {exposure_id} transition chain is disconnected"
+        )));
+    }
+    Ok(ordered)
+}
+
 fn manifest_commit_digest_for_document(
     document: &BundleSameStoreApplyDocument,
     commit_id: CommitId,
@@ -8179,52 +8891,46 @@ fn parse_bundle_manifest_summary(
 fn bundle_manifest_supports_same_store_apply(
     value: &CanonicalValue,
 ) -> std::result::Result<bool, String> {
-    let unsupported_array_fields = [
-        "knowledge_spaces",
-        "knowledge_exposures",
-        "knowledge_exposure_local_sources",
-        "knowledge_exposure_transitions",
-        "knowledge_exposure_source_statuses",
-        "checkpoint_candidates",
-    ];
+    let unsupported_array_fields = ["checkpoint_candidates"];
     for field in unsupported_array_fields {
         if !array_field_ref(value, "bundle manifest", field)?.is_empty() {
             return Ok(false);
         }
     }
+    let target = object_field_ref(value, "bundle manifest", "target")?;
+    let workspace_id = parse_workspace_id_field(target, "bundle manifest target", "workspace_id")?;
+    let entity_versions = array_field_ref(value, "bundle manifest", "entity_versions")?
+        .iter()
+        .map(|entity_version| {
+            parse_bundle_entity_version_ref(entity_version).map_err(|error| error.to_string())
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut expected_acceptance_criterion_ids = BTreeSet::new();
     let mut expected_verification_requirement_ids = BTreeSet::new();
     let mut expected_verification_ids = BTreeSet::new();
     let mut entity_kinds_by_id = BTreeMap::new();
-    for entity_version in array_field_ref(value, "bundle manifest", "entity_versions")? {
-        let entity_id = parse_entity_id_field(
-            entity_version,
-            "bundle manifest entity version",
-            "entity_id",
-        )?;
-        let entity_kind = string_field_value(
-            entity_version,
-            "bundle manifest entity version",
-            "entity_kind",
-        )?;
-        if let Some(existing_kind) = entity_kinds_by_id.insert(entity_id, entity_kind.to_owned())
-            && existing_kind != entity_kind
+    for entity_version in &entity_versions {
+        if let Some(existing_kind) =
+            entity_kinds_by_id.insert(entity_version.entity_id, entity_version.entity_kind.clone())
+            && existing_kind != entity_version.entity_kind
         {
             return Err(format!(
-                "bundle manifest entity {entity_id} has inconsistent entity kinds"
+                "bundle manifest entity {} has inconsistent entity kinds",
+                entity_version.entity_id
             ));
         }
-        match entity_kind {
+        match entity_version.entity_kind.as_str() {
             TASK_ENTITY_KIND => {}
             ACCEPTANCE_CRITERION_ENTITY_KIND => {
-                expected_acceptance_criterion_ids.insert(entity_id);
+                expected_acceptance_criterion_ids.insert(entity_version.entity_id);
             }
             VERIFICATION_REQUIREMENT_ENTITY_KIND => {
-                expected_verification_requirement_ids.insert(entity_id);
+                expected_verification_requirement_ids.insert(entity_version.entity_id);
             }
             VERIFICATION_ENTITY_KIND => {
-                expected_verification_ids.insert(entity_id);
+                expected_verification_ids.insert(entity_version.entity_id);
             }
+            KNOWLEDGE_ENTITY_KIND => {}
             _ => return Ok(false),
         }
     }
@@ -8308,13 +9014,256 @@ fn bundle_manifest_supports_same_store_apply(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let session_diff_session_ids =
         unique_session_diff_session_ids(&session_diffs).map_err(|error| error.to_string())?;
+    let knowledge_spaces = optional_array_field_ref(value, "bundle manifest", "knowledge_spaces")?
+        .iter()
+        .map(|space| parse_bundle_knowledge_space_ref(space).map_err(|error| error.to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let knowledge_exposures =
+        optional_array_field_ref(value, "bundle manifest", "knowledge_exposures")?
+            .iter()
+            .map(|exposure| {
+                parse_bundle_knowledge_exposure_ref(exposure).map_err(|error| error.to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    let knowledge_exposure_local_sources =
+        optional_array_field_ref(value, "bundle manifest", "knowledge_exposure_local_sources")?
+            .iter()
+            .map(|source| {
+                parse_bundle_knowledge_exposure_local_source_ref(source)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    let knowledge_exposure_transitions =
+        optional_array_field_ref(value, "bundle manifest", "knowledge_exposure_transitions")?
+            .iter()
+            .map(|transition| {
+                parse_bundle_knowledge_exposure_transition_ref(transition)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    let knowledge_exposure_source_statuses = optional_array_field_ref(
+        value,
+        "bundle manifest",
+        "knowledge_exposure_source_statuses",
+    )?
+    .iter()
+    .map(|source_status| {
+        parse_bundle_knowledge_exposure_source_status_ref(source_status)
+            .map_err(|error| error.to_string())
+    })
+    .collect::<std::result::Result<Vec<_>, _>>()?;
+    let knowledge_exposure_supported = bundle_manifest_knowledge_exposure_apply_supported(
+        workspace_id,
+        &entity_versions,
+        &knowledge_spaces,
+        &knowledge_exposures,
+        &knowledge_exposure_local_sources,
+        &knowledge_exposure_transitions,
+        &knowledge_exposure_source_statuses,
+    )?;
     Ok(
         acceptance_criterion_ids == expected_acceptance_criterion_ids
             && verification_requirement_ids == expected_verification_requirement_ids
             && verification_basis_ids == expected_verification_ids
             && session_ids == source_session_ids
-            && session_diff_session_ids == source_session_ids,
+            && session_diff_session_ids == source_session_ids
+            && knowledge_exposure_supported,
     )
+}
+
+fn bundle_manifest_knowledge_exposure_apply_supported(
+    workspace_id: WorkspaceId,
+    entity_versions: &[BundleEntityVersionRef],
+    knowledge_spaces: &[BundleKnowledgeSpaceRef],
+    knowledge_exposures: &[BundleKnowledgeExposureRef],
+    knowledge_exposure_local_sources: &[BundleKnowledgeExposureLocalSourceRef],
+    knowledge_exposure_transitions: &[BundleKnowledgeExposureTransitionRef],
+    knowledge_exposure_source_statuses: &[BundleKnowledgeExposureSourceStatusRef],
+) -> std::result::Result<bool, String> {
+    let knowledge_space_ids = unique_knowledge_space_ids_for_manifest(knowledge_spaces)?;
+    let knowledge_exposure_ids = unique_knowledge_exposure_ids_for_manifest(knowledge_exposures)?;
+    let local_source_exposure_ids =
+        unique_knowledge_exposure_local_source_ids_for_manifest(knowledge_exposure_local_sources)?;
+    let source_status_exposure_ids = unique_knowledge_exposure_source_status_ids_for_manifest(
+        knowledge_exposure_source_statuses,
+    )?;
+    let transition_exposure_ids =
+        validate_knowledge_exposure_transition_chains_for_manifest(knowledge_exposure_transitions)?;
+
+    if local_source_exposure_ids != knowledge_exposure_ids
+        || source_status_exposure_ids != knowledge_exposure_ids
+        || transition_exposure_ids != knowledge_exposure_ids
+    {
+        return Ok(false);
+    }
+    for exposure in knowledge_exposures {
+        if !knowledge_space_ids.contains(&exposure.knowledge_space_id) {
+            return Ok(false);
+        }
+    }
+    let entity_versions = entity_versions
+        .iter()
+        .map(|entity_version| {
+            (
+                entity_version.entity_id,
+                entity_version.entity_version_id,
+                entity_version.entity_kind.as_str(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    for source in knowledge_exposure_local_sources {
+        if source.source_workspace_id != workspace_id {
+            return Ok(false);
+        }
+        if !entity_versions.contains(&(
+            source.source_knowledge_entity_id,
+            source.source_knowledge_entity_version_id,
+            KNOWLEDGE_ENTITY_KIND,
+        )) {
+            return Ok(false);
+        }
+    }
+    Ok(!knowledge_exposure_transitions
+        .iter()
+        .any(|transition| transition.event_id.is_some()))
+}
+
+fn unique_knowledge_space_ids_for_manifest(
+    spaces: &[BundleKnowledgeSpaceRef],
+) -> std::result::Result<BTreeSet<KnowledgeSpaceId>, String> {
+    let mut ids = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    for space in spaces {
+        if !ids.insert(space.knowledge_space_id) {
+            return Err(format!(
+                "bundle KnowledgeSpace {} appears more than once",
+                space.knowledge_space_id
+            ));
+        }
+        if !names.insert(space.name.clone()) {
+            return Err(format!(
+                "bundle KnowledgeSpace name {:?} appears more than once",
+                space.name
+            ));
+        }
+    }
+    Ok(ids)
+}
+
+fn unique_knowledge_exposure_ids_for_manifest(
+    exposures: &[BundleKnowledgeExposureRef],
+) -> std::result::Result<BTreeSet<ExposureId>, String> {
+    let mut ids = BTreeSet::new();
+    for exposure in exposures {
+        if !ids.insert(exposure.exposure_id) {
+            return Err(format!(
+                "bundle KnowledgeExposure {} appears more than once",
+                exposure.exposure_id
+            ));
+        }
+    }
+    Ok(ids)
+}
+
+fn unique_knowledge_exposure_local_source_ids_for_manifest(
+    sources: &[BundleKnowledgeExposureLocalSourceRef],
+) -> std::result::Result<BTreeSet<ExposureId>, String> {
+    let mut ids = BTreeSet::new();
+    for source in sources {
+        if !ids.insert(source.exposure_id) {
+            return Err(format!(
+                "bundle KnowledgeExposure {} has more than one local source",
+                source.exposure_id
+            ));
+        }
+    }
+    Ok(ids)
+}
+
+fn unique_knowledge_exposure_source_status_ids_for_manifest(
+    statuses: &[BundleKnowledgeExposureSourceStatusRef],
+) -> std::result::Result<BTreeSet<ExposureId>, String> {
+    let mut ids = BTreeSet::new();
+    for status in statuses {
+        if !ids.insert(status.exposure_id) {
+            return Err(format!(
+                "bundle KnowledgeExposure {} has more than one source status",
+                status.exposure_id
+            ));
+        }
+    }
+    Ok(ids)
+}
+
+fn validate_knowledge_exposure_transition_chains_for_manifest(
+    transitions: &[BundleKnowledgeExposureTransitionRef],
+) -> std::result::Result<BTreeSet<ExposureId>, String> {
+    let mut by_exposure: BTreeMap<ExposureId, Vec<&BundleKnowledgeExposureTransitionRef>> =
+        BTreeMap::new();
+    for transition in transitions {
+        if transition.previous_transition_id == Some(transition.transition_id) {
+            return Err(format!(
+                "bundle KnowledgeExposure {} transition {} references itself",
+                transition.exposure_id, transition.transition_id
+            ));
+        }
+        by_exposure
+            .entry(transition.exposure_id)
+            .or_default()
+            .push(transition);
+    }
+    for (exposure_id, exposure_transitions) in &by_exposure {
+        validate_knowledge_exposure_transition_chain_for_manifest(
+            *exposure_id,
+            exposure_transitions,
+        )?;
+    }
+    Ok(by_exposure.keys().copied().collect())
+}
+
+fn validate_knowledge_exposure_transition_chain_for_manifest(
+    exposure_id: ExposureId,
+    transitions: &[&BundleKnowledgeExposureTransitionRef],
+) -> std::result::Result<(), String> {
+    let mut ids = BTreeSet::new();
+    let mut previous_ids = BTreeSet::new();
+    let mut root_count = 0;
+    for transition in transitions {
+        if !ids.insert(transition.transition_id) {
+            return Err(format!(
+                "bundle KnowledgeExposure {exposure_id} transition {} appears more than once",
+                transition.transition_id
+            ));
+        }
+        if let Some(previous_id) = transition.previous_transition_id {
+            if !previous_ids.insert(previous_id) {
+                return Err(format!(
+                    "bundle KnowledgeExposure {exposure_id} transition {previous_id} has multiple successors"
+                ));
+            }
+        } else {
+            root_count += 1;
+        }
+    }
+    if root_count != 1 {
+        return Err(format!(
+            "bundle KnowledgeExposure {exposure_id} must have exactly one initial transition"
+        ));
+    }
+    for previous_id in &previous_ids {
+        if !ids.contains(previous_id) {
+            return Err(format!(
+                "bundle KnowledgeExposure {exposure_id} transition {previous_id} is referenced but missing"
+            ));
+        }
+    }
+    let head_count = ids.difference(&previous_ids).count();
+    if head_count != 1 {
+        return Err(format!(
+            "bundle KnowledgeExposure {exposure_id} must have exactly one current transition head"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_bundle_manifest_summary_integrity(
@@ -8732,6 +9681,38 @@ fn parse_bundle_same_store_apply_document(
     .iter()
     .map(parse_bundle_verification_semantic_dependency_ref)
     .collect::<Result<Vec<_>>>()?;
+    let knowledge_spaces = optional_array_field_ref(value, "bundle manifest", "knowledge_spaces")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_knowledge_space_ref)
+        .collect::<Result<Vec<_>>>()?;
+    let knowledge_exposures =
+        optional_array_field_ref(value, "bundle manifest", "knowledge_exposures")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_knowledge_exposure_ref)
+            .collect::<Result<Vec<_>>>()?;
+    let knowledge_exposure_local_sources =
+        optional_array_field_ref(value, "bundle manifest", "knowledge_exposure_local_sources")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_knowledge_exposure_local_source_ref)
+            .collect::<Result<Vec<_>>>()?;
+    let knowledge_exposure_transitions =
+        optional_array_field_ref(value, "bundle manifest", "knowledge_exposure_transitions")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_knowledge_exposure_transition_ref)
+            .collect::<Result<Vec<_>>>()?;
+    let knowledge_exposure_source_statuses = optional_array_field_ref(
+        value,
+        "bundle manifest",
+        "knowledge_exposure_source_statuses",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .iter()
+    .map(parse_bundle_knowledge_exposure_source_status_ref)
+    .collect::<Result<Vec<_>>>()?;
     let entity_membership_changes =
         array_field_ref(value, "bundle manifest", "entity_membership_changes")
             .map_err(WorkVcsError::QueryInvalid)?
@@ -8766,11 +9747,17 @@ fn parse_bundle_same_store_apply_document(
         verification_bases,
         verification_resource_bases,
         verification_semantic_dependencies,
+        knowledge_spaces,
+        knowledge_exposures,
+        knowledge_exposure_local_sources,
+        knowledge_exposure_transitions,
+        knowledge_exposure_source_statuses,
         entity_membership_changes,
         relation_membership_changes,
     };
     validate_same_store_apply_identity_coverage(&document)?;
     validate_same_store_apply_provenance_coverage(&document)?;
+    validate_same_store_apply_knowledge_exposure_coverage(&document)?;
     validate_same_store_apply_relation_coverage(&document)?;
     Ok(document)
 }
@@ -9008,6 +9995,7 @@ fn validate_same_store_apply_identity_coverage(
             VERIFICATION_ENTITY_KIND => {
                 expected_verification_ids.insert(entity_version.entity_id);
             }
+            KNOWLEDGE_ENTITY_KIND => {}
             _ => {
                 return Err(WorkVcsError::QueryInvalid(format!(
                     "bundle entity {} kind {} is outside same-Store typed-entity apply scope",
@@ -9271,6 +10259,92 @@ fn validate_same_store_apply_provenance_coverage(
                 dependency.ordinal,
                 dependency.expected_entity_version_id,
                 dependency.dependency_entity_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_same_store_apply_knowledge_exposure_coverage(
+    document: &BundleSameStoreApplyDocument,
+) -> Result<()> {
+    let knowledge_space_ids = unique_knowledge_space_ids_for_manifest(&document.knowledge_spaces)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let knowledge_exposure_ids =
+        unique_knowledge_exposure_ids_for_manifest(&document.knowledge_exposures)
+            .map_err(WorkVcsError::QueryInvalid)?;
+    let local_source_exposure_ids = unique_knowledge_exposure_local_source_ids_for_manifest(
+        &document.knowledge_exposure_local_sources,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    let source_status_exposure_ids = unique_knowledge_exposure_source_status_ids_for_manifest(
+        &document.knowledge_exposure_source_statuses,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    let transition_exposure_ids = validate_knowledge_exposure_transition_chains_for_manifest(
+        &document.knowledge_exposure_transitions,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    if local_source_exposure_ids != knowledge_exposure_ids {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle KnowledgeExposure local sources do not cover KnowledgeExposure rows".to_owned(),
+        ));
+    }
+    if source_status_exposure_ids != knowledge_exposure_ids {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle KnowledgeExposure source statuses do not cover KnowledgeExposure rows"
+                .to_owned(),
+        ));
+    }
+    if transition_exposure_ids != knowledge_exposure_ids {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle KnowledgeExposure transitions do not cover KnowledgeExposure rows".to_owned(),
+        ));
+    }
+    for exposure in &document.knowledge_exposures {
+        if !knowledge_space_ids.contains(&exposure.knowledge_space_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {} references missing KnowledgeSpace {}",
+                exposure.exposure_id, exposure.knowledge_space_id
+            )));
+        }
+    }
+    let entity_versions = document
+        .entity_versions
+        .iter()
+        .map(|entity_version| {
+            (
+                entity_version.entity_id,
+                entity_version.entity_version_id,
+                entity_version.entity_kind.as_str(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    for source in &document.knowledge_exposure_local_sources {
+        if source.source_workspace_id != document.workspace_id {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {} source workspace {} is outside same-Workspace apply scope",
+                source.exposure_id, source.source_workspace_id
+            )));
+        }
+        if !entity_versions.contains(&(
+            source.source_knowledge_entity_id,
+            source.source_knowledge_entity_version_id,
+            KNOWLEDGE_ENTITY_KIND,
+        )) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {} references missing source KnowledgeVersion {} for entity {}",
+                source.exposure_id,
+                source.source_knowledge_entity_version_id,
+                source.source_knowledge_entity_id
+            )));
+        }
+    }
+    for transition in &document.knowledge_exposure_transitions {
+        if transition.event_id.is_some() {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {} transition {} with event_id is outside same-Store apply scope",
+                transition.exposure_id, transition.transition_id
             )));
         }
     }
@@ -10015,6 +11089,234 @@ fn parse_bundle_verification_semantic_dependency_ref(
     })
 }
 
+fn parse_bundle_knowledge_space_ref(value: &CanonicalValue) -> Result<BundleKnowledgeSpaceRef> {
+    let name = string_field_value(value, "bundle manifest knowledge space", "name")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest knowledge space name", &name)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let created_at_us =
+        integer_field_value(value, "bundle manifest knowledge space", "created_at_us")
+            .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest knowledge space created_at_us",
+        created_at_us,
+    )?;
+    Ok(BundleKnowledgeSpaceRef {
+        knowledge_space_id: parse_knowledge_space_id_field(
+            value,
+            "bundle manifest knowledge space",
+            "knowledge_space_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        name,
+        created_at_us,
+    })
+}
+
+fn parse_bundle_knowledge_exposure_ref(
+    value: &CanonicalValue,
+) -> Result<BundleKnowledgeExposureRef> {
+    let created_at_us =
+        integer_field_value(value, "bundle manifest knowledge exposure", "created_at_us")
+            .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest knowledge exposure created_at_us",
+        created_at_us,
+    )?;
+    Ok(BundleKnowledgeExposureRef {
+        exposure_id: parse_exposure_id_field(
+            value,
+            "bundle manifest knowledge exposure",
+            "exposure_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        knowledge_space_id: parse_knowledge_space_id_field(
+            value,
+            "bundle manifest knowledge exposure",
+            "knowledge_space_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        created_at_us,
+    })
+}
+
+fn parse_bundle_knowledge_exposure_local_source_ref(
+    value: &CanonicalValue,
+) -> Result<BundleKnowledgeExposureLocalSourceRef> {
+    let source_knowledge_state_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest knowledge exposure local source",
+        "source_knowledge_state_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest knowledge exposure source state_json size",
+        source_knowledge_state_json_size_bytes,
+    )?;
+    Ok(BundleKnowledgeExposureLocalSourceRef {
+        exposure_id: parse_exposure_id_field(
+            value,
+            "bundle manifest knowledge exposure local source",
+            "exposure_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        source_workspace_id: parse_workspace_id_field(
+            value,
+            "bundle manifest knowledge exposure local source",
+            "source_workspace_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        source_knowledge_entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest knowledge exposure local source",
+            "source_knowledge_entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        source_knowledge_entity_version_id: parse_entity_version_id_field(
+            value,
+            "bundle manifest knowledge exposure local source",
+            "source_knowledge_entity_version_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        source_knowledge_state_digest: parse_digest_field(
+            value,
+            "bundle manifest knowledge exposure local source",
+            "source_knowledge_state_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        source_knowledge_state_json_digest: parse_digest_field(
+            value,
+            "bundle manifest knowledge exposure local source",
+            "source_knowledge_state_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        source_knowledge_state_json_size_bytes,
+    })
+}
+
+fn parse_bundle_knowledge_exposure_transition_ref(
+    value: &CanonicalValue,
+) -> Result<BundleKnowledgeExposureTransitionRef> {
+    let lifecycle_status = string_field_value(
+        value,
+        "bundle manifest knowledge exposure transition",
+        "lifecycle_status",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_knowledge_exposure_lifecycle_status(
+        "bundle manifest knowledge exposure transition lifecycle_status",
+        &lifecycle_status,
+    )?;
+    let changed_at_us = integer_field_value(
+        value,
+        "bundle manifest knowledge exposure transition",
+        "changed_at_us",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest knowledge exposure transition changed_at_us",
+        changed_at_us,
+    )?;
+    let detail_size_bytes = integer_field_value(
+        value,
+        "bundle manifest knowledge exposure transition",
+        "detail_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest knowledge exposure transition detail_size_bytes",
+        detail_size_bytes,
+    )?;
+    Ok(BundleKnowledgeExposureTransitionRef {
+        exposure_id: parse_exposure_id_field(
+            value,
+            "bundle manifest knowledge exposure transition",
+            "exposure_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        transition_id: parse_exposure_transition_id_field(
+            value,
+            "bundle manifest knowledge exposure transition",
+            "transition_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        previous_transition_id: parse_optional_exposure_transition_field(
+            value,
+            "bundle manifest knowledge exposure transition",
+            "previous_transition_id",
+        )?,
+        lifecycle_status,
+        changed_at_us,
+        event_id: parse_optional_event_field(
+            value,
+            "bundle manifest knowledge exposure transition",
+            "event_id",
+        )?,
+        detail_digest: parse_digest_field(
+            value,
+            "bundle manifest knowledge exposure transition",
+            "detail_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        detail_size_bytes,
+    })
+}
+
+fn parse_bundle_knowledge_exposure_source_status_ref(
+    value: &CanonicalValue,
+) -> Result<BundleKnowledgeExposureSourceStatusRef> {
+    let source_status = string_field_value(
+        value,
+        "bundle manifest knowledge exposure source status",
+        "source_status",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_knowledge_exposure_source_status(
+        "bundle manifest knowledge exposure source status",
+        &source_status,
+    )?;
+    let checked_at_us = integer_field_value(
+        value,
+        "bundle manifest knowledge exposure source status",
+        "checked_at_us",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest knowledge exposure source status checked_at_us",
+        checked_at_us,
+    )?;
+    let detail_size_bytes = integer_field_value(
+        value,
+        "bundle manifest knowledge exposure source status",
+        "detail_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest knowledge exposure source status detail_size_bytes",
+        detail_size_bytes,
+    )?;
+    Ok(BundleKnowledgeExposureSourceStatusRef {
+        exposure_id: parse_exposure_id_field(
+            value,
+            "bundle manifest knowledge exposure source status",
+            "exposure_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        source_status,
+        checked_at_us,
+        detail_digest: parse_digest_field(
+            value,
+            "bundle manifest knowledge exposure source status",
+            "detail_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        detail_size_bytes,
+    })
+}
+
 fn parse_bundle_relation_membership_change_ref(
     value: &CanonicalValue,
 ) -> Result<BundleRelationMembershipChangeRef> {
@@ -10373,6 +11675,33 @@ fn parse_session_diff_id_field(
         .map_err(|error| error.to_string())
 }
 
+fn parse_knowledge_space_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<KnowledgeSpaceId, String> {
+    KnowledgeSpaceId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_exposure_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<ExposureId, String> {
+    ExposureId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_exposure_transition_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<ExposureTransitionId, String> {
+    ExposureTransitionId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_relation_id_field(
     value: &CanonicalValue,
     label: &str,
@@ -10463,6 +11792,38 @@ fn parse_optional_resource_observation_field(
     match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
         CanonicalValue::Null => Ok(None),
         CanonicalValue::String(value) => ResourceObservationId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
+fn parse_optional_exposure_transition_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<ExposureTransitionId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => ExposureTransitionId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
+fn parse_optional_event_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<EventId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => EventId::parse_canonical(value)
             .map(Some)
             .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
         _ => Err(WorkVcsError::QueryInvalid(format!(
@@ -10995,6 +12356,12 @@ fn decode_relation_id(column: &str, bytes: Vec<u8>) -> Result<RelationId> {
 fn decode_knowledge_space_id(column: &str, bytes: Vec<u8>) -> Result<KnowledgeSpaceId> {
     let bytes = decode_16(column, bytes)?;
     KnowledgeSpaceId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_exposure_id(column: &str, bytes: Vec<u8>) -> Result<ExposureId> {
+    let bytes = decode_16(column, bytes)?;
+    ExposureId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 

@@ -1,3 +1,11 @@
+use super::goal::GOAL_ENTITY_KIND;
+use super::knowledge::KNOWLEDGE_ENTITY_KIND;
+use super::plan::PLAN_ENTITY_KIND;
+use super::record::RECORD_ENTITY_KIND;
+use super::task::{
+    ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_ENTITY_KIND,
+    VERIFICATION_REQUIREMENT_ENTITY_KIND,
+};
 use super::{
     PrimaryContainmentEndpointKind, RecordRelationListOptions, RecordRelationType,
     StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence,
@@ -10,6 +18,9 @@ use crate::identity::{
     RelationVersionId, WorkspaceId,
 };
 use crate::store::StoreConnection;
+use rusqlite::{OptionalExtension, params};
+
+const ENTITY_OBJECT_KIND: &str = "entity";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WhyQueryTarget {
@@ -112,6 +123,7 @@ pub enum ResolvedWhyQuerySubject {
     Entity {
         entity_id: EntityId,
         entity_version_id: EntityVersionId,
+        entity_kind: WhyEntityKind,
     },
     Evidence {
         evidence_id: EvidenceId,
@@ -131,6 +143,13 @@ impl ResolvedWhyQuerySubject {
             Self::Entity {
                 entity_version_id, ..
             } => Some(entity_version_id),
+            Self::Evidence { .. } => None,
+        }
+    }
+
+    pub fn entity_kind(self) -> Option<WhyEntityKind> {
+        match self {
+            Self::Entity { entity_kind, .. } => Some(entity_kind),
             Self::Evidence { .. } => None,
         }
     }
@@ -173,6 +192,7 @@ pub enum WhyEntityKind {
     VerificationRequirement,
     Verification,
     Record,
+    Knowledge,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -400,9 +420,12 @@ fn resolve_subject(
                         resolved.target.commit_id
                     ))
                 })?;
+            let entity_kind =
+                load_subject_entity_kind(connection, resolved.target.workspace_id, entity_id)?;
             Ok(ResolvedWhyQuerySubject::Entity {
                 entity_id,
                 entity_version_id,
+                entity_kind,
             })
         }
         WhyQuerySubject::Evidence(evidence_id) => {
@@ -438,6 +461,68 @@ fn endpoint_matches_subject(subject: WhyQuerySubject, endpoint: WhyRelationEndpo
             WhyRelationEndpoint::Evidence { evidence_id },
         ) => subject_evidence_id == evidence_id,
         _ => false,
+    }
+}
+
+fn load_subject_entity_kind(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    entity_id: EntityId,
+) -> Result<WhyEntityKind> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    entity.workspace_id,
+                    entity.entity_kind
+             FROM entity
+             JOIN object_identity
+               ON object_identity.object_id = entity.object_id
+             WHERE entity.object_id = ?1",
+            params![&entity_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(crate::error::storage_error)?;
+
+    let Some((object_kind, entity_workspace_id, entity_kind)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "entity {entity_id} is present in WorkState but missing from entity table"
+        )));
+    };
+    if object_kind != ENTITY_OBJECT_KIND {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "entity {entity_id} has object kind {object_kind:?}"
+        )));
+    }
+    let entity_workspace_id = decode_workspace_id("entity.workspace_id", entity_workspace_id)?;
+    if entity_workspace_id != workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "entity {entity_id} belongs to workspace {entity_workspace_id}, not {workspace_id}"
+        )));
+    }
+    parse_why_entity_kind(&entity_kind)
+}
+
+fn parse_why_entity_kind(entity_kind: &str) -> Result<WhyEntityKind> {
+    match entity_kind {
+        GOAL_ENTITY_KIND => Ok(WhyEntityKind::Goal),
+        PLAN_ENTITY_KIND => Ok(WhyEntityKind::Plan),
+        TASK_ENTITY_KIND => Ok(WhyEntityKind::Task),
+        ACCEPTANCE_CRITERION_ENTITY_KIND => Ok(WhyEntityKind::AcceptanceCriterion),
+        VERIFICATION_REQUIREMENT_ENTITY_KIND => Ok(WhyEntityKind::VerificationRequirement),
+        VERIFICATION_ENTITY_KIND => Ok(WhyEntityKind::Verification),
+        RECORD_ENTITY_KIND => Ok(WhyEntityKind::Record),
+        KNOWLEDGE_ENTITY_KIND => Ok(WhyEntityKind::Knowledge),
+        other => Err(WorkVcsError::QueryInvalid(format!(
+            "entity kind {other:?} is not supported by why"
+        ))),
     }
 }
 
@@ -480,4 +565,15 @@ impl From<VerificationTarget> for WhyEntityKind {
             VerificationTarget::VerificationRequirement(_) => Self::VerificationRequirement,
         }
     }
+}
+
+fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
+    let bytes = decode_16(column, bytes)?;
+    WorkspaceId::from_bytes(bytes).map_err(|error| WorkVcsError::QueryInvalid(error.to_string()))
+}
+
+fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {
+    bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::QueryInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
+    })
 }

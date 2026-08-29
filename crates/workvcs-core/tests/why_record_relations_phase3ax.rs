@@ -137,6 +137,7 @@ fn why_reports_record_invalidates_edge_for_both_endpoints() {
         ResolvedWhyQuerySubject::Entity {
             entity_id: finding.record_entity_id,
             entity_version_id: finding.record_entity_version_id,
+            entity_kind: WhyEntityKind::Record,
         }
     );
     assert_deferred_families(&finding_why);
@@ -160,6 +161,7 @@ fn why_reports_record_invalidates_edge_for_both_endpoints() {
         ResolvedWhyQuerySubject::Entity {
             entity_id: assumption.record_entity_id,
             entity_version_id: invalidated.record_entity_version_id,
+            entity_kind: WhyEntityKind::Record,
         }
     );
     assert_deferred_families(&assumption_why);

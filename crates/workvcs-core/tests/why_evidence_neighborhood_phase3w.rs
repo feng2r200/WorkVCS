@@ -288,6 +288,7 @@ fn why_verification_subject_reports_evidenced_by_edges_to_evidence_endpoints() {
         ResolvedWhyQuerySubject::Entity {
             entity_id: verification.verification_entity_id,
             entity_version_id: verification.verification_entity_version_id,
+            entity_kind: WhyEntityKind::Verification,
         }
     );
     assert_deferred_families(&why);

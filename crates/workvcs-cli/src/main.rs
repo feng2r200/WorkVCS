@@ -3644,9 +3644,16 @@ fn render_why(result: &WhyQueryResult) -> String {
         ResolvedWhyQuerySubject::Entity {
             entity_id,
             entity_version_id,
+            entity_kind,
         } => {
             writeln!(output, "subject_kind=entity").expect("write to String");
             writeln!(output, "subject_entity_id={entity_id}").expect("write to String");
+            writeln!(
+                output,
+                "subject_entity_kind={}",
+                why_entity_kind(entity_kind)
+            )
+            .expect("write to String");
             writeln!(output, "subject_entity_version_id={entity_version_id}")
                 .expect("write to String");
         }
@@ -3770,6 +3777,7 @@ fn why_entity_kind(kind: WhyEntityKind) -> &'static str {
         WhyEntityKind::VerificationRequirement => "verification_requirement",
         WhyEntityKind::Verification => "verification",
         WhyEntityKind::Record => "record",
+        WhyEntityKind::Knowledge => "knowledge",
     }
 }
 
@@ -7038,6 +7046,25 @@ mod tests {
         );
         assert!(knowledge.contains("knowledge_scope_json={\"kind\":\"workspace\"}"));
         assert!(knowledge.contains("knowledge_provenance_json={\"source\":\"cli\"}"));
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--entity",
+            &value(&knowledge, "knowledge_entity_id"),
+        ])
+        .expect("parse why knowledge"))
+        .expect("why knowledge");
+        assert_eq!(value(&why, "subject_kind"), "entity");
+        assert_eq!(value(&why, "subject_entity_kind"), "knowledge");
+        assert_eq!(
+            value(&why, "subject_entity_version_id"),
+            value(&knowledge, "knowledge_entity_version_id")
+        );
+        assert_eq!(value(&why, "relation_edges"), "0");
 
         let show = run(Cli::try_parse_from([
             "workvcs",

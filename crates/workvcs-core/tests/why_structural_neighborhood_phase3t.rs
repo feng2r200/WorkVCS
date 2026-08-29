@@ -252,12 +252,14 @@ fn assert_entity_subject(
     why: &WhyQueryResult,
     expected_entity_id: EntityId,
     expected_entity_version_id: workvcs_core::EntityVersionId,
+    expected_entity_kind: WhyEntityKind,
 ) {
     assert_eq!(
         why.subject,
         workvcs_core::ResolvedWhyQuerySubject::Entity {
             entity_id: expected_entity_id,
             entity_version_id: expected_entity_version_id,
+            entity_kind: expected_entity_kind,
         }
     );
 }
@@ -320,7 +322,12 @@ fn why_reports_structural_neighborhood_for_plan_subject() {
         WhyQueryTarget::branch_head(workspace.initial_branch_id)
     );
     assert_eq!(why.target.workspace_id, workspace.workspace_id);
-    assert_entity_subject(&why, plan.plan_entity_id, plan.plan_entity_version_id);
+    assert_entity_subject(
+        &why,
+        plan.plan_entity_id,
+        plan.plan_entity_version_id,
+        WhyEntityKind::Plan,
+    );
     assert_deferred_families(&why);
     assert_eq!(
         edge_facts(&why),
@@ -399,7 +406,12 @@ fn why_reports_incoming_references_for_task_subject_deterministically() {
     let why = why_branch_head(&engine, workspace.initial_branch_id, task.task_entity_id);
 
     assert_eq!(why.relation_edges.len(), 4);
-    assert_entity_subject(&why, task.task_entity_id, task.task_entity_version_id);
+    assert_entity_subject(
+        &why,
+        task.task_entity_id,
+        task.task_entity_version_id,
+        WhyEntityKind::Task,
+    );
     assert_deferred_families(&why);
     assert_eq!(
         edge_facts(&why),

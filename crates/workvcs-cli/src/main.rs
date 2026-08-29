@@ -6366,12 +6366,15 @@ fn render_history_entry(output: &mut String, entry: &HistoryEntry) {
         .unwrap_or_else(|| "none".to_owned());
     let _ = writeln!(
         output,
-        "commit={} kind={} operation={} schema={} parent={} state_digest={}",
+        "commit={} changeset={} kind={} operation={} schema={} parent={} committed_at_us={} changeset_created_at_us={} state_digest={}",
         entry.commit_id,
+        entry.changeset_id,
         entry.commit_kind,
         entry.operation_type,
         entry.operation_schema_version,
         parent,
+        entry.committed_at_us,
+        entry.changeset_created_at_us,
         entry.state_digest
     );
 }
@@ -8051,6 +8054,16 @@ mod tests {
         assert_eq!(value(&listed, "event[0].event_kind"), "entity.transitioned");
         assert_ne!(value(&listed, "event[0].payload_json"), "");
         let event_id = value(&listed, "event[0].event_id");
+
+        let history = run(Cli::try_parse_from([
+            "workvcs", "history", store, "--branch", &branch_id, "--limit", "1",
+        ])
+        .expect("parse history"))
+        .expect("history");
+        assert_eq!(value(&history, "entries"), "1");
+        assert!(history.contains(&format!("changeset={changeset_id}")));
+        assert!(history.contains("committed_at_us="));
+        assert!(history.contains("changeset_created_at_us="));
 
         let shown =
             run(

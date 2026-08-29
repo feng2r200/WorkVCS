@@ -450,6 +450,8 @@ pub struct BundleImportApplyResult {
     pub imported_knowledge_exposure_transitions: usize,
     pub imported_knowledge_exposure_source_statuses: usize,
     pub imported_relation_versions: usize,
+    pub imported_checkpoints: usize,
+    pub imported_checkpoint_statuses: usize,
     pub updated_branch_heads: usize,
 }
 
@@ -536,11 +538,18 @@ pub struct BundleImportAttemptOutcomeSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleCheckpointCandidate {
     pub checkpoint_id: CheckpointId,
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub state_digest: Digest,
     pub content_digest: Digest,
     pub content_size_bytes: i64,
     pub checkpoint_format_version: i64,
     pub media_type: Option<String>,
+    pub created_at_us: i64,
     pub usability_state: String,
+    pub last_validated_at_us: i64,
+    pub status_detail_digest: Digest,
+    pub status_detail_size_bytes: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -884,6 +893,7 @@ struct BundleSameStoreApplyDocument {
     knowledge_exposure_source_statuses: Vec<BundleKnowledgeExposureSourceStatusRef>,
     entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
     relation_membership_changes: Vec<BundleRelationMembershipChangeRef>,
+    checkpoint_candidates: Vec<BundleCheckpointCandidate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -929,6 +939,8 @@ struct BundleImportApplyCounts {
     imported_knowledge_exposure_transitions: usize,
     imported_knowledge_exposure_source_statuses: usize,
     imported_relation_versions: usize,
+    imported_checkpoints: usize,
+    imported_checkpoint_statuses: usize,
     updated_branch_heads: usize,
 }
 
@@ -939,6 +951,12 @@ struct BundleKnowledgeExposureApplyCounts {
     imported_knowledge_exposure_local_sources: usize,
     imported_knowledge_exposure_transitions: usize,
     imported_knowledge_exposure_source_statuses: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BundleCheckpointApplyCounts {
+    imported_checkpoints: usize,
+    imported_checkpoint_statuses: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1010,12 +1028,6 @@ pub(crate) fn export_bundle_manifest(
     let sessions =
         session_provenance_refs(connection, &commits, &evidences, &resource_observations)?;
     let session_diffs = session_diff_refs(connection, &sessions)?;
-    let content_objects = content_object_closure_refs(
-        connection,
-        &evidence_contents,
-        &resource_observations,
-        &session_diffs,
-    )?;
     let knowledge_exposures = knowledge_exposure_closure_refs(connection, &relation_versions)?;
     let knowledge_spaces = knowledge_space_closure_refs(connection, &knowledge_exposures)?;
     let knowledge_exposure_local_sources =
@@ -1031,16 +1043,36 @@ pub(crate) fn export_bundle_manifest(
     )?
     .checkpoints
     .into_iter()
-    .map(|checkpoint| BundleCheckpointCandidate {
-        checkpoint_id: checkpoint.checkpoint_id,
-        content_digest: checkpoint.content_digest,
-        content_size_bytes: checkpoint.content_size_bytes,
-        checkpoint_format_version: checkpoint.checkpoint_format_version,
-        media_type: checkpoint.media_type,
-        usability_state: checkpoint.usability_state,
+    .map(|checkpoint| {
+        let status_detail_bytes = canonical_bytes(&checkpoint.status_detail)?;
+        Ok(BundleCheckpointCandidate {
+            checkpoint_id: checkpoint.checkpoint_id,
+            workspace_id: checkpoint.workspace_id,
+            commit_id: checkpoint.commit_id,
+            state_digest: checkpoint.state_digest,
+            content_digest: checkpoint.content_digest,
+            content_size_bytes: checkpoint.content_size_bytes,
+            checkpoint_format_version: checkpoint.checkpoint_format_version,
+            media_type: checkpoint.media_type,
+            created_at_us: checkpoint.created_at_us,
+            usability_state: checkpoint.usability_state,
+            last_validated_at_us: checkpoint.last_validated_at_us,
+            status_detail_digest: content_object_digest(&status_detail_bytes),
+            status_detail_size_bytes: usize_to_i64(
+                "checkpoint_status.detail_json size",
+                status_detail_bytes.len(),
+            )?,
+        })
     })
-    .collect::<Vec<_>>();
+    .collect::<Result<Vec<_>>>()?;
     checkpoint_candidates.sort_by_key(|checkpoint| checkpoint.checkpoint_id.raw_bytes());
+    let content_objects = content_object_closure_refs(
+        connection,
+        &evidence_contents,
+        &resource_observations,
+        &session_diffs,
+        &checkpoint_candidates,
+    )?;
 
     let manifest = manifest_value(BundleManifestValueInput {
         store_info,
@@ -1217,6 +1249,9 @@ pub(crate) fn export_bundle_payloads(
             source_status,
             &mut candidates,
         )?;
+    }
+    for checkpoint in &manifest.checkpoint_candidates {
+        load_checkpoint_status_detail_payload_candidate(connection, checkpoint, &mut candidates)?;
     }
 
     build_payload_export(manifest, manifest_bytes, candidates)
@@ -1509,6 +1544,8 @@ pub(crate) fn apply_bundle_import(
             imported_knowledge_exposure_transitions: 0,
             imported_knowledge_exposure_source_statuses: 0,
             imported_relation_versions: 0,
+            imported_checkpoints: 0,
+            imported_checkpoint_statuses: 0,
             updated_branch_heads: 0,
         });
     }
@@ -1563,6 +1600,8 @@ pub(crate) fn apply_bundle_import(
     let imported_relation_versions =
         apply_relation_versions(&transaction, &document, &payload_lookup, now_us)?;
     let imported_commits = apply_commit_closure(&transaction, &document, &payload_lookup)?;
+    let imported_checkpoints =
+        apply_checkpoint_candidates(&transaction, &document, &payload_lookup)?;
     let updated_branch_heads =
         apply_same_store_branch_fast_forwards(&transaction, &document, now_us)?;
 
@@ -1588,6 +1627,8 @@ pub(crate) fn apply_bundle_import(
         imported_knowledge_exposure_source_statuses: imported_knowledge_exposures
             .imported_knowledge_exposure_source_statuses,
         imported_relation_versions,
+        imported_checkpoints: imported_checkpoints.imported_checkpoints,
+        imported_checkpoint_statuses: imported_checkpoints.imported_checkpoint_statuses,
         updated_branch_heads,
     };
     let detail_json = bundle_import_apply_detail_json(&preflight, counts)?;
@@ -1634,6 +1675,8 @@ pub(crate) fn apply_bundle_import(
         imported_knowledge_exposure_source_statuses: counts
             .imported_knowledge_exposure_source_statuses,
         imported_relation_versions: counts.imported_relation_versions,
+        imported_checkpoints: counts.imported_checkpoints,
+        imported_checkpoint_statuses: counts.imported_checkpoint_statuses,
         updated_branch_heads: counts.updated_branch_heads,
     })
 }
@@ -2874,6 +2917,7 @@ fn content_object_closure_refs(
     evidence_contents: &[BundleEvidenceContentRef],
     resource_observations: &[BundleResourceObservationRef],
     session_diffs: &[BundleSessionDiffRef],
+    checkpoint_candidates: &[BundleCheckpointCandidate],
 ) -> Result<Vec<BundleContentObjectRef>> {
     let mut content_digests = evidence_contents
         .iter()
@@ -2888,6 +2932,11 @@ fn content_object_closure_refs(
         session_diffs
             .iter()
             .filter_map(|session_diff| session_diff.detail_content_digest),
+    );
+    content_digests.extend(
+        checkpoint_candidates
+            .iter()
+            .map(|checkpoint| checkpoint.content_digest),
     );
     content_digests
         .into_iter()
@@ -4289,6 +4338,46 @@ fn load_knowledge_exposure_source_status_detail_payload_candidate(
     )
 }
 
+fn load_checkpoint_status_detail_payload_candidate(
+    connection: &StoreConnection,
+    checkpoint: &BundleCheckpointCandidate,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let detail_json = connection
+        .inner()
+        .query_row(
+            "SELECT detail_json
+             FROM checkpoint_status
+             WHERE checkpoint_id = ?1",
+            params![&checkpoint.checkpoint_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "Checkpoint {} status row does not exist",
+                checkpoint.checkpoint_id
+            ))
+        })?;
+    if content_object_digest(detail_json.as_bytes()) != checkpoint.status_detail_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Checkpoint {} status detail JSON digest changed during payload export",
+            checkpoint.checkpoint_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "checkpoint_status_detail",
+        CanonicalValue::object(vec![string_field(
+            "checkpoint_id",
+            checkpoint.checkpoint_id.to_string(),
+        )])?,
+        "checkpoint_status.detail_json",
+        detail_json,
+    )
+}
+
 fn push_canonical_payload(
     candidates: &mut Vec<BundlePayloadCandidate>,
     role: &str,
@@ -5440,6 +5529,9 @@ fn optional_relation_version_field(
 fn checkpoint_candidate_value(checkpoint: &BundleCheckpointCandidate) -> Result<CanonicalValue> {
     CanonicalValue::object(vec![
         string_field("checkpoint_id", checkpoint.checkpoint_id.to_string()),
+        string_field("workspace_id", checkpoint.workspace_id.to_string()),
+        string_field("commit_id", checkpoint.commit_id.to_string()),
+        string_field("state_digest", checkpoint.state_digest.to_string()),
         string_field("content_digest", checkpoint.content_digest.to_string()),
         integer_field("content_size_bytes", checkpoint.content_size_bytes)?,
         integer_field(
@@ -5454,7 +5546,17 @@ fn checkpoint_candidate_value(checkpoint: &BundleCheckpointCandidate) -> Result<
                 .map(CanonicalValue::String)
                 .unwrap_or(CanonicalValue::Null),
         ),
+        integer_field("created_at_us", checkpoint.created_at_us)?,
         string_field("usability_state", checkpoint.usability_state.clone()),
+        integer_field("last_validated_at_us", checkpoint.last_validated_at_us)?,
+        string_field(
+            "status_detail_digest",
+            checkpoint.status_detail_digest.to_string(),
+        ),
+        integer_field(
+            "status_detail_size_bytes",
+            checkpoint.status_detail_size_bytes,
+        )?,
     ])
 }
 
@@ -5743,6 +5845,17 @@ fn bundle_import_apply_detail_json(
             usize_to_i64(
                 "imported_relation_versions",
                 counts.imported_relation_versions,
+            )?,
+        )?,
+        integer_field(
+            "imported_checkpoints",
+            usize_to_i64("imported_checkpoints", counts.imported_checkpoints)?,
+        )?,
+        integer_field(
+            "imported_checkpoint_statuses",
+            usize_to_i64(
+                "imported_checkpoint_statuses",
+                counts.imported_checkpoint_statuses,
             )?,
         )?,
         integer_field(
@@ -6479,6 +6592,41 @@ fn apply_commit_closure(
     Ok(imported)
 }
 
+fn apply_checkpoint_candidates(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<BundleCheckpointApplyCounts> {
+    let mut counts = BundleCheckpointApplyCounts::default();
+    for checkpoint in &document.checkpoint_candidates {
+        require_workspace_row(transaction, checkpoint.workspace_id)?;
+        require_commit_with_state_digest(
+            transaction,
+            checkpoint.commit_id,
+            checkpoint.state_digest,
+        )?;
+        require_content_object(transaction, checkpoint.content_digest)?;
+        let owner = CanonicalValue::object(vec![string_field(
+            "checkpoint_id",
+            checkpoint.checkpoint_id.to_string(),
+        )])?;
+        let status_detail_json = payload_lookup.required_json(
+            "checkpoint_status_detail",
+            owner,
+            Some(checkpoint.status_detail_digest),
+            Some(checkpoint.status_detail_size_bytes),
+        )?;
+        require_canonical_object_json("bundle checkpoint_status.detail_json", &status_detail_json)?;
+        if ensure_checkpoint_row(transaction, checkpoint)? {
+            counts.imported_checkpoints += 1;
+        }
+        if ensure_checkpoint_status_row(transaction, checkpoint, &status_detail_json)? {
+            counts.imported_checkpoint_statuses += 1;
+        }
+    }
+    Ok(counts)
+}
+
 fn apply_same_store_branch_fast_forwards(
     transaction: &Transaction<'_>,
     document: &BundleSameStoreApplyDocument,
@@ -6684,6 +6832,20 @@ fn require_commit_present(transaction: &Transaction<'_>, commit_id: CommitId) ->
         .ok_or_else(|| {
             WorkVcsError::ImmutableImportInvalid(format!("Commit {commit_id} is missing"))
         })
+}
+
+fn require_commit_with_state_digest(
+    transaction: &Transaction<'_>,
+    commit_id: CommitId,
+    expected_state_digest: Digest,
+) -> Result<()> {
+    if local_commit_present(transaction, commit_id, expected_state_digest)? {
+        Ok(())
+    } else {
+        Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "Commit {commit_id} is missing"
+        )))
+    }
 }
 
 fn ensure_acceptance_criterion_identity_row(
@@ -7044,6 +7206,143 @@ fn require_content_object(transaction: &Transaction<'_>, content_digest: Digest)
                 "ContentObject {content_digest} is missing"
             ))
         })
+}
+
+fn ensure_checkpoint_row(
+    transaction: &Transaction<'_>,
+    checkpoint: &BundleCheckpointCandidate,
+) -> Result<bool> {
+    let checkpoint_id_bytes = checkpoint.checkpoint_id.raw_bytes();
+    let row = transaction
+        .query_row(
+            "SELECT workspace_id,
+                    commit_id,
+                    state_digest,
+                    checkpoint_format_version,
+                    content_digest,
+                    created_at_us
+             FROM checkpoint
+             WHERE checkpoint_id = ?1",
+            params![&checkpoint_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((
+        workspace_id,
+        commit_id,
+        state_digest,
+        checkpoint_format_version,
+        content_digest,
+        created_at_us,
+    )) = row
+    {
+        if decode_workspace_id("checkpoint.workspace_id", workspace_id)? != checkpoint.workspace_id
+            || decode_commit_id("checkpoint.commit_id", commit_id)? != checkpoint.commit_id
+            || decode_digest("checkpoint.state_digest", state_digest)? != checkpoint.state_digest
+            || checkpoint_format_version != checkpoint.checkpoint_format_version
+            || decode_digest("checkpoint.content_digest", content_digest)?
+                != checkpoint.content_digest
+            || created_at_us != checkpoint.created_at_us
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Checkpoint {} exists with different content",
+                checkpoint.checkpoint_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO checkpoint(
+                checkpoint_id,
+                workspace_id,
+                commit_id,
+                state_digest,
+                checkpoint_format_version,
+                content_digest,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &checkpoint_id_bytes[..],
+                &checkpoint.workspace_id.raw_bytes()[..],
+                &checkpoint.commit_id.raw_bytes()[..],
+                &checkpoint.state_digest.as_bytes()[..],
+                checkpoint.checkpoint_format_version,
+                &checkpoint.content_digest.as_bytes()[..],
+                checkpoint.created_at_us,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn ensure_checkpoint_status_row(
+    transaction: &Transaction<'_>,
+    checkpoint: &BundleCheckpointCandidate,
+    status_detail_json: &str,
+) -> Result<bool> {
+    let checkpoint_id_bytes = checkpoint.checkpoint_id.raw_bytes();
+    let row = transaction
+        .query_row(
+            "SELECT usability_state,
+                    last_validated_at_us,
+                    detail_json
+             FROM checkpoint_status
+             WHERE checkpoint_id = ?1",
+            params![&checkpoint_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((usability_state, last_validated_at_us, stored_detail_json)) = row {
+        if usability_state != checkpoint.usability_state
+            || last_validated_at_us != checkpoint.last_validated_at_us
+            || stored_detail_json != status_detail_json
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "CheckpointStatus {} exists with different content",
+                checkpoint.checkpoint_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO checkpoint_status(
+                checkpoint_id,
+                usability_state,
+                last_validated_at_us,
+                detail_json
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &checkpoint_id_bytes[..],
+                checkpoint.usability_state,
+                checkpoint.last_validated_at_us,
+                status_detail_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
 }
 
 fn ensure_resource_row(
@@ -8891,9 +9190,8 @@ fn parse_bundle_manifest_summary(
 fn bundle_manifest_supports_same_store_apply(
     value: &CanonicalValue,
 ) -> std::result::Result<bool, String> {
-    let unsupported_array_fields = ["checkpoint_candidates"];
-    for field in unsupported_array_fields {
-        if !array_field_ref(value, "bundle manifest", field)?.is_empty() {
+    for checkpoint in optional_array_field_ref(value, "bundle manifest", "checkpoint_candidates")? {
+        if parse_bundle_checkpoint_candidate_ref(checkpoint).is_err() {
             return Ok(false);
         }
     }
@@ -9725,6 +10023,12 @@ fn parse_bundle_same_store_apply_document(
             .iter()
             .map(parse_bundle_relation_membership_change_ref)
             .collect::<Result<Vec<_>>>()?;
+    let checkpoint_candidates =
+        optional_array_field_ref(value, "bundle manifest", "checkpoint_candidates")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_checkpoint_candidate_ref)
+            .collect::<Result<Vec<_>>>()?;
 
     let document = BundleSameStoreApplyDocument {
         source_store_id: summary.source_store_id,
@@ -9754,11 +10058,13 @@ fn parse_bundle_same_store_apply_document(
         knowledge_exposure_source_statuses,
         entity_membership_changes,
         relation_membership_changes,
+        checkpoint_candidates,
     };
     validate_same_store_apply_identity_coverage(&document)?;
     validate_same_store_apply_provenance_coverage(&document)?;
     validate_same_store_apply_knowledge_exposure_coverage(&document)?;
     validate_same_store_apply_relation_coverage(&document)?;
+    validate_same_store_apply_checkpoint_coverage(&document)?;
     Ok(document)
 }
 
@@ -10351,6 +10657,64 @@ fn validate_same_store_apply_knowledge_exposure_coverage(
     Ok(())
 }
 
+fn validate_same_store_apply_checkpoint_coverage(
+    document: &BundleSameStoreApplyDocument,
+) -> Result<()> {
+    let content_objects_by_digest = document
+        .content_objects
+        .iter()
+        .map(|content| (content.content_digest, content))
+        .collect::<BTreeMap<_, _>>();
+    let commit_state_digests = document
+        .commits
+        .iter()
+        .map(|commit| (commit.commit_id, commit.state_digest))
+        .collect::<BTreeMap<_, _>>();
+    let mut checkpoint_ids = BTreeSet::new();
+
+    for checkpoint in &document.checkpoint_candidates {
+        if !checkpoint_ids.insert(checkpoint.checkpoint_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle checkpoint candidate {} appears more than once",
+                checkpoint.checkpoint_id
+            )));
+        }
+        if checkpoint.workspace_id != document.workspace_id {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle checkpoint candidate {} workspace {} does not match target workspace",
+                checkpoint.checkpoint_id, checkpoint.workspace_id
+            )));
+        }
+        let Some(commit_state_digest) = commit_state_digests.get(&checkpoint.commit_id) else {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle checkpoint candidate {} references missing commit {}",
+                checkpoint.checkpoint_id, checkpoint.commit_id
+            )));
+        };
+        if *commit_state_digest != checkpoint.state_digest {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle checkpoint candidate {} state digest does not match commit {}",
+                checkpoint.checkpoint_id, checkpoint.commit_id
+            )));
+        }
+        let Some(content) = content_objects_by_digest.get(&checkpoint.content_digest) else {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle checkpoint candidate {} references missing content object {}",
+                checkpoint.checkpoint_id, checkpoint.content_digest
+            )));
+        };
+        if content.size_bytes != checkpoint.content_size_bytes
+            || content.media_type != checkpoint.media_type
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle checkpoint candidate {} content object metadata does not match checkpoint metadata",
+                checkpoint.checkpoint_id
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn unique_content_object_digests(
     content_objects: &[BundleContentObjectRef],
 ) -> Result<BTreeSet<Digest>> {
@@ -10663,6 +11027,127 @@ fn parse_bundle_content_object_ref(value: &CanonicalValue) -> Result<BundleConte
         )
         .map_err(WorkVcsError::QueryInvalid)?,
         format_metadata_json_size_bytes,
+    })
+}
+
+fn parse_bundle_checkpoint_candidate_ref(
+    value: &CanonicalValue,
+) -> Result<BundleCheckpointCandidate> {
+    let content_size_bytes = integer_field_value(
+        value,
+        "bundle manifest checkpoint candidate",
+        "content_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest checkpoint candidate content_size_bytes",
+        content_size_bytes,
+    )?;
+    let checkpoint_format_version = integer_field_value(
+        value,
+        "bundle manifest checkpoint candidate",
+        "checkpoint_format_version",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_positive_i64(
+        "bundle manifest checkpoint candidate checkpoint_format_version",
+        checkpoint_format_version,
+    )?;
+    let media_type =
+        parse_optional_string_field(value, "bundle manifest checkpoint candidate", "media_type")?;
+    if let Some(media_type) = &media_type {
+        validate_portable_text(
+            "bundle manifest checkpoint candidate media_type",
+            media_type,
+        )
+        .map_err(WorkVcsError::QueryInvalid)?;
+    }
+    let created_at_us = integer_field_value(
+        value,
+        "bundle manifest checkpoint candidate",
+        "created_at_us",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest checkpoint candidate created_at_us",
+        created_at_us,
+    )?;
+    let usability_state = string_field_value(
+        value,
+        "bundle manifest checkpoint candidate",
+        "usability_state",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_portable_text(
+        "bundle manifest checkpoint candidate usability_state",
+        &usability_state,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    let last_validated_at_us = integer_field_value(
+        value,
+        "bundle manifest checkpoint candidate",
+        "last_validated_at_us",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest checkpoint candidate last_validated_at_us",
+        last_validated_at_us,
+    )?;
+    let status_detail_size_bytes = integer_field_value(
+        value,
+        "bundle manifest checkpoint candidate",
+        "status_detail_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest checkpoint candidate status_detail_size_bytes",
+        status_detail_size_bytes,
+    )?;
+    Ok(BundleCheckpointCandidate {
+        checkpoint_id: parse_checkpoint_id_field(
+            value,
+            "bundle manifest checkpoint candidate",
+            "checkpoint_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        workspace_id: parse_workspace_id_field(
+            value,
+            "bundle manifest checkpoint candidate",
+            "workspace_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        commit_id: parse_commit_id_field(
+            value,
+            "bundle manifest checkpoint candidate",
+            "commit_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        state_digest: parse_digest_field(
+            value,
+            "bundle manifest checkpoint candidate",
+            "state_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        content_digest: parse_digest_field(
+            value,
+            "bundle manifest checkpoint candidate",
+            "content_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        content_size_bytes,
+        checkpoint_format_version,
+        media_type,
+        created_at_us,
+        usability_state,
+        last_validated_at_us,
+        status_detail_digest: parse_digest_field(
+            value,
+            "bundle manifest checkpoint candidate",
+            "status_detail_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        status_detail_size_bytes,
     })
 }
 
@@ -11591,6 +12076,15 @@ fn parse_commit_id_field(
     field: &str,
 ) -> std::result::Result<CommitId, String> {
     CommitId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_checkpoint_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<CheckpointId, String> {
+    CheckpointId::parse_canonical(string_field_value(value, label, field)?)
         .map_err(|error| error.to_string())
 }
 

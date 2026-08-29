@@ -1238,6 +1238,17 @@ pub(crate) struct VerificationRelationSnapshot {
     pub(crate) state_digest: Digest,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VerificationEvidenceRelationAtSnapshot {
+    pub(crate) workspace_id: WorkspaceId,
+    pub(crate) commit_id: CommitId,
+    pub(crate) relation_id: RelationId,
+    pub(crate) relation_version_id: RelationVersionId,
+    pub(crate) source_verification_entity_id: EntityId,
+    pub(crate) evidence_id: EvidenceId,
+    pub(crate) state_digest: Digest,
+}
+
 pub(crate) fn create_task(
     connection: &mut StoreConnection,
     options: &TaskCreateOptions,
@@ -1894,6 +1905,49 @@ pub(crate) fn verification_relations_at(
     Ok(relations)
 }
 
+pub(crate) fn verification_evidence_relations_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<VerificationEvidenceRelationAtSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut relations = Vec::new();
+
+    for (relation_id, relation_version_id) in replayed.state.relations() {
+        let Some(relation) = load_evidenced_by_relation_version(
+            connection,
+            replayed.workspace_id,
+            *relation_id,
+            *relation_version_id,
+        )?
+        else {
+            continue;
+        };
+        validate_current_evidenced_by_relation_source(
+            connection,
+            replayed.workspace_id,
+            &replayed.state,
+            &relation,
+        )?;
+        relations.push(VerificationEvidenceRelationAtSnapshot {
+            workspace_id: replayed.workspace_id,
+            commit_id,
+            relation_id: relation.relation_id,
+            relation_version_id: relation.relation_version_id,
+            source_verification_entity_id: relation.source_verification_entity_id,
+            evidence_id: relation.evidence_id,
+            state_digest: relation.state_digest,
+        });
+    }
+
+    relations.sort_by(|left, right| {
+        left.source_verification_entity_id
+            .cmp(&right.source_verification_entity_id)
+            .then_with(|| left.evidence_id.cmp(&right.evidence_id))
+            .then_with(|| left.relation_id.cmp(&right.relation_id))
+    });
+    Ok(relations)
+}
+
 fn validate_current_verifies_relation_endpoints(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
@@ -1942,7 +1996,45 @@ fn validate_current_verifies_relation_endpoints(
     Ok(())
 }
 
+fn validate_current_evidenced_by_relation_source(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+    relation: &LoadedEvidenceRelationVersion,
+) -> Result<()> {
+    let source_version_id = current_relation_entity_endpoint_version_id(
+        EVIDENCED_BY_RELATION_TYPE,
+        state,
+        relation.relation_id,
+        "source verification",
+        relation.source_verification_entity_id,
+    )?;
+    load_verification_version(
+        connection,
+        workspace_id,
+        relation.source_verification_entity_id,
+        source_version_id,
+    )?;
+    Ok(())
+}
+
 fn current_verifies_endpoint_version_id(
+    state: &WorkState,
+    relation_id: RelationId,
+    endpoint_role: &str,
+    entity_id: EntityId,
+) -> Result<EntityVersionId> {
+    current_relation_entity_endpoint_version_id(
+        VERIFIES_RELATION_TYPE,
+        state,
+        relation_id,
+        endpoint_role,
+        entity_id,
+    )
+}
+
+fn current_relation_entity_endpoint_version_id(
+    relation_type: &str,
     state: &WorkState,
     relation_id: RelationId,
     endpoint_role: &str,
@@ -1956,7 +2048,7 @@ fn current_verifies_endpoint_version_id(
         })
         .ok_or_else(|| {
             WorkVcsError::TaskInvalid(format!(
-                "verifies relation {relation_id} {endpoint_role} entity {entity_id} is not present in WorkState"
+                "{relation_type} relation {relation_id} {endpoint_role} entity {entity_id} is not present in WorkState"
             ))
         })
 }

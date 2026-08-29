@@ -362,9 +362,12 @@ fn verification_creation_records_evidenced_by_closure_atomically() {
             .count(),
         1
     );
-    assert!(
-        why.deferred_relation_families
-            .contains(&WhyDeferredRelationFamily::VerificationEvidence)
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![
+            WhyDeferredRelationFamily::Evolution,
+            WhyDeferredRelationFamily::Epistemic,
+        ]
     );
 }
 

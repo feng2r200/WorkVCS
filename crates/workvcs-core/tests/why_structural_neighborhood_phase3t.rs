@@ -8,7 +8,7 @@ use workvcs_core::{
     PrimaryContainmentCreateOptions, StoreInitOptions, StructuralReferenceCreateCommit,
     StructuralReferenceCreateOptions, TaskCreateOptions, TaskSnapshot, WhyDeferredRelationFamily,
     WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEdge, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,23 +217,12 @@ fn edge_facts(
 ) -> BTreeSet<(
     WhyRelationKind,
     WhyRelationDirection,
-    EntityId,
-    WhyEntityKind,
-    EntityId,
-    WhyEntityKind,
+    WhyRelationEndpoint,
+    WhyRelationEndpoint,
 )> {
     why.relation_edges
         .iter()
-        .map(|edge| {
-            (
-                edge.relation_kind,
-                edge.direction,
-                edge.source_entity_id,
-                edge.source_kind,
-                edge.target_entity_id,
-                edge.target_kind,
-            )
-        })
+        .map(|edge| (edge.relation_kind, edge.direction, edge.source, edge.target))
         .collect()
 }
 
@@ -242,21 +231,35 @@ fn edge_order_key(
 ) -> (
     WhyRelationKind,
     WhyRelationDirection,
-    WhyEntityKind,
-    EntityId,
-    WhyEntityKind,
-    EntityId,
+    WhyRelationEndpoint,
+    WhyRelationEndpoint,
     workvcs_core::RelationId,
 ) {
     (
         edge.relation_kind,
         edge.direction,
-        edge.source_kind,
-        edge.source_entity_id,
-        edge.target_kind,
-        edge.target_entity_id,
+        edge.source,
+        edge.target,
         edge.relation_id,
     )
+}
+
+fn entity_endpoint(entity_id: EntityId, entity_kind: WhyEntityKind) -> WhyRelationEndpoint {
+    WhyRelationEndpoint::entity(entity_id, entity_kind)
+}
+
+fn assert_entity_subject(
+    why: &WhyQueryResult,
+    expected_entity_id: EntityId,
+    expected_entity_version_id: workvcs_core::EntityVersionId,
+) {
+    assert_eq!(
+        why.subject,
+        workvcs_core::ResolvedWhyQuerySubject::Entity {
+            entity_id: expected_entity_id,
+            entity_version_id: expected_entity_version_id,
+        }
+    );
 }
 
 fn assert_edges_are_sorted(edges: &[WhyRelationEdge]) {
@@ -271,7 +274,6 @@ fn assert_deferred_families(why: &WhyQueryResult) {
         vec![
             WhyDeferredRelationFamily::Evolution,
             WhyDeferredRelationFamily::Epistemic,
-            WhyDeferredRelationFamily::VerificationEvidence,
         ]
     );
 }
@@ -318,8 +320,7 @@ fn why_reports_structural_neighborhood_for_plan_subject() {
         WhyQueryTarget::branch_head(workspace.initial_branch_id)
     );
     assert_eq!(why.target.workspace_id, workspace.workspace_id);
-    assert_eq!(why.subject_entity_id, plan.plan_entity_id);
-    assert_eq!(why.subject_entity_version_id, plan.plan_entity_version_id);
+    assert_entity_subject(&why, plan.plan_entity_id, plan.plan_entity_version_id);
     assert_deferred_families(&why);
     assert_eq!(
         edge_facts(&why),
@@ -327,26 +328,20 @@ fn why_reports_structural_neighborhood_for_plan_subject() {
             (
                 WhyRelationKind::PrimaryContainment,
                 WhyRelationDirection::Incoming,
-                goal.goal_entity_id,
-                WhyEntityKind::Goal,
-                plan.plan_entity_id,
-                WhyEntityKind::Plan,
+                entity_endpoint(goal.goal_entity_id, WhyEntityKind::Goal),
+                entity_endpoint(plan.plan_entity_id, WhyEntityKind::Plan),
             ),
             (
                 WhyRelationKind::PrimaryContainment,
                 WhyRelationDirection::Outgoing,
-                plan.plan_entity_id,
-                WhyEntityKind::Plan,
-                task.task_entity_id,
-                WhyEntityKind::Task,
+                entity_endpoint(plan.plan_entity_id, WhyEntityKind::Plan),
+                entity_endpoint(task.task_entity_id, WhyEntityKind::Task),
             ),
             (
                 WhyRelationKind::StructuralReference,
                 WhyRelationDirection::Outgoing,
-                plan.plan_entity_id,
-                WhyEntityKind::Plan,
-                task.task_entity_id,
-                WhyEntityKind::Task,
+                entity_endpoint(plan.plan_entity_id, WhyEntityKind::Plan),
+                entity_endpoint(task.task_entity_id, WhyEntityKind::Task),
             ),
         ])
     );
@@ -404,8 +399,7 @@ fn why_reports_incoming_references_for_task_subject_deterministically() {
     let why = why_branch_head(&engine, workspace.initial_branch_id, task.task_entity_id);
 
     assert_eq!(why.relation_edges.len(), 4);
-    assert_eq!(why.subject_entity_id, task.task_entity_id);
-    assert_eq!(why.subject_entity_version_id, task.task_entity_version_id);
+    assert_entity_subject(&why, task.task_entity_id, task.task_entity_version_id);
     assert_deferred_families(&why);
     assert_eq!(
         edge_facts(&why),
@@ -413,34 +407,26 @@ fn why_reports_incoming_references_for_task_subject_deterministically() {
             (
                 WhyRelationKind::PrimaryContainment,
                 WhyRelationDirection::Incoming,
-                first_plan.plan_entity_id,
-                WhyEntityKind::Plan,
-                task.task_entity_id,
-                WhyEntityKind::Task,
+                entity_endpoint(first_plan.plan_entity_id, WhyEntityKind::Plan),
+                entity_endpoint(task.task_entity_id, WhyEntityKind::Task),
             ),
             (
                 WhyRelationKind::StructuralReference,
                 WhyRelationDirection::Incoming,
-                goal.goal_entity_id,
-                WhyEntityKind::Goal,
-                task.task_entity_id,
-                WhyEntityKind::Task,
+                entity_endpoint(goal.goal_entity_id, WhyEntityKind::Goal),
+                entity_endpoint(task.task_entity_id, WhyEntityKind::Task),
             ),
             (
                 WhyRelationKind::StructuralReference,
                 WhyRelationDirection::Incoming,
-                first_plan.plan_entity_id,
-                WhyEntityKind::Plan,
-                task.task_entity_id,
-                WhyEntityKind::Task,
+                entity_endpoint(first_plan.plan_entity_id, WhyEntityKind::Plan),
+                entity_endpoint(task.task_entity_id, WhyEntityKind::Task),
             ),
             (
                 WhyRelationKind::StructuralReference,
                 WhyRelationDirection::Incoming,
-                second_plan.plan_entity_id,
-                WhyEntityKind::Plan,
-                task.task_entity_id,
-                WhyEntityKind::Task,
+                entity_endpoint(second_plan.plan_entity_id, WhyEntityKind::Plan),
+                entity_endpoint(task.task_entity_id, WhyEntityKind::Task),
             ),
         ])
     );
@@ -479,10 +465,8 @@ fn why_commit_selector_reads_historical_structural_neighborhood() {
         BTreeSet::from([(
             WhyRelationKind::PrimaryContainment,
             WhyRelationDirection::Incoming,
-            goal.goal_entity_id,
-            WhyEntityKind::Goal,
-            plan.plan_entity_id,
-            WhyEntityKind::Plan,
+            entity_endpoint(goal.goal_entity_id, WhyEntityKind::Goal),
+            entity_endpoint(plan.plan_entity_id, WhyEntityKind::Plan),
         )])
     );
 }

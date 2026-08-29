@@ -62,6 +62,7 @@ recorded as Accepted ADRs:
 - [ADR-0034: Phase 3T Why Structural Neighborhood](decisions/adr/0034-phase-3t-why-structural-neighborhood.md)
 - [ADR-0035: Phase 3U Why Verification Neighborhood](decisions/adr/0035-phase-3u-why-verification-neighborhood.md)
 - [ADR-0036: Phase 3V Verification Evidence Closure](decisions/adr/0036-phase-3v-verification-evidence-closure.md)
+- [ADR-0037: Phase 3W Why Evidence Neighborhood](decisions/adr/0037-phase-3w-why-evidence-neighborhood.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

@@ -58,8 +58,9 @@ pub use task::{
     VerificationSnapshot, VerificationState, VerificationTarget,
 };
 pub use why::{
-    ResolvedWhyQueryTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions,
-    WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationKind,
+    ResolvedWhyQuerySubject, ResolvedWhyQueryTarget, WhyDeferredRelationFamily, WhyEntityKind,
+    WhyQueryOptions, WhyQueryResult, WhyQuerySubject, WhyQueryTarget, WhyRelationDirection,
+    WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind,
 };
 
 pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
@@ -79,6 +80,6 @@ pub(crate) use task::{
     create_verification_requirement, reject_reserved_semantic_entity_transition,
     revise_acceptance_criterion, revise_verification_requirement, task_at,
     task_scheduling_relations_at, tasks_at, transition_task, verification_at,
-    verification_relations_at, verification_requirement_at,
+    verification_evidence_relations_at, verification_relations_at, verification_requirement_at,
 };
 pub(crate) use why::explain_why;

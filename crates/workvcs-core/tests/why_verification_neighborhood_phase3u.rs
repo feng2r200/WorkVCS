@@ -9,7 +9,8 @@ use workvcs_core::{
     VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationResult, VerificationTarget,
     WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
-    WhyRelationDirection, WhyRelationEdge, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,23 +190,12 @@ fn edge_facts(
 ) -> BTreeSet<(
     WhyRelationKind,
     WhyRelationDirection,
-    EntityId,
-    WhyEntityKind,
-    EntityId,
-    WhyEntityKind,
+    WhyRelationEndpoint,
+    WhyRelationEndpoint,
 )> {
     why.relation_edges
         .iter()
-        .map(|edge| {
-            (
-                edge.relation_kind,
-                edge.direction,
-                edge.source_entity_id,
-                edge.source_kind,
-                edge.target_entity_id,
-                edge.target_kind,
-            )
-        })
+        .map(|edge| (edge.relation_kind, edge.direction, edge.source, edge.target))
         .collect()
 }
 
@@ -214,21 +204,35 @@ fn edge_order_key(
 ) -> (
     WhyRelationKind,
     WhyRelationDirection,
-    WhyEntityKind,
-    EntityId,
-    WhyEntityKind,
-    EntityId,
+    WhyRelationEndpoint,
+    WhyRelationEndpoint,
     RelationId,
 ) {
     (
         edge.relation_kind,
         edge.direction,
-        edge.source_kind,
-        edge.source_entity_id,
-        edge.target_kind,
-        edge.target_entity_id,
+        edge.source,
+        edge.target,
         edge.relation_id,
     )
+}
+
+fn entity_endpoint(entity_id: EntityId, entity_kind: WhyEntityKind) -> WhyRelationEndpoint {
+    WhyRelationEndpoint::entity(entity_id, entity_kind)
+}
+
+fn assert_entity_subject(
+    why: &WhyQueryResult,
+    expected_entity_id: EntityId,
+    expected_entity_version_id: workvcs_core::EntityVersionId,
+) {
+    assert_eq!(
+        why.subject,
+        workvcs_core::ResolvedWhyQuerySubject::Entity {
+            entity_id: expected_entity_id,
+            entity_version_id: expected_entity_version_id,
+        }
+    );
 }
 
 fn assert_edges_are_sorted(edges: &[WhyRelationEdge]) {
@@ -243,7 +247,6 @@ fn assert_deferred_families(why: &WhyQueryResult) {
         vec![
             WhyDeferredRelationFamily::Evolution,
             WhyDeferredRelationFamily::Epistemic,
-            WhyDeferredRelationFamily::VerificationEvidence,
         ]
     );
 }
@@ -277,9 +280,10 @@ fn why_reports_direct_acceptance_criterion_verification_from_both_endpoints() {
         criterion_why.target.target,
         WhyQueryTarget::branch_head(workspace.initial_branch_id)
     );
-    assert_eq!(
-        criterion_why.subject_entity_version_id,
-        fixture.criterion.acceptance_criterion_entity_version_id
+    assert_entity_subject(
+        &criterion_why,
+        fixture.criterion.acceptance_criterion_entity_id,
+        fixture.criterion.acceptance_criterion_entity_version_id,
     );
     assert_deferred_families(&criterion_why);
     assert_eq!(
@@ -287,16 +291,21 @@ fn why_reports_direct_acceptance_criterion_verification_from_both_endpoints() {
         BTreeSet::from([(
             WhyRelationKind::Verifies,
             WhyRelationDirection::Incoming,
-            verification.verification_entity_id,
-            WhyEntityKind::Verification,
-            fixture.criterion.acceptance_criterion_entity_id,
-            WhyEntityKind::AcceptanceCriterion,
+            entity_endpoint(
+                verification.verification_entity_id,
+                WhyEntityKind::Verification
+            ),
+            entity_endpoint(
+                fixture.criterion.acceptance_criterion_entity_id,
+                WhyEntityKind::AcceptanceCriterion
+            ),
         )])
     );
 
-    assert_eq!(
-        verification_why.subject_entity_version_id,
-        verification.verification_entity_version_id
+    assert_entity_subject(
+        &verification_why,
+        verification.verification_entity_id,
+        verification.verification_entity_version_id,
     );
     assert_deferred_families(&verification_why);
     assert_eq!(
@@ -304,10 +313,14 @@ fn why_reports_direct_acceptance_criterion_verification_from_both_endpoints() {
         BTreeSet::from([(
             WhyRelationKind::Verifies,
             WhyRelationDirection::Outgoing,
-            verification.verification_entity_id,
-            WhyEntityKind::Verification,
-            fixture.criterion.acceptance_criterion_entity_id,
-            WhyEntityKind::AcceptanceCriterion,
+            entity_endpoint(
+                verification.verification_entity_id,
+                WhyEntityKind::Verification
+            ),
+            entity_endpoint(
+                fixture.criterion.acceptance_criterion_entity_id,
+                WhyEntityKind::AcceptanceCriterion
+            ),
         )])
     );
 }
@@ -338,9 +351,10 @@ fn why_reports_verification_requirement_target_relation() {
         requirement.verification_requirement_entity_id,
     );
 
-    assert_eq!(
-        requirement_why.subject_entity_version_id,
-        requirement.verification_requirement_entity_version_id
+    assert_entity_subject(
+        &requirement_why,
+        requirement.verification_requirement_entity_id,
+        requirement.verification_requirement_entity_version_id,
     );
     assert_deferred_families(&requirement_why);
     assert_eq!(
@@ -348,10 +362,14 @@ fn why_reports_verification_requirement_target_relation() {
         BTreeSet::from([(
             WhyRelationKind::Verifies,
             WhyRelationDirection::Incoming,
-            verification.verification_entity_id,
-            WhyEntityKind::Verification,
-            requirement.verification_requirement_entity_id,
-            WhyEntityKind::VerificationRequirement,
+            entity_endpoint(
+                verification.verification_entity_id,
+                WhyEntityKind::Verification
+            ),
+            entity_endpoint(
+                requirement.verification_requirement_entity_id,
+                WhyEntityKind::VerificationRequirement
+            ),
         )])
     );
 }
@@ -387,10 +405,14 @@ fn why_commit_selector_reads_historical_verification_neighborhood() {
         BTreeSet::from([(
             WhyRelationKind::Verifies,
             WhyRelationDirection::Incoming,
-            verification.verification_entity_id,
-            WhyEntityKind::Verification,
-            fixture.criterion.acceptance_criterion_entity_id,
-            WhyEntityKind::AcceptanceCriterion,
+            entity_endpoint(
+                verification.verification_entity_id,
+                WhyEntityKind::Verification
+            ),
+            entity_endpoint(
+                fixture.criterion.acceptance_criterion_entity_id,
+                WhyEntityKind::AcceptanceCriterion
+            ),
         )])
     );
 }
@@ -463,18 +485,20 @@ fn why_verification_edges_are_sorted_read_only_and_ignore_projection_and_event_n
             (
                 WhyRelationKind::Verifies,
                 WhyRelationDirection::Incoming,
-                failed.verification_entity_id,
-                WhyEntityKind::Verification,
-                fixture.criterion.acceptance_criterion_entity_id,
-                WhyEntityKind::AcceptanceCriterion,
+                entity_endpoint(failed.verification_entity_id, WhyEntityKind::Verification),
+                entity_endpoint(
+                    fixture.criterion.acceptance_criterion_entity_id,
+                    WhyEntityKind::AcceptanceCriterion
+                ),
             ),
             (
                 WhyRelationKind::Verifies,
                 WhyRelationDirection::Incoming,
-                passed.verification_entity_id,
-                WhyEntityKind::Verification,
-                fixture.criterion.acceptance_criterion_entity_id,
-                WhyEntityKind::AcceptanceCriterion,
+                entity_endpoint(passed.verification_entity_id, WhyEntityKind::Verification),
+                entity_endpoint(
+                    fixture.criterion.acceptance_criterion_entity_id,
+                    WhyEntityKind::AcceptanceCriterion
+                ),
             ),
         ])
     );

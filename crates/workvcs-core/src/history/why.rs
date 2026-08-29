@@ -1,12 +1,12 @@
 use super::{
     PrimaryContainmentEndpointKind, StructuralReferenceEndpointKind, VerificationTarget,
-    branch_head, primary_containment_relations_at, state_at, structural_references_at,
-    verification_relations_at,
+    branch_head, evidence, primary_containment_relations_at, state_at, structural_references_at,
+    verification_evidence_relations_at, verification_relations_at,
 };
 use crate::error::{Result, WorkVcsError};
 use crate::identity::{
-    BranchId, CommitId, Digest, EntityId, EntityVersionId, RelationId, RelationVersionId,
-    WorkspaceId,
+    BranchId, CommitId, Digest, EntityId, EntityVersionId, EvidenceId, RelationId,
+    RelationVersionId, WorkspaceId,
 };
 use crate::store::StoreConnection;
 
@@ -26,17 +26,44 @@ impl WhyQueryTarget {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WhyQuerySubject {
+    Entity(EntityId),
+    Evidence(EvidenceId),
+}
+
+impl WhyQuerySubject {
+    pub fn entity(entity_id: EntityId) -> Self {
+        Self::Entity(entity_id)
+    }
+
+    pub fn evidence(evidence_id: EvidenceId) -> Self {
+        Self::Evidence(evidence_id)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WhyQueryOptions {
     target: WhyQueryTarget,
-    subject_entity_id: EntityId,
+    subject: WhyQuerySubject,
 }
 
 impl WhyQueryOptions {
     pub fn new(target: WhyQueryTarget, subject_entity_id: EntityId) -> Self {
         Self {
             target,
-            subject_entity_id,
+            subject: WhyQuerySubject::Entity(subject_entity_id),
+        }
+    }
+
+    pub fn for_entity(target: WhyQueryTarget, subject_entity_id: EntityId) -> Self {
+        Self::new(target, subject_entity_id)
+    }
+
+    pub fn for_evidence(target: WhyQueryTarget, subject_evidence_id: EvidenceId) -> Self {
+        Self {
+            target,
+            subject: WhyQuerySubject::Evidence(subject_evidence_id),
         }
     }
 
@@ -44,16 +71,29 @@ impl WhyQueryOptions {
         self.target
     }
 
-    pub fn subject_entity_id(&self) -> EntityId {
-        self.subject_entity_id
+    pub fn subject(&self) -> WhyQuerySubject {
+        self.subject
+    }
+
+    pub fn subject_entity_id(&self) -> Option<EntityId> {
+        match self.subject {
+            WhyQuerySubject::Entity(entity_id) => Some(entity_id),
+            WhyQuerySubject::Evidence(_) => None,
+        }
+    }
+
+    pub fn subject_evidence_id(&self) -> Option<EvidenceId> {
+        match self.subject {
+            WhyQuerySubject::Entity(_) => None,
+            WhyQuerySubject::Evidence(evidence_id) => Some(evidence_id),
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WhyQueryResult {
     pub target: ResolvedWhyQueryTarget,
-    pub subject_entity_id: EntityId,
-    pub subject_entity_version_id: EntityVersionId,
+    pub subject: ResolvedWhyQuerySubject,
     pub relation_edges: Vec<WhyRelationEdge>,
     pub deferred_relation_families: Vec<WhyDeferredRelationFamily>,
 }
@@ -66,11 +106,48 @@ pub struct ResolvedWhyQueryTarget {
     pub state_digest: Digest,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolvedWhyQuerySubject {
+    Entity {
+        entity_id: EntityId,
+        entity_version_id: EntityVersionId,
+    },
+    Evidence {
+        evidence_id: EvidenceId,
+    },
+}
+
+impl ResolvedWhyQuerySubject {
+    pub fn entity_id(self) -> Option<EntityId> {
+        match self {
+            Self::Entity { entity_id, .. } => Some(entity_id),
+            Self::Evidence { .. } => None,
+        }
+    }
+
+    pub fn entity_version_id(self) -> Option<EntityVersionId> {
+        match self {
+            Self::Entity {
+                entity_version_id, ..
+            } => Some(entity_version_id),
+            Self::Evidence { .. } => None,
+        }
+    }
+
+    pub fn evidence_id(self) -> Option<EvidenceId> {
+        match self {
+            Self::Entity { .. } => None,
+            Self::Evidence { evidence_id } => Some(evidence_id),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WhyRelationKind {
     PrimaryContainment,
     StructuralReference,
     Verifies,
+    EvidencedBy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -90,10 +167,33 @@ pub enum WhyEntityKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WhyRelationEndpoint {
+    Entity {
+        entity_kind: WhyEntityKind,
+        entity_id: EntityId,
+    },
+    Evidence {
+        evidence_id: EvidenceId,
+    },
+}
+
+impl WhyRelationEndpoint {
+    pub fn entity(entity_id: EntityId, entity_kind: WhyEntityKind) -> Self {
+        Self::Entity {
+            entity_kind,
+            entity_id,
+        }
+    }
+
+    pub fn evidence(evidence_id: EvidenceId) -> Self {
+        Self::Evidence { evidence_id }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WhyDeferredRelationFamily {
     Evolution,
     Epistemic,
-    VerificationEvidence,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,10 +202,8 @@ pub struct WhyRelationEdge {
     pub direction: WhyRelationDirection,
     pub relation_id: RelationId,
     pub relation_version_id: RelationVersionId,
-    pub source_entity_id: EntityId,
-    pub source_kind: WhyEntityKind,
-    pub target_entity_id: EntityId,
-    pub target_kind: WhyEntityKind,
+    pub source: WhyRelationEndpoint,
+    pub target: WhyRelationEndpoint,
     pub state_digest: Digest,
 }
 
@@ -114,82 +212,84 @@ pub(crate) fn explain_why(
     options: &WhyQueryOptions,
 ) -> Result<WhyQueryResult> {
     let resolved = resolve_target(connection, options.target())?;
-    let subject_entity_version_id = resolved
-        .state
-        .entities()
-        .iter()
-        .find_map(|(entity_id, entity_version_id)| {
-            (*entity_id == options.subject_entity_id()).then_some(*entity_version_id)
-        })
-        .ok_or_else(|| {
-            WorkVcsError::QueryInvalid(format!(
-                "entity {} is not current in WorkState commit {}",
-                options.subject_entity_id(),
-                resolved.target.commit_id
-            ))
-        })?;
+    let subject = resolve_subject(connection, &resolved, options.subject())?;
 
     let mut relation_edges = Vec::new();
     for relation in primary_containment_relations_at(connection, resolved.target.commit_id)? {
-        if relation.parent_entity_id == options.subject_entity_id()
-            || relation.child_entity_id == options.subject_entity_id()
+        let source =
+            WhyRelationEndpoint::entity(relation.parent_entity_id, relation.parent_kind.into());
+        let target =
+            WhyRelationEndpoint::entity(relation.child_entity_id, relation.child_kind.into());
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
         {
             relation_edges.push(WhyRelationEdge {
                 relation_kind: WhyRelationKind::PrimaryContainment,
-                direction: relation_direction(
-                    options.subject_entity_id(),
-                    relation.parent_entity_id,
-                    relation.child_entity_id,
-                ),
+                direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
-                source_entity_id: relation.parent_entity_id,
-                source_kind: relation.parent_kind.into(),
-                target_entity_id: relation.child_entity_id,
-                target_kind: relation.child_kind.into(),
+                source,
+                target,
                 state_digest: relation.state_digest,
             });
         }
     }
     for relation in structural_references_at(connection, resolved.target.commit_id)? {
-        if relation.referrer_entity_id == options.subject_entity_id()
-            || relation.target_entity_id == options.subject_entity_id()
+        let source =
+            WhyRelationEndpoint::entity(relation.referrer_entity_id, relation.referrer_kind.into());
+        let target =
+            WhyRelationEndpoint::entity(relation.target_entity_id, relation.target_kind.into());
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
         {
             relation_edges.push(WhyRelationEdge {
                 relation_kind: WhyRelationKind::StructuralReference,
-                direction: relation_direction(
-                    options.subject_entity_id(),
-                    relation.referrer_entity_id,
-                    relation.target_entity_id,
-                ),
+                direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
-                source_entity_id: relation.referrer_entity_id,
-                source_kind: relation.referrer_kind.into(),
-                target_entity_id: relation.target_entity_id,
-                target_kind: relation.target_kind.into(),
+                source,
+                target,
                 state_digest: relation.state_digest,
             });
         }
     }
     for relation in verification_relations_at(connection, resolved.target.commit_id)? {
         let target_entity_id = relation.target.entity_id();
-        if relation.source_verification_entity_id == options.subject_entity_id()
-            || target_entity_id == options.subject_entity_id()
+        let source = WhyRelationEndpoint::entity(
+            relation.source_verification_entity_id,
+            WhyEntityKind::Verification,
+        );
+        let target = WhyRelationEndpoint::entity(target_entity_id, relation.target.into());
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
         {
             relation_edges.push(WhyRelationEdge {
                 relation_kind: WhyRelationKind::Verifies,
-                direction: relation_direction(
-                    options.subject_entity_id(),
-                    relation.source_verification_entity_id,
-                    target_entity_id,
-                ),
+                direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
-                source_entity_id: relation.source_verification_entity_id,
-                source_kind: WhyEntityKind::Verification,
-                target_entity_id,
-                target_kind: relation.target.into(),
+                source,
+                target,
+                state_digest: relation.state_digest,
+            });
+        }
+    }
+    for relation in verification_evidence_relations_at(connection, resolved.target.commit_id)? {
+        let source = WhyRelationEndpoint::entity(
+            relation.source_verification_entity_id,
+            WhyEntityKind::Verification,
+        );
+        let target = WhyRelationEndpoint::evidence(relation.evidence_id);
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
+        {
+            relation_edges.push(WhyRelationEdge {
+                relation_kind: WhyRelationKind::EvidencedBy,
+                direction: relation_direction(options.subject(), source, target),
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                source,
+                target,
                 state_digest: relation.state_digest,
             });
         }
@@ -198,22 +298,18 @@ pub(crate) fn explain_why(
         left.relation_kind
             .cmp(&right.relation_kind)
             .then_with(|| left.direction.cmp(&right.direction))
-            .then_with(|| left.source_kind.cmp(&right.source_kind))
-            .then_with(|| left.source_entity_id.cmp(&right.source_entity_id))
-            .then_with(|| left.target_kind.cmp(&right.target_kind))
-            .then_with(|| left.target_entity_id.cmp(&right.target_entity_id))
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.target.cmp(&right.target))
             .then_with(|| left.relation_id.cmp(&right.relation_id))
     });
 
     Ok(WhyQueryResult {
         target: resolved.target,
-        subject_entity_id: options.subject_entity_id(),
-        subject_entity_version_id,
+        subject,
         relation_edges,
         deferred_relation_families: vec![
             WhyDeferredRelationFamily::Evolution,
             WhyDeferredRelationFamily::Epistemic,
-            WhyDeferredRelationFamily::VerificationEvidence,
         ],
     })
 }
@@ -244,16 +340,64 @@ fn resolve_target(
     })
 }
 
+fn resolve_subject(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    subject: WhyQuerySubject,
+) -> Result<ResolvedWhyQuerySubject> {
+    match subject {
+        WhyQuerySubject::Entity(entity_id) => {
+            let entity_version_id = resolved
+                .state
+                .entities()
+                .iter()
+                .find_map(|(current_entity_id, entity_version_id)| {
+                    (*current_entity_id == entity_id).then_some(*entity_version_id)
+                })
+                .ok_or_else(|| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "entity {entity_id} is not current in WorkState commit {}",
+                        resolved.target.commit_id
+                    ))
+                })?;
+            Ok(ResolvedWhyQuerySubject::Entity {
+                entity_id,
+                entity_version_id,
+            })
+        }
+        WhyQuerySubject::Evidence(evidence_id) => {
+            evidence(connection, evidence_id)?;
+            Ok(ResolvedWhyQuerySubject::Evidence { evidence_id })
+        }
+    }
+}
+
 fn relation_direction(
-    subject_entity_id: EntityId,
-    source_entity_id: EntityId,
-    target_entity_id: EntityId,
+    subject: WhyQuerySubject,
+    source: WhyRelationEndpoint,
+    target: WhyRelationEndpoint,
 ) -> WhyRelationDirection {
-    debug_assert!(subject_entity_id == source_entity_id || subject_entity_id == target_entity_id);
-    if subject_entity_id == source_entity_id {
+    debug_assert!(
+        endpoint_matches_subject(subject, source) || endpoint_matches_subject(subject, target)
+    );
+    if endpoint_matches_subject(subject, source) {
         WhyRelationDirection::Outgoing
     } else {
         WhyRelationDirection::Incoming
+    }
+}
+
+fn endpoint_matches_subject(subject: WhyQuerySubject, endpoint: WhyRelationEndpoint) -> bool {
+    match (subject, endpoint) {
+        (
+            WhyQuerySubject::Entity(subject_entity_id),
+            WhyRelationEndpoint::Entity { entity_id, .. },
+        ) => subject_entity_id == entity_id,
+        (
+            WhyQuerySubject::Evidence(subject_evidence_id),
+            WhyRelationEndpoint::Evidence { evidence_id },
+        ) => subject_evidence_id == evidence_id,
+        _ => false,
     }
 }
 

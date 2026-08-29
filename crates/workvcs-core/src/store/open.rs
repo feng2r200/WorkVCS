@@ -11,9 +11,9 @@ use crate::history::{
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
     BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
     CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
-    EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
-    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, CommitSnapshot,
+    EntityTransitionCommit, EntityTransitionOptions, EventListOptions, EventListResult,
+    EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
     GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
@@ -177,6 +177,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::query_history(&self.connection, options)
+    }
+
+    pub(crate) fn commit(&self, commit_id: CommitId) -> Result<CommitSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::commit(&self.connection, commit_id)
     }
 
     pub(crate) fn event(&self, event_id: EventId) -> Result<EventSnapshot> {

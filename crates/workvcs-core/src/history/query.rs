@@ -9,6 +9,7 @@ const GENESIS_COMMIT_KIND: &str = "genesis";
 const NORMAL_COMMIT_KIND: &str = "normal";
 const MERGE_COMMIT_KIND: &str = "merge";
 const PRIMARY_PARENT_ROLE: &str = "primary";
+const SECONDARY_PARENT_ROLE: &str = "secondary";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BranchHead {
@@ -84,6 +85,28 @@ pub struct HistoryEntry {
     pub operation_schema_version: i64,
     pub changeset_created_at_us: i64,
     pub parent_commit_id: Option<CommitId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub commit_kind: String,
+    pub state_digest: Digest,
+    pub committed_at_us: i64,
+    pub operation_type: String,
+    pub operation_schema_version: i64,
+    pub changeset_created_at_us: i64,
+    pub origin_session_id: Option<SessionId>,
+    pub parents: Vec<CommitParentSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitParentSnapshot {
+    pub parent_ordinal: i64,
+    pub parent_role: String,
+    pub parent_commit_id: CommitId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,6 +243,28 @@ pub(crate) fn query_history(
     Ok(HistoryQueryResult {
         start_commit_id,
         entries,
+    })
+}
+
+pub(crate) fn commit(connection: &StoreConnection, commit_id: CommitId) -> Result<CommitSnapshot> {
+    let entry = load_history_entry(connection, commit_id)?;
+    let origin_session_id =
+        load_changeset_origin_session(connection, entry.workspace_id, entry.changeset_id)?;
+    let parents = load_commit_parents(connection, commit_id)?;
+    validate_commit_parent_shape(commit_id, &entry.commit_kind, &parents)?;
+
+    Ok(CommitSnapshot {
+        workspace_id: entry.workspace_id,
+        commit_id: entry.commit_id,
+        changeset_id: entry.changeset_id,
+        commit_kind: entry.commit_kind,
+        state_digest: entry.state_digest,
+        committed_at_us: entry.committed_at_us,
+        operation_type: entry.operation_type,
+        operation_schema_version: entry.operation_schema_version,
+        changeset_created_at_us: entry.changeset_created_at_us,
+        origin_session_id,
+        parents,
     })
 }
 
@@ -460,6 +505,106 @@ fn load_history_entry(connection: &StoreConnection, commit_id: CommitId) -> Resu
         changeset_created_at_us,
         parent_commit_id: None,
     })
+}
+
+fn load_changeset_origin_session(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    changeset_id: ChangeSetId,
+) -> Result<Option<SessionId>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT origin_session_id
+             FROM changeset
+             WHERE workspace_id = ?1
+               AND changeset_id = ?2",
+            params![&workspace_id.raw_bytes()[..], &changeset_id.raw_bytes()[..]],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some(origin_session_id) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "commit ChangeSet {changeset_id} does not exist in workspace {workspace_id}"
+        )));
+    };
+    decode_optional_session_id("changeset.origin_session_id", origin_session_id)
+}
+
+fn load_commit_parents(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<CommitParentSnapshot>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT parent_ordinal, parent_role, parent_commit_id
+             FROM commit_parent
+             WHERE commit_id = ?1
+             ORDER BY parent_ordinal, parent_commit_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&commit_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut parents = Vec::new();
+    for row in rows {
+        let (parent_ordinal, parent_role, parent_commit_id) = row.map_err(storage_error)?;
+        validate_nonnegative("commit_parent.parent_ordinal", parent_ordinal)?;
+        validate_stored_text("commit_parent.parent_role", &parent_role)?;
+        parents.push(CommitParentSnapshot {
+            parent_ordinal,
+            parent_role,
+            parent_commit_id: decode_commit_id("commit_parent.parent_commit_id", parent_commit_id)?,
+        });
+    }
+    Ok(parents)
+}
+
+fn validate_commit_parent_shape(
+    commit_id: CommitId,
+    commit_kind: &str,
+    parents: &[CommitParentSnapshot],
+) -> Result<()> {
+    match commit_kind {
+        GENESIS_COMMIT_KIND if parents.is_empty() => Ok(()),
+        NORMAL_COMMIT_KIND
+            if parents.len() == 1 && parent_matches(&parents[0], 0, PRIMARY_PARENT_ROLE) =>
+        {
+            Ok(())
+        }
+        MERGE_COMMIT_KIND
+            if parents.len() == 2
+                && parent_matches(&parents[0], 0, PRIMARY_PARENT_ROLE)
+                && parent_matches(&parents[1], 1, SECONDARY_PARENT_ROLE) =>
+        {
+            Ok(())
+        }
+        GENESIS_COMMIT_KIND => Err(WorkVcsError::QueryInvalid(format!(
+            "genesis commit {commit_id} must not have parents"
+        ))),
+        NORMAL_COMMIT_KIND => Err(WorkVcsError::QueryInvalid(format!(
+            "normal commit {commit_id} must have one ordinal-0 primary parent"
+        ))),
+        MERGE_COMMIT_KIND => Err(WorkVcsError::QueryInvalid(format!(
+            "merge commit {commit_id} must have ordinal-0 primary and ordinal-1 secondary parents"
+        ))),
+        other => Err(WorkVcsError::QueryInvalid(format!(
+            "unsupported WorkStateCommit kind {other:?}"
+        ))),
+    }
+}
+
+fn parent_matches(parent: &CommitParentSnapshot, ordinal: i64, role: &str) -> bool {
+    parent.parent_ordinal == ordinal && parent.parent_role == role
 }
 
 fn load_first_parent(

@@ -29,7 +29,7 @@ use crate::history::{
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
     BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
     CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, CommitSnapshot,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
     EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
     EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
@@ -157,6 +157,10 @@ impl Engine {
 
     pub fn history(&self, options: HistoryQueryOptions) -> Result<HistoryQueryResult> {
         self.store.history(&options)
+    }
+
+    pub fn commit(&self, commit_id: CommitId) -> Result<CommitSnapshot> {
+        self.store.commit(commit_id)
     }
 
     pub fn event(&self, event_id: EventId) -> Result<EventSnapshot> {

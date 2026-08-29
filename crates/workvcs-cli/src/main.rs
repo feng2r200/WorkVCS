@@ -18,13 +18,13 @@ use workvcs_core::{
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
     CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
     ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
-    CommitId, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EventId,
-    EventListOptions, EventListResult, EventSnapshot, EvidenceId, ExposureId, ExposureTransitionId,
-    ExternalObjectId, ExternalObjectRefListOptions, ExternalObjectRefListResult,
-    ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
-    ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, HistoryEntry,
-    HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
+    EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot, EvidenceId,
+    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
+    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
+    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
+    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
     KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
@@ -123,6 +123,10 @@ enum Command {
 
         #[arg(long)]
         limit: Option<usize>,
+    },
+    Commit {
+        #[command(subcommand)]
+        command: CommitCommand,
     },
     Event {
         #[command(subcommand)]
@@ -650,6 +654,17 @@ enum ProjectionCommand {
 
         #[arg(long)]
         branch: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CommitCommand {
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
     },
 }
 
@@ -2524,6 +2539,13 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(output)
         }
+        Command::Commit { command } => match command {
+            CommitCommand::Show { store, commit } => {
+                let engine = Engine::open(store)?;
+                let snapshot = engine.commit(CommitId::parse_canonical(&commit)?)?;
+                Ok(render_commit_snapshot(&snapshot))
+            }
+        },
         Command::Event { command } => match command {
             EventCommand::Show { store, event } => {
                 let engine = Engine::open(store)?;
@@ -6379,6 +6401,37 @@ fn render_history_entry(output: &mut String, entry: &HistoryEntry) {
     );
 }
 
+fn render_commit_snapshot(commit: &CommitSnapshot) -> String {
+    let origin_session_id = commit
+        .origin_session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let mut output = format!(
+        "workspace_id={}\ncommit_id={}\nchangeset_id={}\ncommit_kind={}\nstate_digest={}\ncommitted_at_us={}\noperation_type={}\noperation_schema_version={}\nchangeset_created_at_us={}\norigin_session_id={}\nparents={}\n",
+        commit.workspace_id,
+        commit.commit_id,
+        commit.changeset_id,
+        commit.commit_kind,
+        commit.state_digest,
+        commit.committed_at_us,
+        commit.operation_type,
+        commit.operation_schema_version,
+        commit.changeset_created_at_us,
+        origin_session_id,
+        commit.parents.len()
+    );
+    for (index, parent) in commit.parents.iter().enumerate() {
+        let _ = writeln!(output, "parent[{index}].ordinal={}", parent.parent_ordinal);
+        let _ = writeln!(output, "parent[{index}].role={}", parent.parent_role);
+        let _ = writeln!(
+            output,
+            "parent[{index}].commit_id={}",
+            parent.parent_commit_id
+        );
+    }
+    output
+}
+
 fn render_event_snapshot(event: &EventSnapshot) -> String {
     let mut output = String::new();
     render_event_fields(&mut output, None, event);
@@ -7905,6 +7958,7 @@ mod tests {
                 "doctor",
                 "store",
                 "history",
+                "commit",
                 "event",
                 "show-at",
                 "restore",
@@ -8037,7 +8091,24 @@ mod tests {
         ])
         .expect("parse task create"))
         .expect("create task");
+        let commit_id = value(&task, "commit_id");
         let changeset_id = value(&task, "changeset_id");
+
+        let shown_commit =
+            run(
+                Cli::try_parse_from(["workvcs", "commit", "show", store, "--commit", &commit_id])
+                    .expect("parse commit show"),
+            )
+            .expect("show commit");
+        assert_eq!(value(&shown_commit, "commit_id"), commit_id);
+        assert_eq!(value(&shown_commit, "changeset_id"), changeset_id);
+        assert_eq!(value(&shown_commit, "commit_kind"), "normal");
+        assert_eq!(value(&shown_commit, "operation_type"), "entity.transition");
+        assert_eq!(value(&shown_commit, "origin_session_id"), "none");
+        assert_eq!(value(&shown_commit, "parents"), "1");
+        assert_eq!(value(&shown_commit, "parent[0].ordinal"), "0");
+        assert_eq!(value(&shown_commit, "parent[0].role"), "primary");
+        assert_eq!(value(&shown_commit, "parent[0].commit_id"), head);
 
         let listed = run(Cli::try_parse_from([
             "workvcs",

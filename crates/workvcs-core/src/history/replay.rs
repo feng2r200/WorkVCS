@@ -67,10 +67,7 @@ fn state_at_inner(
     let replayed = match commit.commit_kind.as_str() {
         GENESIS_COMMIT_KIND => replay_genesis(connection, commit_id, commit),
         NORMAL_COMMIT_KIND => replay_normal(connection, commit_id, commit, visiting),
-        MERGE_COMMIT_KIND => Err(WorkVcsError::ReplayUnsupported(format!(
-            "{:?} WorkStateCommit replay is deferred until ChangeOperation replay is implemented",
-            commit.commit_kind
-        ))),
+        MERGE_COMMIT_KIND => replay_merge(connection, commit_id, commit, visiting),
         other => Err(WorkVcsError::ReplayInvalid(format!(
             "unsupported WorkStateCommit kind {other:?}"
         ))),
@@ -252,7 +249,7 @@ fn replay_normal(
         )));
     }
 
-    let state = apply_entity_transition_changeset(
+    let state = apply_replayable_changeset(
         connection,
         commit.workspace_id,
         commit.changeset_id,
@@ -262,6 +259,50 @@ fn replay_normal(
     if commit.state_digest != actual_digest {
         return Err(WorkVcsError::ReplayInvalid(format!(
             "normal commit {commit_id} state digest does not match replayed WorkState"
+        )));
+    }
+
+    Ok(ReplayedState {
+        workspace_id: commit.workspace_id,
+        commit_id,
+        state,
+        state_digest: actual_digest,
+    })
+}
+
+fn replay_merge(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    commit: CommitRow,
+    visiting: &mut HashSet<[u8; 16]>,
+) -> Result<ReplayedState> {
+    let (primary_parent_commit_id, secondary_parent_commit_id) =
+        load_merge_parents(connection, commit_id)?;
+    let primary_parent = state_at_inner(connection, primary_parent_commit_id, visiting)?;
+    let secondary_parent = state_at_inner(connection, secondary_parent_commit_id, visiting)?;
+    if primary_parent.workspace_id != commit.workspace_id {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "merge commit {commit_id} belongs to workspace {}, but primary parent {} belongs to workspace {}",
+            commit.workspace_id, primary_parent_commit_id, primary_parent.workspace_id
+        )));
+    }
+    if secondary_parent.workspace_id != commit.workspace_id {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "merge commit {commit_id} belongs to workspace {}, but secondary parent {} belongs to workspace {}",
+            commit.workspace_id, secondary_parent_commit_id, secondary_parent.workspace_id
+        )));
+    }
+
+    let state = apply_replayable_changeset(
+        connection,
+        commit.workspace_id,
+        commit.changeset_id,
+        primary_parent.state,
+    )?;
+    let actual_digest = work_state_mapping_digest(&state);
+    if commit.state_digest != actual_digest {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "merge commit {commit_id} state digest does not match replayed WorkState"
         )));
     }
 
@@ -308,7 +349,63 @@ fn load_normal_primary_parent(
     decode_commit_id("commit_parent.parent_commit_id", parent)
 }
 
-fn apply_entity_transition_changeset(
+fn load_merge_parents(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<(CommitId, CommitId)> {
+    require_count(
+        connection,
+        "Merge commit parents",
+        2,
+        "SELECT count(*)
+         FROM commit_parent
+         WHERE commit_id = ?1",
+        params![&commit_id.raw_bytes()[..]],
+    )?;
+
+    let primary_parent = connection
+        .inner()
+        .query_row(
+            "SELECT parent_commit_id
+             FROM commit_parent
+             WHERE commit_id = ?1
+               AND parent_ordinal = 0
+               AND parent_role = 'primary'",
+            params![&commit_id.raw_bytes()[..]],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some(primary_parent) = primary_parent else {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "merge commit {commit_id} does not have ordinal-0 primary parent"
+        )));
+    };
+    let secondary_parent = connection
+        .inner()
+        .query_row(
+            "SELECT parent_commit_id
+             FROM commit_parent
+             WHERE commit_id = ?1
+               AND parent_ordinal = 1
+               AND parent_role = 'secondary'",
+            params![&commit_id.raw_bytes()[..]],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some(secondary_parent) = secondary_parent else {
+        return Err(WorkVcsError::ReplayInvalid(format!(
+            "merge commit {commit_id} does not have ordinal-1 secondary parent"
+        )));
+    };
+    Ok((
+        decode_commit_id("commit_parent.parent_commit_id", primary_parent)?,
+        decode_commit_id("commit_parent.parent_commit_id", secondary_parent)?,
+    ))
+}
+
+fn apply_replayable_changeset(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     changeset_id: ChangeSetId,
@@ -318,14 +415,14 @@ fn apply_entity_transition_changeset(
     let operations = load_change_operations(connection, changeset_id)?;
     if operations.is_empty() {
         return Err(WorkVcsError::ReplayInvalid(format!(
-            "normal ChangeSet {changeset_id} has no ChangeOperations"
+            "ChangeSet {changeset_id} has no ChangeOperations"
         )));
     }
     if operations.len() == 1
         && changeset.operation_payload_json != operations[0].operation_payload_json
     {
         return Err(WorkVcsError::ReplayInvalid(format!(
-            "normal ChangeSet {changeset_id} payload does not match its single ChangeOperation"
+            "ChangeSet {changeset_id} payload does not match its single ChangeOperation"
         )));
     }
 

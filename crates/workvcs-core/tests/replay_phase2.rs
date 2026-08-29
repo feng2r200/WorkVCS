@@ -2,8 +2,9 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    ChangeSetId, CommitId, Engine, EntityId, ErrorCode, EventId, StoreInitOptions, WorkState,
-    WorkspaceInfo, WorkspaceInitOptions, work_state_mapping_digest,
+    BranchForkOptions, CanonicalValue, ChangeSetId, CommitId, Engine, EntityId,
+    EntityTransitionOptions, EntityVersionId, ErrorCode, EventId, OperationId, StoreInitOptions,
+    WorkState, WorkspaceInfo, WorkspaceInitOptions, work_state_mapping_digest,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -143,6 +144,127 @@ fn insert_merge_commit_after_genesis(
             ],
         )
         .expect("insert merge commit");
+    connection
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, 'primary', ?2)",
+            params![&commit_id_bytes[..], &primary_parent_id[..]],
+        )
+        .expect("insert merge primary parent");
+    connection
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 1, 'secondary', ?2)",
+            params![&commit_id_bytes[..], &secondary_parent_id[..]],
+        )
+        .expect("insert merge secondary parent");
+
+    commit_id
+}
+
+fn insert_replayable_merge_commit_after_genesis(
+    connection: &Connection,
+    workspace: &WorkspaceInfo,
+    secondary_parent_id: CommitId,
+    entity_id: EntityId,
+    entity_version_id: EntityVersionId,
+) -> CommitId {
+    let workspace_id = workspace.workspace_id.raw_bytes();
+    let primary_parent_id = workspace.genesis_commit_id.raw_bytes();
+    let secondary_parent_id = secondary_parent_id.raw_bytes();
+    let changeset_id = ChangeSetId::new_v7().raw_bytes();
+    let operation_id = OperationId::new_v7().raw_bytes();
+    let commit_id = CommitId::new_v7();
+    let commit_id_bytes = commit_id.raw_bytes();
+    let entity_id_bytes = entity_id.raw_bytes();
+    let entity_version_id_bytes = entity_version_id.raw_bytes();
+    let operation_payload = format!(
+        "{{\"after_entity_version_id\":\"{entity_version_id}\",\"before_entity_version_id\":null,\"entity_id\":\"{entity_id}\"}}"
+    );
+    let state = WorkState::new([(entity_id, entity_version_id)], []).expect("merge state");
+    let state_digest = work_state_mapping_digest(&state);
+
+    connection
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, 'entity.transition', 1, ?3, '{}', NULL, 5)",
+            params![&changeset_id[..], &workspace_id[..], operation_payload],
+        )
+        .expect("insert replayable merge changeset");
+    connection
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 0, 'entity', ?3, ?4)",
+            params![
+                &operation_id[..],
+                &changeset_id[..],
+                &entity_id_bytes[..],
+                operation_payload
+            ],
+        )
+        .expect("insert merge operation");
+    connection
+        .execute(
+            "INSERT INTO entity_membership_change(
+                operation_id,
+                entity_id,
+                before_entity_version_id,
+                after_entity_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, NULL, ?3, '{}')",
+            params![
+                &operation_id[..],
+                &entity_id_bytes[..],
+                &entity_version_id_bytes[..]
+            ],
+        )
+        .expect("insert merge entity membership change");
+    connection
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, 'merge', ?4, 6)",
+            params![
+                &commit_id_bytes[..],
+                &workspace_id[..],
+                &changeset_id[..],
+                &state_digest.as_bytes()[..]
+            ],
+        )
+        .expect("insert replayable merge commit");
     connection
         .execute(
             "INSERT INTO commit_parent(
@@ -430,7 +552,56 @@ fn state_at_marks_unsupported_normal_operations_unsupported() {
 }
 
 #[test]
-fn state_at_marks_merge_commits_unsupported_for_this_slice() {
+fn state_at_replays_merge_commit_along_primary_parent_changeset() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path, "merge-replay");
+    let source_branch = engine
+        .fork_branch(
+            BranchForkOptions::from_branch(workspace.initial_branch_id, "source")
+                .expect("fork options"),
+        )
+        .expect("fork source");
+    let source_entity = engine
+        .commit_entity_transition(
+            EntityTransitionOptions::create(
+                source_branch.branch_id,
+                workspace.genesis_commit_id,
+                "test.entity",
+                CanonicalValue::object(Vec::new()).expect("state"),
+            )
+            .expect("entity options"),
+        )
+        .expect("source entity");
+
+    let connection = raw_connection(&path);
+    let merge_commit_id = insert_replayable_merge_commit_after_genesis(
+        &connection,
+        &workspace,
+        source_entity.commit_id,
+        source_entity.entity_id,
+        source_entity.entity_version_id,
+    );
+    drop(connection);
+
+    let replayed = engine.state_at(merge_commit_id).expect("merge replay");
+    assert_eq!(replayed.workspace_id, workspace.workspace_id);
+    assert_eq!(replayed.commit_id, merge_commit_id);
+    assert_eq!(
+        replayed.state,
+        WorkState::new(
+            [(source_entity.entity_id, source_entity.entity_version_id)],
+            []
+        )
+        .expect("expected state")
+    );
+    assert_eq!(
+        replayed.state_digest,
+        work_state_mapping_digest(&replayed.state)
+    );
+}
+
+#[test]
+fn state_at_marks_merge_commits_with_unsupported_changesets_unsupported() {
     let (_tempdir, path) = store_path();
     let (engine, workspace) = create_workspace(&path, "merge");
 
@@ -440,7 +611,7 @@ fn state_at_marks_merge_commits_unsupported_for_this_slice() {
 
     let error = engine
         .state_at(merge_commit_id)
-        .expect_err("merge replay not implemented");
+        .expect_err("merge changeset unsupported");
 
     assert_eq!(error.code(), ErrorCode::ReplayUnsupported);
 }

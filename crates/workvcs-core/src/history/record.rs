@@ -21,6 +21,8 @@ pub enum RecordKind {
     Assumption,
     Decision,
     Finding,
+    Question,
+    Risk,
 }
 
 impl RecordKind {
@@ -29,6 +31,8 @@ impl RecordKind {
             Self::Assumption => "assumption",
             Self::Decision => "decision",
             Self::Finding => "finding",
+            Self::Question => "question",
+            Self::Risk => "risk",
         }
     }
 
@@ -37,6 +41,8 @@ impl RecordKind {
             "assumption" => Ok(Self::Assumption),
             "decision" => Ok(Self::Decision),
             "finding" => Ok(Self::Finding),
+            "question" => Ok(Self::Question),
+            "risk" => Ok(Self::Risk),
             other => Err(WorkVcsError::RecordInvalid(format!(
                 "record kind {other:?} is not implemented by the semantic Record API"
             ))),
@@ -96,6 +102,28 @@ pub struct RecordState {
 }
 
 impl RecordState {
+    pub fn question(statement: impl Into<String>) -> Result<Self> {
+        let statement = statement.into();
+        validate_statement(&statement)?;
+        Ok(Self {
+            kind: RecordKind::Question,
+            statement,
+            scope: CanonicalValue::object(Vec::new())?,
+            status: RecordStatus::Active,
+        })
+    }
+
+    pub fn risk(statement: impl Into<String>) -> Result<Self> {
+        let statement = statement.into();
+        validate_statement(&statement)?;
+        Ok(Self {
+            kind: RecordKind::Risk,
+            statement,
+            scope: CanonicalValue::object(Vec::new())?,
+            status: RecordStatus::Active,
+        })
+    }
+
     pub fn decision(statement: impl Into<String>) -> Result<Self> {
         let statement = statement.into();
         validate_statement(&statement)?;
@@ -266,6 +294,32 @@ impl RecordTransitionOptions {
 }
 
 impl RecordCreateOptions {
+    pub fn question(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        statement: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            state: RecordState::question(statement)?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn risk(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        statement: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            state: RecordState::risk(statement)?,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
     pub fn decision(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -668,7 +722,10 @@ fn validate_assumption_lifecycle_transition(
 
 fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
     match (kind, status) {
-        (RecordKind::Finding | RecordKind::Decision, RecordStatus::Active)
+        (
+            RecordKind::Finding | RecordKind::Decision | RecordKind::Question | RecordKind::Risk,
+            RecordStatus::Active,
+        )
         | (
             RecordKind::Assumption,
             RecordStatus::Unverified | RecordStatus::Validated | RecordStatus::Invalidated,

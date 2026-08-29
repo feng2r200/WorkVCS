@@ -400,6 +400,38 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    Question {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+    },
+    Risk {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1065,6 +1097,50 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let mut engine = Engine::open(store)?;
             let mut options = RecordCreateOptions::decision(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        Command::Record {
+            command:
+                RecordCommand::Question {
+                    store,
+                    branch,
+                    head,
+                    statement,
+                    scope_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::question(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        Command::Record {
+            command:
+                RecordCommand::Risk {
+                    store,
+                    branch,
+                    head,
+                    statement,
+                    scope_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::risk(
                 BranchId::parse_canonical(&branch)?,
                 CommitId::parse_canonical(&head)?,
                 statement,
@@ -3105,6 +3181,65 @@ mod tests {
         assert!(record.contains("record_kind=decision"));
         assert!(record.contains("record_status=active"));
         assert!(record.contains("record_entity_id="));
+    }
+
+    #[test]
+    fn cli_runs_question_and_risk_record_workflows() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let question = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "question",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Which replay invariant should be exposed next?",
+        ])
+        .expect("parse record question"))
+        .expect("create question record");
+        assert!(question.contains("record_kind=question"));
+        assert!(question.contains("record_status=active"));
+
+        let risk = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "risk",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&question, "commit_id"),
+            "--statement",
+            "Manual ordering remains unresolved",
+        ])
+        .expect("parse record risk"))
+        .expect("create risk record");
+        assert!(risk.contains("record_kind=risk"));
+        assert!(risk.contains("record_status=active"));
     }
 
     fn value(output: &str, key: &str) -> String {

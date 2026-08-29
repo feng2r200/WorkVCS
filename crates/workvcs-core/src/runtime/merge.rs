@@ -1,10 +1,12 @@
 use super::session;
-use crate::canonical::{CanonicalValue, canonical_bytes, parse_canonical_json};
+use crate::canonical::{
+    CanonicalValue, WorkState, canonical_bytes, parse_canonical_json, work_state_mapping_digest,
+};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history;
 use crate::identity::{
-    BranchId, CommitId, EntityId, EntityVersionId, EventId, MergeId, MergeItemId, RelationId,
-    RelationVersionId, SessionId, WorkspaceId,
+    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, MergeId,
+    MergeItemId, OperationId, RelationId, RelationVersionId, SessionId, WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -27,6 +29,13 @@ const RELATION_MERGE_ITEM_SUBJECT_KIND: &str = "relation";
 const MERGE_ATTEMPT_OBJECT_KIND: &str = "merge_attempt";
 const MERGE_STARTED_EVENT_KIND: &str = "merge.started";
 const MERGE_ABORTED_EVENT_KIND: &str = "merge.aborted";
+const MERGE_COMPLETED_EVENT_KIND: &str = "merge.completed";
+const MERGE_CONTINUE_OPERATION_TYPE: &str = "merge.continue";
+const MERGE_CONTINUE_OPERATION_SCHEMA_VERSION: i64 = 1;
+const MERGE_COMMIT_KIND: &str = "merge";
+const PRIMARY_PARENT_ROLE: &str = "primary";
+const SECONDARY_PARENT_ROLE: &str = "secondary";
+const EMPTY_FIELD_DELTA: &str = "{}";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergeRuntimeState {
@@ -318,6 +327,61 @@ pub struct MergeFreezeResolutionsResult {
     pub merge_id: MergeId,
     pub workspace_id: WorkspaceId,
     pub frozen_items: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeContinueOptions {
+    merge_id: MergeId,
+    continue_session_id: Option<SessionId>,
+    detail: CanonicalValue,
+}
+
+impl MergeContinueOptions {
+    pub fn new(merge_id: MergeId) -> Result<Self> {
+        Ok(Self {
+            merge_id,
+            continue_session_id: None,
+            detail: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_continue_session_id(mut self, continue_session_id: SessionId) -> Self {
+        self.continue_session_id = Some(continue_session_id);
+        self
+    }
+
+    pub fn with_detail(mut self, detail: CanonicalValue) -> Result<Self> {
+        require_object_value("merge continue detail", &detail)?;
+        self.detail = detail;
+        Ok(self)
+    }
+
+    pub fn merge_id(&self) -> MergeId {
+        self.merge_id
+    }
+
+    pub fn continue_session_id(&self) -> Option<SessionId> {
+        self.continue_session_id
+    }
+
+    pub fn detail(&self) -> &CanonicalValue {
+        &self.detail
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeContinueResult {
+    pub merge_id: MergeId,
+    pub workspace_id: WorkspaceId,
+    pub target_branch_id: BranchId,
+    pub source_branch_id: BranchId,
+    pub result_commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub work_state_digest: Digest,
+    pub continued_by_session_id: Option<SessionId>,
+    pub runtime_state: MergeRuntimeState,
+    pub event_id: EventId,
+    pub completed_at_us: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -876,6 +940,112 @@ pub(crate) fn freeze_merge_resolutions(
     })
 }
 
+pub(crate) fn continue_merge(
+    connection: &mut StoreConnection,
+    options: &MergeContinueOptions,
+) -> Result<MergeContinueResult> {
+    connection.verify_foreign_keys()?;
+
+    let prepared = prepare_merge_continue(connection, options.merge_id())?;
+    let completed_at_us = current_epoch_micros()?;
+    let changeset_id = ChangeSetId::new_v7();
+    let result_commit_id = CommitId::new_v7();
+    let event_id = EventId::new_v7();
+    let detail_json = canonical_json_string(options.detail())?;
+    let operation_payload_json = merge_continue_payload_json(&MergeContinuePayload {
+        merge: &prepared.merge,
+        result_commit_id,
+        applied_operations: prepared.operations.len(),
+    })?;
+    let completed_runtime_json = runtime_json(MergeRuntimeState::Completed)?;
+    let event_payload_json = merge_completed_payload_json(&MergeCompletedPayload {
+        merge: &prepared.merge,
+        result_commit_id,
+        continued_by_session_id: options.continue_session_id(),
+        applied_operations: prepared.operations.len(),
+        detail: options.detail().clone(),
+    })?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let merge = load_active_merge_for_update(&transaction, options.merge_id())?;
+    if merge.workspace_id != prepared.merge.workspace_id
+        || merge.target_branch_id != prepared.merge.target_branch_id
+        || merge.source_branch_id != prepared.merge.source_branch_id
+        || merge.merge_base_commit_id != prepared.merge.merge_base_commit_id
+        || merge.target_head_commit_id != prepared.merge.target_head_commit_id
+        || merge.source_head_commit_id != prepared.merge.source_head_commit_id
+    {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {} changed while preparing continuation",
+            options.merge_id()
+        )));
+    }
+    let target = load_active_branch(&transaction, merge.target_branch_id)?;
+    if target.workspace_id != merge.workspace_id
+        || target.head_commit_id != merge.target_head_commit_id
+    {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "merge target branch {} moved from {} to {}",
+            merge.target_branch_id, merge.target_head_commit_id, target.head_commit_id
+        )));
+    }
+    let source = load_active_branch(&transaction, merge.source_branch_id)?;
+    if source.workspace_id != merge.workspace_id
+        || source.head_commit_id != merge.source_head_commit_id
+    {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "merge source branch {} moved from {} to {}",
+            merge.source_branch_id, merge.source_head_commit_id, source.head_commit_id
+        )));
+    }
+    ensure_all_merge_items_frozen(&transaction, merge.merge_id)?;
+    if let Some(continue_session_id) = options.continue_session_id() {
+        let session =
+            session::load_active_session_runtime_for_update(&transaction, continue_session_id)?;
+        if session.active_workspace_id != merge.workspace_id {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "merge continue session {continue_session_id} belongs to workspace {}, not {}",
+                session.active_workspace_id, merge.workspace_id
+            )));
+        }
+        session::update_session_activity(&transaction, continue_session_id, completed_at_us)?;
+    }
+
+    write_merge_continue(
+        &transaction,
+        &prepared,
+        &MergeContinueWrite {
+            changeset_id,
+            result_commit_id,
+            event_id,
+            continue_session_id: options.continue_session_id(),
+            completed_at_us,
+            operation_payload_json: &operation_payload_json,
+            detail_json: &detail_json,
+            completed_runtime_json: &completed_runtime_json,
+            event_payload_json: &event_payload_json,
+        },
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(MergeContinueResult {
+        merge_id: merge.merge_id,
+        workspace_id: merge.workspace_id,
+        target_branch_id: merge.target_branch_id,
+        source_branch_id: merge.source_branch_id,
+        result_commit_id,
+        changeset_id,
+        work_state_digest: prepared.work_state_digest,
+        continued_by_session_id: options.continue_session_id(),
+        runtime_state: MergeRuntimeState::Completed,
+        event_id,
+        completed_at_us,
+    })
+}
+
 pub(crate) fn merge_attempt(
     connection: &StoreConnection,
     merge_id: MergeId,
@@ -928,6 +1098,45 @@ struct PreparedMergeItem {
     classification: MergeItemClassification,
     subject: MergeItemSubject,
     payload_json: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FrozenMergeItem {
+    merge_item_id: MergeItemId,
+    ordinal: i64,
+    subject: MergeItemSubject,
+    payload: CanonicalValue,
+    resolution: MergeItemResolutionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedMergeContinue {
+    merge: MergeAttemptSnapshot,
+    work_state_digest: Digest,
+    operations: Vec<PreparedMergeOperation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedMergeOperation {
+    operation_id: OperationId,
+    ordinal: i64,
+    subject: MergeItemSubject,
+    operation_payload_json: String,
+    membership_change: PreparedMembershipChange,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedMembershipChange {
+    Entity {
+        entity_id: EntityId,
+        before_entity_version_id: Option<EntityVersionId>,
+        after_entity_version_id: EntityVersionId,
+    },
+    Relation {
+        relation_id: RelationId,
+        before_relation_version_id: Option<RelationVersionId>,
+        after_relation_version_id: Option<RelationVersionId>,
+    },
 }
 
 fn load_active_branch(transaction: &Transaction<'_>, branch_id: BranchId) -> Result<BranchRow> {
@@ -1200,6 +1409,530 @@ fn copy_runtime_resolutions_to_frozen(
             params![&merge_id.raw_bytes()[..]],
         )
         .map_err(storage_error)
+}
+
+fn ensure_all_merge_items_frozen(transaction: &Transaction<'_>, merge_id: MergeId) -> Result<()> {
+    let missing: i64 = transaction
+        .query_row(
+            "SELECT count(*)
+             FROM merge_item
+             LEFT JOIN merge_resolution
+               ON merge_resolution.merge_item_id = merge_item.merge_item_id
+             WHERE merge_item.merge_id = ?1
+               AND merge_resolution.merge_item_id IS NULL",
+            params![&merge_id.raw_bytes()[..]],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    if missing != 0 {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} has {missing} unfrozen item resolution(s)"
+        )));
+    }
+    Ok(())
+}
+
+fn prepare_merge_continue(
+    connection: &StoreConnection,
+    merge_id: MergeId,
+) -> Result<PreparedMergeContinue> {
+    let merge = load_merge_attempt_snapshot(connection.inner(), merge_id)?;
+    if merge.runtime_state != MergeRuntimeState::Active || merge.outcome.is_some() {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} is not active"
+        )));
+    }
+
+    let target = history::state_at(connection, merge.target_head_commit_id)?;
+    let source = history::state_at(connection, merge.source_head_commit_id)?;
+    if target.workspace_id != merge.workspace_id || source.workspace_id != merge.workspace_id {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} replay crossed workspace boundary for workspace {}",
+            merge.workspace_id
+        )));
+    }
+
+    let frozen_items = load_frozen_merge_items(connection.inner(), merge_id)?;
+    if frozen_items.len() != merge.items.len() {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} has unfrozen item resolution(s)"
+        )));
+    }
+    if frozen_items.is_empty() {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} has no merge items to continue"
+        )));
+    }
+
+    let mut entities = entity_map(target.state.entities());
+    let mut relations = relation_map(target.state.relations());
+    let source_entities = entity_map(source.state.entities());
+    let source_relations = relation_map(source.state.relations());
+    let mut operations = Vec::new();
+
+    for item in &frozen_items {
+        match item.subject {
+            MergeItemSubject::Entity(entity_id) => prepare_entity_merge_operation(
+                merge_id,
+                item,
+                entity_id,
+                &mut entities,
+                &source_entities,
+                &mut operations,
+            )?,
+            MergeItemSubject::Relation(relation_id) => prepare_relation_merge_operation(
+                merge_id,
+                item,
+                relation_id,
+                &mut relations,
+                &source_relations,
+                &mut operations,
+            )?,
+        }
+    }
+
+    let result_state = WorkState::new(entities, relations).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!("merge {merge_id} result state is invalid: {error}"))
+    })?;
+    let work_state_digest = work_state_mapping_digest(&result_state);
+    Ok(PreparedMergeContinue {
+        merge,
+        work_state_digest,
+        operations,
+    })
+}
+
+fn prepare_entity_merge_operation(
+    merge_id: MergeId,
+    item: &FrozenMergeItem,
+    subject_entity_id: EntityId,
+    entities: &mut BTreeMap<EntityId, EntityVersionId>,
+    source_entities: &BTreeMap<EntityId, EntityVersionId>,
+    operations: &mut Vec<PreparedMergeOperation>,
+) -> Result<()> {
+    let payload = entity_merge_payload(merge_id, item)?;
+    if payload.entity_id != subject_entity_id {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {} subject entity does not match payload",
+            item.merge_item_id
+        )));
+    }
+    let source_version = source_entities.get(&subject_entity_id).copied();
+    if source_version != payload.source_entity_version_id {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {} source entity version is stale",
+            item.merge_item_id
+        )));
+    }
+    let current = entities.get(&subject_entity_id).copied();
+    if current != payload.target_entity_version_id {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {} target entity version is stale",
+            item.merge_item_id
+        )));
+    }
+
+    match item.resolution.resolution_kind {
+        MergeResolutionKind::Ours => Ok(()),
+        MergeResolutionKind::Custom => Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {} custom resolution cannot be continued in this slice",
+            item.merge_item_id
+        ))),
+        MergeResolutionKind::Theirs => {
+            let after_entity_version_id = payload.source_entity_version_id.ok_or_else(|| {
+                WorkVcsError::ReplayUnsupported(format!(
+                    "merge {merge_id} item {} would remove entity {subject_entity_id}",
+                    item.merge_item_id
+                ))
+            })?;
+            if payload.target_entity_version_id == Some(after_entity_version_id) {
+                return Err(WorkVcsError::WorkspaceInvalid(format!(
+                    "merge {merge_id} item {} has identical target and source entity versions",
+                    item.merge_item_id
+                )));
+            }
+            entities.insert(subject_entity_id, after_entity_version_id);
+            let operation_payload_json = entity_transition_payload_json(
+                subject_entity_id,
+                payload.target_entity_version_id,
+                after_entity_version_id,
+            )?;
+            operations.push(PreparedMergeOperation {
+                operation_id: OperationId::new_v7(),
+                ordinal: operations.len() as i64,
+                subject: MergeItemSubject::Entity(subject_entity_id),
+                operation_payload_json,
+                membership_change: PreparedMembershipChange::Entity {
+                    entity_id: subject_entity_id,
+                    before_entity_version_id: payload.target_entity_version_id,
+                    after_entity_version_id,
+                },
+            });
+            Ok(())
+        }
+    }
+}
+
+fn prepare_relation_merge_operation(
+    merge_id: MergeId,
+    item: &FrozenMergeItem,
+    subject_relation_id: RelationId,
+    relations: &mut BTreeMap<RelationId, RelationVersionId>,
+    source_relations: &BTreeMap<RelationId, RelationVersionId>,
+    operations: &mut Vec<PreparedMergeOperation>,
+) -> Result<()> {
+    let payload = relation_merge_payload(merge_id, item)?;
+    if payload.relation_id != subject_relation_id {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {} subject relation does not match payload",
+            item.merge_item_id
+        )));
+    }
+    let source_version = source_relations.get(&subject_relation_id).copied();
+    if source_version != payload.source_relation_version_id {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {} source relation version is stale",
+            item.merge_item_id
+        )));
+    }
+    let current = relations.get(&subject_relation_id).copied();
+    if current != payload.target_relation_version_id {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {} target relation version is stale",
+            item.merge_item_id
+        )));
+    }
+
+    match item.resolution.resolution_kind {
+        MergeResolutionKind::Ours => Ok(()),
+        MergeResolutionKind::Custom => Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {} custom resolution cannot be continued in this slice",
+            item.merge_item_id
+        ))),
+        MergeResolutionKind::Theirs => {
+            match (
+                payload.target_relation_version_id,
+                payload.source_relation_version_id,
+            ) {
+                (None, Some(after_relation_version_id)) => {
+                    relations.insert(subject_relation_id, after_relation_version_id);
+                }
+                (Some(_), None) => {
+                    relations.remove(&subject_relation_id);
+                }
+                (Some(_), Some(_)) => {
+                    return Err(WorkVcsError::ReplayUnsupported(format!(
+                        "merge {merge_id} item {} would update relation version {subject_relation_id}",
+                        item.merge_item_id
+                    )));
+                }
+                (None, None) => {
+                    return Err(WorkVcsError::WorkspaceInvalid(format!(
+                        "merge {merge_id} item {} has no target or source relation version",
+                        item.merge_item_id
+                    )));
+                }
+            }
+            let operation_payload_json = relation_transition_payload_json(
+                subject_relation_id,
+                payload.target_relation_version_id,
+                payload.source_relation_version_id,
+            )?;
+            operations.push(PreparedMergeOperation {
+                operation_id: OperationId::new_v7(),
+                ordinal: operations.len() as i64,
+                subject: MergeItemSubject::Relation(subject_relation_id),
+                operation_payload_json,
+                membership_change: PreparedMembershipChange::Relation {
+                    relation_id: subject_relation_id,
+                    before_relation_version_id: payload.target_relation_version_id,
+                    after_relation_version_id: payload.source_relation_version_id,
+                },
+            });
+            Ok(())
+        }
+    }
+}
+
+fn write_merge_continue(
+    transaction: &Transaction<'_>,
+    prepared: &PreparedMergeContinue,
+    write: &MergeContinueWrite<'_>,
+) -> Result<()> {
+    let merge = &prepared.merge;
+    let workspace_id_bytes = merge.workspace_id.raw_bytes();
+    let merge_id_bytes = merge.merge_id.raw_bytes();
+    let target_branch_id_bytes = merge.target_branch_id.raw_bytes();
+    let target_head_commit_id_bytes = merge.target_head_commit_id.raw_bytes();
+    let source_head_commit_id_bytes = merge.source_head_commit_id.raw_bytes();
+    let changeset_id_bytes = write.changeset_id.raw_bytes();
+    let result_commit_id_bytes = write.result_commit_id.raw_bytes();
+    let work_state_digest_bytes = prepared.work_state_digest.as_bytes();
+    let event_id_bytes = write.event_id.raw_bytes();
+    let continue_session_id_bytes = write.continue_session_id.map(|id| id.raw_bytes());
+
+    transaction
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                &changeset_id_bytes[..],
+                &workspace_id_bytes[..],
+                MERGE_CONTINUE_OPERATION_TYPE,
+                MERGE_CONTINUE_OPERATION_SCHEMA_VERSION,
+                write.operation_payload_json,
+                write.detail_json,
+                continue_session_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                write.completed_at_us
+            ],
+        )
+        .map_err(storage_error)?;
+    insert_prepared_merge_operations(transaction, write.changeset_id, &prepared.operations)?;
+    transaction
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &result_commit_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                MERGE_COMMIT_KIND,
+                &work_state_digest_bytes[..],
+                write.completed_at_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, ?2, ?3)",
+            params![
+                &result_commit_id_bytes[..],
+                PRIMARY_PARENT_ROLE,
+                &target_head_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 1, ?2, ?3)",
+            params![
+                &result_commit_id_bytes[..],
+                SECONDARY_PARENT_ROLE,
+                &source_head_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    let moved = transaction
+        .execute(
+            "UPDATE branch
+             SET head_commit_id = ?1
+             WHERE branch_id = ?2
+               AND head_commit_id = ?3",
+            params![
+                &result_commit_id_bytes[..],
+                &target_branch_id_bytes[..],
+                &target_head_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    if moved != 1 {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "merge target branch {} head changed before merge {} could be installed",
+            merge.target_branch_id, merge.merge_id
+        )));
+    }
+    transaction
+        .execute(
+            "UPDATE merge_runtime
+             SET runtime_json = ?2
+             WHERE merge_id = ?1",
+            params![&merge_id_bytes[..], write.completed_runtime_json],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO merge_attempt_outcome(
+                merge_id,
+                outcome,
+                result_commit_id,
+                completed_at_us,
+                detail_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &merge_id_bytes[..],
+                COMPLETED_MERGE_OUTCOME,
+                &result_commit_id_bytes[..],
+                write.completed_at_us,
+                write.detail_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &event_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                continue_session_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                MERGE_COMPLETED_EVENT_KIND,
+                write.completed_at_us,
+                write.event_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+struct MergeContinueWrite<'a> {
+    changeset_id: ChangeSetId,
+    result_commit_id: CommitId,
+    event_id: EventId,
+    continue_session_id: Option<SessionId>,
+    completed_at_us: i64,
+    operation_payload_json: &'a str,
+    detail_json: &'a str,
+    completed_runtime_json: &'a str,
+    event_payload_json: &'a str,
+}
+
+fn insert_prepared_merge_operations(
+    transaction: &Transaction<'_>,
+    changeset_id: ChangeSetId,
+    operations: &[PreparedMergeOperation],
+) -> Result<()> {
+    let changeset_id_bytes = changeset_id.raw_bytes();
+    for operation in operations {
+        let operation_id_bytes = operation.operation_id.raw_bytes();
+        let subject_object_id_bytes = operation.subject.object_id_bytes();
+        transaction
+            .execute(
+                "INSERT INTO change_operation(
+                    operation_id,
+                    changeset_id,
+                    ordinal,
+                    subject_family,
+                    subject_object_id,
+                    operation_payload_json
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    &operation_id_bytes[..],
+                    &changeset_id_bytes[..],
+                    operation.ordinal,
+                    operation.subject.kind(),
+                    &subject_object_id_bytes[..],
+                    operation.operation_payload_json
+                ],
+            )
+            .map_err(storage_error)?;
+        match operation.membership_change {
+            PreparedMembershipChange::Entity {
+                entity_id,
+                before_entity_version_id,
+                after_entity_version_id,
+            } => {
+                let entity_id_bytes = entity_id.raw_bytes();
+                let before_entity_version_id_bytes =
+                    before_entity_version_id.map(|version_id| version_id.raw_bytes());
+                let after_entity_version_id_bytes = after_entity_version_id.raw_bytes();
+                transaction
+                    .execute(
+                        "INSERT INTO entity_membership_change(
+                            operation_id,
+                            entity_id,
+                            before_entity_version_id,
+                            after_entity_version_id,
+                            field_delta_json
+                         )
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![
+                            &operation_id_bytes[..],
+                            &entity_id_bytes[..],
+                            before_entity_version_id_bytes
+                                .as_ref()
+                                .map(|bytes| &bytes[..]),
+                            &after_entity_version_id_bytes[..],
+                            EMPTY_FIELD_DELTA
+                        ],
+                    )
+                    .map_err(storage_error)?;
+            }
+            PreparedMembershipChange::Relation {
+                relation_id,
+                before_relation_version_id,
+                after_relation_version_id,
+            } => {
+                let relation_id_bytes = relation_id.raw_bytes();
+                let before_relation_version_id_bytes =
+                    before_relation_version_id.map(|version_id| version_id.raw_bytes());
+                let after_relation_version_id_bytes =
+                    after_relation_version_id.map(|version_id| version_id.raw_bytes());
+                transaction
+                    .execute(
+                        "INSERT INTO relation_membership_change(
+                            operation_id,
+                            relation_id,
+                            before_relation_version_id,
+                            after_relation_version_id,
+                            field_delta_json
+                         )
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![
+                            &operation_id_bytes[..],
+                            &relation_id_bytes[..],
+                            before_relation_version_id_bytes
+                                .as_ref()
+                                .map(|bytes| &bytes[..]),
+                            after_relation_version_id_bytes
+                                .as_ref()
+                                .map(|bytes| &bytes[..]),
+                            EMPTY_FIELD_DELTA
+                        ],
+                    )
+                    .map_err(storage_error)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn merge_attempt_ids(connection: &Connection, options: &MergeListOptions) -> Result<Vec<MergeId>> {
@@ -1676,6 +2409,100 @@ fn load_merge_items(connection: &Connection, merge_id: MergeId) -> Result<Vec<Me
     Ok(items)
 }
 
+fn load_frozen_merge_items(
+    connection: &Connection,
+    merge_id: MergeId,
+) -> Result<Vec<FrozenMergeItem>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT merge_item.merge_item_id,
+                    merge_item.ordinal,
+                    merge_item.subject_object_id,
+                    object_identity.object_kind,
+                    merge_item.item_payload_json,
+                    merge_resolution.resolution_kind,
+                    merge_resolution.custom_payload_json,
+                    merge_resolution.rationale_json,
+                    merge_resolution.resolved_by_session_id,
+                    merge_resolution.resolved_at_us
+             FROM merge_item
+             JOIN merge_resolution
+               ON merge_resolution.merge_item_id = merge_item.merge_item_id
+             LEFT JOIN object_identity
+               ON object_identity.object_id = merge_item.subject_object_id
+             WHERE merge_item.merge_id = ?1
+             ORDER BY merge_item.ordinal",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&merge_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<Vec<u8>>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<Vec<u8>>>(8)?,
+                row.get::<_, i64>(9)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        let (
+            merge_item_id,
+            ordinal,
+            subject_object_id,
+            object_kind,
+            item_payload_json,
+            resolution_kind,
+            custom_payload_json,
+            rationale_json,
+            resolved_by_session_id,
+            resolved_at_us,
+        ) = row.map_err(storage_error)?;
+        let merge_item_id = decode_merge_item_id("merge_item.merge_item_id", merge_item_id)?;
+        let subject = decode_merge_item_subject(merge_id, subject_object_id, object_kind)?
+            .ok_or_else(|| {
+                WorkVcsError::WorkspaceInvalid(format!(
+                    "merge {merge_id} item {merge_item_id} has no subject"
+                ))
+            })?;
+        let payload = parse_canonical_json(item_payload_json.as_bytes()).map_err(|error| {
+            WorkVcsError::WorkspaceInvalid(format!(
+                "merge {merge_id} item {merge_item_id} item_payload_json is not canonical JSON: {error}"
+            ))
+        })?;
+        require_object_value("merge item payload", &payload)?;
+        let resolution = decode_merge_item_resolution_snapshot(
+            merge_id,
+            merge_item_id,
+            Some(resolution_kind),
+            custom_payload_json,
+            Some(rationale_json),
+            resolved_by_session_id,
+            Some(resolved_at_us),
+        )?
+        .ok_or_else(|| {
+            WorkVcsError::WorkspaceInvalid(format!(
+                "merge {merge_id} item {merge_item_id} has no frozen resolution"
+            ))
+        })?;
+        items.push(FrozenMergeItem {
+            merge_item_id,
+            ordinal,
+            subject,
+            payload,
+            resolution,
+        });
+    }
+    Ok(items)
+}
+
 fn decode_merge_item_subject(
     merge_id: MergeId,
     subject_object_id: Option<Vec<u8>>,
@@ -2002,6 +2829,365 @@ fn merge_aborted_payload_json(payload: &MergeAbortedPayload) -> Result<String> {
         (
             "workspace_id".to_owned(),
             CanonicalValue::String(payload.merge.workspace_id.to_string()),
+        ),
+    ])?)
+}
+
+struct MergeContinuePayload<'a> {
+    merge: &'a MergeAttemptSnapshot,
+    result_commit_id: CommitId,
+    applied_operations: usize,
+}
+
+fn merge_continue_payload_json(payload: &MergeContinuePayload<'_>) -> Result<String> {
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "applied_operations".to_owned(),
+            canonical_count(
+                "merge continue applied operations",
+                payload.applied_operations,
+            )?,
+        ),
+        (
+            "merge_base_commit_id".to_owned(),
+            CanonicalValue::String(payload.merge.merge_base_commit_id.to_string()),
+        ),
+        (
+            "merge_id".to_owned(),
+            CanonicalValue::String(payload.merge.merge_id.to_string()),
+        ),
+        (
+            "result_commit_id".to_owned(),
+            CanonicalValue::String(payload.result_commit_id.to_string()),
+        ),
+        (
+            "source_branch_id".to_owned(),
+            CanonicalValue::String(payload.merge.source_branch_id.to_string()),
+        ),
+        (
+            "source_head_commit_id".to_owned(),
+            CanonicalValue::String(payload.merge.source_head_commit_id.to_string()),
+        ),
+        (
+            "target_branch_id".to_owned(),
+            CanonicalValue::String(payload.merge.target_branch_id.to_string()),
+        ),
+        (
+            "target_head_commit_id".to_owned(),
+            CanonicalValue::String(payload.merge.target_head_commit_id.to_string()),
+        ),
+        (
+            "workspace_id".to_owned(),
+            CanonicalValue::String(payload.merge.workspace_id.to_string()),
+        ),
+    ])?)
+}
+
+struct MergeCompletedPayload<'a> {
+    merge: &'a MergeAttemptSnapshot,
+    result_commit_id: CommitId,
+    continued_by_session_id: Option<SessionId>,
+    applied_operations: usize,
+    detail: CanonicalValue,
+}
+
+fn merge_completed_payload_json(payload: &MergeCompletedPayload<'_>) -> Result<String> {
+    let origin_session_id = match payload.merge.origin_session_id {
+        Some(origin_session_id) => CanonicalValue::String(origin_session_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    let continued_by_session_id = match payload.continued_by_session_id {
+        Some(session_id) => CanonicalValue::String(session_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "applied_operations".to_owned(),
+            canonical_count(
+                "merge completed applied operations",
+                payload.applied_operations,
+            )?,
+        ),
+        (
+            "continued_by_session_id".to_owned(),
+            continued_by_session_id,
+        ),
+        ("detail".to_owned(), payload.detail.clone()),
+        (
+            "lifecycle_state".to_owned(),
+            CanonicalValue::String(COMPLETED_MERGE_RUNTIME_STATE.to_owned()),
+        ),
+        (
+            "merge_base_commit_id".to_owned(),
+            CanonicalValue::String(payload.merge.merge_base_commit_id.to_string()),
+        ),
+        (
+            "merge_id".to_owned(),
+            CanonicalValue::String(payload.merge.merge_id.to_string()),
+        ),
+        ("origin_session_id".to_owned(), origin_session_id),
+        (
+            "outcome".to_owned(),
+            CanonicalValue::String(COMPLETED_MERGE_OUTCOME.to_owned()),
+        ),
+        (
+            "result_commit_id".to_owned(),
+            CanonicalValue::String(payload.result_commit_id.to_string()),
+        ),
+        (
+            "source_branch_id".to_owned(),
+            CanonicalValue::String(payload.merge.source_branch_id.to_string()),
+        ),
+        (
+            "source_head_commit_id".to_owned(),
+            CanonicalValue::String(payload.merge.source_head_commit_id.to_string()),
+        ),
+        (
+            "target_branch_id".to_owned(),
+            CanonicalValue::String(payload.merge.target_branch_id.to_string()),
+        ),
+        (
+            "target_head_commit_id".to_owned(),
+            CanonicalValue::String(payload.merge.target_head_commit_id.to_string()),
+        ),
+        (
+            "workspace_id".to_owned(),
+            CanonicalValue::String(payload.merge.workspace_id.to_string()),
+        ),
+    ])?)
+}
+
+fn canonical_count(label: &str, count: usize) -> Result<CanonicalValue> {
+    let count = i64::try_from(count)
+        .map_err(|_| WorkVcsError::WorkspaceInvalid(format!("{label} does not fit into i64")))?;
+    CanonicalValue::safe_integer(count)
+}
+
+struct EntityMergePayload {
+    entity_id: EntityId,
+    target_entity_version_id: Option<EntityVersionId>,
+    source_entity_version_id: Option<EntityVersionId>,
+}
+
+fn entity_merge_payload(merge_id: MergeId, item: &FrozenMergeItem) -> Result<EntityMergePayload> {
+    require_payload_kind(
+        merge_id,
+        item.merge_item_id,
+        &item.payload,
+        ENTITY_MERGE_ITEM_SUBJECT_KIND,
+    )?;
+    Ok(EntityMergePayload {
+        entity_id: entity_id_field(merge_id, item.merge_item_id, &item.payload, "entity_id")?,
+        target_entity_version_id: optional_entity_version_field(
+            merge_id,
+            item.merge_item_id,
+            &item.payload,
+            "target_entity_version_id",
+        )?,
+        source_entity_version_id: optional_entity_version_field(
+            merge_id,
+            item.merge_item_id,
+            &item.payload,
+            "source_entity_version_id",
+        )?,
+    })
+}
+
+struct RelationMergePayload {
+    relation_id: RelationId,
+    target_relation_version_id: Option<RelationVersionId>,
+    source_relation_version_id: Option<RelationVersionId>,
+}
+
+fn relation_merge_payload(
+    merge_id: MergeId,
+    item: &FrozenMergeItem,
+) -> Result<RelationMergePayload> {
+    require_payload_kind(
+        merge_id,
+        item.merge_item_id,
+        &item.payload,
+        RELATION_MERGE_ITEM_SUBJECT_KIND,
+    )?;
+    Ok(RelationMergePayload {
+        relation_id: relation_id_field(merge_id, item.merge_item_id, &item.payload, "relation_id")?,
+        target_relation_version_id: optional_relation_version_field(
+            merge_id,
+            item.merge_item_id,
+            &item.payload,
+            "target_relation_version_id",
+        )?,
+        source_relation_version_id: optional_relation_version_field(
+            merge_id,
+            item.merge_item_id,
+            &item.payload,
+            "source_relation_version_id",
+        )?,
+    })
+}
+
+fn require_payload_kind(
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+    payload: &CanonicalValue,
+    expected: &str,
+) -> Result<()> {
+    let actual = string_field(merge_id, merge_item_id, payload, "kind")?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} kind {actual:?} is not {expected:?}"
+        )))
+    }
+}
+
+fn entity_id_field(
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+    payload: &CanonicalValue,
+    key: &str,
+) -> Result<EntityId> {
+    let value = string_field(merge_id, merge_item_id, payload, key)?;
+    EntityId::parse_canonical(value).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} field {key} is not an EntityId: {error}"
+        ))
+    })
+}
+
+fn relation_id_field(
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+    payload: &CanonicalValue,
+    key: &str,
+) -> Result<RelationId> {
+    let value = string_field(merge_id, merge_item_id, payload, key)?;
+    RelationId::parse_canonical(value).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} field {key} is not a RelationId: {error}"
+        ))
+    })
+}
+
+fn optional_entity_version_field(
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+    payload: &CanonicalValue,
+    key: &str,
+) -> Result<Option<EntityVersionId>> {
+    match payload_field(merge_id, merge_item_id, payload, key)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => EntityVersionId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| {
+                WorkVcsError::WorkspaceInvalid(format!(
+                    "merge {merge_id} item {merge_item_id} field {key} is not an EntityVersionId: {error}"
+                ))
+            }),
+        _ => Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} field {key} must be a string or null"
+        ))),
+    }
+}
+
+fn optional_relation_version_field(
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+    payload: &CanonicalValue,
+    key: &str,
+) -> Result<Option<RelationVersionId>> {
+    match payload_field(merge_id, merge_item_id, payload, key)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => RelationVersionId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| {
+                WorkVcsError::WorkspaceInvalid(format!(
+                    "merge {merge_id} item {merge_item_id} field {key} is not a RelationVersionId: {error}"
+                ))
+            }),
+        _ => Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} field {key} must be a string or null"
+        ))),
+    }
+}
+
+fn string_field<'a>(
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+    payload: &'a CanonicalValue,
+    key: &str,
+) -> Result<&'a str> {
+    match payload_field(merge_id, merge_item_id, payload, key)? {
+        CanonicalValue::String(value) => Ok(value),
+        _ => Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} field {key} must be a string"
+        ))),
+    }
+}
+
+fn payload_field<'a>(
+    merge_id: MergeId,
+    merge_item_id: MergeItemId,
+    payload: &'a CanonicalValue,
+    key: &str,
+) -> Result<&'a CanonicalValue> {
+    let CanonicalValue::Object(entries) = payload else {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item {merge_item_id} payload must be an object"
+        )));
+    };
+    entries
+        .iter()
+        .find_map(|(candidate, value)| (candidate == key).then_some(value))
+        .ok_or_else(|| {
+            WorkVcsError::WorkspaceInvalid(format!(
+                "merge {merge_id} item {merge_item_id} payload is missing {key}"
+            ))
+        })
+}
+
+fn entity_transition_payload_json(
+    entity_id: EntityId,
+    before_entity_version_id: Option<EntityVersionId>,
+    after_entity_version_id: EntityVersionId,
+) -> Result<String> {
+    let before_value = match before_entity_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "after_entity_version_id".to_owned(),
+            CanonicalValue::String(after_entity_version_id.to_string()),
+        ),
+        ("before_entity_version_id".to_owned(), before_value),
+        (
+            "entity_id".to_owned(),
+            CanonicalValue::String(entity_id.to_string()),
+        ),
+    ])?)
+}
+
+fn relation_transition_payload_json(
+    relation_id: RelationId,
+    before_relation_version_id: Option<RelationVersionId>,
+    after_relation_version_id: Option<RelationVersionId>,
+) -> Result<String> {
+    let before_value = match before_relation_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    let after_value = match after_relation_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    canonical_json_string(&CanonicalValue::object(vec![
+        ("after_relation_version_id".to_owned(), after_value),
+        ("before_relation_version_id".to_owned(), before_value),
+        (
+            "relation_id".to_owned(),
+            CanonicalValue::String(relation_id.to_string()),
         ),
     ])?)
 }

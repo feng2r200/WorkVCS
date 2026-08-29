@@ -50,12 +50,12 @@ use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
-    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
+    MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeListOptions, MergeListResult,
+    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
+    NextWorkResult, RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -578,6 +578,10 @@ impl Engine {
         options: MergeFreezeResolutionsOptions,
     ) -> Result<MergeFreezeResolutionsResult> {
         self.store.freeze_merge_resolutions(&options)
+    }
+
+    pub fn continue_merge(&mut self, options: MergeContinueOptions) -> Result<MergeContinueResult> {
+        self.store.continue_merge(&options)
     }
 
     pub fn merge_attempt(&self, merge_id: crate::MergeId) -> Result<MergeAttemptSnapshot> {

@@ -40,12 +40,12 @@ use crate::identity::RelationId;
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
-    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
+    MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeListOptions, MergeListResult,
+    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
+    NextWorkResult, RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -788,6 +788,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::freeze_merge_resolutions(&mut self.connection, options)
+    }
+
+    pub(crate) fn continue_merge(
+        &mut self,
+        options: &MergeContinueOptions,
+    ) -> Result<MergeContinueResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::continue_merge(&mut self.connection, options)
     }
 
     pub(crate) fn merge_attempt(&self, merge_id: crate::MergeId) -> Result<MergeAttemptSnapshot> {

@@ -11,11 +11,12 @@ pub use claim::{
 };
 pub use context::{ContextOverview, ContextOverviewOptions};
 pub use merge::{
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeItemClassification, MergeItemResolutionSnapshot,
-    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcome,
-    MergeOutcomeSnapshot, MergeResolutionKind, MergeResolveOptions, MergeResolveResult,
-    MergeRuntimeState, MergeStartOptions, MergeStartResult,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
+    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult,
+    MergeItemClassification, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
+    MergeListOptions, MergeListResult, MergeOutcome, MergeOutcomeSnapshot, MergeResolutionKind,
+    MergeResolveOptions, MergeResolveResult, MergeRuntimeState, MergeStartOptions,
+    MergeStartResult,
 };
 pub use next::{NextWorkOptions, NextWorkResult};
 pub use runnable::{
@@ -31,8 +32,8 @@ pub use session::{
 pub(crate) use claim::{claim_next_task, claim_snapshot, claim_task, release_claim};
 pub(crate) use context::context_overview;
 pub(crate) use merge::{
-    abort_merge, freeze_merge_resolutions, merge_attempt, merge_attempts, resolve_merge_item,
-    start_merge,
+    abort_merge, continue_merge, freeze_merge_resolutions, merge_attempt, merge_attempts,
+    resolve_merge_item, start_merge,
 };
 pub(crate) use next::next_work;
 pub(crate) use runnable::runnable_tasks;

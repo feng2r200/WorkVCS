@@ -32,6 +32,8 @@ const GENESIS_OPERATION_TYPE: &str = "workspace.genesis";
 const GENESIS_COMMIT_KIND: &str = "genesis";
 const NORMAL_COMMIT_KIND: &str = "normal";
 const MERGE_COMMIT_KIND: &str = "merge";
+const MERGE_CONTINUE_OPERATION_SCHEMA_VERSION: i64 = 1;
+const MERGE_CONTINUE_OPERATION_TYPE: &str = "merge.continue";
 const PRIMARY_CONTAINMENT_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
 const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
@@ -414,11 +416,15 @@ fn apply_replayable_changeset(
     let changeset = validate_entity_transition_changeset(connection, workspace_id, changeset_id)?;
     let operations = load_change_operations(connection, changeset_id)?;
     if operations.is_empty() {
+        if changeset.operation_type == MERGE_CONTINUE_OPERATION_TYPE {
+            return Ok(parent_state);
+        }
         return Err(WorkVcsError::ReplayInvalid(format!(
             "ChangeSet {changeset_id} has no ChangeOperations"
         )));
     }
-    if operations.len() == 1
+    if changeset.operation_type != MERGE_CONTINUE_OPERATION_TYPE
+        && operations.len() == 1
         && changeset.operation_payload_json != operations[0].operation_payload_json
     {
         return Err(WorkVcsError::ReplayInvalid(format!(
@@ -603,6 +609,13 @@ fn validate_entity_transition_changeset(
                 )));
             }
         }
+        MERGE_CONTINUE_OPERATION_TYPE => {
+            if operation_schema_version != MERGE_CONTINUE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "merge ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
         _ => {
             return Err(WorkVcsError::ReplayUnsupported(format!(
                 "normal ChangeSet {changeset_id} operation type {operation_type:?} is deferred"
@@ -612,11 +625,13 @@ fn validate_entity_transition_changeset(
     validate_canonical_json_text("changeset.operation_payload_json", &operation_payload_json)?;
     validate_canonical_json_text("changeset.rationale_json", &rationale_json)?;
     Ok(ChangeSetRow {
+        operation_type,
         operation_payload_json,
     })
 }
 
 struct ChangeSetRow {
+    operation_type: String,
     operation_payload_json: String,
 }
 

@@ -15,12 +15,13 @@ use workvcs_core::{
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
     KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
-    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot,
-    MergeResolutionKind, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
-    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
+    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
+    MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
+    MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
+    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
@@ -292,6 +293,19 @@ enum MergeCommand {
 
         #[arg(long)]
         merge: String,
+    },
+    Continue {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        merge: String,
+
+        #[arg(long)]
+        session: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        detail_json: String,
     },
     Show {
         #[arg(value_name = "STORE")]
@@ -3072,6 +3086,23 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_merge_freeze(&frozen))
         }
         Command::Merge {
+            command:
+                MergeCommand::Continue {
+                    store,
+                    merge,
+                    session,
+                    detail_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = MergeContinueOptions::new(MergeId::parse_canonical(&merge)?)?
+                .with_detail(parse_cli_object("merge continue detail", &detail_json)?)?;
+            if let Some(session) = session {
+                options = options.with_continue_session_id(SessionId::parse_canonical(&session)?);
+            }
+            Ok(render_merge_continue(&engine.continue_merge(options)?))
+        }
+        Command::Merge {
             command: MergeCommand::Show { store, merge },
         } => {
             let engine = Engine::open(store)?;
@@ -4376,6 +4407,27 @@ fn render_merge_freeze(result: &MergeFreezeResolutionsResult) -> String {
     format!(
         "merge_id={}\nworkspace_id={}\nfrozen_items={}\n",
         result.merge_id, result.workspace_id, result.frozen_items
+    )
+}
+
+fn render_merge_continue(result: &MergeContinueResult) -> String {
+    let continued_by_session_id = result
+        .continued_by_session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    format!(
+        "merge_id={}\nworkspace_id={}\ntarget_branch_id={}\nsource_branch_id={}\nresult_commit_id={}\nchangeset_id={}\nwork_state_digest={}\ncontinued_by_session_id={}\nevent_id={}\ncompleted_at_us={}\nruntime_state={}\n",
+        result.merge_id,
+        result.workspace_id,
+        result.target_branch_id,
+        result.source_branch_id,
+        result.result_commit_id,
+        result.changeset_id,
+        result.work_state_digest,
+        continued_by_session_id,
+        result.event_id,
+        result.completed_at_us,
+        result.runtime_state.as_str()
     )
 }
 
@@ -10651,18 +10703,37 @@ mod tests {
         assert_eq!(value(&active, "merge.0.runtime_state"), "active");
         assert_eq!(value(&active, "merge.0.items"), "1");
 
-        run(Cli::try_parse_from([
+        let continued = run(Cli::try_parse_from([
             "workvcs",
             "merge",
-            "abort",
+            "continue",
             store,
             "--merge",
             &merge_id,
             "--detail-json",
-            "{\"reason\":\"superseded by another attempt\"}",
+            "{\"reason\":\"complete merge\"}",
         ])
-        .expect("parse merge abort"))
-        .expect("abort merge");
+        .expect("parse merge continue"))
+        .expect("continue merge");
+        assert_eq!(value(&continued, "merge_id"), merge_id);
+        assert_eq!(value(&continued, "workspace_id"), workspace_id);
+        assert_eq!(value(&continued, "target_branch_id"), target_branch);
+        assert_eq!(value(&continued, "source_branch_id"), source_branch);
+        assert_eq!(value(&continued, "runtime_state"), "completed");
+        assert_eq!(value(&continued, "continued_by_session_id"), "none");
+        let result_commit = value(&continued, "result_commit_id");
+
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            store,
+            "--branch",
+            &target_branch,
+        ])
+        .expect("parse continued branch head"))
+        .expect("continued branch head");
+        assert_eq!(value(&head, "head_commit_id"), result_commit);
 
         let hidden = run(Cli::try_parse_from([
             "workvcs",
@@ -10673,7 +10744,7 @@ mod tests {
             &workspace_id,
         ])
         .expect("parse hidden merge list"))
-        .expect("list active merges after abort");
+        .expect("list active merges after continue");
         assert_eq!(value(&hidden, "merges"), "0");
 
         let closed =
@@ -10682,14 +10753,14 @@ mod tests {
                     .expect("parse closed merge show"),
             )
             .expect("show closed merge");
-        assert_eq!(value(&closed, "runtime_state"), "aborted");
+        assert_eq!(value(&closed, "runtime_state"), "completed");
         assert_eq!(value(&closed, "items"), "1");
-        assert_eq!(value(&closed, "outcome"), "aborted");
-        assert_eq!(value(&closed, "outcome.kind"), "aborted");
-        assert_eq!(value(&closed, "outcome.result_commit_id"), "none");
+        assert_eq!(value(&closed, "outcome"), "completed");
+        assert_eq!(value(&closed, "outcome.kind"), "completed");
+        assert_eq!(value(&closed, "outcome.result_commit_id"), result_commit);
         assert_eq!(
             value(&closed, "outcome.detail_json"),
-            "{\"reason\":\"superseded by another attempt\"}"
+            "{\"reason\":\"complete merge\"}"
         );
 
         let all = run(Cli::try_parse_from([
@@ -10707,9 +10778,9 @@ mod tests {
         .expect("list closed merges");
         assert_eq!(value(&all, "merges"), "1");
         assert_eq!(value(&all, "merge.0.merge_id"), merge_id);
-        assert_eq!(value(&all, "merge.0.runtime_state"), "aborted");
+        assert_eq!(value(&all, "merge.0.runtime_state"), "completed");
         assert_eq!(value(&all, "merge.0.items"), "1");
-        assert_eq!(value(&all, "merge.0.outcome"), "aborted");
+        assert_eq!(value(&all, "merge.0.outcome"), "completed");
     }
 
     fn value(output: &str, key: &str) -> String {

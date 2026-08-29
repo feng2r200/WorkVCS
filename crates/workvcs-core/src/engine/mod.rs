@@ -21,7 +21,8 @@ use crate::history::{
     VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
-    WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo, WorkspaceInitOptions,
+    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
@@ -79,6 +80,10 @@ impl Engine {
 
     pub fn diff(&self, options: WorkStateDiffOptions) -> Result<WorkStateDiff> {
         self.store.diff(&options)
+    }
+
+    pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {
+        self.store.why(&options)
     }
 
     pub fn validate_integrity(&self) -> Result<IntegrityReport> {

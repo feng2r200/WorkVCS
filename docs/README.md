@@ -59,6 +59,7 @@ recorded as Accepted ADRs:
 - [ADR-0031: Phase 3Q Goal-Focused Runnable Projection](decisions/adr/0031-phase-3q-goal-focused-runnable-projection.md)
 - [ADR-0032: Phase 3R Structural References Relations](decisions/adr/0032-phase-3r-structural-references-relations.md)
 - [ADR-0033: Phase 3S WorkState Diff Query](decisions/adr/0033-phase-3s-workstate-diff-query.md)
+- [ADR-0034: Phase 3T Why Structural Neighborhood](decisions/adr/0034-phase-3t-why-structural-neighborhood.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

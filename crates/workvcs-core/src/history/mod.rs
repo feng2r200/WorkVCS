@@ -9,6 +9,7 @@ mod query;
 mod reference;
 mod replay;
 mod task;
+mod why;
 
 pub use containment::{
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
@@ -50,6 +51,10 @@ pub use task::{
     VerificationRequirementState, VerificationResult, VerificationSemanticDependency,
     VerificationSnapshot, VerificationState, VerificationTarget,
 };
+pub use why::{
+    ResolvedWhyQueryTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions,
+    WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationKind,
+};
 
 pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
 pub(crate) use diff::diff_work_state;
@@ -69,3 +74,4 @@ pub(crate) use task::{
     task_scheduling_relations_at, tasks_at, transition_task, verification_at,
     verification_requirement_at,
 };
+pub(crate) use why::explain_why;

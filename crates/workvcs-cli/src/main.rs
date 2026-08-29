@@ -521,6 +521,9 @@ enum RecordCommand {
         prior_record_version: String,
 
         #[arg(long)]
+        because_record: Option<String>,
+
+        #[arg(long)]
         rationale: String,
     },
     RelationList {
@@ -1506,19 +1509,23 @@ fn run(cli: Cli) -> Result<String> {
                     replacement_record,
                     prior_record,
                     prior_record_version,
+                    because_record,
                     rationale,
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let superseded =
-                engine.supersede_decision_record(DecisionRecordSupersedeOptions::new(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&replacement_record)?,
-                    EntityId::parse_canonical(&prior_record)?,
-                    EntityVersionId::parse_canonical(&prior_record_version)?,
-                    rationale,
-                )?)?;
+            let mut options = DecisionRecordSupersedeOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&replacement_record)?,
+                EntityId::parse_canonical(&prior_record)?,
+                EntityVersionId::parse_canonical(&prior_record_version)?,
+                rationale,
+            )?;
+            if let Some(because_record) = because_record {
+                options = options.with_causal_record(EntityId::parse_canonical(&because_record)?);
+            }
+            let superseded = engine.supersede_decision_record(options)?;
             Ok(render_decision_record_supersede(&superseded))
         }
         Command::Record {
@@ -2523,7 +2530,7 @@ fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> Strin
 
 fn render_decision_record_supersede(superseded: &DecisionRecordSupersedeCommit) -> String {
     format!(
-        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\nprior_record_operation_id={}\nrelation_operation_id={}\nreplacement_record_entity_id={}\nprior_record_entity_id={}\nprevious_prior_record_entity_version_id={}\nprior_record_entity_version_id={}\nprior_record_state_digest={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nrelation_state_digest={}\nwork_state_digest={}\nprevious_prior_record_status={}\nprior_record_status={}\n",
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\nprior_record_operation_id={}\nrelation_operation_id={}\nreplacement_record_entity_id={}\nprior_record_entity_id={}\nprevious_prior_record_entity_version_id={}\nprior_record_entity_version_id={}\nprior_record_state_digest={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nrelation_state_digest={}\ncausal_record_entity_id={}\ncausal_relation_operation_id={}\ncausal_relation_id={}\ncausal_relation_version_id={}\ncausal_relation_type={}\ncausal_relation_state_digest={}\nwork_state_digest={}\nprevious_prior_record_status={}\nprior_record_status={}\n",
         superseded.workspace_id,
         superseded.branch_id,
         superseded.previous_head_commit_id,
@@ -2540,10 +2547,26 @@ fn render_decision_record_supersede(superseded: &DecisionRecordSupersedeCommit) 
         superseded.relation_version_id,
         RecordRelationType::Supersedes,
         superseded.relation_state_digest,
+        render_optional_display(superseded.causal_record_entity_id.as_ref()),
+        render_optional_display(superseded.causal_relation_operation_id.as_ref()),
+        render_optional_display(superseded.causal_relation_id.as_ref()),
+        render_optional_display(superseded.causal_relation_version_id.as_ref()),
+        superseded
+            .causal_relation_id
+            .as_ref()
+            .map(|_| RecordRelationType::DerivedFrom.as_str())
+            .unwrap_or(""),
+        render_optional_display(superseded.causal_relation_state_digest.as_ref()),
         superseded.work_state_digest,
         superseded.previous_prior_state.status,
         superseded.prior_state.status
     )
+}
+
+fn render_optional_display<T: std::fmt::Display>(value: Option<&T>) -> String {
+    value
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default()
 }
 
 fn render_record_relation_list(result: &RecordRelationListResult) -> String {
@@ -4378,6 +4401,20 @@ mod tests {
         ])
         .expect("parse prior decision"))
         .expect("create prior decision");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&prior, "commit_id"),
+            "--statement",
+            "Concurrent write tests fail without serialization",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
         let replacement = run(Cli::try_parse_from([
             "workvcs",
             "record",
@@ -4386,7 +4423,7 @@ mod tests {
             "--branch",
             &branch,
             "--head",
-            &value(&prior, "commit_id"),
+            &value(&finding, "commit_id"),
             "--statement",
             "Use serialized writes",
         ])
@@ -4407,6 +4444,8 @@ mod tests {
             &value(&prior, "record_entity_id"),
             "--prior-record-version",
             &value(&prior, "record_entity_version_id"),
+            "--because-record",
+            &value(&finding, "record_entity_id"),
             "--rationale",
             "Serialized writes supersede optimistic writes",
         ])
@@ -4415,6 +4454,12 @@ mod tests {
 
         assert!(superseded.contains("prior_record_status=superseded"));
         assert!(superseded.contains("relation_type=supersedes"));
+        assert_eq!(
+            value(&superseded, "causal_record_entity_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(value(&superseded, "causal_relation_type"), "derived_from");
+        assert!(!value(&superseded, "causal_relation_id").is_empty());
 
         let shown = run(Cli::try_parse_from([
             "workvcs",
@@ -4446,6 +4491,24 @@ mod tests {
         assert_eq!(
             value(&listed, "relation.0.relation_id"),
             value(&superseded, "relation_id")
+        );
+
+        let derived = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--type",
+            "derived_from",
+        ])
+        .expect("parse derived relation list"))
+        .expect("list derived_from");
+        assert!(derived.contains("relations=1"));
+        assert_eq!(
+            value(&derived, "relation.0.relation_id"),
+            value(&superseded, "causal_relation_id")
         );
 
         let why_prior = run(Cli::try_parse_from([

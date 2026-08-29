@@ -22,8 +22,8 @@ mod why;
 
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
-    BundleCheckpointCandidate, BundleExportManifest, BundleExportOptions,
-    BundleManifestValidationOptions, BundleManifestValidationResult,
+    BundleCheckpointCandidate, BundleEntityVersionRef, BundleExportManifest, BundleExportOptions,
+    BundleManifestValidationOptions, BundleManifestValidationResult, BundleRelationVersionRef,
 };
 pub use checkpoint::{
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,

@@ -1,6 +1,6 @@
 use crate::canonical::{
-    CanonicalValue, WorkState, canonical_bytes, content_object_digest, parse_canonical_json,
-    work_state_mapping_digest,
+    CanonicalValue, WorkState, canonical_bytes, content_object_digest, entity_version_digest,
+    parse_canonical_json, relation_version_digest, work_state_mapping_digest,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
@@ -10,6 +10,7 @@ use crate::identity::{
 use crate::store::{StoreConnection, StoreInfo, StoreManifest};
 use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
+use uuid::Uuid;
 
 const BUNDLE_EXPORT_MANIFEST_PROFILE: &str = "workvcs-local-export-manifest-v1";
 const BUNDLE_EXPORT_MANIFEST_VERSION: i64 = 1;
@@ -42,6 +43,8 @@ pub struct BundleExportManifest {
     pub entity_count: usize,
     pub relation_count: usize,
     pub commit_count: usize,
+    pub entity_versions: Vec<BundleEntityVersionRef>,
+    pub relation_versions: Vec<BundleRelationVersionRef>,
     pub checkpoint_candidates: Vec<BundleCheckpointCandidate>,
     pub manifest: CanonicalValue,
 }
@@ -93,6 +96,31 @@ pub struct BundleCheckpointCandidate {
     pub checkpoint_format_version: i64,
     pub media_type: Option<String>,
     pub usability_state: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleEntityVersionRef {
+    pub entity_id: EntityId,
+    pub entity_version_id: EntityVersionId,
+    pub entity_kind: String,
+    pub state_schema_version: i64,
+    pub state_digest: Digest,
+    pub state_json_digest: Digest,
+    pub state_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleRelationVersionRef {
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: String,
+    pub source_object_id: String,
+    pub target_object_id: String,
+    pub relation_discriminator: String,
+    pub state_schema_version: i64,
+    pub state_digest: Digest,
+    pub metadata_json_digest: Digest,
+    pub metadata_json_size_bytes: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,6 +177,11 @@ pub(crate) fn export_bundle_manifest(
             .then_with(|| left.commit_id.cmp(&right.commit_id))
     });
 
+    let entity_versions =
+        current_entity_version_refs(connection, replayed.workspace_id, &replayed.state)?;
+    let relation_versions =
+        current_relation_version_refs(connection, replayed.workspace_id, &replayed.state)?;
+
     let mut checkpoint_candidates = super::checkpoints(
         connection,
         super::CheckpointListOptions::for_commit(options.commit_id()),
@@ -166,7 +199,14 @@ pub(crate) fn export_bundle_manifest(
     .collect::<Vec<_>>();
     checkpoint_candidates.sort_by_key(|checkpoint| checkpoint.checkpoint_id.raw_bytes());
 
-    let manifest = manifest_value(store_info, &replayed, &commits, &checkpoint_candidates)?;
+    let manifest = manifest_value(
+        store_info,
+        &replayed,
+        &commits,
+        &entity_versions,
+        &relation_versions,
+        &checkpoint_candidates,
+    )?;
     let manifest_bytes = canonical_bytes(&manifest)?;
     let manifest_digest = content_object_digest(&manifest_bytes);
     let manifest_size_bytes = usize_to_i64("manifest_size_bytes", manifest_bytes.len())?;
@@ -183,6 +223,8 @@ pub(crate) fn export_bundle_manifest(
         entity_count: replayed.state.entities().len(),
         relation_count: replayed.state.relations().len(),
         commit_count: commits.len(),
+        entity_versions,
+        relation_versions,
         checkpoint_candidates,
         manifest,
     })
@@ -367,6 +409,198 @@ fn load_commit_parent_refs(
     Ok(parents)
 }
 
+fn current_entity_version_refs(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+) -> Result<Vec<BundleEntityVersionRef>> {
+    sorted_entities(state)
+        .into_iter()
+        .map(|(entity_id, entity_version_id)| {
+            load_entity_version_ref(connection, workspace_id, entity_id, entity_version_id)
+        })
+        .collect()
+}
+
+fn load_entity_version_ref(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    entity_id: EntityId,
+    entity_version_id: EntityVersionId,
+) -> Result<BundleEntityVersionRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT entity.workspace_id,
+                    entity.entity_kind,
+                    entity_version.state_schema_version,
+                    entity_version.state_json,
+                    entity_version.state_digest
+             FROM entity_version
+             JOIN entity
+               ON entity.object_id = entity_version.entity_id
+             WHERE entity_version.entity_id = ?1
+               AND entity_version.entity_version_id = ?2",
+            params![
+                &entity_id.raw_bytes()[..],
+                &entity_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((stored_workspace_id, entity_kind, state_schema_version, state_json, state_digest)) =
+        row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "EntityVersion {entity_version_id} for entity {entity_id} does not exist"
+        )));
+    };
+    let stored_workspace_id = decode_workspace_id("entity.workspace_id", stored_workspace_id)?;
+    if stored_workspace_id != workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "entity {entity_id} belongs to workspace {stored_workspace_id}, not export workspace {workspace_id}"
+        )));
+    }
+    validate_stored_text("entity.entity_kind", &entity_kind)?;
+    validate_positive_i64("entity_version.state_schema_version", state_schema_version)?;
+    let state_digest = decode_digest("entity_version.state_digest", state_digest)?;
+    let value = validate_canonical_json_value("entity_version.state_json", &state_json)?;
+    let actual_digest = entity_version_digest(&value)?;
+    if actual_digest != state_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "EntityVersion {entity_version_id} digest does not match state JSON"
+        )));
+    }
+
+    Ok(BundleEntityVersionRef {
+        entity_id,
+        entity_version_id,
+        entity_kind,
+        state_schema_version,
+        state_digest,
+        state_json_digest: content_object_digest(state_json.as_bytes()),
+        state_json_size_bytes: usize_to_i64("entity_version.state_json size", state_json.len())?,
+    })
+}
+
+fn current_relation_version_refs(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+) -> Result<Vec<BundleRelationVersionRef>> {
+    sorted_relations(state)
+        .into_iter()
+        .map(|(relation_id, relation_version_id)| {
+            load_relation_version_ref(connection, workspace_id, relation_id, relation_version_id)
+        })
+        .collect()
+}
+
+fn load_relation_version_ref(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<BundleRelationVersionRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT relation.workspace_id,
+                    relation.relation_type,
+                    relation.source_object_id,
+                    relation.target_object_id,
+                    relation.relation_discriminator,
+                    relation_version.state_schema_version,
+                    relation_version.metadata_json,
+                    relation_version.state_digest
+             FROM relation_version
+             JOIN relation
+               ON relation.object_id = relation_version.relation_id
+             WHERE relation_version.relation_id = ?1
+               AND relation_version.relation_version_id = ?2",
+            params![
+                &relation_id.raw_bytes()[..],
+                &relation_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Vec<u8>>(7)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        stored_workspace_id,
+        relation_type,
+        source_object_id,
+        target_object_id,
+        relation_discriminator,
+        state_schema_version,
+        metadata_json,
+        state_digest,
+    )) = row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "RelationVersion {relation_version_id} for relation {relation_id} does not exist"
+        )));
+    };
+    let stored_workspace_id = decode_workspace_id("relation.workspace_id", stored_workspace_id)?;
+    if stored_workspace_id != workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "relation {relation_id} belongs to workspace {stored_workspace_id}, not export workspace {workspace_id}"
+        )));
+    }
+    validate_stored_text("relation.relation_type", &relation_type)?;
+    validate_stored_text_allow_empty("relation.relation_discriminator", &relation_discriminator)?;
+    validate_positive_i64(
+        "relation_version.state_schema_version",
+        state_schema_version,
+    )?;
+    let state_digest = decode_digest("relation_version.state_digest", state_digest)?;
+    let value = validate_canonical_json_value("relation_version.metadata_json", &metadata_json)?;
+    let actual_digest = relation_version_digest(&value)?;
+    if actual_digest != state_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "RelationVersion {relation_version_id} digest does not match metadata JSON"
+        )));
+    }
+
+    Ok(BundleRelationVersionRef {
+        relation_id,
+        relation_version_id,
+        relation_type,
+        source_object_id: decode_object_id_text("relation.source_object_id", source_object_id)?,
+        target_object_id: decode_object_id_text("relation.target_object_id", target_object_id)?,
+        relation_discriminator,
+        state_schema_version,
+        state_digest,
+        metadata_json_digest: content_object_digest(metadata_json.as_bytes()),
+        metadata_json_size_bytes: usize_to_i64(
+            "relation_version.metadata_json size",
+            metadata_json.len(),
+        )?,
+    })
+}
+
 fn bundle_manifest_validation_problem(
     expected: &BundleExportManifest,
     manifest_bytes: &[u8],
@@ -396,6 +630,8 @@ fn manifest_value(
     store_info: &StoreInfo,
     replayed: &super::ReplayedState,
     commits: &[BundleCommitRef],
+    entity_versions: &[BundleEntityVersionRef],
+    relation_versions: &[BundleRelationVersionRef],
     checkpoint_candidates: &[BundleCheckpointCandidate],
 ) -> Result<CanonicalValue> {
     CanonicalValue::object(vec![
@@ -446,6 +682,24 @@ fn manifest_value(
         (
             "work_state".to_owned(),
             work_state_manifest_value(&replayed.state)?,
+        ),
+        (
+            "entity_versions".to_owned(),
+            CanonicalValue::Array(
+                entity_versions
+                    .iter()
+                    .map(entity_version_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "relation_versions".to_owned(),
+            CanonicalValue::Array(
+                relation_versions
+                    .iter()
+                    .map(relation_version_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
         ),
         (
             "checkpoint_candidates".to_owned(),
@@ -574,6 +828,65 @@ fn relation_ref_value(entry: (RelationId, RelationVersionId)) -> Result<Canonica
     ])
 }
 
+fn entity_version_ref_value(entity_version: &BundleEntityVersionRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("entity_id", entity_version.entity_id.to_string()),
+        string_field(
+            "entity_version_id",
+            entity_version.entity_version_id.to_string(),
+        ),
+        string_field("entity_kind", entity_version.entity_kind.clone()),
+        integer_field("state_schema_version", entity_version.state_schema_version)?,
+        string_field("state_digest", entity_version.state_digest.to_string()),
+        string_field(
+            "state_json_digest",
+            entity_version.state_json_digest.to_string(),
+        ),
+        integer_field(
+            "state_json_size_bytes",
+            entity_version.state_json_size_bytes,
+        )?,
+    ])
+}
+
+fn relation_version_ref_value(
+    relation_version: &BundleRelationVersionRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("relation_id", relation_version.relation_id.to_string()),
+        string_field(
+            "relation_version_id",
+            relation_version.relation_version_id.to_string(),
+        ),
+        string_field("relation_type", relation_version.relation_type.clone()),
+        string_field(
+            "source_object_id",
+            relation_version.source_object_id.clone(),
+        ),
+        string_field(
+            "target_object_id",
+            relation_version.target_object_id.clone(),
+        ),
+        string_field(
+            "relation_discriminator",
+            relation_version.relation_discriminator.clone(),
+        ),
+        integer_field(
+            "state_schema_version",
+            relation_version.state_schema_version,
+        )?,
+        string_field("state_digest", relation_version.state_digest.to_string()),
+        string_field(
+            "metadata_json_digest",
+            relation_version.metadata_json_digest.to_string(),
+        ),
+        integer_field(
+            "metadata_json_size_bytes",
+            relation_version.metadata_json_size_bytes,
+        )?,
+    ])
+}
+
 fn checkpoint_candidate_value(checkpoint: &BundleCheckpointCandidate) -> Result<CanonicalValue> {
     CanonicalValue::object(vec![
         string_field("checkpoint_id", checkpoint.checkpoint_id.to_string()),
@@ -609,6 +922,10 @@ fn usize_to_i64(label: &str, value: usize) -> Result<i64> {
 }
 
 fn validate_canonical_json_text(label: &str, input: &str) -> Result<()> {
+    validate_canonical_json_value(label, input).map(|_| ())
+}
+
+fn validate_canonical_json_value(label: &str, input: &str) -> Result<CanonicalValue> {
     let value = parse_canonical_json(input.as_bytes())?;
     let bytes = canonical_bytes(&value)?;
     let reencoded = String::from_utf8(bytes).map_err(|error| {
@@ -619,7 +936,7 @@ fn validate_canonical_json_text(label: &str, input: &str) -> Result<()> {
             "{label} is not canonical JSON"
         )));
     }
-    Ok(())
+    Ok(value)
 }
 
 fn validate_stored_text(label: &str, value: &str) -> Result<()> {
@@ -628,6 +945,15 @@ fn validate_stored_text(label: &str, value: &str) -> Result<()> {
             "{label} cannot be empty"
         )));
     }
+    if value.chars().any(char::is_control) {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} cannot contain control characters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_stored_text_allow_empty(label: &str, value: &str) -> Result<()> {
     if value.chars().any(char::is_control) {
         return Err(WorkVcsError::QueryInvalid(format!(
             "{label} cannot contain control characters"
@@ -670,6 +996,17 @@ fn decode_changeset_id(column: &str, bytes: Vec<u8>) -> Result<ChangeSetId> {
     let bytes = decode_16(column, bytes)?;
     ChangeSetId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_object_id_text(column: &str, bytes: Vec<u8>) -> Result<String> {
+    let bytes = decode_16(column, bytes)?;
+    let uuid = Uuid::from_bytes(bytes);
+    if uuid.get_version_num() != 7 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{column} is not a UUIDv7 value"
+        )));
+    }
+    Ok(uuid.hyphenated().to_string())
 }
 
 fn decode_digest(column: &str, bytes: Vec<u8>) -> Result<Digest> {

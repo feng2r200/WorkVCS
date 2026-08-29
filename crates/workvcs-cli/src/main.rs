@@ -8,7 +8,8 @@ use workvcs_core::{
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
-    BundleExportOptions, BundleImportAttemptOptions, BundleImportAttemptResult,
+    BundleExportOptions, BundleImportAttemptListOptions, BundleImportAttemptListResult,
+    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
     BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
     BundlePayloadInput, BundlePayloadValidationOptions, BundlePayloadValidationResult,
@@ -18,8 +19,8 @@ use workvcs_core::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
     ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, ImportId,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -384,6 +385,20 @@ enum BundleCommand {
 
         #[arg(long)]
         input_dir: PathBuf,
+    },
+    ImportShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        import: String,
+    },
+    ImportList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     ValidateManifest {
         #[arg(value_name = "STORE")]
@@ -1806,6 +1821,20 @@ fn run(cli: Cli) -> Result<String> {
                         payloads,
                     )?)?;
                 Ok(render_bundle_import_attempt(&result))
+            }
+            BundleCommand::ImportShow { store, import } => {
+                let engine = Engine::open(store)?;
+                let snapshot = engine.bundle_import_attempt(ImportId::parse_canonical(&import)?)?;
+                Ok(render_bundle_import_attempt_snapshot(&snapshot))
+            }
+            BundleCommand::ImportList { store, limit } => {
+                let engine = Engine::open(store)?;
+                let mut options = BundleImportAttemptListOptions::new();
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                let result = engine.bundle_import_attempts(options)?;
+                Ok(render_bundle_import_attempt_list(&result))
             }
             BundleCommand::ValidateManifest {
                 store,
@@ -5691,24 +5720,116 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
     format!(
         "recorded={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nproblem={}\n",
         result.recorded,
-        render_optional_display(result.import_id.as_ref()),
+        render_optional_display_or_none(result.import_id.as_ref()),
         result.bundle_digest,
         result.import_profile,
-        render_optional_display(result.started_at_us.as_ref()),
-        render_optional_display(result.completed_at_us.as_ref()),
+        render_optional_display_or_none(result.started_at_us.as_ref()),
+        render_optional_display_or_none(result.completed_at_us.as_ref()),
         result.outcome,
         result.preflight.valid,
         result.preflight.format_compatible,
-        render_optional_display(result.preflight.source_store_id.as_ref()),
-        render_optional_display(result.preflight.target_workspace_id.as_ref()),
-        render_optional_display(result.preflight.target_commit_id.as_ref()),
-        render_optional_display(result.preflight.target_state_digest.as_ref()),
+        render_optional_display_or_none(result.preflight.source_store_id.as_ref()),
+        render_optional_display_or_none(result.preflight.target_workspace_id.as_ref()),
+        render_optional_display_or_none(result.preflight.target_commit_id.as_ref()),
+        render_optional_display_or_none(result.preflight.target_state_digest.as_ref()),
         result.preflight.source_store_relation,
         result.preflight.incoming_commit_present,
         result.preflight.import_required,
         result.preflight.can_apply,
         result.preflight.problem.as_deref().unwrap_or("none")
     )
+}
+
+fn render_bundle_import_attempt_snapshot(snapshot: &BundleImportAttemptSnapshot) -> String {
+    let mut output = String::new();
+    write_bundle_import_attempt_snapshot_fields(&mut output, None, snapshot);
+    output
+}
+
+fn render_bundle_import_attempt_list(result: &BundleImportAttemptListResult) -> String {
+    let mut output = format!("imports={}\n", result.attempts.len());
+    for (index, snapshot) in result.attempts.iter().enumerate() {
+        write_bundle_import_attempt_snapshot_fields(
+            &mut output,
+            Some(&format!("import[{index}]")),
+            snapshot,
+        );
+    }
+    output
+}
+
+fn write_bundle_import_attempt_snapshot_fields(
+    output: &mut String,
+    prefix: Option<&str>,
+    snapshot: &BundleImportAttemptSnapshot,
+) {
+    let key = |name: &str| {
+        prefix
+            .map(|prefix| format!("{prefix}.{name}"))
+            .unwrap_or_else(|| name.to_owned())
+    };
+    let (outcome, completed_at_us, detail_digest, detail_size_bytes) =
+        if let Some(outcome) = &snapshot.outcome {
+            (
+                outcome.outcome.clone(),
+                outcome.completed_at_us.to_string(),
+                outcome.detail_digest.to_string(),
+                outcome.detail_size_bytes.to_string(),
+            )
+        } else {
+            (
+                "none".to_owned(),
+                "none".to_owned(),
+                "none".to_owned(),
+                "none".to_owned(),
+            )
+        };
+    writeln!(output, "{}={}", key("import_id"), snapshot.import_id).expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("source_store_id"),
+        snapshot.source_store_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("bundle_digest"),
+        snapshot.bundle_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("import_profile"),
+        snapshot.import_profile
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("origin_session_id"),
+        render_optional_display_or_none(snapshot.origin_session_id.as_ref())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{}={}",
+        key("started_at_us"),
+        snapshot.started_at_us
+    )
+    .expect("write to String");
+    writeln!(output, "{}={outcome}", key("outcome")).expect("write to String");
+    writeln!(output, "{}={completed_at_us}", key("completed_at_us")).expect("write to String");
+    writeln!(output, "{}={detail_digest}", key("detail_digest")).expect("write to String");
+    writeln!(output, "{}={detail_size_bytes}", key("detail_size_bytes")).expect("write to String");
+}
+
+fn render_optional_display_or_none<T: std::fmt::Display>(value: Option<&T>) -> String {
+    value
+        .map(std::string::ToString::to_string)
+        .unwrap_or_else(|| "none".to_owned())
 }
 
 fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
@@ -6513,6 +6634,35 @@ mod tests {
         assert_eq!(value(&import_attempt, "import_required"), "false");
         assert_eq!(value(&import_attempt, "can_apply"), "false");
         assert_eq!(value(&import_attempt, "problem"), "none");
+        let import_id = value(&import_attempt, "import_id");
+
+        let shown_import = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-show",
+            store,
+            "--import",
+            &import_id,
+        ])
+        .expect("parse bundle import-show"))
+        .expect("show bundle import attempt");
+        assert_eq!(value(&shown_import, "import_id"), import_id);
+        assert_eq!(value(&shown_import, "outcome"), "already_present");
+        assert_ne!(value(&shown_import, "detail_digest"), "none");
+        assert_ne!(value(&shown_import, "detail_size_bytes"), "none");
+
+        let listed_imports =
+            run(
+                Cli::try_parse_from(["workvcs", "bundle", "import-list", store, "--limit", "1"])
+                    .expect("parse bundle import-list"),
+            )
+            .expect("list bundle import attempts");
+        assert_eq!(value(&listed_imports, "imports"), "1");
+        assert_eq!(value(&listed_imports, "import[0].import_id"), import_id);
+        assert_eq!(
+            value(&listed_imports, "import[0].outcome"),
+            "already_present"
+        );
     }
 
     #[test]

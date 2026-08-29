@@ -5,7 +5,8 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
-    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportPreflightOptions,
+    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
+    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
     BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadValidationOptions,
     BundlePayloadValidationResult, CheckpointCreateOptions, CheckpointCreateResult,
@@ -61,7 +62,7 @@ use crate::store::bootstrap::{
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
 use crate::{
-    BranchId, ClaimId, CommitId, EntityId, EvidenceId, ResourceId, ResourceObservationId,
+    BranchId, ClaimId, CommitId, EntityId, EvidenceId, ImportId, ResourceId, ResourceObservationId,
     SessionId, WorkspaceId, history, runtime,
 };
 use std::path::Path;
@@ -272,6 +273,24 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::record_bundle_import_attempt(&mut self.connection, &current, options)
+    }
+
+    pub(crate) fn bundle_import_attempt(
+        &self,
+        import_id: ImportId,
+    ) -> Result<BundleImportAttemptSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::bundle_import_attempt(&self.connection, import_id)
+    }
+
+    pub(crate) fn bundle_import_attempts(
+        &self,
+        options: BundleImportAttemptListOptions,
+    ) -> Result<BundleImportAttemptListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::bundle_import_attempts(&self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

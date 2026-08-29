@@ -345,6 +345,62 @@ pub struct BundleImportAttemptResult {
     pub preflight: BundleImportPreflightResult,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BundleImportAttemptListOptions {
+    limit: usize,
+}
+
+impl BundleImportAttemptListOptions {
+    pub fn new() -> Self {
+        Self { limit: 50 }
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Result<Self> {
+        if limit == 0 {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle import attempt list limit must be positive".to_owned(),
+            ));
+        }
+        self.limit = limit;
+        Ok(self)
+    }
+
+    fn limit(self) -> usize {
+        self.limit
+    }
+}
+
+impl Default for BundleImportAttemptListOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportAttemptListResult {
+    pub attempts: Vec<BundleImportAttemptSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportAttemptSnapshot {
+    pub import_id: ImportId,
+    pub source_store_id: StoreId,
+    pub bundle_digest: Digest,
+    pub import_profile: String,
+    pub origin_session_id: Option<SessionId>,
+    pub started_at_us: i64,
+    pub outcome: Option<BundleImportAttemptOutcomeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportAttemptOutcomeSnapshot {
+    pub outcome: String,
+    pub completed_at_us: i64,
+    pub detail: CanonicalValue,
+    pub detail_digest: Digest,
+    pub detail_size_bytes: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleCheckpointCandidate {
     pub checkpoint_id: CheckpointId,
@@ -856,6 +912,42 @@ pub(crate) fn record_bundle_import_attempt(
         outcome: preflight.action.clone(),
         preflight,
     })
+}
+
+pub(crate) fn bundle_import_attempt(
+    connection: &StoreConnection,
+    import_id: ImportId,
+) -> Result<BundleImportAttemptSnapshot> {
+    connection.verify_foreign_keys()?;
+    load_bundle_import_attempt_snapshot(connection, import_id)?
+        .ok_or_else(|| WorkVcsError::QueryInvalid(format!("ImportAttempt {import_id} not found")))
+}
+
+pub(crate) fn bundle_import_attempts(
+    connection: &StoreConnection,
+    options: BundleImportAttemptListOptions,
+) -> Result<BundleImportAttemptListResult> {
+    connection.verify_foreign_keys()?;
+    let limit = usize_to_i64("bundle import attempt list limit", options.limit())?;
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT import_id
+             FROM import_attempt
+             ORDER BY started_at_us DESC, import_id DESC
+             LIMIT ?1",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![limit], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(storage_error)?;
+
+    let mut attempts = Vec::new();
+    for row in rows {
+        let import_id = decode_import_id("import_attempt.import_id", row.map_err(storage_error)?)?;
+        attempts.push(bundle_import_attempt(connection, import_id)?);
+    }
+    Ok(BundleImportAttemptListResult { attempts })
 }
 
 fn commit_closure_refs(
@@ -2952,9 +3044,110 @@ fn load_commit_state_digest_optional(
         .transpose()
 }
 
+fn load_bundle_import_attempt_snapshot(
+    connection: &StoreConnection,
+    import_id: ImportId,
+) -> Result<Option<BundleImportAttemptSnapshot>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT source_store_id,
+                    bundle_digest,
+                    import_profile,
+                    origin_session_id,
+                    started_at_us
+             FROM import_attempt
+             WHERE import_id = ?1",
+            params![&import_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((source_store_id, bundle_digest, import_profile, origin_session_id, started_at_us)) =
+        row
+    else {
+        return Ok(None);
+    };
+    validate_stored_text("import_attempt.import_profile", &import_profile)?;
+    validate_positive_i64("import_attempt.started_at_us", started_at_us)?;
+    Ok(Some(BundleImportAttemptSnapshot {
+        import_id,
+        source_store_id: decode_store_id("import_attempt.source_store_id", source_store_id)?,
+        bundle_digest: decode_digest("import_attempt.bundle_digest", bundle_digest)?,
+        import_profile,
+        origin_session_id: decode_optional_session_id(
+            "import_attempt.origin_session_id",
+            origin_session_id,
+        )?,
+        started_at_us,
+        outcome: load_bundle_import_attempt_outcome(connection, import_id)?,
+    }))
+}
+
+fn load_bundle_import_attempt_outcome(
+    connection: &StoreConnection,
+    import_id: ImportId,
+) -> Result<Option<BundleImportAttemptOutcomeSnapshot>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT outcome,
+                    completed_at_us,
+                    detail_json
+             FROM import_attempt_outcome
+             WHERE import_id = ?1",
+            params![&import_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((outcome, completed_at_us, detail_json)) = row else {
+        return Ok(None);
+    };
+    validate_stored_text("import_attempt_outcome.outcome", &outcome)?;
+    validate_positive_i64("import_attempt_outcome.completed_at_us", completed_at_us)?;
+    let detail = validate_canonical_json_value("import_attempt_outcome.detail_json", &detail_json)?;
+    Ok(Some(BundleImportAttemptOutcomeSnapshot {
+        outcome,
+        completed_at_us,
+        detail,
+        detail_digest: content_object_digest(detail_json.as_bytes()),
+        detail_size_bytes: usize_to_i64(
+            "import_attempt_outcome.detail_json size",
+            detail_json.len(),
+        )?,
+    }))
+}
+
+fn decode_store_id(column: &str, bytes: Vec<u8>) -> Result<StoreId> {
+    let bytes = decode_16(column, bytes)?;
+    StoreId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
 fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
     let bytes = decode_16(column, bytes)?;
     WorkspaceId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_import_id(column: &str, bytes: Vec<u8>) -> Result<ImportId> {
+    let bytes = decode_16(column, bytes)?;
+    ImportId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 
@@ -3009,6 +3202,16 @@ fn decode_optional_relation_version_id(
         .map(|bytes| {
             let bytes = decode_16(column, bytes)?;
             RelationVersionId::from_bytes(bytes)
+                .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+        })
+        .transpose()
+}
+
+fn decode_optional_session_id(column: &str, bytes: Option<Vec<u8>>) -> Result<Option<SessionId>> {
+    bytes
+        .map(|bytes| {
+            let bytes = decode_16(column, bytes)?;
+            SessionId::from_bytes(bytes)
                 .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
         })
         .transpose()

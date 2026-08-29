@@ -4,6 +4,7 @@ use crate::ClaimId;
 use crate::CommitId;
 use crate::EntityId;
 use crate::EvidenceId;
+use crate::ImportId;
 use crate::RelationId;
 use crate::ResourceId;
 use crate::ResourceObservationId;
@@ -16,7 +17,8 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
-    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportPreflightOptions,
+    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
+    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
     BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadValidationOptions,
     BundlePayloadValidationResult, CheckpointCreateOptions, CheckpointCreateResult,
@@ -213,6 +215,20 @@ impl Engine {
         options: BundleImportAttemptOptions,
     ) -> Result<BundleImportAttemptResult> {
         self.store.record_bundle_import_attempt(options)
+    }
+
+    pub fn bundle_import_attempt(
+        &self,
+        import_id: ImportId,
+    ) -> Result<BundleImportAttemptSnapshot> {
+        self.store.bundle_import_attempt(import_id)
+    }
+
+    pub fn bundle_import_attempts(
+        &self,
+        options: BundleImportAttemptListOptions,
+    ) -> Result<BundleImportAttemptListResult> {
+        self.store.bundle_import_attempts(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

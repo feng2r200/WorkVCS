@@ -115,7 +115,7 @@ fn create_record(
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 expected_head_commit_id,
-                "record",
+                "generic_record",
                 record_state(title, "open"),
             )
             .expect("create options"),
@@ -136,7 +136,7 @@ fn update_record(
                 current.commit_id,
                 current.entity_id,
                 current.entity_version_id,
-                record_state("record", status),
+                record_state("generic_record", status),
             )
             .expect("update options"),
         )
@@ -223,7 +223,7 @@ fn diff_reports_added_updated_and_removed_entity_versions() {
         &mut engine,
         &workspace,
         workspace.genesis_commit_id,
-        "record",
+        "generic_record",
     );
     let second = update_record(&mut engine, &workspace, &first, "done");
 

@@ -117,7 +117,7 @@ fn two_engine_cas_race_allows_one_winner_and_rolls_back_stale_loser() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 first_seen_head,
-                "record",
+                "generic_record",
                 record_state("winner", "open"),
             )
             .expect("winner options"),
@@ -133,7 +133,7 @@ fn two_engine_cas_race_allows_one_winner_and_rolls_back_stale_loser() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 second_seen_head,
-                "record",
+                "generic_record",
                 record_state("loser", "open"),
             )
             .expect("loser options"),
@@ -174,7 +174,7 @@ fn invalid_update_subject_rolls_back_without_partial_history() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("first", "open"),
             )
             .expect("create options"),
@@ -248,7 +248,7 @@ fn corrupted_expected_head_replay_fails_before_mutation_rows() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("first", "open"),
             )
             .expect("create options"),

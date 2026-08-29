@@ -131,7 +131,7 @@ fn commits_two_entity_transitions_and_replays_history_after_reopen() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("draft", "open"),
             )
             .expect("create options"),
@@ -188,7 +188,7 @@ fn entity_transition_writes_atomic_history_rows() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("row", "open"),
             )
             .expect("create options"),
@@ -226,7 +226,7 @@ fn entity_state_is_stored_as_canonical_json_and_digest() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 swapped_state(),
             )
             .expect("create options"),
@@ -265,7 +265,7 @@ fn projection_rows_do_not_drive_mutation_or_state_at() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("projection", "open"),
             )
             .expect("create options"),
@@ -330,7 +330,7 @@ fn stale_expected_head_fails_without_partial_history() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("winner", "open"),
             )
             .expect("create options"),
@@ -346,7 +346,7 @@ fn stale_expected_head_fails_without_partial_history() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("stale", "open"),
             )
             .expect("stale options"),
@@ -370,7 +370,7 @@ fn wrong_expected_entity_version_rolls_back_without_partial_history() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("first", "open"),
             )
             .expect("create options"),
@@ -414,7 +414,7 @@ fn missing_branch_is_a_structured_error() {
             EntityTransitionOptions::create(
                 BranchId::new_v7(),
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("missing", "open"),
             )
             .expect("create options"),
@@ -434,7 +434,7 @@ fn replay_rejects_corrupted_entity_version_digest() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("digest", "open"),
             )
             .expect("create options"),
@@ -469,7 +469,7 @@ fn replay_rejects_corrupted_change_operation_payload() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("payload", "open"),
             )
             .expect("create options"),
@@ -504,7 +504,7 @@ fn replay_rejects_corrupted_changeset_payload() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("changeset", "open"),
             )
             .expect("create options"),
@@ -646,7 +646,7 @@ fn committed_work_state_digest_is_order_independent() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("first", "open"),
             )
             .expect("first options"),
@@ -657,7 +657,7 @@ fn committed_work_state_digest_is_order_independent() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 first.commit_id,
-                "record",
+                "generic_record",
                 record_state("second", "open"),
             )
             .expect("second options"),

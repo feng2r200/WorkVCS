@@ -478,7 +478,7 @@ fn task_transition_rejects_non_task_entity_without_history_rows() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("not a task"),
             )
             .expect("record options"),

@@ -51,7 +51,7 @@ fn create_record(
             EntityTransitionOptions::create(
                 branch_id,
                 head_commit_id,
-                "record",
+                "generic_record",
                 record_state(title, "open"),
             )
             .expect("create options"),

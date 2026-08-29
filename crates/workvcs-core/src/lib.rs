@@ -28,6 +28,7 @@ pub use history::{
     IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanState, PlanStatus,
     PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
+    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordSnapshot, RecordState, RecordStatus,
     RelationVersionDiff, ReplayedState, ResolvedWhyQuerySubject, ResolvedWhyQueryTarget,
     ResolvedWorkStateDiffTarget, ResourceBindOptions, ResourceBindResult, ResourceBindingSnapshot,
     ResourceCreateOptions, ResourceCreateResult, ResourceObservationCreateOptions,

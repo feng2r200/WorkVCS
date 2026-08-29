@@ -13,6 +13,7 @@ pub enum ErrorCategory {
     Mutation,
     Plan,
     Query,
+    Record,
     Relation,
     Replay,
     Resource,
@@ -46,6 +47,8 @@ pub enum ErrorCode {
     PlanNotFound,
     QueryInvalid,
     QueryUnsupported,
+    RecordInvalid,
+    RecordNotFound,
     RelationInvalid,
     ResourceInvalid,
     ResourceNotFound,
@@ -127,6 +130,12 @@ pub enum WorkVcsError {
     #[error("query unsupported: {0}")]
     QueryUnsupported(String),
 
+    #[error("record invalid: {0}")]
+    RecordInvalid(String),
+
+    #[error("record not found: {0}")]
+    RecordNotFound(String),
+
     #[error("relation invalid: {0}")]
     RelationInvalid(String),
 
@@ -202,6 +211,8 @@ impl WorkVcsError {
             Self::PlanNotFound(_) => ErrorCode::PlanNotFound,
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
             Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
+            Self::RecordInvalid(_) => ErrorCode::RecordInvalid,
+            Self::RecordNotFound(_) => ErrorCode::RecordNotFound,
             Self::RelationInvalid(_) => ErrorCode::RelationInvalid,
             Self::ResourceInvalid(_) => ErrorCode::ResourceInvalid,
             Self::ResourceNotFound(_) => ErrorCode::ResourceNotFound,
@@ -236,6 +247,7 @@ impl WorkVcsError {
             Self::GoalInvalid(_) | Self::GoalNotFound(_) => ErrorCategory::Goal,
             Self::PlanInvalid(_) | Self::PlanNotFound(_) => ErrorCategory::Plan,
             Self::QueryInvalid(_) | Self::QueryUnsupported(_) => ErrorCategory::Query,
+            Self::RecordInvalid(_) | Self::RecordNotFound(_) => ErrorCategory::Record,
             Self::RelationInvalid(_) => ErrorCategory::Relation,
             Self::ResourceInvalid(_)
             | Self::ResourceNotFound(_)

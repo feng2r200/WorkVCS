@@ -408,7 +408,7 @@ fn goal_at_rejects_non_goal_entity_and_invalid_goal_state_shape() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("not a goal"),
             )
             .expect("record options"),

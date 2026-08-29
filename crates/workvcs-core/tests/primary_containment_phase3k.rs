@@ -672,7 +672,7 @@ fn unsupported_and_cross_workspace_endpoints_are_rejected_without_partial_rows()
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 task.commit_id,
-                "record",
+                "generic_record",
                 record_state("not containable"),
             )
             .expect("record options"),

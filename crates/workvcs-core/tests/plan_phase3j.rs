@@ -460,7 +460,7 @@ fn plan_at_rejects_non_plan_entity_and_invalid_plan_state_shape() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("not a plan"),
             )
             .expect("record options"),

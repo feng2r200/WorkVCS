@@ -53,7 +53,7 @@ fn create_two_transitions(
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("first", "open"),
             )
             .expect("first options"),

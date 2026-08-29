@@ -5,6 +5,7 @@ use super::entity::{
 use super::evidence::{EVIDENCE_OBJECT_KIND, require_evidence_exists};
 use super::goal::GOAL_ENTITY_KIND;
 use super::plan::PLAN_ENTITY_KIND;
+use super::record::RECORD_ENTITY_KIND;
 use super::resource::{resource, resource_observation};
 use super::{EntityTransitionOptions, branch_head, commit_entity_transition, state_at};
 use crate::canonical::{
@@ -6270,6 +6271,7 @@ fn is_reserved_semantic_entity_kind(entity_kind: &str) -> bool {
         GOAL_ENTITY_KIND
             | PLAN_ENTITY_KIND
             | TASK_ENTITY_KIND
+            | RECORD_ENTITY_KIND
             | ACCEPTANCE_CRITERION_ENTITY_KIND
             | VERIFICATION_REQUIREMENT_ENTITY_KIND
             | VERIFICATION_ENTITY_KIND

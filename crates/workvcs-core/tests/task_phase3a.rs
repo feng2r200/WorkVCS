@@ -415,7 +415,7 @@ fn task_at_rejects_non_task_entity_and_invalid_task_state_shape() {
             EntityTransitionOptions::create(
                 workspace.initial_branch_id,
                 workspace.genesis_commit_id,
-                "record",
+                "generic_record",
                 record_state("not a task"),
             )
             .expect("record options"),

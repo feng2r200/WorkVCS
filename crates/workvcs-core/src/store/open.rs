@@ -8,19 +8,20 @@ use crate::history::{
     GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions,
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState,
-    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
-    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
-    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
-    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
-    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
+    RecordCreateOptions, RecordSnapshot, ReplayedState, ResourceBindOptions, ResourceBindResult,
+    ResourceCreateOptions, ResourceCreateResult, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationSnapshot, ResourceSnapshot,
+    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions, StructuralReferenceSnapshot,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
+    VerificationRequirementSnapshot, VerificationSnapshot, WhyQueryOptions, WhyQueryResult,
+    WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo, WorkspaceInitOptions,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
@@ -150,6 +151,25 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::evidence(&self.connection, evidence_id)
+    }
+
+    pub(crate) fn create_record(
+        &mut self,
+        options: &RecordCreateOptions,
+    ) -> Result<RecordCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_record(&mut self.connection, options)
+    }
+
+    pub(crate) fn record_at(
+        &self,
+        commit_id: CommitId,
+        record_entity_id: EntityId,
+    ) -> Result<RecordSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_at(&self.connection, commit_id, record_entity_id)
     }
 
     pub(crate) fn create_resource(

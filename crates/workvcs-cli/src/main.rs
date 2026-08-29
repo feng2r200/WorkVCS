@@ -9,13 +9,14 @@ use workvcs_core::{
     ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
     Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
-    NextWorkResult, ReplayedState, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, ReplayedState, ResourceCreateOptions,
+    ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
@@ -92,6 +93,10 @@ enum Command {
     Resource {
         #[command(subcommand)]
         command: ResourceCommand,
+    },
+    Record {
+        #[command(subcommand)]
+        command: RecordCommand,
     },
     Session {
         #[command(subcommand)]
@@ -319,6 +324,26 @@ enum ResourceCommand {
 
         #[arg(long, default_value = "{}")]
         summary_json: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RecordCommand {
+    Finding {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        scope_json: Option<String>,
     },
 }
 
@@ -888,6 +913,28 @@ fn run(cli: Cli) -> Result<String> {
             )?;
             Ok(render_verification_applicability_cache(&snapshot))
         }
+        Command::Record {
+            command:
+                RecordCommand::Finding {
+                    store,
+                    branch,
+                    head,
+                    statement,
+                    scope_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::finding(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
         Command::Session {
             command:
                 SessionCommand::Start {
@@ -1379,6 +1426,24 @@ fn render_verification_applicability_cache(
     )
 }
 
+fn render_record_create(record: &RecordCreateCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrecord_entity_id={}\nrecord_entity_version_id={}\nrecord_state_digest={}\nwork_state_digest={}\nrecord_kind={}\nrecord_status={}\n",
+        record.workspace_id,
+        record.branch_id,
+        record.previous_head_commit_id,
+        record.commit_id,
+        record.changeset_id,
+        record.operation_id,
+        record.record_entity_id,
+        record.record_entity_version_id,
+        record.record_state_digest,
+        record.work_state_digest,
+        record.state.kind,
+        record.state.status
+    )
+}
+
 fn render_session_start(session: &SessionStartResult) -> String {
     format!(
         "session_id={}\nworkspace_id={}\nbranch_id={}\nstarted_at_us={}\nlifecycle_state={}\n",
@@ -1743,6 +1808,7 @@ mod tests {
                 "ac",
                 "vr",
                 "resource",
+                "record",
                 "session",
                 "claim",
                 "context",
@@ -2709,6 +2775,53 @@ mod tests {
         .expect("parse runnable"))
         .expect("runnable after next");
         assert!(runnable.contains(&format!("candidate.0.claim=claimed_by_session:{claim_id}")));
+    }
+
+    #[test]
+    fn cli_runs_record_finding_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let record = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Schema validation has no drift",
+            "--scope-json",
+            r#"{"subject":"schema"}"#,
+        ])
+        .expect("parse record finding"))
+        .expect("create finding record");
+
+        assert!(record.contains("record_kind=finding"));
+        assert!(record.contains("record_status=active"));
+        assert!(record.contains("record_entity_id="));
+        assert!(record.contains("commit_id="));
     }
 
     fn value(output: &str, key: &str) -> String {

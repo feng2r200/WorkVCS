@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    ContextOverviewOptions, Engine, ErrorCategory, ErrorCode, RecordCreateOptions,
-    RecordRelationCreateOptions, RecordRelationType, SessionEndOptions, SessionFocusOptions,
-    SessionStartOptions, StoreInitOptions, TaskCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
+    ContextOverviewOptions, Engine, ErrorCategory, ErrorCode, KnowledgeCreateOptions,
+    KnowledgeTransitionOptions, RecordCreateOptions, RecordRelationCreateOptions,
+    RecordRelationType, SessionEndOptions, SessionFocusOptions, SessionStartOptions,
+    StoreInitOptions, TaskCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -83,6 +84,7 @@ fn context_overview_returns_active_anchor_focus_and_runnable_summary() {
         task.task_entity_id
     );
     assert!(context.runnable_tasks.candidates[0].runnable);
+    assert!(context.knowledge.knowledge.is_empty());
     assert!(context.records.records.is_empty());
     assert!(context.record_relations.relations.is_empty());
 }
@@ -120,6 +122,7 @@ fn context_overview_is_read_only() {
         .expect("branch after context");
     assert_eq!(after, before);
     assert_eq!(context.branch.head_commit_id, task.commit_id);
+    assert!(context.knowledge.knowledge.is_empty());
     assert!(context.records.records.is_empty());
     assert!(context.record_relations.relations.is_empty());
 }
@@ -165,6 +168,69 @@ fn context_overview_includes_current_record_summaries() {
         context.records.records[0].state.statement,
         finding.state.statement
     );
+    assert!(context.knowledge.knowledge.is_empty());
+    assert!(context.record_relations.relations.is_empty());
+}
+
+#[test]
+fn context_overview_includes_active_knowledge_summaries() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let active = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Serialized writes make SQLite sufficient for V0.1",
+            )
+            .expect("active knowledge options"),
+        )
+        .expect("create active knowledge");
+    let stale = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(
+                workspace.initial_branch_id,
+                active.commit_id,
+                "Legacy cache keys do not need schema versions",
+            )
+            .expect("stale knowledge options"),
+        )
+        .expect("create stale knowledge");
+    let invalidated = engine
+        .transition_knowledge(
+            KnowledgeTransitionOptions::invalidate(
+                workspace.initial_branch_id,
+                stale.commit_id,
+                stale.knowledge_entity_id,
+                stale.knowledge_entity_version_id,
+                "Schema versions are part of cache keys",
+            )
+            .expect("invalidate options"),
+        )
+        .expect("invalidate stale knowledge");
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let context = engine
+        .context_overview(ContextOverviewOptions::new(session.session_id))
+        .expect("context overview");
+
+    assert_eq!(context.knowledge.workspace_id, workspace.workspace_id);
+    assert_eq!(context.knowledge.commit_id, invalidated.commit_id);
+    assert_eq!(context.knowledge.knowledge.len(), 1);
+    assert_eq!(
+        context.knowledge.knowledge[0].knowledge_entity_id,
+        active.knowledge_entity_id
+    );
+    assert_eq!(
+        context.knowledge.knowledge[0].state.statement,
+        active.state.statement
+    );
+    assert!(context.records.records.is_empty());
     assert!(context.record_relations.relations.is_empty());
 }
 

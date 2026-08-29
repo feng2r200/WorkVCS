@@ -2,8 +2,8 @@ use super::runnable::{self, RunnableTasksOptions, RunnableTasksProjection};
 use super::session::{self, SessionLifecycleState, SessionSnapshot};
 use crate::error::{Result, WorkVcsError};
 use crate::history::{
-    self, BranchHead, RecordListOptions, RecordListResult, RecordRelationListOptions,
-    RecordRelationListResult,
+    self, BranchHead, KnowledgeListOptions, KnowledgeListResult, KnowledgeStatus,
+    RecordListOptions, RecordListResult, RecordRelationListOptions, RecordRelationListResult,
 };
 use crate::identity::{SessionId, WorkspaceId};
 use crate::store::StoreConnection;
@@ -28,6 +28,7 @@ pub struct ContextOverview {
     pub session: SessionSnapshot,
     pub branch: BranchHead,
     pub runnable_tasks: RunnableTasksProjection,
+    pub knowledge: KnowledgeListResult,
     pub records: RecordListResult,
     pub record_relations: RecordRelationListResult,
 }
@@ -75,6 +76,17 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let knowledge = history::knowledges_at(
+        connection,
+        &KnowledgeListOptions::new(branch.head_commit_id).with_status(KnowledgeStatus::Active),
+    )?;
+    if knowledge.workspace_id != active_workspace_id || knowledge.commit_id != branch.head_commit_id
+    {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} knowledge context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
     let record_relations = history::record_relations_at(
         connection,
         &RecordRelationListOptions::new(branch.head_commit_id),
@@ -92,6 +104,7 @@ pub(crate) fn context_overview(
         session,
         branch,
         runnable_tasks,
+        knowledge,
         records,
         record_relations,
     })

@@ -3290,7 +3290,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nrecords={}\nrecord_relations={}\n",
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nknowledge={}\nrecords={}\nrecord_relations={}\n",
         session.session_id,
         session_lifecycle_state(session.lifecycle_state),
         context.branch.workspace_id,
@@ -3309,6 +3309,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         session.context_workspaces.len(),
         context.runnable_tasks.candidates.len(),
         runnable_ready,
+        context.knowledge.knowledge.len(),
         context.records.records.len(),
         context.record_relations.relations.len()
     );
@@ -3320,6 +3321,44 @@ fn render_context_overview(context: &ContextOverview) -> String {
     }
     for (index, candidate) in context.runnable_tasks.candidates.iter().enumerate() {
         render_runnable_candidate(&mut output, index, candidate);
+    }
+    for (index, knowledge) in context.knowledge.knowledge.iter().enumerate() {
+        let statement_json =
+            serde_json::to_string(&knowledge.state.statement).expect("knowledge statement JSON");
+        let scope_json = context_canonical_json(&knowledge.state.scope);
+        let provenance_json = context_canonical_json(&knowledge.state.provenance);
+        let _ = writeln!(
+            output,
+            "context_knowledge.{index}.knowledge_entity_id={}",
+            knowledge.knowledge_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge.{index}.knowledge_entity_version_id={}",
+            knowledge.knowledge_entity_version_id
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge.{index}.knowledge_state_digest={}",
+            knowledge.state_digest
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge.{index}.knowledge_status={}",
+            knowledge.state.status
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge.{index}.knowledge_statement_json={statement_json}"
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge.{index}.knowledge_scope_json={scope_json}"
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge.{index}.knowledge_provenance_json={provenance_json}"
+        );
     }
     for (index, record) in context.records.records.iter().enumerate() {
         let statement_json =
@@ -3394,6 +3433,11 @@ fn render_context_overview(context: &ContextOverview) -> String {
     output
 }
 
+fn context_canonical_json(value: &CanonicalValue) -> String {
+    String::from_utf8(canonical_bytes(value).expect("canonical context JSON"))
+        .expect("canonical context JSON must be UTF-8")
+}
+
 fn render_next_work(result: &NextWorkResult) -> String {
     let selected = result.claim_next.selected.is_some();
     let focus_entity_id = result
@@ -3411,7 +3455,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_records={}\ncontext_record_relations={}\n",
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_knowledge={}\ncontext_records={}\ncontext_record_relations={}\n",
         result.claim_next.session_id,
         result.claim_next.workspace_id,
         result.claim_next.branch_id,
@@ -3422,6 +3466,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         result.context.session.context_workspaces.len(),
         result.context.runnable_tasks.candidates.len(),
         runnable_ready,
+        result.context.knowledge.knowledge.len(),
         result.context.records.records.len(),
         result.context.record_relations.relations.len()
     );
@@ -4593,6 +4638,7 @@ mod tests {
         assert!(context.contains(&format!("branch_id={branch}")));
         assert!(context.contains("context_workspaces=1"));
         assert!(context.contains("runnable_candidates=1"));
+        assert!(context.contains("knowledge=0"));
         assert!(context.contains("records=0"));
         assert!(context.contains("record_relations=0"));
         assert!(context.contains(&format!("candidate.0.task_entity_id={task_id}")));
@@ -4729,6 +4775,7 @@ mod tests {
                     .expect("parse context"),
             )
             .expect("context overview");
+        assert!(context.contains("knowledge=0"));
         assert!(context.contains("records=1"));
         assert!(context.contains("record_relations=0"));
         assert_eq!(
@@ -4742,6 +4789,118 @@ mod tests {
                 "context_record.0.record_statement_json=\"The context resolver should expose current findings\""
             )
         );
+    }
+
+    #[test]
+    fn cli_context_includes_current_active_knowledge_summary() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let active = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Serialized writes make SQLite sufficient for V0.1",
+            "--scope-json",
+            "{\"kind\":\"workspace\"}",
+        ])
+        .expect("parse active knowledge"))
+        .expect("create active knowledge");
+        let stale = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&active, "commit_id"),
+            "--statement",
+            "Legacy cache keys do not need schema versions",
+        ])
+        .expect("parse stale knowledge"))
+        .expect("create stale knowledge");
+        let invalidated = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "invalidate",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&stale, "commit_id"),
+            "--knowledge",
+            &value(&stale, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&stale, "knowledge_entity_version_id"),
+            "--rationale",
+            "Schema versions are part of cache keys",
+        ])
+        .expect("parse invalidate knowledge"))
+        .expect("invalidate knowledge");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context =
+            run(
+                Cli::try_parse_from(["workvcs", "context", store, "--session", &session_id])
+                    .expect("parse context"),
+            )
+            .expect("context overview");
+        assert_eq!(
+            value(&context, "head_commit_id"),
+            value(&invalidated, "commit_id")
+        );
+        assert_eq!(value(&context, "knowledge"), "1");
+        assert_eq!(
+            value(&context, "context_knowledge.0.knowledge_entity_id"),
+            value(&active, "knowledge_entity_id")
+        );
+        assert!(context.contains(
+            "context_knowledge.0.knowledge_statement_json=\"Serialized writes make SQLite sufficient for V0.1\""
+        ));
+        assert!(
+            context.contains("context_knowledge.0.knowledge_scope_json={\"kind\":\"workspace\"}")
+        );
+        assert!(!context.contains("Legacy cache keys do not need schema versions"));
     }
 
     #[test]
@@ -4924,6 +5083,7 @@ mod tests {
         assert!(next.contains(&format!("task_entity_id={task_id}")));
         assert!(next.contains(&format!("context_focus_entity_id={task_id}")));
         assert!(next.contains("context_runnable_candidates=1"));
+        assert!(next.contains("context_knowledge=0"));
 
         let runnable = run(Cli::try_parse_from([
             "workvcs",

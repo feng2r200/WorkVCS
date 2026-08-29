@@ -153,6 +153,7 @@ pub enum WhyRelationKind {
     RecordInvalidates,
     RecordRelatedTo,
     RecordSupports,
+    RecordSupersedes,
     RecordValidates,
 }
 
@@ -445,6 +446,7 @@ fn record_relation_kind(relation_type: RecordRelationType) -> WhyRelationKind {
         RecordRelationType::Invalidates => WhyRelationKind::RecordInvalidates,
         RecordRelationType::RelatedTo => WhyRelationKind::RecordRelatedTo,
         RecordRelationType::Supports => WhyRelationKind::RecordSupports,
+        RecordRelationType::Supersedes => WhyRelationKind::RecordSupersedes,
         RecordRelationType::Validates => WhyRelationKind::RecordValidates,
     }
 }

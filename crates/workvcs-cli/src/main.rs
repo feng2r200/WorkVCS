@@ -7,10 +7,11 @@ use workvcs_core::{
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, CanonicalValue, ClaimId, ClaimLifecycleState,
     ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
-    ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
-    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
-    NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordListOptions, RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
+    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
     RecordRelationListOptions, RecordRelationListResult, RecordRelationSnapshot,
     RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
     RecordTransitionOptions, RelationId, ReplayedState, ResolvedWhyQuerySubject,
@@ -477,6 +478,28 @@ enum RecordCommand {
 
         #[arg(long)]
         label: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    SupersedeDecision {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        replacement_record: String,
+
+        #[arg(long)]
+        prior_record: String,
+
+        #[arg(long)]
+        prior_record_version: String,
 
         #[arg(long)]
         rationale: String,
@@ -1435,6 +1458,30 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::SupersedeDecision {
+                    store,
+                    branch,
+                    head,
+                    replacement_record,
+                    prior_record,
+                    prior_record_version,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let superseded =
+                engine.supersede_decision_record(DecisionRecordSupersedeOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&replacement_record)?,
+                    EntityId::parse_canonical(&prior_record)?,
+                    EntityVersionId::parse_canonical(&prior_record_version)?,
+                    rationale,
+                )?)?;
+            Ok(render_decision_record_supersede(&superseded))
+        }
+        Command::Record {
+            command:
                 RecordCommand::RelationList {
                     store,
                     commit,
@@ -1971,6 +2018,7 @@ fn parse_record_relation_type(value: &str) -> Result<RecordRelationType> {
         "contradicts" => Ok(RecordRelationType::Contradicts),
         "invalidates" => Ok(RecordRelationType::Invalidates),
         "related_to" => Ok(RecordRelationType::RelatedTo),
+        "supersedes" => Ok(RecordRelationType::Supersedes),
         "supports" => Ok(RecordRelationType::Supports),
         "validates" => Ok(RecordRelationType::Validates),
         other => Err(WorkVcsError::RecordInvalid(format!(
@@ -2428,6 +2476,31 @@ fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> Strin
         relation.target_record_entity_id,
         relation.relation_state_digest,
         relation.work_state_digest
+    )
+}
+
+fn render_decision_record_supersede(superseded: &DecisionRecordSupersedeCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\nprior_record_operation_id={}\nrelation_operation_id={}\nreplacement_record_entity_id={}\nprior_record_entity_id={}\nprevious_prior_record_entity_version_id={}\nprior_record_entity_version_id={}\nprior_record_state_digest={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nrelation_state_digest={}\nwork_state_digest={}\nprevious_prior_record_status={}\nprior_record_status={}\n",
+        superseded.workspace_id,
+        superseded.branch_id,
+        superseded.previous_head_commit_id,
+        superseded.commit_id,
+        superseded.changeset_id,
+        superseded.prior_record_operation_id,
+        superseded.relation_operation_id,
+        superseded.replacement_record_entity_id,
+        superseded.prior_record_entity_id,
+        superseded.previous_prior_record_entity_version_id,
+        superseded.prior_record_entity_version_id,
+        superseded.prior_record_state_digest,
+        superseded.relation_id,
+        superseded.relation_version_id,
+        RecordRelationType::Supersedes,
+        superseded.relation_state_digest,
+        superseded.work_state_digest,
+        superseded.previous_prior_state.status,
+        superseded.prior_state.status
     )
 }
 
@@ -2947,6 +3020,7 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::RecordInvalidates => "record_invalidates",
         WhyRelationKind::RecordRelatedTo => "record_related_to",
         WhyRelationKind::RecordSupports => "record_supports",
+        WhyRelationKind::RecordSupersedes => "record_supersedes",
         WhyRelationKind::RecordValidates => "record_validates",
     }
 }
@@ -4222,6 +4296,128 @@ mod tests {
         .expect("parse record show"))
         .expect("show decision");
         assert!(shown.contains("record_status=superseded"));
+    }
+
+    #[test]
+    fn cli_supersedes_decision_record_atomically() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let prior = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Use optimistic writes",
+        ])
+        .expect("parse prior decision"))
+        .expect("create prior decision");
+        let replacement = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&prior, "commit_id"),
+            "--statement",
+            "Use serialized writes",
+        ])
+        .expect("parse replacement decision"))
+        .expect("create replacement decision");
+        let superseded = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "supersede-decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&replacement, "commit_id"),
+            "--replacement-record",
+            &value(&replacement, "record_entity_id"),
+            "--prior-record",
+            &value(&prior, "record_entity_id"),
+            "--prior-record-version",
+            &value(&prior, "record_entity_version_id"),
+            "--rationale",
+            "Serialized writes supersede optimistic writes",
+        ])
+        .expect("parse supersede decision"))
+        .expect("supersede decision");
+
+        assert!(superseded.contains("prior_record_status=superseded"));
+        assert!(superseded.contains("relation_type=supersedes"));
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--record",
+            &value(&prior, "record_entity_id"),
+        ])
+        .expect("parse prior show"))
+        .expect("show prior");
+        assert!(shown.contains("record_status=superseded"));
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--type",
+            "supersedes",
+        ])
+        .expect("parse relation list"))
+        .expect("list supersedes");
+        assert!(listed.contains("relations=1"));
+        assert_eq!(
+            value(&listed, "relation.0.relation_id"),
+            value(&superseded, "relation_id")
+        );
+
+        let why_prior = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--entity",
+            &value(&prior, "record_entity_id"),
+        ])
+        .expect("parse why prior"))
+        .expect("why prior");
+        assert!(why_prior.contains("relation.0.relation_kind=record_supersedes"));
+        assert!(why_prior.contains("relation.0.direction=incoming"));
     }
 
     #[test]

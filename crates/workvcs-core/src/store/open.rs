@@ -218,6 +218,15 @@ impl Store {
         history::transition_record(&mut self.connection, options)
     }
 
+    pub(crate) fn supersede_decision_record(
+        &mut self,
+        options: &crate::DecisionRecordSupersedeOptions,
+    ) -> Result<crate::DecisionRecordSupersedeCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::supersede_decision_record(&mut self.connection, options)
+    }
+
     pub(crate) fn create_resource(
         &mut self,
         options: &ResourceCreateOptions,

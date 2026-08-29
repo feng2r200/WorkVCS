@@ -1,10 +1,12 @@
 use super::session;
 use crate::error::{Result, WorkVcsError, storage_error};
-use crate::history::{self, TaskSnapshot, TaskStatus};
+use crate::history::{
+    self, TaskSchedulingRelationSnapshot, TaskSchedulingRelationType, TaskSnapshot, TaskStatus,
+};
 use crate::identity::{BranchId, ClaimId, CommitId, EntityId, SessionId, WorkspaceId};
 use crate::store::StoreConnection;
 use rusqlite::params;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const EXCLUSIVE_CLAIM_MODE: &str = "exclusive";
@@ -47,6 +49,8 @@ pub enum RunnableTaskProjectionDimension {
 pub struct RunnableTaskCandidate {
     pub task: TaskSnapshot,
     pub lifecycle_eligible: bool,
+    pub dependency_ready: bool,
+    pub unsatisfied_dependency_entity_ids: Vec<EntityId>,
     pub claim_coordination: RunnableTaskClaimCoordination,
     pub runnable: bool,
     pub blocked_reasons: Vec<RunnableTaskBlockedReason>,
@@ -67,6 +71,7 @@ pub enum RunnableTaskClaimCoordination {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunnableTaskBlockedReason {
     LifecycleIneligible,
+    DependencyBlocked,
     ClaimBlocked,
 }
 
@@ -77,6 +82,23 @@ struct ProjectionAnchor {
     head_commit_id: CommitId,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DependencyReadiness {
+    unsatisfied_dependency_entity_ids: Vec<EntityId>,
+}
+
+impl DependencyReadiness {
+    fn satisfied() -> Self {
+        Self {
+            unsatisfied_dependency_entity_ids: Vec::new(),
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        self.unsatisfied_dependency_entity_ids.is_empty()
+    }
+}
+
 pub(crate) fn runnable_tasks(
     connection: &StoreConnection,
     options: &RunnableTasksOptions,
@@ -84,6 +106,9 @@ pub(crate) fn runnable_tasks(
     connection.verify_foreign_keys()?;
     let anchor = projection_anchor(connection, options.session_id())?;
     let tasks = history::tasks_at(connection, anchor.head_commit_id)?;
+    let scheduling_relations =
+        history::task_scheduling_relations_at(connection, anchor.head_commit_id)?;
+    let dependency_readiness = dependency_readiness_by_task(&tasks, &scheduling_relations)?;
     let claim_coordination = load_active_claim_coordination(
         connection,
         anchor.workspace_id,
@@ -93,11 +118,15 @@ pub(crate) fn runnable_tasks(
     let mut candidates = tasks
         .into_iter()
         .map(|task| {
+            let dependency_readiness = dependency_readiness
+                .get(&task.task_entity_id)
+                .cloned()
+                .unwrap_or_else(DependencyReadiness::satisfied);
             let coordination = claim_coordination
                 .get(&task.task_entity_id)
                 .cloned()
                 .unwrap_or(RunnableTaskClaimCoordination::Unclaimed);
-            candidate_with_claims(task, coordination)
+            candidate_with_claims(task, dependency_readiness, coordination)
         })
         .collect::<Vec<_>>();
     sort_candidates(&mut candidates);
@@ -115,9 +144,11 @@ pub(crate) fn runnable_tasks(
 
 fn candidate_with_claims(
     task: TaskSnapshot,
+    dependency_readiness: DependencyReadiness,
     claim_coordination: RunnableTaskClaimCoordination,
 ) -> RunnableTaskCandidate {
     let lifecycle_eligible = lifecycle_eligible(task.state.status);
+    let dependency_ready = dependency_readiness.is_ready();
     let claim_blocked = matches!(
         claim_coordination,
         RunnableTaskClaimCoordination::ClaimedByOtherSession { .. }
@@ -126,6 +157,9 @@ fn candidate_with_claims(
     if !lifecycle_eligible {
         blocked_reasons.push(RunnableTaskBlockedReason::LifecycleIneligible);
     }
+    if !dependency_ready {
+        blocked_reasons.push(RunnableTaskBlockedReason::DependencyBlocked);
+    }
     if claim_blocked {
         blocked_reasons.push(RunnableTaskBlockedReason::ClaimBlocked);
     }
@@ -133,14 +167,131 @@ fn candidate_with_claims(
     RunnableTaskCandidate {
         task,
         lifecycle_eligible,
+        dependency_ready,
+        unsatisfied_dependency_entity_ids: dependency_readiness.unsatisfied_dependency_entity_ids,
         claim_coordination,
-        runnable: lifecycle_eligible && !claim_blocked,
+        runnable: lifecycle_eligible && dependency_ready && !claim_blocked,
         blocked_reasons,
     }
 }
 
 fn lifecycle_eligible(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Pending | TaskStatus::InProgress)
+}
+
+fn dependency_readiness_by_task(
+    tasks: &[TaskSnapshot],
+    relations: &[TaskSchedulingRelationSnapshot],
+) -> Result<BTreeMap<EntityId, DependencyReadiness>> {
+    let task_statuses = tasks
+        .iter()
+        .map(|task| (task.task_entity_id, task.state.status))
+        .collect::<BTreeMap<_, _>>();
+    let mut graph = BTreeMap::<EntityId, Vec<EntityId>>::new();
+
+    for relation in relations {
+        if relation.relation_type != TaskSchedulingRelationType::DependsOn {
+            continue;
+        }
+        if !task_statuses.contains_key(&relation.source_task_entity_id) {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "depends_on relation {} source task {} is not present in runnable projection",
+                relation.relation_id, relation.source_task_entity_id
+            )));
+        }
+        if !task_statuses.contains_key(&relation.target_task_entity_id) {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "depends_on relation {} target task {} is not present in runnable projection",
+                relation.relation_id, relation.target_task_entity_id
+            )));
+        }
+        graph
+            .entry(relation.source_task_entity_id)
+            .or_default()
+            .push(relation.target_task_entity_id);
+    }
+    for prerequisites in graph.values_mut() {
+        prerequisites.sort();
+        prerequisites.dedup();
+    }
+
+    let mut readiness = BTreeMap::new();
+    for task in tasks {
+        let dependencies = dependency_closure(task.task_entity_id, &graph, &task_statuses)?;
+        let unsatisfied_dependency_entity_ids = dependencies
+            .into_iter()
+            .filter(|dependency_entity_id| {
+                task_statuses.get(dependency_entity_id).copied() != Some(TaskStatus::Done)
+            })
+            .collect();
+        readiness.insert(
+            task.task_entity_id,
+            DependencyReadiness {
+                unsatisfied_dependency_entity_ids,
+            },
+        );
+    }
+    Ok(readiness)
+}
+
+fn dependency_closure(
+    task_entity_id: EntityId,
+    graph: &BTreeMap<EntityId, Vec<EntityId>>,
+    task_statuses: &BTreeMap<EntityId, TaskStatus>,
+) -> Result<BTreeSet<EntityId>> {
+    let mut collected = BTreeSet::new();
+    let mut active_path = HashSet::new();
+    let mut complete = HashSet::new();
+    collect_dependency_closure(
+        task_entity_id,
+        graph,
+        task_statuses,
+        &mut active_path,
+        &mut complete,
+        &mut collected,
+    )?;
+    Ok(collected)
+}
+
+fn collect_dependency_closure(
+    task_entity_id: EntityId,
+    graph: &BTreeMap<EntityId, Vec<EntityId>>,
+    task_statuses: &BTreeMap<EntityId, TaskStatus>,
+    active_path: &mut HashSet<EntityId>,
+    complete: &mut HashSet<EntityId>,
+    collected: &mut BTreeSet<EntityId>,
+) -> Result<()> {
+    if complete.contains(&task_entity_id) {
+        return Ok(());
+    }
+    if !active_path.insert(task_entity_id) {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "current depends_on graph contains a dependency cycle at task {task_entity_id}"
+        )));
+    }
+
+    if let Some(prerequisites) = graph.get(&task_entity_id) {
+        for prerequisite in prerequisites {
+            if !task_statuses.contains_key(prerequisite) {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "depends_on prerequisite task {prerequisite} is not present in runnable projection"
+                )));
+            }
+            collected.insert(*prerequisite);
+            collect_dependency_closure(
+                *prerequisite,
+                graph,
+                task_statuses,
+                active_path,
+                complete,
+                collected,
+            )?;
+        }
+    }
+
+    active_path.remove(&task_entity_id);
+    complete.insert(task_entity_id);
+    Ok(())
 }
 
 fn sort_candidates(candidates: &mut [RunnableTaskCandidate]) {
@@ -299,7 +450,6 @@ fn deferred_dimensions() -> Vec<RunnableTaskProjectionDimension> {
     vec![
         RunnableTaskProjectionDimension::ActiveScopePlanPath,
         RunnableTaskProjectionDimension::ExecutableTaskDescendants,
-        RunnableTaskProjectionDimension::DependencyReadiness,
         RunnableTaskProjectionDimension::ExplicitManualOrder,
         RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker,
     ]

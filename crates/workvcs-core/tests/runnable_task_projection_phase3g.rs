@@ -224,7 +224,6 @@ fn runnable_projection_lists_lifecycle_candidates_without_mutation() {
         vec![
             RunnableTaskProjectionDimension::ActiveScopePlanPath,
             RunnableTaskProjectionDimension::ExecutableTaskDescendants,
-            RunnableTaskProjectionDimension::DependencyReadiness,
             RunnableTaskProjectionDimension::ExplicitManualOrder,
             RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker,
         ]
@@ -259,6 +258,12 @@ fn runnable_projection_lists_lifecycle_candidates_without_mutation() {
     assert_eq!(pending_candidate.task.state.status, TaskStatus::Pending);
     assert_eq!(pending_candidate.task.state.priority, 4);
     assert!(pending_candidate.lifecycle_eligible);
+    assert!(pending_candidate.dependency_ready);
+    assert!(
+        pending_candidate
+            .unsatisfied_dependency_entity_ids
+            .is_empty()
+    );
     assert!(pending_candidate.runnable);
     assert_eq!(
         pending_candidate.claim_coordination,
@@ -272,6 +277,12 @@ fn runnable_projection_lists_lifecycle_candidates_without_mutation() {
     assert_eq!(running_candidate.task.state.status, TaskStatus::InProgress);
     assert_eq!(running_candidate.task.state.priority, -10);
     assert!(running_candidate.lifecycle_eligible);
+    assert!(running_candidate.dependency_ready);
+    assert!(
+        running_candidate
+            .unsatisfied_dependency_entity_ids
+            .is_empty()
+    );
     assert!(running_candidate.runnable);
     assert_eq!(
         running_candidate.claim_coordination,
@@ -285,6 +296,12 @@ fn runnable_projection_lists_lifecycle_candidates_without_mutation() {
     assert_eq!(blocked_candidate.task.state.status, TaskStatus::Blocked);
     assert_eq!(blocked_candidate.task.state.priority, 100);
     assert!(!blocked_candidate.lifecycle_eligible);
+    assert!(blocked_candidate.dependency_ready);
+    assert!(
+        blocked_candidate
+            .unsatisfied_dependency_entity_ids
+            .is_empty()
+    );
     assert!(!blocked_candidate.runnable);
     assert_eq!(
         blocked_candidate.claim_coordination,
@@ -447,6 +464,8 @@ fn runnable_projection_rejects_terminal_task_statuses() {
             .expect("terminal candidate");
         assert_eq!(candidate.task.state.status, status);
         assert!(!candidate.lifecycle_eligible);
+        assert!(candidate.dependency_ready);
+        assert!(candidate.unsatisfied_dependency_entity_ids.is_empty());
         assert!(!candidate.runnable);
         assert_eq!(
             candidate.blocked_reasons,
@@ -507,6 +526,7 @@ fn runnable_projection_coordinates_active_and_released_claims_without_mutation()
         .get(&first_task.task_entity_id)
         .expect("first session claimed candidate");
     assert!(first_claimed_candidate.lifecycle_eligible);
+    assert!(first_claimed_candidate.dependency_ready);
     assert!(first_claimed_candidate.runnable);
     assert_eq!(
         first_claimed_candidate.claim_coordination,
@@ -520,6 +540,7 @@ fn runnable_projection_coordinates_active_and_released_claims_without_mutation()
         .get(&second_task.task_entity_id)
         .expect("first session unclaimed candidate");
     assert!(first_unclaimed_candidate.runnable);
+    assert!(first_unclaimed_candidate.dependency_ready);
     assert_eq!(
         first_unclaimed_candidate.claim_coordination,
         RunnableTaskClaimCoordination::Unclaimed
@@ -530,6 +551,7 @@ fn runnable_projection_coordinates_active_and_released_claims_without_mutation()
         .get(&first_task.task_entity_id)
         .expect("second session claim-blocked candidate");
     assert!(second_blocked_candidate.lifecycle_eligible);
+    assert!(second_blocked_candidate.dependency_ready);
     assert!(!second_blocked_candidate.runnable);
     assert_eq!(
         second_blocked_candidate.claim_coordination,
@@ -559,6 +581,7 @@ fn runnable_projection_coordinates_active_and_released_claims_without_mutation()
         .get(&first_task.task_entity_id)
         .expect("released task candidate");
     assert!(released_candidate.runnable);
+    assert!(released_candidate.dependency_ready);
     assert_eq!(
         released_candidate.claim_coordination,
         RunnableTaskClaimCoordination::Unclaimed

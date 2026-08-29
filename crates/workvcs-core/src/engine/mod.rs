@@ -16,12 +16,13 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
-    BundleManifestValidationOptions, BundleManifestValidationResult, CheckpointCreateOptions,
-    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
-    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
-    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
+    BundlePayloadExportOptions, CheckpointCreateOptions, CheckpointCreateResult,
+    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
+    CheckpointSnapshot, CheckpointValidationResult, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, EntityTransitionCommit, EntityTransitionOptions,
+    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
@@ -182,6 +183,13 @@ impl Engine {
         options: BundleManifestValidationOptions,
     ) -> Result<BundleManifestValidationResult> {
         self.store.validate_bundle_manifest(options)
+    }
+
+    pub fn export_bundle_payloads(
+        &self,
+        options: BundlePayloadExportOptions,
+    ) -> Result<BundlePayloadExport> {
+        self.store.export_bundle_payloads(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

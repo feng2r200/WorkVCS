@@ -1,7 +1,7 @@
 use clap::{ArgGroup, Parser, Subcommand};
 use std::fmt::Write as _;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
@@ -9,25 +9,25 @@ use workvcs_core::{
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
     BundleExportOptions, BundleManifestValidationOptions, BundleManifestValidationResult,
-    CanonicalValue, CheckpointCreateOptions, CheckpointCreateResult, CheckpointId,
-    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
-    CheckpointSnapshot, CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode,
-    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
-    ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
-    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
-    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
-    KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
-    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
-    MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
-    MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
-    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    BundlePayloadExport, BundlePayloadExportOptions, CanonicalValue, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointId, CheckpointLatestOptions, CheckpointLatestResult,
+    CheckpointListOptions, CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
+    ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult,
+    ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId,
+    ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EvidenceId,
+    HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
+    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
+    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, MergeAbortOptions, MergeAbortResult,
+    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
+    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot,
+    MergeResolutionKind, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
+    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
@@ -347,6 +347,16 @@ enum BundleCommand {
 
         #[arg(long)]
         commit: String,
+    },
+    ExportDir {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+
+        #[arg(long)]
+        output_dir: PathBuf,
     },
     ValidateManifest {
         #[arg(value_name = "STORE")]
@@ -1713,6 +1723,18 @@ fn run(cli: Cli) -> Result<String> {
                     CommitId::parse_canonical(&commit)?,
                 ))?;
                 render_bundle_export_manifest_json(&manifest)
+            }
+            BundleCommand::ExportDir {
+                store,
+                commit,
+                output_dir,
+            } => {
+                let engine = Engine::open(store)?;
+                let export = engine.export_bundle_payloads(
+                    BundlePayloadExportOptions::for_commit(CommitId::parse_canonical(&commit)?),
+                )?;
+                write_bundle_payload_export_directory(&output_dir, &export)?;
+                Ok(render_bundle_payload_export(&export, &output_dir))
             }
             BundleCommand::ValidateManifest {
                 store,
@@ -5435,6 +5457,62 @@ fn render_bundle_export_manifest_json(manifest: &BundleExportManifest) -> Result
     })
 }
 
+fn write_bundle_payload_export_directory(
+    output_dir: &Path,
+    export: &BundlePayloadExport,
+) -> Result<()> {
+    fs::create_dir_all(output_dir).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "failed to create bundle output directory {}: {error}",
+            output_dir.display()
+        ))
+    })?;
+    write_new_file(output_dir.join("manifest.json"), &export.manifest_bytes)?;
+    write_new_file(
+        output_dir.join("payload-index.json"),
+        &export.payload_index_bytes,
+    )?;
+    fs::create_dir_all(output_dir.join("payloads")).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "failed to create bundle payload directory {}: {error}",
+            output_dir.join("payloads").display()
+        ))
+    })?;
+    for payload in &export.payload_files {
+        write_new_file(output_dir.join(&payload.relative_path), &payload.bytes)?;
+    }
+    Ok(())
+}
+
+fn write_new_file(path: PathBuf, bytes: &[u8]) -> Result<()> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, bytes))
+        .map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "failed to write bundle export file {}: {error}",
+                path.display()
+            ))
+        })
+}
+
+fn render_bundle_payload_export(export: &BundlePayloadExport, output_dir: &Path) -> String {
+    format!(
+        "bundle_payload_export_profile={}\nbundle_payload_index_version={}\noutput_dir={}\ncommit_id={}\nmanifest_digest={}\npayload_index_digest={}\npayload_index_size_bytes={}\npayload_files={}\npayload_references={}\n",
+        "workvcs-local-payload-index-v1",
+        1,
+        output_dir.display(),
+        export.manifest.commit_id,
+        export.manifest.manifest_digest,
+        export.payload_index_digest,
+        export.payload_index_size_bytes,
+        export.payload_files.len(),
+        export.payload_references.len()
+    )
+}
+
 fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
     format!(
         "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nactual_manifest_size_bytes={}\nproblem={}\n",
@@ -6141,6 +6219,35 @@ mod tests {
         assert_eq!(value(&validation, "commit_id"), genesis);
         assert_eq!(value(&validation, "valid"), "true");
         assert_eq!(value(&validation, "problem"), "none");
+
+        let export_dir = tempdir.path().join("bundle-export");
+        let exported_dir = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export-dir",
+            store,
+            "--commit",
+            &genesis,
+            "--output-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse bundle export-dir"))
+        .expect("export bundle directory");
+        assert_eq!(
+            value(&exported_dir, "bundle_payload_export_profile"),
+            "workvcs-local-payload-index-v1"
+        );
+        assert_eq!(value(&exported_dir, "bundle_payload_index_version"), "1");
+        assert_eq!(value(&exported_dir, "commit_id"), genesis);
+        assert_eq!(value(&exported_dir, "payload_files"), "1");
+        assert_eq!(value(&exported_dir, "payload_references"), "2");
+        assert_eq!(
+            fs::read_to_string(export_dir.join("manifest.json")).expect("manifest file"),
+            manifest_json
+        );
+        let payload_index =
+            fs::read(export_dir.join("payload-index.json")).expect("payload index file");
+        parse_canonical_json(&payload_index).expect("payload index is canonical JSON");
     }
 
     #[test]

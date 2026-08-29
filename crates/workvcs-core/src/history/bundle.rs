@@ -4,16 +4,19 @@ use crate::canonical::{
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, RelationId,
-    RelationVersionId, StoreId, WorkspaceId,
+    ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, OperationId,
+    RelationId, RelationVersionId, StoreId, WorkspaceId,
 };
 use crate::store::{StoreConnection, StoreInfo, StoreManifest};
 use rusqlite::{OptionalExtension, params};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
 const BUNDLE_EXPORT_MANIFEST_PROFILE: &str = "workvcs-local-export-manifest-v1";
 const BUNDLE_EXPORT_MANIFEST_VERSION: i64 = 1;
+const BUNDLE_PAYLOAD_INDEX_PROFILE: &str = "workvcs-local-payload-index-v1";
+const BUNDLE_PAYLOAD_INDEX_VERSION: i64 = 1;
+const BUNDLE_PAYLOAD_MEDIA_TYPE: &str = "application/json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BundleExportOptions {
@@ -21,6 +24,21 @@ pub struct BundleExportOptions {
 }
 
 impl BundleExportOptions {
+    pub fn for_commit(commit_id: CommitId) -> Self {
+        Self { commit_id }
+    }
+
+    pub fn commit_id(self) -> CommitId {
+        self.commit_id
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BundlePayloadExportOptions {
+    commit_id: CommitId,
+}
+
+impl BundlePayloadExportOptions {
     pub fn for_commit(commit_id: CommitId) -> Self {
         Self { commit_id }
     }
@@ -89,6 +107,36 @@ pub struct BundleManifestValidationResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundlePayloadExport {
+    pub manifest: BundleExportManifest,
+    pub manifest_bytes: Vec<u8>,
+    pub payload_index: CanonicalValue,
+    pub payload_index_bytes: Vec<u8>,
+    pub payload_index_digest: Digest,
+    pub payload_index_size_bytes: i64,
+    pub payload_files: Vec<BundlePayloadFile>,
+    pub payload_references: Vec<BundlePayloadReference>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundlePayloadFile {
+    pub relative_path: String,
+    pub content_digest: Digest,
+    pub size_bytes: i64,
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundlePayloadReference {
+    pub role: String,
+    pub relative_path: String,
+    pub content_digest: Digest,
+    pub size_bytes: i64,
+    pub owner: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleCheckpointCandidate {
     pub checkpoint_id: CheckpointId,
     pub content_digest: Digest,
@@ -145,6 +193,13 @@ struct BundleCommitParentRef {
     parent_ordinal: i64,
     parent_role: String,
     parent_commit_id: CommitId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundlePayloadCandidate {
+    role: String,
+    owner: CanonicalValue,
+    bytes: Vec<u8>,
 }
 
 pub(crate) fn export_bundle_manifest(
@@ -253,6 +308,46 @@ pub(crate) fn validate_bundle_manifest(
         actual_manifest_size_bytes,
         problem,
     })
+}
+
+pub(crate) fn export_bundle_payloads(
+    connection: &StoreConnection,
+    store_info: &StoreInfo,
+    options: BundlePayloadExportOptions,
+) -> Result<BundlePayloadExport> {
+    connection.verify_foreign_keys()?;
+    let manifest = export_bundle_manifest(
+        connection,
+        store_info,
+        BundleExportOptions::for_commit(options.commit_id()),
+    )?;
+    let manifest_bytes = canonical_bytes(&manifest.manifest)?;
+    if content_object_digest(&manifest_bytes) != manifest.manifest_digest {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle manifest digest does not match canonical manifest bytes".to_owned(),
+        ));
+    }
+
+    let mut commits = commit_closure_refs(connection, options.commit_id())?;
+    commits.sort_by(|left, right| {
+        left.committed_at_us
+            .cmp(&right.committed_at_us)
+            .then_with(|| left.commit_id.cmp(&right.commit_id))
+    });
+
+    let mut candidates = Vec::new();
+    for commit in &commits {
+        load_changeset_payload_candidates(connection, commit, &mut candidates)?;
+        load_change_operation_payload_candidates(connection, commit, &mut candidates)?;
+    }
+    for entity_version in &manifest.entity_versions {
+        load_entity_version_payload_candidate(connection, entity_version, &mut candidates)?;
+    }
+    for relation_version in &manifest.relation_versions {
+        load_relation_version_payload_candidate(connection, relation_version, &mut candidates)?;
+    }
+
+    build_payload_export(manifest, manifest_bytes, candidates)
 }
 
 fn commit_closure_refs(
@@ -601,6 +696,279 @@ fn load_relation_version_ref(
     })
 }
 
+fn load_changeset_payload_candidates(
+    connection: &StoreConnection,
+    commit: &BundleCommitRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT operation_payload_json, rationale_json
+             FROM changeset
+             WHERE changeset_id = ?1",
+            params![&commit.changeset_id.raw_bytes()[..]],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((operation_payload_json, rationale_json)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ChangeSet {} does not exist",
+            commit.changeset_id
+        )));
+    };
+    push_canonical_payload(
+        candidates,
+        "changeset_operation_payload",
+        CanonicalValue::object(vec![
+            string_field("commit_id", commit.commit_id.to_string()),
+            string_field("changeset_id", commit.changeset_id.to_string()),
+        ])?,
+        "changeset.operation_payload_json",
+        operation_payload_json,
+    )?;
+    push_canonical_payload(
+        candidates,
+        "changeset_rationale",
+        CanonicalValue::object(vec![
+            string_field("commit_id", commit.commit_id.to_string()),
+            string_field("changeset_id", commit.changeset_id.to_string()),
+        ])?,
+        "changeset.rationale_json",
+        rationale_json,
+    )
+}
+
+fn load_change_operation_payload_candidates(
+    connection: &StoreConnection,
+    commit: &BundleCommitRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT operation_id,
+                    ordinal,
+                    subject_family,
+                    subject_object_id,
+                    operation_payload_json
+             FROM change_operation
+             WHERE changeset_id = ?1
+             ORDER BY ordinal, operation_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&commit.changeset_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    for row in rows {
+        let (operation_id, ordinal, subject_family, subject_object_id, operation_payload_json) =
+            row.map_err(storage_error)?;
+        let operation_id = decode_operation_id("change_operation.operation_id", operation_id)?;
+        validate_nonnegative_i64("change_operation.ordinal", ordinal)?;
+        validate_subject_family("change_operation.subject_family", &subject_family)?;
+        let subject_object_id =
+            decode_object_id_text("change_operation.subject_object_id", subject_object_id)?;
+        push_canonical_payload(
+            candidates,
+            "change_operation_payload",
+            CanonicalValue::object(vec![
+                string_field("changeset_id", commit.changeset_id.to_string()),
+                string_field("operation_id", operation_id.to_string()),
+                integer_field("ordinal", ordinal)?,
+                string_field("subject_family", subject_family),
+                string_field("subject_object_id", subject_object_id),
+            ])?,
+            "change_operation.operation_payload_json",
+            operation_payload_json,
+        )?;
+    }
+    Ok(())
+}
+
+fn load_entity_version_payload_candidate(
+    connection: &StoreConnection,
+    entity_version: &BundleEntityVersionRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let state_json = connection
+        .inner()
+        .query_row(
+            "SELECT state_json
+             FROM entity_version
+             WHERE entity_id = ?1
+               AND entity_version_id = ?2",
+            params![
+                &entity_version.entity_id.raw_bytes()[..],
+                &entity_version.entity_version_id.raw_bytes()[..]
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "EntityVersion {} for entity {} does not exist",
+                entity_version.entity_version_id, entity_version.entity_id
+            ))
+        })?;
+    if content_object_digest(state_json.as_bytes()) != entity_version.state_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "EntityVersion {} raw state JSON digest changed during payload export",
+            entity_version.entity_version_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "entity_version_state",
+        CanonicalValue::object(vec![
+            string_field("entity_id", entity_version.entity_id.to_string()),
+            string_field(
+                "entity_version_id",
+                entity_version.entity_version_id.to_string(),
+            ),
+        ])?,
+        "entity_version.state_json",
+        state_json,
+    )
+}
+
+fn load_relation_version_payload_candidate(
+    connection: &StoreConnection,
+    relation_version: &BundleRelationVersionRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let metadata_json = connection
+        .inner()
+        .query_row(
+            "SELECT metadata_json
+             FROM relation_version
+             WHERE relation_id = ?1
+               AND relation_version_id = ?2",
+            params![
+                &relation_version.relation_id.raw_bytes()[..],
+                &relation_version.relation_version_id.raw_bytes()[..]
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "RelationVersion {} for relation {} does not exist",
+                relation_version.relation_version_id, relation_version.relation_id
+            ))
+        })?;
+    if content_object_digest(metadata_json.as_bytes()) != relation_version.metadata_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "RelationVersion {} raw metadata JSON digest changed during payload export",
+            relation_version.relation_version_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "relation_version_metadata",
+        CanonicalValue::object(vec![
+            string_field("relation_id", relation_version.relation_id.to_string()),
+            string_field(
+                "relation_version_id",
+                relation_version.relation_version_id.to_string(),
+            ),
+        ])?,
+        "relation_version.metadata_json",
+        metadata_json,
+    )
+}
+
+fn push_canonical_payload(
+    candidates: &mut Vec<BundlePayloadCandidate>,
+    role: &str,
+    owner: CanonicalValue,
+    label: &str,
+    json: String,
+) -> Result<()> {
+    validate_canonical_json_value(label, &json)?;
+    candidates.push(BundlePayloadCandidate {
+        role: role.to_owned(),
+        owner,
+        bytes: json.into_bytes(),
+    });
+    Ok(())
+}
+
+fn build_payload_export(
+    manifest: BundleExportManifest,
+    manifest_bytes: Vec<u8>,
+    candidates: Vec<BundlePayloadCandidate>,
+) -> Result<BundlePayloadExport> {
+    let mut payload_files_by_digest: BTreeMap<Digest, BundlePayloadFile> = BTreeMap::new();
+    let mut payload_references = Vec::new();
+
+    for candidate in candidates {
+        let content_digest = content_object_digest(&candidate.bytes);
+        let size_bytes = usize_to_i64("bundle payload size", candidate.bytes.len())?;
+        let relative_path = format!("payloads/{content_digest}.json");
+        if let Some(existing) = payload_files_by_digest.get(&content_digest) {
+            if existing.bytes != candidate.bytes {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "bundle payload digest collision at {content_digest}"
+                )));
+            }
+        } else {
+            payload_files_by_digest.insert(
+                content_digest,
+                BundlePayloadFile {
+                    relative_path: relative_path.clone(),
+                    content_digest,
+                    size_bytes,
+                    media_type: BUNDLE_PAYLOAD_MEDIA_TYPE.to_owned(),
+                    bytes: candidate.bytes.clone(),
+                },
+            );
+        }
+        payload_references.push(BundlePayloadReference {
+            role: candidate.role,
+            relative_path,
+            content_digest,
+            size_bytes,
+            owner: candidate.owner,
+        });
+    }
+
+    let payload_files = payload_files_by_digest.into_values().collect::<Vec<_>>();
+    let payload_index = payload_index_value(
+        &manifest,
+        &manifest_bytes,
+        &payload_files,
+        &payload_references,
+    )?;
+    let payload_index_bytes = canonical_bytes(&payload_index)?;
+    let payload_index_digest = content_object_digest(&payload_index_bytes);
+    let payload_index_size_bytes =
+        usize_to_i64("payload_index_size_bytes", payload_index_bytes.len())?;
+
+    Ok(BundlePayloadExport {
+        manifest,
+        manifest_bytes,
+        payload_index,
+        payload_index_bytes,
+        payload_index_digest,
+        payload_index_size_bytes,
+        payload_files,
+        payload_references,
+    })
+}
+
 fn bundle_manifest_validation_problem(
     expected: &BundleExportManifest,
     manifest_bytes: &[u8],
@@ -908,6 +1276,82 @@ fn checkpoint_candidate_value(checkpoint: &BundleCheckpointCandidate) -> Result<
     ])
 }
 
+fn payload_index_value(
+    manifest: &BundleExportManifest,
+    manifest_bytes: &[u8],
+    payload_files: &[BundlePayloadFile],
+    payload_references: &[BundlePayloadReference],
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("bundle_payload_index_profile", BUNDLE_PAYLOAD_INDEX_PROFILE),
+        integer_field("bundle_payload_index_version", BUNDLE_PAYLOAD_INDEX_VERSION)?,
+        (
+            "manifest".to_owned(),
+            CanonicalValue::object(vec![
+                string_field("path", "manifest.json"),
+                string_field("digest", manifest.manifest_digest.to_string()),
+                integer_field(
+                    "size_bytes",
+                    usize_to_i64("manifest_size_bytes", manifest_bytes.len())?,
+                )?,
+            ])?,
+        ),
+        (
+            "target".to_owned(),
+            CanonicalValue::object(vec![
+                string_field("workspace_id", manifest.workspace_id.to_string()),
+                string_field("commit_id", manifest.commit_id.to_string()),
+                string_field("state_digest", manifest.state_digest.to_string()),
+            ])?,
+        ),
+        integer_field(
+            "payload_count",
+            usize_to_i64("payload_count", payload_files.len())?,
+        )?,
+        integer_field(
+            "reference_count",
+            usize_to_i64("reference_count", payload_references.len())?,
+        )?,
+        (
+            "payloads".to_owned(),
+            CanonicalValue::Array(
+                payload_files
+                    .iter()
+                    .map(payload_file_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "references".to_owned(),
+            CanonicalValue::Array(
+                payload_references
+                    .iter()
+                    .map(payload_reference_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+    ])
+}
+
+fn payload_file_value(payload: &BundlePayloadFile) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("path", payload.relative_path.clone()),
+        string_field("content_digest", payload.content_digest.to_string()),
+        integer_field("size_bytes", payload.size_bytes)?,
+        string_field("media_type", payload.media_type.clone()),
+    ])
+}
+
+fn payload_reference_value(reference: &BundlePayloadReference) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("role", reference.role.clone()),
+        string_field("path", reference.relative_path.clone()),
+        string_field("content_digest", reference.content_digest.to_string()),
+        integer_field("size_bytes", reference.size_bytes)?,
+        ("owner".to_owned(), reference.owner.clone()),
+    ])
+}
+
 fn string_field(name: &str, value: impl Into<String>) -> (String, CanonicalValue) {
     (name.to_owned(), CanonicalValue::String(value.into()))
 }
@@ -980,6 +1424,15 @@ fn validate_positive_i64(label: &str, value: i64) -> Result<()> {
     Ok(())
 }
 
+fn validate_subject_family(label: &str, value: &str) -> Result<()> {
+    match value {
+        "entity" | "relation" => Ok(()),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be entity or relation"
+        ))),
+    }
+}
+
 fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
     let bytes = decode_16(column, bytes)?;
     WorkspaceId::from_bytes(bytes)
@@ -995,6 +1448,12 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
 fn decode_changeset_id(column: &str, bytes: Vec<u8>) -> Result<ChangeSetId> {
     let bytes = decode_16(column, bytes)?;
     ChangeSetId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_operation_id(column: &str, bytes: Vec<u8>) -> Result<OperationId> {
+    let bytes = decode_16(column, bytes)?;
+    OperationId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 

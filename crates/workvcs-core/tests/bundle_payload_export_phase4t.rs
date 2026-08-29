@@ -154,7 +154,8 @@ fn bundle_payload_export_includes_canonical_json_payload_closure() {
     assert_eq!(counts.get("entity_membership_field_delta"), Some(&2));
     assert_eq!(counts.get("relation_version_metadata"), Some(&1));
     assert_eq!(counts.get("relation_membership_field_delta"), Some(&1));
-    assert_eq!(export.payload_references.len(), 17);
+    assert_eq!(counts.get("event_payload"), Some(&4));
+    assert_eq!(export.payload_references.len(), 21);
 
     let payloads = payload_file_digest_map(&export);
     for change in &export.manifest.entity_membership_changes {

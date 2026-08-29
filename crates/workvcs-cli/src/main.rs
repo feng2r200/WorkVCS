@@ -6359,7 +6359,7 @@ fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> Str
 
 fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
     let mut output = format!(
-        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nacceptance_criterion_identities={}\nverification_requirement_identities={}\nrelation_versions={}\ncontent_objects={}\nsessions={}\nsession_diffs={}\nevidences={}\nevidence_contents={}\nresources={}\nresource_observations={}\nverification_bases={}\nverification_resource_bases={}\nverification_semantic_dependencies={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
+        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nacceptance_criterion_identities={}\nverification_requirement_identities={}\nrelation_versions={}\ncontent_objects={}\nsessions={}\nsession_diffs={}\nevidences={}\nevidence_contents={}\nresources={}\nresource_observations={}\nverification_bases={}\nverification_resource_bases={}\nverification_semantic_dependencies={}\nevents={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
         manifest.manifest_profile,
         manifest.manifest_version,
         manifest.store_id,
@@ -6386,6 +6386,7 @@ fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
         manifest.verification_bases.len(),
         manifest.verification_resource_bases.len(),
         manifest.verification_semantic_dependencies.len(),
+        manifest.events.len(),
         manifest.knowledge_spaces.len(),
         manifest.knowledge_exposures.len(),
         manifest.knowledge_exposure_local_sources.len(),
@@ -6395,6 +6396,10 @@ fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
         manifest.relation_membership_changes.len(),
         manifest.checkpoint_candidates.len()
     );
+    for (index, event) in manifest.events.iter().enumerate() {
+        writeln!(output, "event[{index}].id={}", event.event_id).expect("write to String");
+        writeln!(output, "event[{index}].kind={}", event.event_kind).expect("write to String");
+    }
     for (index, checkpoint) in manifest.checkpoint_candidates.iter().enumerate() {
         writeln!(
             output,
@@ -6631,7 +6636,7 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
 
 fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
     format!(
-        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nimported_content_objects={}\nimported_sessions={}\nimported_session_diffs={}\nimported_evidences={}\nimported_resources={}\nimported_resource_observations={}\nimported_verification_bases={}\nimported_knowledge_spaces={}\nimported_knowledge_exposures={}\nimported_knowledge_exposure_local_sources={}\nimported_knowledge_exposure_transitions={}\nimported_knowledge_exposure_source_statuses={}\nimported_relation_versions={}\nimported_checkpoints={}\nimported_checkpoint_statuses={}\nupdated_branch_heads={}\nproblem={}\n",
+        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nimported_content_objects={}\nimported_sessions={}\nimported_session_diffs={}\nimported_evidences={}\nimported_resources={}\nimported_resource_observations={}\nimported_verification_bases={}\nimported_events={}\nimported_knowledge_spaces={}\nimported_knowledge_exposures={}\nimported_knowledge_exposure_local_sources={}\nimported_knowledge_exposure_transitions={}\nimported_knowledge_exposure_source_statuses={}\nimported_relation_versions={}\nimported_checkpoints={}\nimported_checkpoint_statuses={}\nupdated_branch_heads={}\nproblem={}\n",
         result.applied,
         render_optional_display_or_none(result.import_id.as_ref()),
         result.bundle_digest,
@@ -6665,6 +6670,7 @@ fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
         result.imported_resources,
         result.imported_resource_observations,
         result.imported_verification_bases,
+        result.imported_events,
         result.imported_knowledge_spaces,
         result.imported_knowledge_exposures,
         result.imported_knowledge_exposure_local_sources,
@@ -10277,7 +10283,7 @@ mod tests {
         assert_eq!(value(&exported_dir, "bundle_payload_index_version"), "1");
         assert_eq!(value(&exported_dir, "commit_id"), genesis);
         assert_eq!(value(&exported_dir, "payload_files"), "3");
-        assert_eq!(value(&exported_dir, "payload_references"), "4");
+        assert_eq!(value(&exported_dir, "payload_references"), "5");
         assert_eq!(
             fs::read_to_string(export_dir.join("manifest.json")).expect("manifest file"),
             manifest_json
@@ -10302,7 +10308,7 @@ mod tests {
         assert_eq!(value(&validated_dir, "valid"), "true");
         assert_eq!(value(&validated_dir, "expected_payload_files"), "3");
         assert_eq!(value(&validated_dir, "actual_payload_files"), "3");
-        assert_eq!(value(&validated_dir, "expected_payload_references"), "4");
+        assert_eq!(value(&validated_dir, "expected_payload_references"), "5");
         assert_eq!(value(&validated_dir, "problem"), "none");
 
         let preflight = run(Cli::try_parse_from([

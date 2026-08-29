@@ -269,6 +269,7 @@ pub struct BundleExportManifest {
     pub verification_bases: Vec<BundleVerificationBasisRef>,
     pub verification_resource_bases: Vec<BundleVerificationResourceBasisRef>,
     pub verification_semantic_dependencies: Vec<BundleVerificationSemanticDependencyRef>,
+    pub events: Vec<BundleEventRef>,
     pub knowledge_spaces: Vec<BundleKnowledgeSpaceRef>,
     pub knowledge_exposures: Vec<BundleKnowledgeExposureRef>,
     pub knowledge_exposure_local_sources: Vec<BundleKnowledgeExposureLocalSourceRef>,
@@ -444,6 +445,7 @@ pub struct BundleImportApplyResult {
     pub imported_resources: usize,
     pub imported_resource_observations: usize,
     pub imported_verification_bases: usize,
+    pub imported_events: usize,
     pub imported_knowledge_spaces: usize,
     pub imported_knowledge_exposures: usize,
     pub imported_knowledge_exposure_local_sources: usize,
@@ -609,6 +611,18 @@ pub struct BundleContentObjectRef {
     pub media_type: Option<String>,
     pub format_metadata_json_digest: Digest,
     pub format_metadata_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleEventRef {
+    pub event_id: EventId,
+    pub workspace_id: Option<WorkspaceId>,
+    pub changeset_id: Option<ChangeSetId>,
+    pub session_id: Option<SessionId>,
+    pub event_kind: String,
+    pub occurred_at_us: i64,
+    pub payload_digest: Digest,
+    pub payload_size_bytes: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -886,6 +900,7 @@ struct BundleSameStoreApplyDocument {
     verification_bases: Vec<BundleVerificationBasisRef>,
     verification_resource_bases: Vec<BundleVerificationResourceBasisRef>,
     verification_semantic_dependencies: Vec<BundleVerificationSemanticDependencyRef>,
+    events: Vec<BundleEventRef>,
     knowledge_spaces: Vec<BundleKnowledgeSpaceRef>,
     knowledge_exposures: Vec<BundleKnowledgeExposureRef>,
     knowledge_exposure_local_sources: Vec<BundleKnowledgeExposureLocalSourceRef>,
@@ -933,6 +948,7 @@ struct BundleImportApplyCounts {
     imported_resources: usize,
     imported_resource_observations: usize,
     imported_verification_bases: usize,
+    imported_events: usize,
     imported_knowledge_spaces: usize,
     imported_knowledge_exposures: usize,
     imported_knowledge_exposure_local_sources: usize,
@@ -1036,6 +1052,7 @@ pub(crate) fn export_bundle_manifest(
         knowledge_exposure_transition_refs(connection, &knowledge_exposures)?;
     let knowledge_exposure_source_statuses =
         knowledge_exposure_source_status_refs(connection, &knowledge_exposures)?;
+    let events = event_closure_refs(connection, &commits, &knowledge_exposure_transitions)?;
 
     let mut checkpoint_candidates = super::checkpoints(
         connection,
@@ -1093,6 +1110,7 @@ pub(crate) fn export_bundle_manifest(
         verification_bases: &verification_bases,
         verification_resource_bases: &verification_resource_bases,
         verification_semantic_dependencies: &verification_semantic_dependencies,
+        events: &events,
         knowledge_spaces: &knowledge_spaces,
         knowledge_exposures: &knowledge_exposures,
         knowledge_exposure_local_sources: &knowledge_exposure_local_sources,
@@ -1133,6 +1151,7 @@ pub(crate) fn export_bundle_manifest(
         verification_bases,
         verification_resource_bases,
         verification_semantic_dependencies,
+        events,
         knowledge_spaces,
         knowledge_exposures,
         knowledge_exposure_local_sources,
@@ -1228,6 +1247,9 @@ pub(crate) fn export_bundle_payloads(
     }
     for basis in &manifest.verification_resource_bases {
         load_verification_resource_basis_payload_candidate(connection, basis, &mut candidates)?;
+    }
+    for event in &manifest.events {
+        load_event_payload_candidate(connection, event, &mut candidates)?;
     }
     for source in &manifest.knowledge_exposure_local_sources {
         load_knowledge_exposure_source_knowledge_payload_candidate(
@@ -1538,6 +1560,7 @@ pub(crate) fn apply_bundle_import(
             imported_resources: 0,
             imported_resource_observations: 0,
             imported_verification_bases: 0,
+            imported_events: 0,
             imported_knowledge_spaces: 0,
             imported_knowledge_exposures: 0,
             imported_knowledge_exposure_local_sources: 0,
@@ -1600,6 +1623,7 @@ pub(crate) fn apply_bundle_import(
     let imported_relation_versions =
         apply_relation_versions(&transaction, &document, &payload_lookup, now_us)?;
     let imported_commits = apply_commit_closure(&transaction, &document, &payload_lookup)?;
+    let imported_events = apply_events(&transaction, &document, &payload_lookup)?;
     let imported_checkpoints =
         apply_checkpoint_candidates(&transaction, &document, &payload_lookup)?;
     let updated_branch_heads =
@@ -1618,6 +1642,7 @@ pub(crate) fn apply_bundle_import(
         imported_resources,
         imported_resource_observations,
         imported_verification_bases,
+        imported_events,
         imported_knowledge_spaces: imported_knowledge_exposures.imported_knowledge_spaces,
         imported_knowledge_exposures: imported_knowledge_exposures.imported_knowledge_exposures,
         imported_knowledge_exposure_local_sources: imported_knowledge_exposures
@@ -1668,6 +1693,7 @@ pub(crate) fn apply_bundle_import(
         imported_resources: counts.imported_resources,
         imported_resource_observations: counts.imported_resource_observations,
         imported_verification_bases: counts.imported_verification_bases,
+        imported_events: counts.imported_events,
         imported_knowledge_spaces: counts.imported_knowledge_spaces,
         imported_knowledge_exposures: counts.imported_knowledge_exposures,
         imported_knowledge_exposure_local_sources: counts.imported_knowledge_exposure_local_sources,
@@ -2989,6 +3015,99 @@ fn load_content_object_ref(
     })
 }
 
+fn event_closure_refs(
+    connection: &StoreConnection,
+    commits: &[BundleCommitRef],
+    knowledge_exposure_transitions: &[BundleKnowledgeExposureTransitionRef],
+) -> Result<Vec<BundleEventRef>> {
+    let mut event_ids = BTreeSet::new();
+    for commit in commits {
+        event_ids.extend(event_ids_for_changeset(connection, commit.changeset_id)?);
+    }
+    event_ids.extend(
+        knowledge_exposure_transitions
+            .iter()
+            .filter_map(|transition| transition.event_id),
+    );
+    event_ids
+        .into_iter()
+        .map(|event_id| load_event_ref(connection, event_id))
+        .collect()
+}
+
+fn event_ids_for_changeset(
+    connection: &StoreConnection,
+    changeset_id: ChangeSetId,
+) -> Result<Vec<EventId>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT event_id
+             FROM event
+             WHERE changeset_id = ?1
+             ORDER BY occurred_at_us, event_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&changeset_id.raw_bytes()[..]], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(storage_error)?;
+    rows.map(|row| {
+        let bytes = row.map_err(storage_error)?;
+        decode_event_id("event.event_id", bytes)
+    })
+    .collect()
+}
+
+fn load_event_ref(connection: &StoreConnection, event_id: EventId) -> Result<BundleEventRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT workspace_id,
+                    changeset_id,
+                    session_id,
+                    event_kind,
+                    occurred_at_us,
+                    payload_json
+             FROM event
+             WHERE event_id = ?1",
+            params![&event_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Option<Vec<u8>>>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((workspace_id, changeset_id, session_id, event_kind, occurred_at_us, payload_json)) =
+        row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Event {event_id} does not exist"
+        )));
+    };
+    validate_portable_text("event.event_kind", &event_kind).map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("event.occurred_at_us", occurred_at_us)?;
+    validate_canonical_json_text("event.payload_json", &payload_json)?;
+    Ok(BundleEventRef {
+        event_id,
+        workspace_id: decode_optional_workspace_id("event.workspace_id", workspace_id)?,
+        changeset_id: decode_optional_changeset_id("event.changeset_id", changeset_id)?,
+        session_id: decode_optional_session_id("event.session_id", session_id)?,
+        event_kind,
+        occurred_at_us,
+        payload_digest: content_object_digest(payload_json.as_bytes()),
+        payload_size_bytes: usize_to_i64("event.payload_json size", payload_json.len())?,
+    })
+}
+
 fn knowledge_exposure_closure_refs(
     connection: &StoreConnection,
     relation_versions: &[BundleRelationVersionRef],
@@ -4197,6 +4316,40 @@ fn load_verification_resource_basis_payload_candidate(
     )
 }
 
+fn load_event_payload_candidate(
+    connection: &StoreConnection,
+    event: &BundleEventRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let payload_json = connection
+        .inner()
+        .query_row(
+            "SELECT payload_json
+             FROM event
+             WHERE event_id = ?1",
+            params![&event.event_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!("Event {} does not exist", event.event_id))
+        })?;
+    if content_object_digest(payload_json.as_bytes()) != event.payload_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Event {} payload JSON digest changed during payload export",
+            event.event_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "event_payload",
+        CanonicalValue::object(vec![string_field("event_id", event.event_id.to_string())])?,
+        "event.payload_json",
+        payload_json,
+    )
+}
+
 fn load_knowledge_exposure_source_knowledge_payload_candidate(
     connection: &StoreConnection,
     source: &BundleKnowledgeExposureLocalSourceRef,
@@ -4673,6 +4826,7 @@ struct BundleManifestValueInput<'a> {
     verification_bases: &'a [BundleVerificationBasisRef],
     verification_resource_bases: &'a [BundleVerificationResourceBasisRef],
     verification_semantic_dependencies: &'a [BundleVerificationSemanticDependencyRef],
+    events: &'a [BundleEventRef],
     knowledge_spaces: &'a [BundleKnowledgeSpaceRef],
     knowledge_exposures: &'a [BundleKnowledgeExposureRef],
     knowledge_exposure_local_sources: &'a [BundleKnowledgeExposureLocalSourceRef],
@@ -4881,6 +5035,16 @@ fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue>
                     .verification_semantic_dependencies
                     .iter()
                     .map(verification_semantic_dependency_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "events".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .events
+                    .iter()
+                    .map(event_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
@@ -5200,6 +5364,19 @@ fn content_object_ref_value(content: &BundleContentObjectRef) -> Result<Canonica
             "format_metadata_json_size_bytes",
             content.format_metadata_json_size_bytes,
         )?,
+    ])
+}
+
+fn event_ref_value(event: &BundleEventRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("event_id", event.event_id.to_string()),
+        optional_display_field("workspace_id", event.workspace_id),
+        optional_display_field("changeset_id", event.changeset_id),
+        optional_display_field("session_id", event.session_id),
+        string_field("event_kind", event.event_kind.clone()),
+        integer_field("occurred_at_us", event.occurred_at_us)?,
+        string_field("payload_digest", event.payload_digest.to_string()),
+        integer_field("payload_size_bytes", event.payload_size_bytes)?,
     ])
 }
 
@@ -5804,6 +5981,10 @@ fn bundle_import_apply_detail_json(
                 "imported_verification_bases",
                 counts.imported_verification_bases,
             )?,
+        )?,
+        integer_field(
+            "imported_events",
+            usize_to_i64("imported_events", counts.imported_events)?,
         )?,
         integer_field(
             "imported_knowledge_spaces",
@@ -6592,6 +6773,38 @@ fn apply_commit_closure(
     Ok(imported)
 }
 
+fn apply_events(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<usize> {
+    let mut imported = 0;
+    for event in &document.events {
+        if let Some(workspace_id) = event.workspace_id {
+            require_workspace_row(transaction, workspace_id)?;
+        }
+        if let Some(changeset_id) = event.changeset_id {
+            require_changeset_row(transaction, changeset_id)?;
+        }
+        if let Some(session_id) = event.session_id {
+            require_session_row(transaction, session_id)?;
+        }
+        let owner =
+            CanonicalValue::object(vec![string_field("event_id", event.event_id.to_string())])?;
+        let payload_json = payload_lookup.required_json(
+            "event_payload",
+            owner,
+            Some(event.payload_digest),
+            Some(event.payload_size_bytes),
+        )?;
+        validate_canonical_json_text("bundle event.payload_json", &payload_json)?;
+        if ensure_event_row(transaction, event, &payload_json)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
 fn apply_checkpoint_candidates(
     transaction: &Transaction<'_>,
     document: &BundleSameStoreApplyDocument,
@@ -6846,6 +7059,22 @@ fn require_commit_with_state_digest(
             "Commit {commit_id} is missing"
         )))
     }
+}
+
+fn require_changeset_row(transaction: &Transaction<'_>, changeset_id: ChangeSetId) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM changeset
+             WHERE changeset_id = ?1",
+            params![&changeset_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!("ChangeSet {changeset_id} is missing"))
+        })
 }
 
 fn ensure_acceptance_criterion_identity_row(
@@ -7339,6 +7568,90 @@ fn ensure_checkpoint_status_row(
                 checkpoint.usability_state,
                 checkpoint.last_validated_at_us,
                 status_detail_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn ensure_event_row(
+    transaction: &Transaction<'_>,
+    event: &BundleEventRef,
+    payload_json: &str,
+) -> Result<bool> {
+    let event_id_bytes = event.event_id.raw_bytes();
+    let row = transaction
+        .query_row(
+            "SELECT workspace_id,
+                    changeset_id,
+                    session_id,
+                    event_kind,
+                    occurred_at_us,
+                    payload_json
+             FROM event
+             WHERE event_id = ?1",
+            params![&event_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Option<Vec<u8>>>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((
+        workspace_id,
+        changeset_id,
+        session_id,
+        event_kind,
+        occurred_at_us,
+        stored_payload_json,
+    )) = row
+    {
+        if decode_optional_workspace_id("event.workspace_id", workspace_id)? != event.workspace_id
+            || decode_optional_changeset_id("event.changeset_id", changeset_id)?
+                != event.changeset_id
+            || decode_optional_session_id("event.session_id", session_id)? != event.session_id
+            || event_kind != event.event_kind
+            || occurred_at_us != event.occurred_at_us
+            || stored_payload_json != payload_json
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Event {} exists with different content",
+                event.event_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    let workspace_id_bytes = event.workspace_id.map(|id| id.raw_bytes());
+    let changeset_id_bytes = event.changeset_id.map(|id| id.raw_bytes());
+    let session_id_bytes = event.session_id.map(|id| id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &event_id_bytes[..],
+                workspace_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                changeset_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                session_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                event.event_kind,
+                event.occurred_at_us,
+                payload_json,
             ],
         )
         .map_err(storage_error)?;
@@ -9266,13 +9579,14 @@ fn bundle_manifest_supports_same_store_apply(
             .collect::<std::result::Result<Vec<_>, _>>()?;
     let verification_basis_ids =
         unique_verification_basis_ids(&verification_bases).map_err(|error| error.to_string())?;
-    let commit_origin_session_ids = array_field_ref(value, "bundle manifest", "commit_closure")?
+    let commits = array_field_ref(value, "bundle manifest", "commit_closure")?
         .iter()
-        .map(|commit| {
-            parse_optional_session_field(commit, "bundle manifest commit", "origin_session_id")
-                .map_err(|error| error.to_string())
-        })
+        .map(|commit| parse_bundle_commit_ref(commit).map_err(|error| error.to_string()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let commit_origin_session_ids = commits
+        .iter()
+        .map(|commit| commit.origin_session_id)
+        .collect::<Vec<_>>();
     let evidences = optional_array_field_ref(value, "bundle manifest", "evidences")?
         .iter()
         .map(|evidence| parse_bundle_evidence_ref(evidence).map_err(|error| error.to_string()))
@@ -9312,6 +9626,12 @@ fn bundle_manifest_supports_same_store_apply(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let session_diff_session_ids =
         unique_session_diff_session_ids(&session_diffs).map_err(|error| error.to_string())?;
+    let events = optional_array_field_ref(value, "bundle manifest", "events")?
+        .iter()
+        .map(|event| parse_bundle_event_ref(event).map_err(|error| error.to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let event_supported =
+        bundle_manifest_event_apply_supported(workspace_id, &commits, &sessions, &events)?;
     let knowledge_spaces = optional_array_field_ref(value, "bundle manifest", "knowledge_spaces")?
         .iter()
         .map(|space| parse_bundle_knowledge_space_ref(space).map_err(|error| error.to_string()))
@@ -9365,8 +9685,44 @@ fn bundle_manifest_supports_same_store_apply(
             && verification_basis_ids == expected_verification_ids
             && session_ids == source_session_ids
             && session_diff_session_ids == source_session_ids
+            && event_supported
             && knowledge_exposure_supported,
     )
+}
+
+fn bundle_manifest_event_apply_supported(
+    workspace_id: WorkspaceId,
+    commits: &[BundleCommitRef],
+    sessions: &[BundleSessionRef],
+    events: &[BundleEventRef],
+) -> std::result::Result<bool, String> {
+    unique_event_ids_for_manifest(events)?;
+    let changeset_ids = commits
+        .iter()
+        .map(|commit| commit.changeset_id)
+        .collect::<BTreeSet<_>>();
+    let session_ids = sessions
+        .iter()
+        .map(|session| session.session_id)
+        .collect::<BTreeSet<_>>();
+    for event in events {
+        if let Some(event_workspace_id) = event.workspace_id
+            && event_workspace_id != workspace_id
+        {
+            return Ok(false);
+        }
+        if let Some(changeset_id) = event.changeset_id
+            && !changeset_ids.contains(&changeset_id)
+        {
+            return Ok(false);
+        }
+        if let Some(session_id) = event.session_id
+            && !session_ids.contains(&session_id)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn bundle_manifest_knowledge_exposure_apply_supported(
@@ -9979,6 +10335,11 @@ fn parse_bundle_same_store_apply_document(
     .iter()
     .map(parse_bundle_verification_semantic_dependency_ref)
     .collect::<Result<Vec<_>>>()?;
+    let events = optional_array_field_ref(value, "bundle manifest", "events")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_event_ref)
+        .collect::<Result<Vec<_>>>()?;
     let knowledge_spaces = optional_array_field_ref(value, "bundle manifest", "knowledge_spaces")
         .map_err(WorkVcsError::QueryInvalid)?
         .iter()
@@ -10051,6 +10412,7 @@ fn parse_bundle_same_store_apply_document(
         verification_bases,
         verification_resource_bases,
         verification_semantic_dependencies,
+        events,
         knowledge_spaces,
         knowledge_exposures,
         knowledge_exposure_local_sources,
@@ -10062,6 +10424,7 @@ fn parse_bundle_same_store_apply_document(
     };
     validate_same_store_apply_identity_coverage(&document)?;
     validate_same_store_apply_provenance_coverage(&document)?;
+    validate_same_store_apply_event_coverage(&document)?;
     validate_same_store_apply_knowledge_exposure_coverage(&document)?;
     validate_same_store_apply_relation_coverage(&document)?;
     validate_same_store_apply_checkpoint_coverage(&document)?;
@@ -10571,6 +10934,63 @@ fn validate_same_store_apply_provenance_coverage(
     Ok(())
 }
 
+fn validate_same_store_apply_event_coverage(document: &BundleSameStoreApplyDocument) -> Result<()> {
+    unique_event_ids_for_manifest(&document.events).map_err(WorkVcsError::QueryInvalid)?;
+    let changeset_ids = document
+        .commits
+        .iter()
+        .map(|commit| commit.changeset_id)
+        .collect::<BTreeSet<_>>();
+    let session_ids = document
+        .sessions
+        .iter()
+        .map(|session| session.session_id)
+        .collect::<BTreeSet<_>>();
+    let event_ids = document
+        .events
+        .iter()
+        .map(|event| event.event_id)
+        .collect::<BTreeSet<_>>();
+
+    for event in &document.events {
+        if let Some(workspace_id) = event.workspace_id
+            && workspace_id != document.workspace_id
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle event {} workspace {} does not match target workspace",
+                event.event_id, workspace_id
+            )));
+        }
+        if let Some(changeset_id) = event.changeset_id
+            && !changeset_ids.contains(&changeset_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle event {} references missing changeset {}",
+                event.event_id, changeset_id
+            )));
+        }
+        if let Some(session_id) = event.session_id
+            && !session_ids.contains(&session_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle event {} references missing session {}",
+                event.event_id, session_id
+            )));
+        }
+    }
+    for transition in &document.knowledge_exposure_transitions {
+        if let Some(event_id) = transition.event_id
+            && !event_ids.contains(&event_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle KnowledgeExposure {} transition {} references missing event {}",
+                transition.exposure_id, transition.transition_id, event_id
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_same_store_apply_knowledge_exposure_coverage(
     document: &BundleSameStoreApplyDocument,
 ) -> Result<()> {
@@ -10806,6 +11226,21 @@ fn unique_session_diff_session_ids(
     Ok(session_ids)
 }
 
+fn unique_event_ids_for_manifest(
+    events: &[BundleEventRef],
+) -> std::result::Result<BTreeSet<EventId>, String> {
+    let mut ids = BTreeSet::new();
+    for event in events {
+        if !ids.insert(event.event_id) {
+            return Err(format!(
+                "bundle event {} appears more than once",
+                event.event_id
+            ));
+        }
+    }
+    Ok(ids)
+}
+
 fn unique_evidence_content_ordinals(contents: &[BundleEvidenceContentRef]) -> Result<()> {
     let mut keys = BTreeSet::new();
     for content in contents {
@@ -11027,6 +11462,44 @@ fn parse_bundle_content_object_ref(value: &CanonicalValue) -> Result<BundleConte
         )
         .map_err(WorkVcsError::QueryInvalid)?,
         format_metadata_json_size_bytes,
+    })
+}
+
+fn parse_bundle_event_ref(value: &CanonicalValue) -> Result<BundleEventRef> {
+    let event_kind = string_field_value(value, "bundle manifest event", "event_kind")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest event event_kind", &event_kind)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let occurred_at_us = integer_field_value(value, "bundle manifest event", "occurred_at_us")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest event occurred_at_us", occurred_at_us)?;
+    let payload_size_bytes =
+        integer_field_value(value, "bundle manifest event", "payload_size_bytes")
+            .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest event payload_size_bytes",
+        payload_size_bytes,
+    )?;
+    Ok(BundleEventRef {
+        event_id: parse_event_id_field(value, "bundle manifest event", "event_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        workspace_id: parse_optional_workspace_field(
+            value,
+            "bundle manifest event",
+            "workspace_id",
+        )?,
+        changeset_id: parse_optional_changeset_field(
+            value,
+            "bundle manifest event",
+            "changeset_id",
+        )?,
+        session_id: parse_optional_session_field(value, "bundle manifest event", "session_id")?,
+        event_kind,
+        occurred_at_us,
+        payload_digest: parse_digest_field(value, "bundle manifest event", "payload_digest")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        payload_size_bytes,
     })
 }
 
@@ -12079,6 +12552,15 @@ fn parse_commit_id_field(
         .map_err(|error| error.to_string())
 }
 
+fn parse_event_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<EventId, String> {
+    EventId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_checkpoint_id_field(
     value: &CanonicalValue,
     label: &str,
@@ -12254,6 +12736,38 @@ fn parse_optional_session_field(
     match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
         CanonicalValue::Null => Ok(None),
         CanonicalValue::String(value) => SessionId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
+fn parse_optional_workspace_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<WorkspaceId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => WorkspaceId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
+fn parse_optional_changeset_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<ChangeSetId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => ChangeSetId::parse_canonical(value)
             .map(Some)
             .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
         _ => Err(WorkVcsError::QueryInvalid(format!(
@@ -12811,6 +13325,12 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 
+fn decode_event_id(column: &str, bytes: Vec<u8>) -> Result<EventId> {
+    let bytes = decode_16(column, bytes)?;
+    EventId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
 fn decode_changeset_id(column: &str, bytes: Vec<u8>) -> Result<ChangeSetId> {
     let bytes = decode_16(column, bytes)?;
     ChangeSetId::from_bytes(bytes)
@@ -12915,6 +13435,32 @@ fn decode_optional_event_id(column: &str, bytes: Option<Vec<u8>>) -> Result<Opti
         .map(|bytes| {
             let bytes = decode_16(column, bytes)?;
             EventId::from_bytes(bytes)
+                .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+        })
+        .transpose()
+}
+
+fn decode_optional_workspace_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<WorkspaceId>> {
+    bytes
+        .map(|bytes| {
+            let bytes = decode_16(column, bytes)?;
+            WorkspaceId::from_bytes(bytes)
+                .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+        })
+        .transpose()
+}
+
+fn decode_optional_changeset_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<ChangeSetId>> {
+    bytes
+        .map(|bytes| {
+            let bytes = decode_16(column, bytes)?;
+            ChangeSetId::from_bytes(bytes)
                 .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
         })
         .transpose()

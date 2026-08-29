@@ -12,8 +12,8 @@ use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
     BranchId, ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, EventId,
     EvidenceId, ExposureId, ExposureTransitionId, ImportId, KnowledgeSpaceId, OperationId,
-    RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionId, StoreId,
-    WorkspaceId,
+    RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId,
+    StoreId, WorkspaceId,
 };
 use crate::store::{StoreConnection, StoreInfo, StoreManifest, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -28,6 +28,8 @@ const BUNDLE_PAYLOAD_MEDIA_TYPE: &str = "application/json";
 const BUNDLE_IMPORT_PROFILE: &str = "workvcs-local-payload-directory-v1";
 const EVIDENCED_BY_RELATION_TYPE: &str = "evidenced_by";
 const RELATION_OBJECT_KIND: &str = "relation";
+const SESSION_OBJECT_KIND: &str = "session";
+const SESSION_DIFF_OBJECT_KIND: &str = "session_diff";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BundleExportOptions {
@@ -255,6 +257,8 @@ pub struct BundleExportManifest {
     pub verification_requirement_identities: Vec<BundleVerificationRequirementIdentityRef>,
     pub relation_versions: Vec<BundleRelationVersionRef>,
     pub content_objects: Vec<BundleContentObjectRef>,
+    pub sessions: Vec<BundleSessionRef>,
+    pub session_diffs: Vec<BundleSessionDiffRef>,
     pub evidences: Vec<BundleEvidenceRef>,
     pub evidence_contents: Vec<BundleEvidenceContentRef>,
     pub resources: Vec<BundleResourceRef>,
@@ -431,6 +435,8 @@ pub struct BundleImportApplyResult {
     pub imported_acceptance_criterion_identities: usize,
     pub imported_verification_requirement_identities: usize,
     pub imported_content_objects: usize,
+    pub imported_sessions: usize,
+    pub imported_session_diffs: usize,
     pub imported_evidences: usize,
     pub imported_resources: usize,
     pub imported_resource_observations: usize,
@@ -586,6 +592,24 @@ pub struct BundleContentObjectRef {
     pub media_type: Option<String>,
     pub format_metadata_json_digest: Digest,
     pub format_metadata_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleSessionRef {
+    pub session_id: SessionId,
+    pub started_at_us: i64,
+    pub metadata_json_digest: Digest,
+    pub metadata_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleSessionDiffRef {
+    pub session_diff_id: SessionDiffId,
+    pub session_id: SessionId,
+    pub created_at_us: i64,
+    pub summary_json_digest: Digest,
+    pub summary_json_size_bytes: i64,
+    pub detail_content_digest: Option<Digest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -835,6 +859,8 @@ struct BundleSameStoreApplyDocument {
     verification_requirement_identities: Vec<BundleVerificationRequirementIdentityRef>,
     relation_versions: Vec<BundleRelationVersionRef>,
     content_objects: Vec<BundleContentObjectRef>,
+    sessions: Vec<BundleSessionRef>,
+    session_diffs: Vec<BundleSessionDiffRef>,
     evidences: Vec<BundleEvidenceRef>,
     evidence_contents: Vec<BundleEvidenceContentRef>,
     resources: Vec<BundleResourceRef>,
@@ -877,6 +903,8 @@ struct BundleImportApplyCounts {
     imported_acceptance_criterion_identities: usize,
     imported_verification_requirement_identities: usize,
     imported_content_objects: usize,
+    imported_sessions: usize,
+    imported_session_diffs: usize,
     imported_evidences: usize,
     imported_resources: usize,
     imported_resource_observations: usize,
@@ -951,8 +979,14 @@ pub(crate) fn export_bundle_manifest(
     let resources = resource_closure_refs(connection, &verification_resource_bases)?;
     let resource_observations =
         resource_observation_closure_refs(connection, &verification_resource_bases)?;
-    let content_objects =
-        content_object_closure_refs(connection, &evidence_contents, &resource_observations)?;
+    let sessions = session_provenance_refs(connection, &evidences, &resource_observations)?;
+    let session_diffs = session_diff_refs(connection, &sessions)?;
+    let content_objects = content_object_closure_refs(
+        connection,
+        &evidence_contents,
+        &resource_observations,
+        &session_diffs,
+    )?;
     let knowledge_exposures = knowledge_exposure_closure_refs(connection, &relation_versions)?;
     let knowledge_spaces = knowledge_space_closure_refs(connection, &knowledge_exposures)?;
     let knowledge_exposure_local_sources =
@@ -989,6 +1023,8 @@ pub(crate) fn export_bundle_manifest(
         verification_requirement_identities: &verification_requirement_identities,
         relation_versions: &relation_versions,
         content_objects: &content_objects,
+        sessions: &sessions,
+        session_diffs: &session_diffs,
         evidences: &evidences,
         evidence_contents: &evidence_contents,
         resources: &resources,
@@ -1027,6 +1063,8 @@ pub(crate) fn export_bundle_manifest(
         verification_requirement_identities,
         relation_versions,
         content_objects,
+        sessions,
+        session_diffs,
         evidences,
         evidence_contents,
         resources,
@@ -1108,6 +1146,12 @@ pub(crate) fn export_bundle_payloads(
     }
     for relation_version in &manifest.relation_versions {
         load_relation_version_payload_candidate(connection, relation_version, &mut candidates)?;
+    }
+    for session in &manifest.sessions {
+        load_session_payload_candidate(connection, session, &mut candidates)?;
+    }
+    for session_diff in &manifest.session_diffs {
+        load_session_diff_payload_candidate(connection, session_diff, &mut candidates)?;
     }
     for content in &manifest.content_objects {
         load_content_object_payload_candidate(connection, content, &mut candidates)?;
@@ -1424,6 +1468,8 @@ pub(crate) fn apply_bundle_import(
             imported_acceptance_criterion_identities: 0,
             imported_verification_requirement_identities: 0,
             imported_content_objects: 0,
+            imported_sessions: 0,
+            imported_session_diffs: 0,
             imported_evidences: 0,
             imported_resources: 0,
             imported_resource_observations: 0,
@@ -1469,7 +1515,9 @@ pub(crate) fn apply_bundle_import(
         apply_acceptance_criterion_identities(&transaction, &document)?;
     let imported_verification_requirement_identities =
         apply_verification_requirement_identities(&transaction, &document)?;
+    let imported_sessions = apply_sessions(&transaction, &document, &payload_lookup)?;
     let imported_content_objects = apply_content_objects(&transaction, &document, &payload_lookup)?;
+    let imported_session_diffs = apply_session_diffs(&transaction, &document, &payload_lookup)?;
     let imported_resources = apply_resources(&transaction, &document)?;
     let imported_resource_observations =
         apply_resource_observations(&transaction, &document, &payload_lookup)?;
@@ -1489,6 +1537,8 @@ pub(crate) fn apply_bundle_import(
         imported_acceptance_criterion_identities,
         imported_verification_requirement_identities,
         imported_content_objects,
+        imported_sessions,
+        imported_session_diffs,
         imported_evidences,
         imported_resources,
         imported_resource_observations,
@@ -1527,6 +1577,8 @@ pub(crate) fn apply_bundle_import(
         imported_verification_requirement_identities: counts
             .imported_verification_requirement_identities,
         imported_content_objects: counts.imported_content_objects,
+        imported_sessions: counts.imported_sessions,
+        imported_session_diffs: counts.imported_session_diffs,
         imported_evidences: counts.imported_evidences,
         imported_resources: counts.imported_resources,
         imported_resource_observations: counts.imported_resource_observations,
@@ -2623,10 +2675,142 @@ fn load_resource_observation_ref(
     })
 }
 
+fn session_provenance_refs(
+    connection: &StoreConnection,
+    evidences: &[BundleEvidenceRef],
+    resource_observations: &[BundleResourceObservationRef],
+) -> Result<Vec<BundleSessionRef>> {
+    let mut session_ids = evidences
+        .iter()
+        .filter_map(|evidence| evidence.source_session_id)
+        .collect::<BTreeSet<_>>();
+    session_ids.extend(
+        resource_observations
+            .iter()
+            .filter_map(|observation| observation.source_session_id),
+    );
+    session_ids
+        .into_iter()
+        .map(|session_id| load_session_ref(connection, session_id))
+        .collect()
+}
+
+fn load_session_ref(
+    connection: &StoreConnection,
+    session_id: SessionId,
+) -> Result<BundleSessionRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    session.started_at_us,
+                    session.metadata_json
+             FROM session
+             JOIN object_identity
+               ON object_identity.object_id = session.session_id
+             WHERE session.session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((object_kind, started_at_us, metadata_json)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Session {session_id} does not exist"
+        )));
+    };
+    validate_object_kind_exact("session.object_kind", &object_kind, SESSION_OBJECT_KIND)?;
+    validate_nonnegative_i64("session.started_at_us", started_at_us)?;
+    validate_canonical_json_text("session.metadata_json", &metadata_json)?;
+    Ok(BundleSessionRef {
+        session_id,
+        started_at_us,
+        metadata_json_digest: content_object_digest(metadata_json.as_bytes()),
+        metadata_json_size_bytes: usize_to_i64("session.metadata_json size", metadata_json.len())?,
+    })
+}
+
+fn session_diff_refs(
+    connection: &StoreConnection,
+    sessions: &[BundleSessionRef],
+) -> Result<Vec<BundleSessionDiffRef>> {
+    let mut refs = Vec::new();
+    for session in sessions {
+        if let Some(session_diff) = load_session_diff_ref(connection, session.session_id)? {
+            refs.push(session_diff);
+        }
+    }
+    refs.sort_by_key(|session_diff| session_diff.session_id.raw_bytes());
+    Ok(refs)
+}
+
+fn load_session_diff_ref(
+    connection: &StoreConnection,
+    session_id: SessionId,
+) -> Result<Option<BundleSessionDiffRef>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    session_diff.session_diff_id,
+                    session_diff.created_at_us,
+                    session_diff.summary_json,
+                    session_diff.detail_content_digest
+             FROM session_diff
+             JOIN object_identity
+               ON object_identity.object_id = session_diff.session_diff_id
+             WHERE session_diff.session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((object_kind, session_diff_id, created_at_us, summary_json, detail_content_digest)) =
+        row
+    else {
+        return Ok(None);
+    };
+    validate_object_kind_exact(
+        "session_diff.object_kind",
+        &object_kind,
+        SESSION_DIFF_OBJECT_KIND,
+    )?;
+    validate_nonnegative_i64("session_diff.created_at_us", created_at_us)?;
+    validate_canonical_json_text("session_diff.summary_json", &summary_json)?;
+    Ok(Some(BundleSessionDiffRef {
+        session_diff_id: decode_session_diff_id("session_diff.session_diff_id", session_diff_id)?,
+        session_id,
+        created_at_us,
+        summary_json_digest: content_object_digest(summary_json.as_bytes()),
+        summary_json_size_bytes: usize_to_i64(
+            "session_diff.summary_json size",
+            summary_json.len(),
+        )?,
+        detail_content_digest: detail_content_digest
+            .map(|bytes| decode_digest("session_diff.detail_content_digest", bytes))
+            .transpose()?,
+    }))
+}
+
 fn content_object_closure_refs(
     connection: &StoreConnection,
     evidence_contents: &[BundleEvidenceContentRef],
     resource_observations: &[BundleResourceObservationRef],
+    session_diffs: &[BundleSessionDiffRef],
 ) -> Result<Vec<BundleContentObjectRef>> {
     let mut content_digests = evidence_contents
         .iter()
@@ -2636,6 +2820,11 @@ fn content_object_closure_refs(
         resource_observations
             .iter()
             .filter_map(|observation| observation.detail_content_digest),
+    );
+    content_digests.extend(
+        session_diffs
+            .iter()
+            .filter_map(|session_diff| session_diff.detail_content_digest),
     );
     content_digests
         .into_iter()
@@ -3617,6 +3806,83 @@ fn load_relation_version_payload_candidate(
     )
 }
 
+fn load_session_payload_candidate(
+    connection: &StoreConnection,
+    session: &BundleSessionRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let metadata_json = connection
+        .inner()
+        .query_row(
+            "SELECT metadata_json
+             FROM session
+             WHERE session_id = ?1",
+            params![&session.session_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!("Session {} does not exist", session.session_id))
+        })?;
+    if content_object_digest(metadata_json.as_bytes()) != session.metadata_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Session {} metadata JSON digest changed during payload export",
+            session.session_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "session_metadata",
+        CanonicalValue::object(vec![string_field(
+            "session_id",
+            session.session_id.to_string(),
+        )])?,
+        "session.metadata_json",
+        metadata_json,
+    )
+}
+
+fn load_session_diff_payload_candidate(
+    connection: &StoreConnection,
+    session_diff: &BundleSessionDiffRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let summary_json = connection
+        .inner()
+        .query_row(
+            "SELECT summary_json
+             FROM session_diff
+             WHERE session_diff_id = ?1",
+            params![&session_diff.session_diff_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "SessionDiff {} does not exist",
+                session_diff.session_diff_id
+            ))
+        })?;
+    if content_object_digest(summary_json.as_bytes()) != session_diff.summary_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "SessionDiff {} summary JSON digest changed during payload export",
+            session_diff.session_diff_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "session_diff_summary",
+        CanonicalValue::object(vec![
+            string_field("session_diff_id", session_diff.session_diff_id.to_string()),
+            string_field("session_id", session_diff.session_id.to_string()),
+        ])?,
+        "session_diff.summary_json",
+        summary_json,
+    )
+}
+
 fn load_content_object_payload_candidate(
     connection: &StoreConnection,
     content: &BundleContentObjectRef,
@@ -4246,6 +4512,8 @@ struct BundleManifestValueInput<'a> {
     verification_requirement_identities: &'a [BundleVerificationRequirementIdentityRef],
     relation_versions: &'a [BundleRelationVersionRef],
     content_objects: &'a [BundleContentObjectRef],
+    sessions: &'a [BundleSessionRef],
+    session_diffs: &'a [BundleSessionDiffRef],
     evidences: &'a [BundleEvidenceRef],
     evidence_contents: &'a [BundleEvidenceContentRef],
     resources: &'a [BundleResourceRef],
@@ -4371,6 +4639,26 @@ fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue>
                     .content_objects
                     .iter()
                     .map(content_object_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "sessions".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .sessions
+                    .iter()
+                    .map(session_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "session_diffs".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .session_diffs
+                    .iter()
+                    .map(session_diff_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
@@ -4756,6 +5044,41 @@ fn content_object_ref_value(content: &BundleContentObjectRef) -> Result<Canonica
             "format_metadata_json_size_bytes",
             content.format_metadata_json_size_bytes,
         )?,
+    ])
+}
+
+fn session_ref_value(session: &BundleSessionRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("session_id", session.session_id.to_string()),
+        integer_field("started_at_us", session.started_at_us)?,
+        string_field(
+            "metadata_json_digest",
+            session.metadata_json_digest.to_string(),
+        ),
+        integer_field("metadata_json_size_bytes", session.metadata_json_size_bytes)?,
+    ])
+}
+
+fn session_diff_ref_value(session_diff: &BundleSessionDiffRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("session_diff_id", session_diff.session_diff_id.to_string()),
+        string_field("session_id", session_diff.session_id.to_string()),
+        integer_field("created_at_us", session_diff.created_at_us)?,
+        string_field(
+            "summary_json_digest",
+            session_diff.summary_json_digest.to_string(),
+        ),
+        integer_field(
+            "summary_json_size_bytes",
+            session_diff.summary_json_size_bytes,
+        )?,
+        optional_string_field(
+            "detail_content_digest",
+            session_diff
+                .detail_content_digest
+                .map(|digest| digest.to_string())
+                .as_deref(),
+        ),
     ])
 }
 
@@ -5284,6 +5607,14 @@ fn bundle_import_apply_detail_json(
             usize_to_i64("imported_content_objects", counts.imported_content_objects)?,
         )?,
         integer_field(
+            "imported_sessions",
+            usize_to_i64("imported_sessions", counts.imported_sessions)?,
+        )?,
+        integer_field(
+            "imported_session_diffs",
+            usize_to_i64("imported_session_diffs", counts.imported_session_diffs)?,
+        )?,
+        integer_field(
             "imported_evidences",
             usize_to_i64("imported_evidences", counts.imported_evidences)?,
         )?,
@@ -5476,6 +5807,38 @@ fn apply_verification_requirement_identities(
     Ok(imported)
 }
 
+fn apply_sessions(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<usize> {
+    let mut imported = 0;
+    for session in &document.sessions {
+        let owner = CanonicalValue::object(vec![string_field(
+            "session_id",
+            session.session_id.to_string(),
+        )])?;
+        let metadata_json = payload_lookup.required_json(
+            "session_metadata",
+            owner,
+            Some(session.metadata_json_digest),
+            Some(session.metadata_json_size_bytes),
+        )?;
+        require_canonical_object_json("bundle session.metadata_json", &metadata_json)?;
+        ensure_object_identity_row(
+            transaction,
+            "session",
+            &session.session_id.raw_bytes(),
+            SESSION_OBJECT_KIND,
+            session.started_at_us,
+        )?;
+        if ensure_session_row(transaction, session, &metadata_json)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
 fn apply_content_objects(
     transaction: &Transaction<'_>,
     document: &BundleSameStoreApplyDocument,
@@ -5498,6 +5861,42 @@ fn apply_content_objects(
             &format_metadata_json,
         )?;
         if ensure_content_object_row(transaction, content, &format_metadata_json)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_session_diffs(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<usize> {
+    let mut imported = 0;
+    for session_diff in &document.session_diffs {
+        require_session_row(transaction, session_diff.session_id)?;
+        if let Some(content_digest) = session_diff.detail_content_digest {
+            require_content_object(transaction, content_digest)?;
+        }
+        let owner = CanonicalValue::object(vec![
+            string_field("session_diff_id", session_diff.session_diff_id.to_string()),
+            string_field("session_id", session_diff.session_id.to_string()),
+        ])?;
+        let summary_json = payload_lookup.required_json(
+            "session_diff_summary",
+            owner,
+            Some(session_diff.summary_json_digest),
+            Some(session_diff.summary_json_size_bytes),
+        )?;
+        require_canonical_object_json("bundle session_diff.summary_json", &summary_json)?;
+        ensure_object_identity_row(
+            transaction,
+            "session_diff",
+            &session_diff.session_diff_id.raw_bytes(),
+            SESSION_DIFF_OBJECT_KIND,
+            session_diff.created_at_us,
+        )?;
+        if ensure_session_diff_row(transaction, session_diff, &summary_json)? {
             imported += 1;
         }
     }
@@ -5535,11 +5934,8 @@ fn apply_resource_observations(
         if let Some(content_digest) = observation.detail_content_digest {
             require_content_object(transaction, content_digest)?;
         }
-        if observation.source_session_id.is_some() {
-            return Err(WorkVcsError::QueryInvalid(
-                "bundle resource observation source_session_id is outside same-Store apply scope"
-                    .to_owned(),
-            ));
+        if let Some(session_id) = observation.source_session_id {
+            require_session_row(transaction, session_id)?;
         }
         let owner = CanonicalValue::object(vec![string_field(
             "observation_id",
@@ -5573,10 +5969,8 @@ fn apply_evidences(
 ) -> Result<usize> {
     let mut imported = 0;
     for evidence in &document.evidences {
-        if evidence.source_session_id.is_some() {
-            return Err(WorkVcsError::QueryInvalid(
-                "bundle evidence source_session_id is outside same-Store apply scope".to_owned(),
-            ));
+        if let Some(session_id) = evidence.source_session_id {
+            require_session_row(transaction, session_id)?;
         }
         let owner = CanonicalValue::object(vec![string_field(
             "evidence_id",
@@ -6174,6 +6568,162 @@ fn ensure_object_identity_row(
             Ok(())
         }
     }
+}
+
+fn ensure_session_row(
+    transaction: &Transaction<'_>,
+    session: &BundleSessionRef,
+    metadata_json: &str,
+) -> Result<bool> {
+    let row = transaction
+        .query_row(
+            "SELECT started_at_us, metadata_json
+             FROM session
+             WHERE session_id = ?1",
+            params![&session.session_id.raw_bytes()[..]],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((started_at_us, stored_metadata_json)) = row {
+        if started_at_us != session.started_at_us || stored_metadata_json != metadata_json {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Session {} exists with different content",
+                session.session_id
+            )));
+        }
+        return Ok(false);
+    }
+    transaction
+        .execute(
+            "INSERT INTO session(session_id, started_at_us, metadata_json)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &session.session_id.raw_bytes()[..],
+                session.started_at_us,
+                metadata_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn require_session_row(transaction: &Transaction<'_>, session_id: SessionId) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM session
+             WHERE session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!("Session {session_id} is missing"))
+        })
+}
+
+fn ensure_session_diff_row(
+    transaction: &Transaction<'_>,
+    session_diff: &BundleSessionDiffRef,
+    summary_json: &str,
+) -> Result<bool> {
+    if session_runtime_exists(transaction, session_diff.session_id)? {
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "Session {} still has active runtime and cannot import final SessionDiff",
+            session_diff.session_id
+        )));
+    }
+    let row = transaction
+        .query_row(
+            "SELECT session_id, created_at_us, summary_json, detail_content_digest
+             FROM session_diff
+             WHERE session_diff_id = ?1",
+            params![&session_diff.session_diff_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((session_id, created_at_us, stored_summary_json, detail_content_digest)) = row {
+        let detail_content_digest = detail_content_digest
+            .map(|bytes| decode_digest("session_diff.detail_content_digest", bytes))
+            .transpose()?;
+        if decode_session_id("session_diff.session_id", session_id)? != session_diff.session_id
+            || created_at_us != session_diff.created_at_us
+            || stored_summary_json != summary_json
+            || detail_content_digest != session_diff.detail_content_digest
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "SessionDiff {} exists with different content",
+                session_diff.session_diff_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    let existing_diff_for_session = transaction
+        .query_row(
+            "SELECT session_diff_id
+             FROM session_diff
+             WHERE session_id = ?1",
+            params![&session_diff.session_id.raw_bytes()[..]],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(existing_session_diff_id) = existing_diff_for_session {
+        let existing_session_diff_id =
+            decode_session_diff_id("session_diff.session_diff_id", existing_session_diff_id)?;
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "Session {} already has SessionDiff {}",
+            session_diff.session_id, existing_session_diff_id
+        )));
+    }
+
+    let detail_content_digest_bytes = session_diff
+        .detail_content_digest
+        .map(|digest| *digest.as_bytes());
+    transaction
+        .execute(
+            "INSERT INTO session_diff(
+                session_diff_id,
+                session_id,
+                created_at_us,
+                summary_json,
+                detail_content_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &session_diff.session_diff_id.raw_bytes()[..],
+                &session_diff.session_id.raw_bytes()[..],
+                session_diff.created_at_us,
+                summary_json,
+                detail_content_digest_bytes.as_ref().map(|bytes| &bytes[..]),
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn session_runtime_exists(transaction: &Transaction<'_>, session_id: SessionId) -> Result<bool> {
+    let count = transaction
+        .query_row(
+            "SELECT count(*)
+             FROM session_runtime
+             WHERE session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?;
+    Ok(count > 0)
 }
 
 fn ensure_content_object_row(
@@ -7692,12 +8242,6 @@ fn bundle_manifest_supports_same_store_apply(
         .iter()
         .map(|evidence| parse_bundle_evidence_ref(evidence).map_err(|error| error.to_string()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    if evidences
-        .iter()
-        .any(|evidence| evidence.source_session_id.is_some())
-    {
-        return Ok(false);
-    }
     let resource_observations =
         optional_array_field_ref(value, "bundle manifest", "resource_observations")?
             .iter()
@@ -7706,16 +8250,34 @@ fn bundle_manifest_supports_same_store_apply(
                     .map_err(|error| error.to_string())
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-    if resource_observations
+    let source_session_ids = evidences
         .iter()
-        .any(|observation| observation.source_session_id.is_some())
-    {
-        return Ok(false);
-    }
+        .filter_map(|evidence| evidence.source_session_id)
+        .chain(
+            resource_observations
+                .iter()
+                .filter_map(|observation| observation.source_session_id),
+        )
+        .collect::<BTreeSet<_>>();
+    let sessions = optional_array_field_ref(value, "bundle manifest", "sessions")?
+        .iter()
+        .map(|session| parse_bundle_session_ref(session).map_err(|error| error.to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let session_ids = unique_session_ids(&sessions).map_err(|error| error.to_string())?;
+    let session_diffs = optional_array_field_ref(value, "bundle manifest", "session_diffs")?
+        .iter()
+        .map(|session_diff| {
+            parse_bundle_session_diff_ref(session_diff).map_err(|error| error.to_string())
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let session_diff_session_ids =
+        unique_session_diff_session_ids(&session_diffs).map_err(|error| error.to_string())?;
     Ok(
         acceptance_criterion_ids == expected_acceptance_criterion_ids
             && verification_requirement_ids == expected_verification_requirement_ids
-            && verification_basis_ids == expected_verification_ids,
+            && verification_basis_ids == expected_verification_ids
+            && session_ids == source_session_ids
+            && session_diff_session_ids == source_session_ids,
     )
 }
 
@@ -8082,6 +8644,16 @@ fn parse_bundle_same_store_apply_document(
         .iter()
         .map(parse_bundle_content_object_ref)
         .collect::<Result<Vec<_>>>()?;
+    let sessions = optional_array_field_ref(value, "bundle manifest", "sessions")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_session_ref)
+        .collect::<Result<Vec<_>>>()?;
+    let session_diffs = optional_array_field_ref(value, "bundle manifest", "session_diffs")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_session_diff_ref)
+        .collect::<Result<Vec<_>>>()?;
     let evidences = optional_array_field_ref(value, "bundle manifest", "evidences")
         .map_err(WorkVcsError::QueryInvalid)?
         .iter()
@@ -8149,6 +8721,8 @@ fn parse_bundle_same_store_apply_document(
         verification_requirement_identities,
         relation_versions,
         content_objects,
+        sessions,
+        session_diffs,
         evidences,
         evidence_contents,
         resources,
@@ -8501,6 +9075,8 @@ fn validate_same_store_apply_provenance_coverage(
     let evidence_ids = unique_evidence_ids(&document.evidences)?;
     let resource_ids = unique_resource_ids(&document.resources)?;
     let observation_ids = unique_resource_observation_ids(&document.resource_observations)?;
+    let session_ids = unique_session_ids(&document.sessions)?;
+    let session_diff_session_ids = unique_session_diff_session_ids(&document.session_diffs)?;
     let entity_versions = document
         .entity_versions
         .iter()
@@ -8513,10 +9089,21 @@ fn validate_same_store_apply_provenance_coverage(
         .collect::<BTreeSet<_>>();
 
     for evidence in &document.evidences {
-        if evidence.source_session_id.is_some() {
-            return Err(WorkVcsError::QueryInvalid(
-                "bundle evidence source_session_id is outside same-Store apply scope".to_owned(),
-            ));
+        if let Some(session_id) = evidence.source_session_id
+            && !session_ids.contains(&session_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle evidence {} references missing source session {}",
+                evidence.evidence_id, session_id
+            )));
+        }
+        if let Some(session_id) = evidence.source_session_id
+            && !session_diff_session_ids.contains(&session_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle evidence {} source session {} is not ended in bundle provenance",
+                evidence.evidence_id, session_id
+            )));
         }
     }
     for observation in &document.resource_observations {
@@ -8534,11 +9121,37 @@ fn validate_same_store_apply_provenance_coverage(
                 observation.observation_id, content_digest
             )));
         }
-        if observation.source_session_id.is_some() {
-            return Err(WorkVcsError::QueryInvalid(
-                "bundle resource observation source_session_id is outside same-Store apply scope"
-                    .to_owned(),
-            ));
+        if let Some(session_id) = observation.source_session_id
+            && !session_ids.contains(&session_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle resource observation {} references missing source session {}",
+                observation.observation_id, session_id
+            )));
+        }
+        if let Some(session_id) = observation.source_session_id
+            && !session_diff_session_ids.contains(&session_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle resource observation {} source session {} is not ended in bundle provenance",
+                observation.observation_id, session_id
+            )));
+        }
+    }
+    for session_diff in &document.session_diffs {
+        if !session_ids.contains(&session_diff.session_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle SessionDiff {} references missing session {}",
+                session_diff.session_diff_id, session_diff.session_id
+            )));
+        }
+        if let Some(content_digest) = session_diff.detail_content_digest
+            && !content_digests.contains(&content_digest)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle SessionDiff {} references missing content object {}",
+                session_diff.session_diff_id, content_digest
+            )));
         }
     }
     for content in &document.evidence_contents {
@@ -8659,6 +9272,41 @@ fn unique_resource_observation_ids(
         }
     }
     Ok(ids)
+}
+
+fn unique_session_ids(sessions: &[BundleSessionRef]) -> Result<BTreeSet<SessionId>> {
+    let mut ids = BTreeSet::new();
+    for session in sessions {
+        if !ids.insert(session.session_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle session {} appears more than once",
+                session.session_id
+            )));
+        }
+    }
+    Ok(ids)
+}
+
+fn unique_session_diff_session_ids(
+    session_diffs: &[BundleSessionDiffRef],
+) -> Result<BTreeSet<SessionId>> {
+    let mut session_ids = BTreeSet::new();
+    let mut session_diff_ids = BTreeSet::new();
+    for session_diff in session_diffs {
+        if !session_diff_ids.insert(session_diff.session_diff_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle SessionDiff {} appears more than once",
+                session_diff.session_diff_id
+            )));
+        }
+        if !session_ids.insert(session_diff.session_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle session {} has more than one SessionDiff",
+                session_diff.session_id
+            )));
+        }
+    }
+    Ok(session_ids)
 }
 
 fn unique_evidence_content_ordinals(contents: &[BundleEvidenceContentRef]) -> Result<()> {
@@ -8882,6 +9530,70 @@ fn parse_bundle_content_object_ref(value: &CanonicalValue) -> Result<BundleConte
         )
         .map_err(WorkVcsError::QueryInvalid)?,
         format_metadata_json_size_bytes,
+    })
+}
+
+fn parse_bundle_session_ref(value: &CanonicalValue) -> Result<BundleSessionRef> {
+    let started_at_us = integer_field_value(value, "bundle manifest session", "started_at_us")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest session started_at_us", started_at_us)?;
+    let metadata_json_size_bytes =
+        integer_field_value(value, "bundle manifest session", "metadata_json_size_bytes")
+            .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest session metadata_json_size_bytes",
+        metadata_json_size_bytes,
+    )?;
+    Ok(BundleSessionRef {
+        session_id: parse_session_id_field(value, "bundle manifest session", "session_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        started_at_us,
+        metadata_json_digest: parse_digest_field(
+            value,
+            "bundle manifest session",
+            "metadata_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        metadata_json_size_bytes,
+    })
+}
+
+fn parse_bundle_session_diff_ref(value: &CanonicalValue) -> Result<BundleSessionDiffRef> {
+    let created_at_us = integer_field_value(value, "bundle manifest session diff", "created_at_us")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest session diff created_at_us", created_at_us)?;
+    let summary_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest session diff",
+        "summary_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest session diff summary_json_size_bytes",
+        summary_json_size_bytes,
+    )?;
+    Ok(BundleSessionDiffRef {
+        session_diff_id: parse_session_diff_id_field(
+            value,
+            "bundle manifest session diff",
+            "session_diff_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        session_id: parse_session_id_field(value, "bundle manifest session diff", "session_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        created_at_us,
+        summary_json_digest: parse_digest_field(
+            value,
+            "bundle manifest session diff",
+            "summary_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        summary_json_size_bytes,
+        detail_content_digest: parse_optional_digest_field(
+            value,
+            "bundle manifest session diff",
+            "detail_content_digest",
+        )?,
     })
 }
 
@@ -9584,6 +10296,24 @@ fn parse_resource_observation_id_field(
         .map_err(|error| error.to_string())
 }
 
+fn parse_session_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<SessionId, String> {
+    SessionId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_session_diff_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<SessionDiffId, String> {
+    SessionDiffId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_relation_id_field(
     value: &CanonicalValue,
     label: &str,
@@ -10281,12 +11011,20 @@ fn decode_optional_resource_observation_id(
 
 fn decode_optional_session_id(column: &str, bytes: Option<Vec<u8>>) -> Result<Option<SessionId>> {
     bytes
-        .map(|bytes| {
-            let bytes = decode_16(column, bytes)?;
-            SessionId::from_bytes(bytes)
-                .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
-        })
+        .map(|bytes| decode_session_id(column, bytes))
         .transpose()
+}
+
+fn decode_session_id(column: &str, bytes: Vec<u8>) -> Result<SessionId> {
+    let bytes = decode_16(column, bytes)?;
+    SessionId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_session_diff_id(column: &str, bytes: Vec<u8>) -> Result<SessionDiffId> {
+    let bytes = decode_16(column, bytes)?;
+    SessionDiffId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 
 fn decode_object_id_text(column: &str, bytes: Vec<u8>) -> Result<String> {

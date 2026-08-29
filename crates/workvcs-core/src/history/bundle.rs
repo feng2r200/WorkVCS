@@ -967,10 +967,18 @@ pub(crate) fn preflight_bundle_import(
     let source_store_relation =
         source_store_relation(store_info.store_id, checked.manifest.source_store_id);
     let incoming_commit_present = existing_commit_digest.is_some();
+    let same_store_fast_forward_ready = source_store_relation == "same_store"
+        && !incoming_commit_present
+        && branch_preflight.exported_branch_heads > 0
+        && branch_preflight.fast_forward > 0
+        && branch_preflight.missing == 0
+        && branch_preflight.diverged == 0;
     let (import_required, can_apply, action) = if !format_compatible {
         (true, false, "incompatible_store_format")
     } else if source_store_relation == "same_store" && incoming_commit_present {
         (false, false, "already_present")
+    } else if same_store_fast_forward_ready {
+        (true, true, "same_store_fast_forward_ready")
     } else if source_store_relation == "same_store" {
         (true, false, "same_store_import_not_implemented")
     } else {

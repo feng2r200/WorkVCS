@@ -87,9 +87,9 @@ fn bundle_import_preflight_classifies_same_store_branch_fast_forward() {
     assert!(preflight.valid, "{:?}", preflight.problem);
     assert_eq!(preflight.source_store_relation, "same_store");
     assert!(preflight.import_required);
-    assert!(!preflight.can_apply);
+    assert!(preflight.can_apply);
     assert!(!preflight.incoming_commit_present);
-    assert_eq!(preflight.action, "same_store_import_not_implemented");
+    assert_eq!(preflight.action, "same_store_fast_forward_ready");
     assert_eq!(preflight.exported_branch_heads, 1);
     assert_eq!(preflight.branch_heads_already_present, 0);
     assert_eq!(preflight.branch_heads_missing, 0);

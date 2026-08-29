@@ -1,11 +1,14 @@
-use super::{knowledge_space, knowledge_version_state_digest, state_at};
+use super::{
+    KnowledgeState, knowledge_space, knowledge_version_state, knowledge_version_state_digest,
+    state_at,
+};
 use crate::canonical::{
     CanonicalValue, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
     CommitId, Digest, EntityId, EntityVersionId, ExposureId, ExposureTransitionId,
-    KnowledgeSpaceId, WorkspaceId,
+    KnowledgeSpaceId, StoreId, WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -186,6 +189,21 @@ impl KnowledgeExposureRefreshSourceStatusOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureAdoptionCandidateOptions {
+    exposure_id: ExposureId,
+}
+
+impl KnowledgeExposureAdoptionCandidateOptions {
+    pub fn new(exposure_id: ExposureId) -> Self {
+        Self { exposure_id }
+    }
+
+    fn exposure_id(&self) -> ExposureId {
+        self.exposure_id
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureCreateResult {
     pub exposure: KnowledgeExposureSnapshot,
@@ -199,6 +217,20 @@ pub struct KnowledgeExposureWithdrawResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureRefreshSourceStatusResult {
     pub exposure: KnowledgeExposureSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureAdoptionCandidateResult {
+    pub candidate: KnowledgeExposureAdoptionCandidate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureAdoptionCandidate {
+    pub exposure: KnowledgeExposureSnapshot,
+    pub source_store_id: StoreId,
+    pub source_knowledge_state_digest: Digest,
+    pub source_knowledge_state: KnowledgeState,
+    pub adoption_provenance: CanonicalValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -801,6 +833,47 @@ pub(crate) fn knowledge_exposure(
     })
 }
 
+pub(crate) fn knowledge_exposure_adoption_candidate(
+    connection: &StoreConnection,
+    source_store_id: StoreId,
+    options: KnowledgeExposureAdoptionCandidateOptions,
+) -> Result<KnowledgeExposureAdoptionCandidateResult> {
+    connection.verify_foreign_keys()?;
+    let exposure = knowledge_exposure(connection, options.exposure_id())?;
+    if exposure.lifecycle_status != KnowledgeExposureLifecycleStatus::Active {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} is {}, not active",
+            options.exposure_id(),
+            exposure.lifecycle_status.as_str()
+        )));
+    }
+    let (source_knowledge_state_digest, source_knowledge_state) = knowledge_version_state(
+        connection,
+        exposure.source.workspace_id,
+        exposure.source.knowledge_entity_id,
+        exposure.source.knowledge_entity_version_id,
+    )?;
+    if source_knowledge_state_digest != exposure.source.knowledge_state_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} source digest {} does not match loaded KnowledgeVersion digest {}",
+            options.exposure_id(),
+            exposure.source.knowledge_state_digest,
+            source_knowledge_state_digest
+        )));
+    }
+    let adoption_provenance =
+        adoption_provenance_value(source_store_id, &exposure, source_knowledge_state_digest)?;
+    Ok(KnowledgeExposureAdoptionCandidateResult {
+        candidate: KnowledgeExposureAdoptionCandidate {
+            exposure,
+            source_store_id,
+            source_knowledge_state_digest,
+            source_knowledge_state,
+            adoption_provenance,
+        },
+    })
+}
+
 pub(crate) fn knowledge_exposures(
     connection: &StoreConnection,
     options: KnowledgeExposureListOptions,
@@ -1356,6 +1429,51 @@ fn canonical_object_json(label: &str, value: &CanonicalValue) -> Result<String> 
     String::from_utf8(bytes).map_err(|error| {
         WorkVcsError::CanonicalEncodingInvalid(format!("canonical JSON was not UTF-8: {error}"))
     })
+}
+
+fn adoption_provenance_value(
+    source_store_id: StoreId,
+    exposure: &KnowledgeExposureSnapshot,
+    source_knowledge_state_digest: Digest,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        (
+            "adopted_from_exposure_id".to_owned(),
+            CanonicalValue::String(exposure.exposure_id.to_string()),
+        ),
+        (
+            "knowledge_space_id".to_owned(),
+            CanonicalValue::String(exposure.knowledge_space_id.to_string()),
+        ),
+        (
+            "source_kind".to_owned(),
+            CanonicalValue::String("local_knowledge_exposure".to_owned()),
+        ),
+        (
+            "source_knowledge_entity_id".to_owned(),
+            CanonicalValue::String(exposure.source.knowledge_entity_id.to_string()),
+        ),
+        (
+            "source_knowledge_entity_version_id".to_owned(),
+            CanonicalValue::String(exposure.source.knowledge_entity_version_id.to_string()),
+        ),
+        (
+            "source_knowledge_state_digest".to_owned(),
+            CanonicalValue::String(source_knowledge_state_digest.to_string()),
+        ),
+        (
+            "source_status".to_owned(),
+            CanonicalValue::String(exposure.source_status.source_status.as_str().to_owned()),
+        ),
+        (
+            "source_store_id".to_owned(),
+            CanonicalValue::String(source_store_id.to_string()),
+        ),
+        (
+            "source_workspace_id".to_owned(),
+            CanonicalValue::String(exposure.source.workspace_id.to_string()),
+        ),
+    ])
 }
 
 fn parse_canonical_object_json(label: &str, input: &str) -> Result<CanonicalValue> {

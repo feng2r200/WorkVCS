@@ -521,6 +521,21 @@ pub(crate) fn knowledge_version_state_digest(
     Ok(loaded.state_digest)
 }
 
+pub(crate) fn knowledge_version_state(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    knowledge_entity_id: EntityId,
+    knowledge_entity_version_id: EntityVersionId,
+) -> Result<(Digest, KnowledgeState)> {
+    let loaded = load_knowledge_version(
+        connection,
+        workspace_id,
+        knowledge_entity_id,
+        knowledge_entity_version_id,
+    )?;
+    Ok((loaded.state_digest, loaded.state))
+}
+
 fn load_knowledge_version(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,

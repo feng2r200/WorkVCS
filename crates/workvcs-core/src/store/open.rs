@@ -50,6 +50,7 @@ use crate::history::{
     ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
 };
 use crate::history::{
+    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -442,6 +443,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::knowledge_exposure(&self.connection, exposure_id)
+    }
+
+    pub(crate) fn knowledge_exposure_adoption_candidate(
+        &self,
+        options: KnowledgeExposureAdoptionCandidateOptions,
+    ) -> Result<KnowledgeExposureAdoptionCandidateResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::knowledge_exposure_adoption_candidate(&self.connection, current.store_id, options)
     }
 
     pub(crate) fn knowledge_exposures(

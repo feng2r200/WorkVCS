@@ -23,7 +23,8 @@ use workvcs_core::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
     ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
     ExternalRefId, ExternalVersionId, HistoryEntry, HistoryQueryOptions, ImportId,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureCreateLocalOptions,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
     KnowledgeExposureCreateResult, KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions,
     KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
     KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
@@ -474,6 +475,14 @@ enum StoreCommand {
     },
     #[command(name = "knowledge-exposure-show")]
     KnowledgeExposureShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        exposure: String,
+    },
+    #[command(name = "knowledge-exposure-adoption-candidate")]
+    KnowledgeExposureAdoptionCandidate {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -2276,6 +2285,15 @@ fn run(cli: Cli) -> Result<String> {
                 let snapshot =
                     engine.knowledge_exposure(ExposureId::parse_canonical(&exposure)?)?;
                 render_knowledge_exposure_snapshot(&snapshot)
+            }
+            StoreCommand::KnowledgeExposureAdoptionCandidate { store, exposure } => {
+                let engine = Engine::open(store)?;
+                let result = engine.knowledge_exposure_adoption_candidate(
+                    KnowledgeExposureAdoptionCandidateOptions::new(ExposureId::parse_canonical(
+                        &exposure,
+                    )?),
+                )?;
+                render_knowledge_exposure_adoption_candidate(&result)
             }
             StoreCommand::KnowledgeExposureWithdraw {
                 store,
@@ -6745,6 +6763,41 @@ fn render_knowledge_exposure_refresh_source_status_result(
     render_knowledge_exposure_snapshot(&result.exposure)
 }
 
+fn render_knowledge_exposure_adoption_candidate(
+    result: &KnowledgeExposureAdoptionCandidateResult,
+) -> Result<String> {
+    let candidate = &result.candidate;
+    let statement_json = knowledge_statement_json(&candidate.source_knowledge_state.statement)?;
+    let scope_json = knowledge_value_json(
+        "knowledge exposure adoption candidate scope",
+        &candidate.source_knowledge_state.scope,
+    )?;
+    let provenance_json = knowledge_value_json(
+        "knowledge exposure adoption candidate provenance",
+        &candidate.source_knowledge_state.provenance,
+    )?;
+    let adoption_provenance_json = knowledge_value_json(
+        "knowledge exposure adoption provenance",
+        &candidate.adoption_provenance,
+    )?;
+    Ok(format!(
+        "exposure_id={}\nknowledge_space_id={}\nsource_store_id={}\nsource_workspace_id={}\nsource_knowledge_entity_id={}\nsource_knowledge_entity_version_id={}\nsource_knowledge_state_digest={}\nsource_status={}\nknowledge_status={}\nknowledge_statement_json={}\nknowledge_scope_json={}\nknowledge_provenance_json={}\nadoption_provenance_json={}\n",
+        candidate.exposure.exposure_id,
+        candidate.exposure.knowledge_space_id,
+        candidate.source_store_id,
+        candidate.exposure.source.workspace_id,
+        candidate.exposure.source.knowledge_entity_id,
+        candidate.exposure.source.knowledge_entity_version_id,
+        candidate.source_knowledge_state_digest,
+        candidate.exposure.source_status.source_status,
+        candidate.source_knowledge_state.status,
+        statement_json,
+        scope_json,
+        provenance_json,
+        adoption_provenance_json
+    ))
+}
+
 fn render_knowledge_exposure_snapshot(snapshot: &KnowledgeExposureSnapshot) -> Result<String> {
     let mut output = String::new();
     write_knowledge_exposure_snapshot_fields(&mut output, None, snapshot)?;
@@ -8849,6 +8902,140 @@ mod tests {
             assert_eq!(second_exposure_id, value(&current_exposure, "exposure_id"));
             assert_eq!(second_source_status, "current");
         }
+    }
+
+    #[test]
+    fn cli_shows_knowledge_exposure_adoption_candidate() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-exposure-adoption-candidate-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let source_store_id = Engine::open(&path)
+            .expect("open store")
+            .store_info()
+            .expect("store info")
+            .store_id
+            .to_string();
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Reusable adoption candidate knowledge",
+            "--scope-json",
+            "{\"kind\":\"workspace\"}",
+            "--provenance-json",
+            "{\"source\":\"cli\"}",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse exposure create"))
+        .expect("create exposure");
+
+        let candidate = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-adoption-candidate",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+        ])
+        .expect("parse adoption candidate"))
+        .expect("show adoption candidate");
+
+        assert_eq!(
+            value(&candidate, "exposure_id"),
+            value(&exposure, "exposure_id")
+        );
+        assert_eq!(value(&candidate, "source_store_id"), source_store_id);
+        assert_eq!(
+            value(&candidate, "source_workspace_id"),
+            value(&exposure, "source_workspace_id")
+        );
+        assert_eq!(
+            value(&candidate, "source_knowledge_entity_id"),
+            value(&knowledge, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(&candidate, "source_knowledge_entity_version_id"),
+            value(&knowledge, "knowledge_entity_version_id")
+        );
+        assert_eq!(
+            value(&candidate, "source_knowledge_state_digest"),
+            value(&knowledge, "knowledge_state_digest")
+        );
+        assert_eq!(value(&candidate, "source_status"), "current");
+        assert_eq!(value(&candidate, "knowledge_status"), "active");
+        assert_eq!(
+            value(&candidate, "knowledge_statement_json"),
+            "\"Reusable adoption candidate knowledge\""
+        );
+        assert_eq!(
+            value(&candidate, "knowledge_scope_json"),
+            "{\"kind\":\"workspace\"}"
+        );
+        assert_eq!(
+            value(&candidate, "knowledge_provenance_json"),
+            "{\"source\":\"cli\"}"
+        );
+        let adoption_provenance = value(&candidate, "adoption_provenance_json");
+        assert!(adoption_provenance.contains(&format!(
+            "\"adopted_from_exposure_id\":\"{}\"",
+            value(&exposure, "exposure_id")
+        )));
+        assert!(
+            adoption_provenance.contains(&format!("\"source_store_id\":\"{source_store_id}\""))
+        );
     }
 
     #[test]

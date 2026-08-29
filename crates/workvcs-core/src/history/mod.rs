@@ -70,16 +70,18 @@ pub use knowledge::{
     KnowledgeTransitionOptions,
 };
 pub use knowledge_exposure::{
-    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions, KnowledgeExposureListResult,
-    KnowledgeExposureLocalSourceSnapshot, KnowledgeExposureRefreshSourceStatusOptions,
-    KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
-    KnowledgeExposureSourceStatus, KnowledgeExposureSourceStatusSnapshot,
-    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
-    KnowledgeSpaceAvailableExposuresOptions, KnowledgeSpaceAvailableExposuresResult,
-    KnowledgeSpaceHistoricalExposuresOptions, KnowledgeSpaceHistoricalExposuresResult,
-    KnowledgeSpaceRefreshSourceStatusesOptions, KnowledgeSpaceRefreshSourceStatusesResult,
-    KnowledgeSpaceSourceStaleExposuresOptions, KnowledgeSpaceSourceStaleExposuresResult,
+    KnowledgeExposureAdoptionCandidate, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions,
+    KnowledgeExposureListResult, KnowledgeExposureLocalSourceSnapshot,
+    KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
+    KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus,
+    KnowledgeExposureSourceStatusSnapshot, KnowledgeExposureWithdrawOptions,
+    KnowledgeExposureWithdrawResult, KnowledgeSpaceAvailableExposuresOptions,
+    KnowledgeSpaceAvailableExposuresResult, KnowledgeSpaceHistoricalExposuresOptions,
+    KnowledgeSpaceHistoricalExposuresResult, KnowledgeSpaceRefreshSourceStatusesOptions,
+    KnowledgeSpaceRefreshSourceStatusesResult, KnowledgeSpaceSourceStaleExposuresOptions,
+    KnowledgeSpaceSourceStaleExposuresResult,
 };
 pub use knowledge_space::{
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
@@ -175,12 +177,12 @@ pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use knowledge::{
-    create_knowledge, knowledge_at, knowledge_version_state_digest, knowledges_at,
-    transition_knowledge,
+    create_knowledge, knowledge_at, knowledge_version_state, knowledge_version_state_digest,
+    knowledges_at, transition_knowledge,
 };
 pub(crate) use knowledge_exposure::{
-    create_local_knowledge_exposure, knowledge_exposure, knowledge_exposures,
-    knowledge_space_available_exposures, knowledge_space_historical_exposures,
+    create_local_knowledge_exposure, knowledge_exposure, knowledge_exposure_adoption_candidate,
+    knowledge_exposures, knowledge_space_available_exposures, knowledge_space_historical_exposures,
     knowledge_space_source_stale_exposures, refresh_knowledge_exposure_source_status,
     refresh_knowledge_space_source_statuses, withdraw_knowledge_exposure,
 };

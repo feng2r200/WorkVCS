@@ -33,8 +33,9 @@ use crate::history::{
     EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
     GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureListOptions, KnowledgeExposureListResult,
+    KnowledgeCreateOptions, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
     KnowledgeExposureSnapshot, KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
     KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
@@ -350,6 +351,13 @@ impl Engine {
 
     pub fn knowledge_exposure(&self, exposure_id: ExposureId) -> Result<KnowledgeExposureSnapshot> {
         self.store.knowledge_exposure(exposure_id)
+    }
+
+    pub fn knowledge_exposure_adoption_candidate(
+        &self,
+        options: KnowledgeExposureAdoptionCandidateOptions,
+    ) -> Result<KnowledgeExposureAdoptionCandidateResult> {
+        self.store.knowledge_exposure_adoption_candidate(options)
     }
 
     pub fn knowledge_exposures(

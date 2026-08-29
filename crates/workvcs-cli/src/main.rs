@@ -6,25 +6,26 @@ use workvcs_core::{
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
-    BranchProjectionRefreshResult, BranchProjectionSnapshot, CanonicalValue,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
-    CommitId, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EvidenceId,
-    HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
-    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
-    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
-    KnowledgeTransitionCommit, KnowledgeTransitionOptions, MergeAbortOptions, MergeAbortResult,
-    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
-    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot,
-    MergeResolutionKind, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
-    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
+    BundleExportOptions, CanonicalValue, CheckpointCreateOptions, CheckpointCreateResult,
+    CheckpointId, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, ClaimId,
+    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview,
+    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
+    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
+    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
+    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
+    KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
+    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
+    MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
+    MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
+    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
@@ -207,6 +208,10 @@ enum Command {
         #[command(subcommand)]
         command: ProjectionCommand,
     },
+    Bundle {
+        #[command(subcommand)]
+        command: BundleCommand,
+    },
     Checkpoint {
         #[command(subcommand)]
         command: CheckpointCommand,
@@ -317,6 +322,17 @@ enum CheckpointCommand {
         commit: String,
     },
     Latest {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BundleCommand {
+    Export {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -1662,6 +1678,15 @@ fn run(cli: Cli) -> Result<String> {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.branch_projection(BranchId::parse_canonical(&branch)?)?;
                 Ok(render_branch_projection_snapshot(&snapshot))
+            }
+        },
+        Command::Bundle { command } => match command {
+            BundleCommand::Export { store, commit } => {
+                let engine = Engine::open(store)?;
+                let manifest = engine.export_bundle_manifest(BundleExportOptions::for_commit(
+                    CommitId::parse_canonical(&commit)?,
+                ))?;
+                Ok(render_bundle_export_manifest(&manifest))
             }
         },
         Command::Checkpoint { command } => match command {
@@ -5315,6 +5340,45 @@ fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> Str
     )
 }
 
+fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
+    let mut output = format!(
+        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nentities={}\nrelations={}\ncheckpoint_candidates={}\n",
+        manifest.manifest_profile,
+        manifest.manifest_version,
+        manifest.store_id,
+        manifest.workspace_id,
+        manifest.commit_id,
+        manifest.state_digest,
+        manifest.manifest_digest,
+        manifest.manifest_size_bytes,
+        manifest.commit_count,
+        manifest.entity_count,
+        manifest.relation_count,
+        manifest.checkpoint_candidates.len()
+    );
+    for (index, checkpoint) in manifest.checkpoint_candidates.iter().enumerate() {
+        writeln!(
+            output,
+            "checkpoint_candidate[{index}].id={}",
+            checkpoint.checkpoint_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "checkpoint_candidate[{index}].content_digest={}",
+            checkpoint.content_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "checkpoint_candidate[{index}].usability_state={}",
+            checkpoint.usability_state
+        )
+        .expect("write to String");
+    }
+    output
+}
+
 fn render_checkpoint_create(result: &CheckpointCreateResult) -> String {
     let mut output = render_checkpoint_snapshot(&result.checkpoint);
     writeln!(output, "entity_count={}", result.entity_count).expect("write to String");
@@ -5628,6 +5692,7 @@ mod tests {
                 "runnable",
                 "verification",
                 "projection",
+                "bundle",
                 "checkpoint",
                 "merge"
             ]
@@ -5959,6 +6024,23 @@ mod tests {
         assert_eq!(value(&latest, "commit_id"), genesis);
         assert_eq!(value(&latest, "checkpoint_found"), "true");
         assert_eq!(value(&latest, "checkpoint_id"), checkpoint);
+
+        let exported =
+            run(
+                Cli::try_parse_from(["workvcs", "bundle", "export", store, "--commit", &genesis])
+                    .expect("parse bundle export"),
+            )
+            .expect("export bundle manifest");
+        assert_eq!(
+            value(&exported, "bundle_manifest_profile"),
+            "workvcs-local-export-manifest-v1"
+        );
+        assert_eq!(value(&exported, "bundle_manifest_version"), "1");
+        assert_eq!(value(&exported, "commit_id"), genesis);
+        assert_eq!(value(&exported, "commits"), "1");
+        assert_eq!(value(&exported, "entities"), "0");
+        assert_eq!(value(&exported, "checkpoint_candidates"), "1");
+        assert_eq!(value(&exported, "checkpoint_candidate[0].id"), checkpoint);
     }
 
     #[test]

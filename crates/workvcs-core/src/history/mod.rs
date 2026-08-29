@@ -1,4 +1,5 @@
 mod branch;
+mod bundle;
 mod checkpoint;
 mod containment;
 mod diff;
@@ -20,6 +21,7 @@ mod task;
 mod why;
 
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
+pub use bundle::{BundleCheckpointCandidate, BundleExportManifest, BundleExportOptions};
 pub use checkpoint::{
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
@@ -114,6 +116,7 @@ pub use why::{
 };
 
 pub(crate) use branch::{fork_branch, list_branches};
+pub(crate) use bundle::export_bundle_manifest;
 pub(crate) use checkpoint::{
     checkpoint, checkpoints, create_checkpoint, latest_usable_checkpoint, validate_checkpoint,
 };

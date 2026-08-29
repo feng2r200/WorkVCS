@@ -53,6 +53,7 @@ recorded as Accepted ADRs:
 - [ADR-0025: Phase 3K Primary Containment Relations](decisions/adr/0025-phase-3k-primary-containment-relations.md)
 - [ADR-0026: Phase 3L Runnable Containment Scope](decisions/adr/0026-phase-3l-runnable-containment-scope.md)
 - [ADR-0027: Phase 3M Goal Semantic Kernel](decisions/adr/0027-phase-3m-goal-semantic-kernel.md)
+- [ADR-0028: Phase 3N Goal Containment Endpoints](decisions/adr/0028-phase-3n-goal-containment-endpoints.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

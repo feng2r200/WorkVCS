@@ -1,4 +1,5 @@
 use super::entity::canonical_json_string;
+use super::goal::{GOAL_ENTITY_KIND, goal_at};
 use super::plan::{PLAN_ENTITY_KIND, plan_at};
 use super::state_at;
 use super::task::{TASK_ENTITY_KIND, task_at};
@@ -30,6 +31,7 @@ const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PrimaryContainmentEndpointKind {
+    Goal,
     Plan,
     Task,
 }
@@ -37,6 +39,7 @@ pub enum PrimaryContainmentEndpointKind {
 impl PrimaryContainmentEndpointKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Goal => GOAL_ENTITY_KIND,
             Self::Plan => PLAN_ENTITY_KIND,
             Self::Task => TASK_ENTITY_KIND,
         }
@@ -44,6 +47,7 @@ impl PrimaryContainmentEndpointKind {
 
     fn parse(entity_kind: &str) -> Option<Self> {
         match entity_kind {
+            GOAL_ENTITY_KIND => Some(Self::Goal),
             PLAN_ENTITY_KIND => Some(Self::Plan),
             TASK_ENTITY_KIND => Some(Self::Task),
             _ => None,
@@ -499,6 +503,12 @@ fn load_containment_endpoint(
     };
 
     match kind {
+        PrimaryContainmentEndpointKind::Goal => goal_at(connection, commit_id, entity_id)
+            .map(|snapshot| ContainmentEndpoint {
+                workspace_id: snapshot.workspace_id,
+                kind,
+            })
+            .map_err(relation_invalid_from),
         PrimaryContainmentEndpointKind::Plan => plan_at(connection, commit_id, entity_id)
             .map(|snapshot| ContainmentEndpoint {
                 workspace_id: snapshot.workspace_id,
@@ -555,12 +565,25 @@ fn validate_containment_kind_pair(
     child_entity_id: EntityId,
 ) -> Result<()> {
     match (parent_kind, child_kind) {
-        (PrimaryContainmentEndpointKind::Plan, PrimaryContainmentEndpointKind::Plan)
+        (PrimaryContainmentEndpointKind::Goal, PrimaryContainmentEndpointKind::Goal)
+        | (PrimaryContainmentEndpointKind::Goal, PrimaryContainmentEndpointKind::Plan)
+        | (PrimaryContainmentEndpointKind::Goal, PrimaryContainmentEndpointKind::Task)
+        | (PrimaryContainmentEndpointKind::Plan, PrimaryContainmentEndpointKind::Plan)
         | (PrimaryContainmentEndpointKind::Plan, PrimaryContainmentEndpointKind::Task)
         | (PrimaryContainmentEndpointKind::Task, PrimaryContainmentEndpointKind::Task) => Ok(()),
+        (PrimaryContainmentEndpointKind::Plan, PrimaryContainmentEndpointKind::Goal) => {
+            Err(WorkVcsError::RelationInvalid(format!(
+                "plan entity {parent_entity_id} cannot contain goal entity {child_entity_id} in Phase 3N"
+            )))
+        }
+        (PrimaryContainmentEndpointKind::Task, PrimaryContainmentEndpointKind::Goal) => {
+            Err(WorkVcsError::RelationInvalid(format!(
+                "task entity {parent_entity_id} cannot contain goal entity {child_entity_id} in Phase 3N"
+            )))
+        }
         (PrimaryContainmentEndpointKind::Task, PrimaryContainmentEndpointKind::Plan) => {
             Err(WorkVcsError::RelationInvalid(format!(
-                "task entity {parent_entity_id} cannot contain plan entity {child_entity_id} in Phase 3K"
+                "task entity {parent_entity_id} cannot contain plan entity {child_entity_id} in Phase 3N"
             )))
         }
     }

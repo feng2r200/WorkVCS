@@ -9,7 +9,7 @@ use crate::identity::{
 };
 use crate::store::{StoreConnection, StoreInfo, StoreManifest};
 use rusqlite::{OptionalExtension, params};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
 const BUNDLE_EXPORT_MANIFEST_PROFILE: &str = "workvcs-local-export-manifest-v1";
@@ -160,6 +160,8 @@ pub struct BundleExportManifest {
     pub commit_count: usize,
     pub entity_versions: Vec<BundleEntityVersionRef>,
     pub relation_versions: Vec<BundleRelationVersionRef>,
+    pub entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
+    pub relation_membership_changes: Vec<BundleRelationMembershipChangeRef>,
     pub checkpoint_candidates: Vec<BundleCheckpointCandidate>,
     pub manifest: CanonicalValue,
 }
@@ -326,6 +328,30 @@ pub struct BundleRelationVersionRef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleEntityMembershipChangeRef {
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub ordinal: i64,
+    pub entity_id: EntityId,
+    pub before_entity_version_id: Option<EntityVersionId>,
+    pub after_entity_version_id: Option<EntityVersionId>,
+    pub field_delta_digest: Digest,
+    pub field_delta_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleRelationMembershipChangeRef {
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub ordinal: i64,
+    pub relation_id: RelationId,
+    pub before_relation_version_id: Option<RelationVersionId>,
+    pub after_relation_version_id: Option<RelationVersionId>,
+    pub field_delta_digest: Digest,
+    pub field_delta_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct BundleCommitRef {
     workspace_id: WorkspaceId,
     commit_id: CommitId,
@@ -425,10 +451,20 @@ pub(crate) fn export_bundle_manifest(
             .then_with(|| left.commit_id.cmp(&right.commit_id))
     });
 
-    let entity_versions =
-        current_entity_version_refs(connection, replayed.workspace_id, &replayed.state)?;
-    let relation_versions =
-        current_relation_version_refs(connection, replayed.workspace_id, &replayed.state)?;
+    let entity_membership_changes = entity_membership_change_refs(connection, &commits)?;
+    let relation_membership_changes = relation_membership_change_refs(connection, &commits)?;
+    let entity_versions = entity_version_closure_refs(
+        connection,
+        replayed.workspace_id,
+        &replayed.state,
+        &entity_membership_changes,
+    )?;
+    let relation_versions = relation_version_closure_refs(
+        connection,
+        replayed.workspace_id,
+        &replayed.state,
+        &relation_membership_changes,
+    )?;
 
     let mut checkpoint_candidates = super::checkpoints(
         connection,
@@ -447,14 +483,16 @@ pub(crate) fn export_bundle_manifest(
     .collect::<Vec<_>>();
     checkpoint_candidates.sort_by_key(|checkpoint| checkpoint.checkpoint_id.raw_bytes());
 
-    let manifest = manifest_value(
+    let manifest = manifest_value(BundleManifestValueInput {
         store_info,
-        &replayed,
-        &commits,
-        &entity_versions,
-        &relation_versions,
-        &checkpoint_candidates,
-    )?;
+        replayed: &replayed,
+        commits: &commits,
+        entity_versions: &entity_versions,
+        relation_versions: &relation_versions,
+        entity_membership_changes: &entity_membership_changes,
+        relation_membership_changes: &relation_membership_changes,
+        checkpoint_candidates: &checkpoint_candidates,
+    })?;
     let manifest_bytes = canonical_bytes(&manifest)?;
     let manifest_digest = content_object_digest(&manifest_bytes);
     let manifest_size_bytes = usize_to_i64("manifest_size_bytes", manifest_bytes.len())?;
@@ -473,6 +511,8 @@ pub(crate) fn export_bundle_manifest(
         commit_count: commits.len(),
         entity_versions,
         relation_versions,
+        entity_membership_changes,
+        relation_membership_changes,
         checkpoint_candidates,
         manifest,
     })
@@ -532,6 +572,8 @@ pub(crate) fn export_bundle_payloads(
     for commit in &commits {
         load_changeset_payload_candidates(connection, commit, &mut candidates)?;
         load_change_operation_payload_candidates(connection, commit, &mut candidates)?;
+        load_entity_membership_change_payload_candidates(connection, commit, &mut candidates)?;
+        load_relation_membership_change_payload_candidates(connection, commit, &mut candidates)?;
     }
     for entity_version in &manifest.entity_versions {
         load_entity_version_payload_candidate(connection, entity_version, &mut candidates)?;
@@ -825,13 +867,23 @@ fn load_commit_parent_refs(
     Ok(parents)
 }
 
-fn current_entity_version_refs(
+fn entity_version_closure_refs(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     state: &WorkState,
+    membership_changes: &[BundleEntityMembershipChangeRef],
 ) -> Result<Vec<BundleEntityVersionRef>> {
-    sorted_entities(state)
-        .into_iter()
+    let mut refs = BTreeSet::new();
+    refs.extend(sorted_entities(state));
+    for change in membership_changes {
+        if let Some(entity_version_id) = change.before_entity_version_id {
+            refs.insert((change.entity_id, entity_version_id));
+        }
+        if let Some(entity_version_id) = change.after_entity_version_id {
+            refs.insert((change.entity_id, entity_version_id));
+        }
+    }
+    refs.into_iter()
         .map(|(entity_id, entity_version_id)| {
             load_entity_version_ref(connection, workspace_id, entity_id, entity_version_id)
         })
@@ -909,13 +961,23 @@ fn load_entity_version_ref(
     })
 }
 
-fn current_relation_version_refs(
+fn relation_version_closure_refs(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     state: &WorkState,
+    membership_changes: &[BundleRelationMembershipChangeRef],
 ) -> Result<Vec<BundleRelationVersionRef>> {
-    sorted_relations(state)
-        .into_iter()
+    let mut refs = BTreeSet::new();
+    refs.extend(sorted_relations(state));
+    for change in membership_changes {
+        if let Some(relation_version_id) = change.before_relation_version_id {
+            refs.insert((change.relation_id, relation_version_id));
+        }
+        if let Some(relation_version_id) = change.after_relation_version_id {
+            refs.insert((change.relation_id, relation_version_id));
+        }
+    }
+    refs.into_iter()
         .map(|(relation_id, relation_version_id)| {
             load_relation_version_ref(connection, workspace_id, relation_id, relation_version_id)
         })
@@ -1015,6 +1077,332 @@ fn load_relation_version_ref(
             metadata_json.len(),
         )?,
     })
+}
+
+fn entity_membership_change_refs(
+    connection: &StoreConnection,
+    commits: &[BundleCommitRef],
+) -> Result<Vec<BundleEntityMembershipChangeRef>> {
+    let mut refs = Vec::new();
+    for commit in commits {
+        refs.extend(load_entity_membership_change_refs(connection, commit)?);
+    }
+    Ok(refs)
+}
+
+fn load_entity_membership_change_refs(
+    connection: &StoreConnection,
+    commit: &BundleCommitRef,
+) -> Result<Vec<BundleEntityMembershipChangeRef>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT change_operation.operation_id,
+                    change_operation.ordinal,
+                    change_operation.subject_family,
+                    change_operation.subject_object_id,
+                    entity_membership_change.entity_id,
+                    entity_membership_change.before_entity_version_id,
+                    entity_membership_change.after_entity_version_id,
+                    entity_membership_change.field_delta_json
+             FROM entity_membership_change
+             JOIN change_operation
+               ON change_operation.operation_id = entity_membership_change.operation_id
+              AND change_operation.subject_object_id = entity_membership_change.entity_id
+             WHERE change_operation.changeset_id = ?1
+             ORDER BY change_operation.ordinal, change_operation.operation_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&commit.changeset_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, Option<Vec<u8>>>(5)?,
+                row.get::<_, Option<Vec<u8>>>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut refs = Vec::new();
+    for row in rows {
+        let (
+            operation_id,
+            ordinal,
+            subject_family,
+            subject_object_id,
+            entity_id,
+            before_entity_version_id,
+            after_entity_version_id,
+            field_delta_json,
+        ) = row.map_err(storage_error)?;
+        validate_subject_family_exact(
+            "change_operation.subject_family",
+            &subject_family,
+            "entity",
+        )?;
+        validate_nonnegative_i64("change_operation.ordinal", ordinal)?;
+        let operation_id = decode_operation_id("change_operation.operation_id", operation_id)?;
+        let subject_entity_id =
+            decode_entity_id("change_operation.subject_object_id", subject_object_id)?;
+        let entity_id = decode_entity_id("entity_membership_change.entity_id", entity_id)?;
+        if subject_entity_id != entity_id {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "entity membership operation {operation_id} subject does not match entity id"
+            )));
+        }
+        let before_entity_version_id = decode_optional_entity_version_id(
+            "entity_membership_change.before_entity_version_id",
+            before_entity_version_id,
+        )?;
+        let after_entity_version_id = decode_optional_entity_version_id(
+            "entity_membership_change.after_entity_version_id",
+            after_entity_version_id,
+        )?;
+        validate_membership_transition(
+            "entity_membership_change",
+            before_entity_version_id,
+            after_entity_version_id,
+        )?;
+        validate_canonical_json_text(
+            "entity_membership_change.field_delta_json",
+            &field_delta_json,
+        )?;
+        refs.push(BundleEntityMembershipChangeRef {
+            changeset_id: commit.changeset_id,
+            operation_id,
+            ordinal,
+            entity_id,
+            before_entity_version_id,
+            after_entity_version_id,
+            field_delta_digest: content_object_digest(field_delta_json.as_bytes()),
+            field_delta_size_bytes: usize_to_i64(
+                "entity_membership_change.field_delta_json size",
+                field_delta_json.len(),
+            )?,
+        });
+    }
+    Ok(refs)
+}
+
+fn relation_membership_change_refs(
+    connection: &StoreConnection,
+    commits: &[BundleCommitRef],
+) -> Result<Vec<BundleRelationMembershipChangeRef>> {
+    let mut refs = Vec::new();
+    for commit in commits {
+        refs.extend(load_relation_membership_change_refs(connection, commit)?);
+    }
+    Ok(refs)
+}
+
+fn load_relation_membership_change_refs(
+    connection: &StoreConnection,
+    commit: &BundleCommitRef,
+) -> Result<Vec<BundleRelationMembershipChangeRef>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT change_operation.operation_id,
+                    change_operation.ordinal,
+                    change_operation.subject_family,
+                    change_operation.subject_object_id,
+                    relation_membership_change.relation_id,
+                    relation_membership_change.before_relation_version_id,
+                    relation_membership_change.after_relation_version_id,
+                    relation_membership_change.field_delta_json
+             FROM relation_membership_change
+             JOIN change_operation
+               ON change_operation.operation_id = relation_membership_change.operation_id
+              AND change_operation.subject_object_id = relation_membership_change.relation_id
+             WHERE change_operation.changeset_id = ?1
+             ORDER BY change_operation.ordinal, change_operation.operation_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&commit.changeset_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, Option<Vec<u8>>>(5)?,
+                row.get::<_, Option<Vec<u8>>>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut refs = Vec::new();
+    for row in rows {
+        let (
+            operation_id,
+            ordinal,
+            subject_family,
+            subject_object_id,
+            relation_id,
+            before_relation_version_id,
+            after_relation_version_id,
+            field_delta_json,
+        ) = row.map_err(storage_error)?;
+        validate_subject_family_exact(
+            "change_operation.subject_family",
+            &subject_family,
+            "relation",
+        )?;
+        validate_nonnegative_i64("change_operation.ordinal", ordinal)?;
+        let operation_id = decode_operation_id("change_operation.operation_id", operation_id)?;
+        let subject_relation_id =
+            decode_relation_id("change_operation.subject_object_id", subject_object_id)?;
+        let relation_id =
+            decode_relation_id("relation_membership_change.relation_id", relation_id)?;
+        if subject_relation_id != relation_id {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "relation membership operation {operation_id} subject does not match relation id"
+            )));
+        }
+        let before_relation_version_id = decode_optional_relation_version_id(
+            "relation_membership_change.before_relation_version_id",
+            before_relation_version_id,
+        )?;
+        let after_relation_version_id = decode_optional_relation_version_id(
+            "relation_membership_change.after_relation_version_id",
+            after_relation_version_id,
+        )?;
+        validate_membership_transition(
+            "relation_membership_change",
+            before_relation_version_id,
+            after_relation_version_id,
+        )?;
+        validate_canonical_json_text(
+            "relation_membership_change.field_delta_json",
+            &field_delta_json,
+        )?;
+        refs.push(BundleRelationMembershipChangeRef {
+            changeset_id: commit.changeset_id,
+            operation_id,
+            ordinal,
+            relation_id,
+            before_relation_version_id,
+            after_relation_version_id,
+            field_delta_digest: content_object_digest(field_delta_json.as_bytes()),
+            field_delta_size_bytes: usize_to_i64(
+                "relation_membership_change.field_delta_json size",
+                field_delta_json.len(),
+            )?,
+        });
+    }
+    Ok(refs)
+}
+
+fn load_entity_membership_change_payload_candidates(
+    connection: &StoreConnection,
+    commit: &BundleCommitRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT change_operation.operation_id,
+                    change_operation.ordinal,
+                    entity_membership_change.entity_id,
+                    entity_membership_change.field_delta_json
+             FROM entity_membership_change
+             JOIN change_operation
+               ON change_operation.operation_id = entity_membership_change.operation_id
+              AND change_operation.subject_object_id = entity_membership_change.entity_id
+             WHERE change_operation.changeset_id = ?1
+             ORDER BY change_operation.ordinal, change_operation.operation_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&commit.changeset_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    for row in rows {
+        let (operation_id, ordinal, entity_id, field_delta_json) = row.map_err(storage_error)?;
+        let operation_id = decode_operation_id("change_operation.operation_id", operation_id)?;
+        validate_nonnegative_i64("change_operation.ordinal", ordinal)?;
+        let entity_id = decode_entity_id("entity_membership_change.entity_id", entity_id)?;
+        push_canonical_payload(
+            candidates,
+            "entity_membership_field_delta",
+            CanonicalValue::object(vec![
+                string_field("changeset_id", commit.changeset_id.to_string()),
+                string_field("operation_id", operation_id.to_string()),
+                integer_field("ordinal", ordinal)?,
+                string_field("entity_id", entity_id.to_string()),
+            ])?,
+            "entity_membership_change.field_delta_json",
+            field_delta_json,
+        )?;
+    }
+    Ok(())
+}
+
+fn load_relation_membership_change_payload_candidates(
+    connection: &StoreConnection,
+    commit: &BundleCommitRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT change_operation.operation_id,
+                    change_operation.ordinal,
+                    relation_membership_change.relation_id,
+                    relation_membership_change.field_delta_json
+             FROM relation_membership_change
+             JOIN change_operation
+               ON change_operation.operation_id = relation_membership_change.operation_id
+              AND change_operation.subject_object_id = relation_membership_change.relation_id
+             WHERE change_operation.changeset_id = ?1
+             ORDER BY change_operation.ordinal, change_operation.operation_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&commit.changeset_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    for row in rows {
+        let (operation_id, ordinal, relation_id, field_delta_json) = row.map_err(storage_error)?;
+        let operation_id = decode_operation_id("change_operation.operation_id", operation_id)?;
+        validate_nonnegative_i64("change_operation.ordinal", ordinal)?;
+        let relation_id =
+            decode_relation_id("relation_membership_change.relation_id", relation_id)?;
+        push_canonical_payload(
+            candidates,
+            "relation_membership_field_delta",
+            CanonicalValue::object(vec![
+                string_field("changeset_id", commit.changeset_id.to_string()),
+                string_field("operation_id", operation_id.to_string()),
+                integer_field("ordinal", ordinal)?,
+                string_field("relation_id", relation_id.to_string()),
+            ])?,
+            "relation_membership_change.field_delta_json",
+            field_delta_json,
+        )?;
+    }
+    Ok(())
 }
 
 fn load_changeset_payload_candidates(
@@ -1487,14 +1875,18 @@ fn bundle_manifest_validation_problem(
     Ok(None)
 }
 
-fn manifest_value(
-    store_info: &StoreInfo,
-    replayed: &super::ReplayedState,
-    commits: &[BundleCommitRef],
-    entity_versions: &[BundleEntityVersionRef],
-    relation_versions: &[BundleRelationVersionRef],
-    checkpoint_candidates: &[BundleCheckpointCandidate],
-) -> Result<CanonicalValue> {
+struct BundleManifestValueInput<'a> {
+    store_info: &'a StoreInfo,
+    replayed: &'a super::ReplayedState,
+    commits: &'a [BundleCommitRef],
+    entity_versions: &'a [BundleEntityVersionRef],
+    relation_versions: &'a [BundleRelationVersionRef],
+    entity_membership_changes: &'a [BundleEntityMembershipChangeRef],
+    relation_membership_changes: &'a [BundleRelationMembershipChangeRef],
+    checkpoint_candidates: &'a [BundleCheckpointCandidate],
+}
+
+fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue> {
     CanonicalValue::object(vec![
         string_field("bundle_manifest_profile", BUNDLE_EXPORT_MANIFEST_PROFILE),
         integer_field("bundle_manifest_version", BUNDLE_EXPORT_MANIFEST_VERSION)?,
@@ -1521,20 +1913,21 @@ fn manifest_value(
         ),
         (
             "store".to_owned(),
-            store_manifest_value(store_info.store_id, &store_info.manifest)?,
+            store_manifest_value(input.store_info.store_id, &input.store_info.manifest)?,
         ),
         (
             "target".to_owned(),
             CanonicalValue::object(vec![
-                string_field("workspace_id", replayed.workspace_id.to_string()),
-                string_field("commit_id", replayed.commit_id.to_string()),
-                string_field("state_digest", replayed.state_digest.to_string()),
+                string_field("workspace_id", input.replayed.workspace_id.to_string()),
+                string_field("commit_id", input.replayed.commit_id.to_string()),
+                string_field("state_digest", input.replayed.state_digest.to_string()),
             ])?,
         ),
         (
             "commit_closure".to_owned(),
             CanonicalValue::Array(
-                commits
+                input
+                    .commits
                     .iter()
                     .map(commit_ref_value)
                     .collect::<Result<Vec<_>>>()?,
@@ -1542,12 +1935,13 @@ fn manifest_value(
         ),
         (
             "work_state".to_owned(),
-            work_state_manifest_value(&replayed.state)?,
+            work_state_manifest_value(&input.replayed.state)?,
         ),
         (
             "entity_versions".to_owned(),
             CanonicalValue::Array(
-                entity_versions
+                input
+                    .entity_versions
                     .iter()
                     .map(entity_version_ref_value)
                     .collect::<Result<Vec<_>>>()?,
@@ -1556,16 +1950,38 @@ fn manifest_value(
         (
             "relation_versions".to_owned(),
             CanonicalValue::Array(
-                relation_versions
+                input
+                    .relation_versions
                     .iter()
                     .map(relation_version_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
         (
+            "entity_membership_changes".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .entity_membership_changes
+                    .iter()
+                    .map(entity_membership_change_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "relation_membership_changes".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .relation_membership_changes
+                    .iter()
+                    .map(relation_membership_change_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
             "checkpoint_candidates".to_owned(),
             CanonicalValue::Array(
-                checkpoint_candidates
+                input
+                    .checkpoint_candidates
                     .iter()
                     .map(checkpoint_candidate_value)
                     .collect::<Result<Vec<_>>>()?,
@@ -1746,6 +2162,66 @@ fn relation_version_ref_value(
             relation_version.metadata_json_size_bytes,
         )?,
     ])
+}
+
+fn entity_membership_change_ref_value(
+    change: &BundleEntityMembershipChangeRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("changeset_id", change.changeset_id.to_string()),
+        string_field("operation_id", change.operation_id.to_string()),
+        integer_field("ordinal", change.ordinal)?,
+        string_field("entity_id", change.entity_id.to_string()),
+        optional_entity_version_field("before_entity_version_id", change.before_entity_version_id),
+        optional_entity_version_field("after_entity_version_id", change.after_entity_version_id),
+        string_field("field_delta_digest", change.field_delta_digest.to_string()),
+        integer_field("field_delta_size_bytes", change.field_delta_size_bytes)?,
+    ])
+}
+
+fn relation_membership_change_ref_value(
+    change: &BundleRelationMembershipChangeRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("changeset_id", change.changeset_id.to_string()),
+        string_field("operation_id", change.operation_id.to_string()),
+        integer_field("ordinal", change.ordinal)?,
+        string_field("relation_id", change.relation_id.to_string()),
+        optional_relation_version_field(
+            "before_relation_version_id",
+            change.before_relation_version_id,
+        ),
+        optional_relation_version_field(
+            "after_relation_version_id",
+            change.after_relation_version_id,
+        ),
+        string_field("field_delta_digest", change.field_delta_digest.to_string()),
+        integer_field("field_delta_size_bytes", change.field_delta_size_bytes)?,
+    ])
+}
+
+fn optional_entity_version_field(
+    name: &str,
+    value: Option<EntityVersionId>,
+) -> (String, CanonicalValue) {
+    (
+        name.to_owned(),
+        value
+            .map(|id| CanonicalValue::String(id.to_string()))
+            .unwrap_or(CanonicalValue::Null),
+    )
+}
+
+fn optional_relation_version_field(
+    name: &str,
+    value: Option<RelationVersionId>,
+) -> (String, CanonicalValue) {
+    (
+        name.to_owned(),
+        value
+            .map(|id| CanonicalValue::String(id.to_string()))
+            .unwrap_or(CanonicalValue::Null),
+    )
 }
 
 fn checkpoint_candidate_value(checkpoint: &BundleCheckpointCandidate) -> Result<CanonicalValue> {
@@ -2180,6 +2656,35 @@ fn validate_subject_family(label: &str, value: &str) -> Result<()> {
     }
 }
 
+fn validate_subject_family_exact(label: &str, value: &str, expected: &str) -> Result<()> {
+    validate_subject_family(label, value)?;
+    if value == expected {
+        Ok(())
+    } else {
+        Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be {expected}"
+        )))
+    }
+}
+
+fn validate_membership_transition<T: Eq>(
+    label: &str,
+    before: Option<T>,
+    after: Option<T>,
+) -> Result<()> {
+    if before.is_none() && after.is_none() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must have a before or after version"
+        )));
+    }
+    if before == after {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} before and after versions must differ"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_payload_relative_path(relative_path: &str) -> Result<()> {
     payload_digest_from_relative_path(relative_path).map(|_| ())
 }
@@ -2256,6 +2761,44 @@ fn decode_operation_id(column: &str, bytes: Vec<u8>) -> Result<OperationId> {
     let bytes = decode_16(column, bytes)?;
     OperationId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
+    let bytes = decode_16(column, bytes)?;
+    EntityId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_relation_id(column: &str, bytes: Vec<u8>) -> Result<RelationId> {
+    let bytes = decode_16(column, bytes)?;
+    RelationId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_optional_entity_version_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<EntityVersionId>> {
+    bytes
+        .map(|bytes| {
+            let bytes = decode_16(column, bytes)?;
+            EntityVersionId::from_bytes(bytes)
+                .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+        })
+        .transpose()
+}
+
+fn decode_optional_relation_version_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<RelationVersionId>> {
+    bytes
+        .map(|bytes| {
+            let bytes = decode_16(column, bytes)?;
+            RelationVersionId::from_bytes(bytes)
+                .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+        })
+        .transpose()
 }
 
 fn decode_object_id_text(column: &str, bytes: Vec<u8>) -> Result<String> {

@@ -22,11 +22,12 @@ mod why;
 
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
-    BundleCheckpointCandidate, BundleEntityVersionRef, BundleExportManifest, BundleExportOptions,
-    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
-    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadFile, BundlePayloadInput, BundlePayloadReference, BundlePayloadValidationOptions,
-    BundlePayloadValidationResult, BundleRelationVersionRef,
+    BundleCheckpointCandidate, BundleEntityMembershipChangeRef, BundleEntityVersionRef,
+    BundleExportManifest, BundleExportOptions, BundleImportPreflightOptions,
+    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
+    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput,
+    BundlePayloadReference, BundlePayloadValidationOptions, BundlePayloadValidationResult,
+    BundleRelationMembershipChangeRef, BundleRelationVersionRef,
 };
 pub use checkpoint::{
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,

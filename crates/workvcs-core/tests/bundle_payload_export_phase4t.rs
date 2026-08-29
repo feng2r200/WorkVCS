@@ -151,10 +151,28 @@ fn bundle_payload_export_includes_canonical_json_payload_closure() {
     assert_eq!(counts.get("changeset_rationale"), Some(&4));
     assert_eq!(counts.get("change_operation_payload"), Some(&3));
     assert_eq!(counts.get("entity_version_state"), Some(&2));
+    assert_eq!(counts.get("entity_membership_field_delta"), Some(&2));
     assert_eq!(counts.get("relation_version_metadata"), Some(&1));
-    assert_eq!(export.payload_references.len(), 14);
+    assert_eq!(counts.get("relation_membership_field_delta"), Some(&1));
+    assert_eq!(export.payload_references.len(), 17);
 
     let payloads = payload_file_digest_map(&export);
+    for change in &export.manifest.entity_membership_changes {
+        assert!(payloads.contains_key(&change.field_delta_digest));
+        assert!(export.payload_references.iter().any(|reference| {
+            reference.role == "entity_membership_field_delta"
+                && reference.content_digest == change.field_delta_digest
+                && reference.relative_path == format!("payloads/{}.json", change.field_delta_digest)
+        }));
+    }
+    for change in &export.manifest.relation_membership_changes {
+        assert!(payloads.contains_key(&change.field_delta_digest));
+        assert!(export.payload_references.iter().any(|reference| {
+            reference.role == "relation_membership_field_delta"
+                && reference.content_digest == change.field_delta_digest
+                && reference.relative_path == format!("payloads/{}.json", change.field_delta_digest)
+        }));
+    }
     for entity in &export.manifest.entity_versions {
         assert!(payloads.contains_key(&entity.state_json_digest));
         assert!(export.payload_references.iter().any(|reference| {

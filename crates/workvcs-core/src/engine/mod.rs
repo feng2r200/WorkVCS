@@ -18,12 +18,13 @@ use crate::history::{
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions,
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
-    RecordCreateOptions, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
-    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
-    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    RecordCreateOptions, RecordListOptions, RecordListResult, RecordSnapshot,
+    RecordTransitionCommit, RecordTransitionOptions, ReplayedState, ResourceBindOptions,
+    ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
+    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -286,6 +287,10 @@ impl Engine {
         record_entity_id: EntityId,
     ) -> Result<RecordSnapshot> {
         self.store.record_at(commit_id, record_entity_id)
+    }
+
+    pub fn records_at(&self, options: RecordListOptions) -> Result<RecordListResult> {
+        self.store.records_at(&options)
     }
 
     pub fn acceptance_criterion_at(

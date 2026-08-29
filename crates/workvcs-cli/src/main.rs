@@ -9,19 +9,19 @@ use workvcs_core::{
     ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
     Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions, ReplayedState, ResourceCreateOptions, ResourceCreateResult,
-    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
-    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
-    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WorkState, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
-    content_object_digest, parse_canonical_json,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
+    RecordListResult, RecordStatus, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
+    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
+    WorkspaceInfo, WorkspaceInitOptions, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -330,6 +330,16 @@ enum ResourceCommand {
 
 #[derive(Debug, Subcommand)]
 enum RecordCommand {
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+
+        #[arg(long)]
+        kind: Option<String>,
+    },
     Assumption {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1002,6 +1012,21 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::List {
+                    store,
+                    commit,
+                    kind,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options = RecordListOptions::new(CommitId::parse_canonical(&commit)?);
+            if let Some(kind) = kind {
+                options = options.with_kind(parse_record_kind(&kind)?);
+            }
+            Ok(render_record_list(&engine.records_at(options)?))
+        }
+        Command::Record {
+            command:
                 RecordCommand::Assumption {
                     store,
                     branch,
@@ -1313,6 +1338,19 @@ fn parse_assumption_record_status(value: &str) -> Result<RecordStatus> {
         "invalidated" => Ok(RecordStatus::Invalidated),
         other => Err(WorkVcsError::RecordInvalid(format!(
             "assumption status {other:?} is not in the CLI transition vocabulary"
+        ))),
+    }
+}
+
+fn parse_record_kind(value: &str) -> Result<RecordKind> {
+    match value {
+        "assumption" => Ok(RecordKind::Assumption),
+        "decision" => Ok(RecordKind::Decision),
+        "finding" => Ok(RecordKind::Finding),
+        "question" => Ok(RecordKind::Question),
+        "risk" => Ok(RecordKind::Risk),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "record kind {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -1688,6 +1726,44 @@ fn render_record_transition(record: &RecordTransitionCommit) -> String {
         record.previous_state.status,
         record.state.status
     )
+}
+
+fn render_record_list(result: &RecordListResult) -> String {
+    let mut output = format!(
+        "workspace_id={}\ncommit_id={}\nrecords={}\n",
+        result.workspace_id,
+        result.commit_id,
+        result.records.len()
+    );
+    for (index, record) in result.records.iter().enumerate() {
+        writeln!(
+            output,
+            "record.{index}.record_entity_id={}",
+            record.record_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "record.{index}.record_entity_version_id={}",
+            record.record_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "record.{index}.record_state_digest={}",
+            record.state_digest
+        )
+        .expect("write to String");
+        writeln!(output, "record.{index}.record_kind={}", record.state.kind)
+            .expect("write to String");
+        writeln!(
+            output,
+            "record.{index}.record_status={}",
+            record.state.status
+        )
+        .expect("write to String");
+    }
+    output
 }
 
 fn render_session_start(session: &SessionStartResult) -> String {
@@ -3240,6 +3316,92 @@ mod tests {
         .expect("create risk record");
         assert!(risk.contains("record_kind=risk"));
         assert!(risk.contains("record_status=active"));
+    }
+
+    #[test]
+    fn cli_lists_record_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Schema validation has no drift",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let assumption = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "assumption",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--statement",
+            "Serialized writes are sufficient",
+        ])
+        .expect("parse assumption"))
+        .expect("create assumption");
+
+        let list = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&assumption, "commit_id"),
+        ])
+        .expect("parse record list"))
+        .expect("list records");
+        assert_eq!(value(&list, "records"), "2");
+        assert!(list.contains("record_kind=finding"));
+        assert!(list.contains("record_kind=assumption"));
+        assert!(list.contains("record_status=active"));
+        assert!(list.contains("record_status=unverified"));
+
+        let filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&assumption, "commit_id"),
+            "--kind",
+            "assumption",
+        ])
+        .expect("parse filtered record list"))
+        .expect("list filtered records");
+        assert_eq!(value(&filtered, "records"), "1");
+        assert!(filtered.contains("record_kind=assumption"));
+        assert!(!filtered.contains("record_kind=finding"));
     }
 
     fn value(output: &str, key: &str) -> String {

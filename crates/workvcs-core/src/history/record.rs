@@ -412,6 +412,41 @@ pub struct RecordSnapshot {
     pub state: RecordState,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordListOptions {
+    commit_id: CommitId,
+    kind: Option<RecordKind>,
+}
+
+impl RecordListOptions {
+    pub fn new(commit_id: CommitId) -> Self {
+        Self {
+            commit_id,
+            kind: None,
+        }
+    }
+
+    pub fn with_kind(mut self, kind: RecordKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    pub fn commit_id(&self) -> CommitId {
+        self.commit_id
+    }
+
+    pub fn kind(&self) -> Option<RecordKind> {
+        self.kind
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordListResult {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub records: Vec<RecordSnapshot>,
+}
+
 pub(crate) fn create_record(
     connection: &mut StoreConnection,
     options: &RecordCreateOptions,
@@ -487,6 +522,51 @@ pub(crate) fn transition_record(
         work_state_digest: commit.work_state_digest,
         previous_state: current.state,
         state: next_state,
+    })
+}
+
+pub(crate) fn records_at(
+    connection: &StoreConnection,
+    options: &RecordListOptions,
+) -> Result<RecordListResult> {
+    let commit_id = options.commit_id();
+    let replayed = state_at(connection, commit_id)?;
+    let mut records = Vec::new();
+
+    for (entity_id, entity_version_id) in replayed.state.entities() {
+        match load_entity_kind(connection, *entity_id)? {
+            Some(entity_kind) if entity_kind == RECORD_ENTITY_KIND => {
+                let loaded = load_record_version(
+                    connection,
+                    replayed.workspace_id,
+                    *entity_id,
+                    *entity_version_id,
+                )?;
+                if options.kind().is_none_or(|kind| loaded.state.kind == kind) {
+                    records.push(RecordSnapshot {
+                        workspace_id: replayed.workspace_id,
+                        commit_id,
+                        record_entity_id: *entity_id,
+                        record_entity_version_id: *entity_version_id,
+                        state_digest: loaded.state_digest,
+                        state: loaded.state,
+                    });
+                }
+            }
+            Some(_) => {}
+            None => {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "WorkState at commit {commit_id} references missing entity {entity_id}"
+                )));
+            }
+        }
+    }
+
+    records.sort_by_key(|record| record.record_entity_id);
+    Ok(RecordListResult {
+        workspace_id: replayed.workspace_id,
+        commit_id,
+        records,
     })
 }
 
@@ -629,6 +709,20 @@ fn load_record_version(
         state_digest,
         state: parse_record_state(value)?,
     })
+}
+
+fn load_entity_kind(connection: &StoreConnection, entity_id: EntityId) -> Result<Option<String>> {
+    connection
+        .inner()
+        .query_row(
+            "SELECT entity_kind
+             FROM entity
+             WHERE object_id = ?1",
+            params![&entity_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)
 }
 
 fn parse_record_state(value: CanonicalValue) -> Result<RecordState> {

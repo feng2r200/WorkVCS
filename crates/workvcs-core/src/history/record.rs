@@ -20,6 +20,7 @@ pub(crate) const RECORD_RELATION_CREATE_OPERATION_TYPE: &str = "record.relation.
 
 const ENTITY_OBJECT_KIND: &str = "entity";
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
+const CONTRADICTS_RELATION_TYPE: &str = "contradicts";
 const EMPTY_FIELD_DELTA: &str = "{}";
 const INVALIDATES_RELATION_TYPE: &str = "invalidates";
 const NORMAL_COMMIT_KIND: &str = "normal";
@@ -620,6 +621,7 @@ pub struct RecordListResult {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecordRelationType {
+    Contradicts,
     Invalidates,
     Supports,
     Validates,
@@ -628,6 +630,7 @@ pub enum RecordRelationType {
 impl RecordRelationType {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Contradicts => CONTRADICTS_RELATION_TYPE,
             Self::Invalidates => INVALIDATES_RELATION_TYPE,
             Self::Supports => SUPPORTS_RELATION_TYPE,
             Self::Validates => VALIDATES_RELATION_TYPE,
@@ -636,6 +639,7 @@ impl RecordRelationType {
 
     fn parse(value: &str) -> Option<Self> {
         match value {
+            CONTRADICTS_RELATION_TYPE => Some(Self::Contradicts),
             INVALIDATES_RELATION_TYPE => Some(Self::Invalidates),
             SUPPORTS_RELATION_TYPE => Some(Self::Supports),
             VALIDATES_RELATION_TYPE => Some(Self::Validates),
@@ -661,6 +665,25 @@ pub struct RecordRelationCreateOptions {
 }
 
 impl RecordRelationCreateOptions {
+    pub fn contradicts(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_record_entity_id: EntityId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::Contradicts,
+            source_record_entity_id,
+            target_record_entity_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
     pub fn invalidates(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -1230,6 +1253,27 @@ fn validate_record_relation_endpoints(
     target: &RecordSnapshot,
 ) -> Result<()> {
     match relation_type {
+        RecordRelationType::Contradicts => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "contradicts source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            if target.state.kind != RecordKind::Decision {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "contradicts target must be a Decision Record, found {}",
+                    target.state.kind
+                )));
+            }
+            if target.state.status != RecordStatus::Active {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "contradicts target Decision must be active, found {}",
+                    target.state.status
+                )));
+            }
+            Ok(())
+        }
         RecordRelationType::Invalidates => {
             if source.state.kind != RecordKind::Finding {
                 return Err(WorkVcsError::RecordInvalid(format!(

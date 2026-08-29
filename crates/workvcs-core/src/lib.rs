@@ -22,6 +22,7 @@ pub use history::{
     ApplicabilityResourceStampInput, ApplicabilityResourceStampSnapshot, BranchForkOptions,
     BranchForkResult, BranchForkSource, BranchHead, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BranchProjectionStatus,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointSnapshot,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
     EntityTransitionOptions, EntityVersionDiff, EvidenceContentInput, EvidenceContentSnapshot,
     EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
@@ -71,9 +72,9 @@ pub use history::{
     WorkspaceResourceAssociationSnapshot,
 };
 pub use identity::{
-    BranchId, ChangeSetId, ClaimId, CommitId, Digest, EntityId, EntityVersionId, EventId,
-    EvidenceId, MergeId, MergeItemId, OperationId, RelationId, RelationVersionId, ResourceId,
-    ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkspaceId,
+    BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, Digest, EntityId, EntityVersionId,
+    EventId, EvidenceId, MergeId, MergeItemId, OperationId, RelationId, RelationVersionId,
+    ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
     ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,

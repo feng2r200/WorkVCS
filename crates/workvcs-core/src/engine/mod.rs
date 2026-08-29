@@ -1,4 +1,5 @@
 use crate::BranchId;
+use crate::CheckpointId;
 use crate::ClaimId;
 use crate::CommitId;
 use crate::EntityId;
@@ -14,11 +15,12 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
-    BranchProjectionSnapshot, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions,
-    EntityTransitionCommit, EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
-    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    BranchProjectionSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointSnapshot,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
+    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -134,6 +136,17 @@ impl Engine {
         options: WorkStateRestoreOptions,
     ) -> Result<WorkStateRestoreCommit> {
         self.store.restore_work_state(&options)
+    }
+
+    pub fn create_checkpoint(
+        &mut self,
+        options: CheckpointCreateOptions,
+    ) -> Result<CheckpointCreateResult> {
+        self.store.create_checkpoint(options)
+    }
+
+    pub fn checkpoint(&self, checkpoint_id: CheckpointId) -> Result<CheckpointSnapshot> {
+        self.store.checkpoint(checkpoint_id)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

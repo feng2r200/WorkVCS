@@ -6,7 +6,8 @@ use workvcs_core::{
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
-    BranchProjectionRefreshResult, BranchProjectionSnapshot, CanonicalValue, ClaimId,
+    BranchProjectionRefreshResult, BranchProjectionSnapshot, CanonicalValue,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointSnapshot, ClaimId,
     ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
     ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview,
     ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
@@ -205,6 +206,10 @@ enum Command {
         #[command(subcommand)]
         command: ProjectionCommand,
     },
+    Checkpoint {
+        #[command(subcommand)]
+        command: CheckpointCommand,
+    },
     Merge {
         #[command(subcommand)]
         command: MergeCommand,
@@ -277,6 +282,24 @@ enum ProjectionCommand {
 
         #[arg(long)]
         branch: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CheckpointCommand {
+    Create {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        checkpoint: String,
     },
 }
 
@@ -1615,6 +1638,20 @@ fn run(cli: Cli) -> Result<String> {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.branch_projection(BranchId::parse_canonical(&branch)?)?;
                 Ok(render_branch_projection_snapshot(&snapshot))
+            }
+        },
+        Command::Checkpoint { command } => match command {
+            CheckpointCommand::Create { store, commit } => {
+                let mut engine = Engine::open(store)?;
+                let result = engine.create_checkpoint(CheckpointCreateOptions::new(
+                    CommitId::parse_canonical(&commit)?,
+                ))?;
+                Ok(render_checkpoint_create(&result))
+            }
+            CheckpointCommand::Show { store, checkpoint } => {
+                let engine = Engine::open(store)?;
+                let snapshot = engine.checkpoint(CheckpointId::parse_canonical(&checkpoint)?)?;
+                Ok(render_checkpoint_snapshot(&snapshot))
             }
         },
         Command::Why {
@@ -5234,6 +5271,30 @@ fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> Str
     )
 }
 
+fn render_checkpoint_create(result: &CheckpointCreateResult) -> String {
+    let mut output = render_checkpoint_snapshot(&result.checkpoint);
+    writeln!(output, "entity_count={}", result.entity_count).expect("write to String");
+    writeln!(output, "relation_count={}", result.relation_count).expect("write to String");
+    output
+}
+
+fn render_checkpoint_snapshot(snapshot: &CheckpointSnapshot) -> String {
+    format!(
+        "checkpoint_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\ncheckpoint_format_version={}\ncontent_digest={}\ncontent_size_bytes={}\nmedia_type={}\ncreated_at_us={}\nusability_state={}\nlast_validated_at_us={}\n",
+        snapshot.checkpoint_id,
+        snapshot.workspace_id,
+        snapshot.commit_id,
+        snapshot.state_digest,
+        snapshot.checkpoint_format_version,
+        snapshot.content_digest,
+        snapshot.content_size_bytes,
+        snapshot.media_type.as_deref().unwrap_or("none"),
+        snapshot.created_at_us,
+        snapshot.usability_state,
+        snapshot.last_validated_at_us
+    )
+}
+
 fn render_why(result: &WhyQueryResult) -> String {
     let mut output = String::new();
     match result.target.target {
@@ -5449,6 +5510,7 @@ mod tests {
                 "runnable",
                 "verification",
                 "projection",
+                "checkpoint",
                 "merge"
             ]
         );
@@ -5674,6 +5736,63 @@ mod tests {
             .expect("show current projection");
         assert_eq!(value(&current, "status"), "complete");
         assert_eq!(value(&current, "is_current"), "true");
+    }
+
+    #[test]
+    fn cli_creates_and_shows_checkpoint() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let created = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "create",
+            store,
+            "--commit",
+            &genesis,
+        ])
+        .expect("parse checkpoint create"))
+        .expect("create checkpoint");
+        assert_eq!(value(&created, "commit_id"), genesis);
+        assert_eq!(value(&created, "checkpoint_format_version"), "1");
+        assert_eq!(value(&created, "usability_state"), "usable");
+        assert_eq!(value(&created, "entity_count"), "0");
+        let checkpoint = value(&created, "checkpoint_id");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "show",
+            store,
+            "--checkpoint",
+            &checkpoint,
+        ])
+        .expect("parse checkpoint show"))
+        .expect("show checkpoint");
+        assert_eq!(value(&shown, "checkpoint_id"), checkpoint);
+        assert_eq!(value(&shown, "commit_id"), genesis);
+        assert_eq!(
+            value(&shown, "content_digest"),
+            value(&created, "content_digest")
+        );
     }
 
     #[test]

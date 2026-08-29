@@ -114,6 +114,7 @@ typed_uuid!(RelationVersionId);
 typed_uuid!(BranchId);
 typed_uuid!(CommitId);
 typed_uuid!(ChangeSetId);
+typed_uuid!(CheckpointId);
 typed_uuid!(OperationId);
 typed_uuid!(EventId);
 typed_uuid!(SessionId);

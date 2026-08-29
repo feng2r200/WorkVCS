@@ -1,7 +1,7 @@
 use super::{EntityTransitionOptions, commit_entity_transition, state_at};
 use crate::canonical::{
-    CanonicalValue, ImportDigestDomain, entity_version_digest, parse_canonical_json,
-    validate_import_fixed_point,
+    CanonicalValue, ImportDigestDomain, canonical_bytes, entity_version_digest,
+    parse_canonical_json, validate_import_fixed_point,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
@@ -277,6 +277,7 @@ pub struct KnowledgeListOptions {
     commit_id: CommitId,
     status: Option<KnowledgeStatus>,
     statement_contains: Option<String>,
+    scope_canonical_bytes: Option<Vec<u8>>,
 }
 
 impl KnowledgeListOptions {
@@ -285,6 +286,7 @@ impl KnowledgeListOptions {
             commit_id,
             status: None,
             statement_contains: None,
+            scope_canonical_bytes: None,
         }
     }
 
@@ -304,6 +306,12 @@ impl KnowledgeListOptions {
         Ok(self)
     }
 
+    pub fn with_scope(mut self, scope: CanonicalValue) -> Result<Self> {
+        require_object_value("knowledge scope filter", &scope)?;
+        self.scope_canonical_bytes = Some(canonical_bytes(&scope).map_err(knowledge_invalid_from)?);
+        Ok(self)
+    }
+
     pub fn commit_id(&self) -> CommitId {
         self.commit_id
     }
@@ -314,6 +322,10 @@ impl KnowledgeListOptions {
 
     pub fn statement_contains(&self) -> Option<&str> {
         self.statement_contains.as_deref()
+    }
+
+    fn scope_canonical_bytes(&self) -> Option<&[u8]> {
+        self.scope_canonical_bytes.as_deref()
     }
 }
 
@@ -461,6 +473,7 @@ pub(crate) fn knowledges_at(
                     && options
                         .statement_contains()
                         .is_none_or(|fragment| loaded.state.statement.contains(fragment))
+                    && scope_matches(options, &loaded.state.scope)?
                 {
                     knowledge.push(KnowledgeSnapshot {
                         workspace_id: replayed.workspace_id,
@@ -724,6 +737,14 @@ fn require_object_value(label: &str, value: &CanonicalValue) -> Result<()> {
             "{label} must be a canonical object, found {other:?}"
         ))),
     }
+}
+
+fn scope_matches(options: &KnowledgeListOptions, scope: &CanonicalValue) -> Result<bool> {
+    let Some(expected) = options.scope_canonical_bytes() else {
+        return Ok(true);
+    };
+    let actual = canonical_bytes(scope).map_err(knowledge_invalid_from)?;
+    Ok(actual == expected)
 }
 
 fn missing_field(field: &str) -> WorkVcsError {

@@ -288,6 +288,9 @@ enum KnowledgeCommand {
         status: Option<String>,
 
         #[arg(long)]
+        scope_json: Option<String>,
+
+        #[arg(long)]
         statement_contains: Option<String>,
     },
     Invalidate {
@@ -1483,6 +1486,7 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     status,
+                    scope_json,
                     statement_contains,
                 },
         } => {
@@ -1491,6 +1495,9 @@ fn run(cli: Cli) -> Result<String> {
                 KnowledgeListOptions::new(resolve_knowledge_query_commit(&engine, branch, commit)?);
             if let Some(status) = status {
                 options = options.with_status(parse_knowledge_status(&status)?);
+            }
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("knowledge scope", &scope_json)?)?;
             }
             if let Some(statement_contains) = statement_contains {
                 options = options.with_statement_contains(statement_contains)?;
@@ -7712,7 +7719,7 @@ mod tests {
             "--statement",
             "SQLite is sufficient under serialized writes",
             "--scope-json",
-            "{\"kind\":\"workspace\"}",
+            "{\"local_ref\":\"root\",\"kind\":\"workspace\"}",
             "--provenance-json",
             "{\"source\":\"cli\"}",
         ])
@@ -7724,8 +7731,28 @@ mod tests {
                 "knowledge_statement_json=\"SQLite is sufficient under serialized writes\""
             )
         );
-        assert!(knowledge.contains("knowledge_scope_json={\"kind\":\"workspace\"}"));
+        assert!(
+            knowledge
+                .contains("knowledge_scope_json={\"kind\":\"workspace\",\"local_ref\":\"root\"}")
+        );
         assert!(knowledge.contains("knowledge_provenance_json={\"source\":\"cli\"}"));
+
+        let other_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--statement",
+            "BLAKE3 state digests are stable for module projections",
+            "--scope-json",
+            "{\"kind\":\"module\",\"local_ref\":\"core\"}",
+        ])
+        .expect("parse other knowledge create"))
+        .expect("create other knowledge");
 
         let why = run(Cli::try_parse_from([
             "workvcs",
@@ -7762,7 +7789,9 @@ mod tests {
             value(&show, "knowledge_entity_version_id"),
             value(&knowledge, "knowledge_entity_version_id")
         );
-        assert!(show.contains("knowledge_scope_json={\"kind\":\"workspace\"}"));
+        assert!(
+            show.contains("knowledge_scope_json={\"kind\":\"workspace\",\"local_ref\":\"root\"}")
+        );
 
         let listed = run(Cli::try_parse_from([
             "workvcs",
@@ -7773,6 +7802,8 @@ mod tests {
             &branch,
             "--status",
             "active",
+            "--scope-json",
+            "{\"kind\":\"workspace\",\"local_ref\":\"root\"}",
             "--statement-contains",
             "serialized",
         ])
@@ -7792,7 +7823,7 @@ mod tests {
             "--branch",
             &branch,
             "--head",
-            &value(&knowledge, "commit_id"),
+            &value(&other_knowledge, "commit_id"),
             "--knowledge",
             &value(&knowledge, "knowledge_entity_id"),
             "--knowledge-version",
@@ -7845,7 +7876,14 @@ mod tests {
         ])
         .expect("parse active knowledge list"))
         .expect("list active knowledge");
-        assert_eq!(value(&active_after_invalidation, "knowledge"), "0");
+        assert_eq!(value(&active_after_invalidation, "knowledge"), "1");
+        assert_eq!(
+            value(
+                &active_after_invalidation,
+                "knowledge.0.knowledge_entity_id"
+            ),
+            value(&other_knowledge, "knowledge_entity_id")
+        );
 
         let invalidated_list = run(Cli::try_parse_from([
             "workvcs",

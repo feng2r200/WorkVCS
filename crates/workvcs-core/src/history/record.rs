@@ -28,6 +28,7 @@ const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
 const RECORD_RELATION_CREATE_EVENT_KIND: &str = "record.relation.created";
 const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
+const SUPPORTS_RELATION_TYPE: &str = "supports";
 const VALIDATES_RELATION_TYPE: &str = "validates";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -620,6 +621,7 @@ pub struct RecordListResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecordRelationType {
     Invalidates,
+    Supports,
     Validates,
 }
 
@@ -627,6 +629,7 @@ impl RecordRelationType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Invalidates => INVALIDATES_RELATION_TYPE,
+            Self::Supports => SUPPORTS_RELATION_TYPE,
             Self::Validates => VALIDATES_RELATION_TYPE,
         }
     }
@@ -634,6 +637,7 @@ impl RecordRelationType {
     fn parse(value: &str) -> Option<Self> {
         match value {
             INVALIDATES_RELATION_TYPE => Some(Self::Invalidates),
+            SUPPORTS_RELATION_TYPE => Some(Self::Supports),
             VALIDATES_RELATION_TYPE => Some(Self::Validates),
             _ => None,
         }
@@ -670,6 +674,25 @@ impl RecordRelationCreateOptions {
             branch_id,
             expected_head_commit_id,
             relation_type: RecordRelationType::Invalidates,
+            source_record_entity_id,
+            target_record_entity_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn supports(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_record_entity_id: EntityId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::Supports,
             source_record_entity_id,
             target_record_entity_id,
             rationale: rationale_value(&rationale)?,
@@ -1223,6 +1246,27 @@ fn validate_record_relation_endpoints(
             if target.state.status != RecordStatus::Invalidated {
                 return Err(WorkVcsError::RecordInvalid(format!(
                     "invalidates target Assumption must be invalidated, found {}",
+                    target.state.status
+                )));
+            }
+            Ok(())
+        }
+        RecordRelationType::Supports => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "supports source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            if target.state.kind != RecordKind::Decision {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "supports target must be a Decision Record, found {}",
+                    target.state.kind
+                )));
+            }
+            if target.state.status != RecordStatus::Active {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "supports target Decision must be active, found {}",
                     target.state.status
                 )));
             }

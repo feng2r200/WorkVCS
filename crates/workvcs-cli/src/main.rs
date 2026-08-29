@@ -420,6 +420,25 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    LinkSupports {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        source_record: String,
+
+        #[arg(long)]
+        target_record: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
     RelationList {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1272,6 +1291,27 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::LinkSupports {
+                    store,
+                    branch,
+                    head,
+                    source_record,
+                    target_record,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation = engine.create_record_relation(RecordRelationCreateOptions::supports(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&source_record)?,
+                EntityId::parse_canonical(&target_record)?,
+                rationale,
+            )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        Command::Record {
+            command:
                 RecordCommand::RelationList {
                     store,
                     commit,
@@ -1735,6 +1775,7 @@ fn parse_record_kind(value: &str) -> Result<RecordKind> {
 fn parse_record_relation_type(value: &str) -> Result<RecordRelationType> {
     match value {
         "invalidates" => Ok(RecordRelationType::Invalidates),
+        "supports" => Ok(RecordRelationType::Supports),
         "validates" => Ok(RecordRelationType::Validates),
         other => Err(WorkVcsError::RecordInvalid(format!(
             "record relation type {other:?} is not in the CLI vocabulary"
@@ -2679,6 +2720,7 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::Verifies => "verifies",
         WhyRelationKind::EvidencedBy => "evidenced_by",
         WhyRelationKind::RecordInvalidates => "record_invalidates",
+        WhyRelationKind::RecordSupports => "record_supports",
         WhyRelationKind::RecordValidates => "record_validates",
     }
 }
@@ -4586,6 +4628,114 @@ mod tests {
         assert!(why_assumption.contains("relation_edges=1"));
         assert!(why_assumption.contains("relation.0.relation_kind=record_validates"));
         assert!(why_assumption.contains("relation.0.direction=incoming"));
+    }
+
+    #[test]
+    fn cli_links_finding_to_supported_decision() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let decision = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Use serialized writes",
+        ])
+        .expect("parse decision"))
+        .expect("create decision");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&decision, "commit_id"),
+            "--statement",
+            "Concurrent write tests are flaky without serialization",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-record",
+            &value(&decision, "record_entity_id"),
+            "--rationale",
+            "Finding supports the decision",
+        ])
+        .expect("parse link supports"))
+        .expect("link supports");
+        assert!(relation.contains("relation_type=supports"));
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--type",
+            "supports",
+        ])
+        .expect("parse relation list"))
+        .expect("list record relations");
+        assert!(listed.contains("relations=1"));
+        assert_eq!(
+            value(&listed, "relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert!(listed.contains("relation.0.relation_type=supports"));
+
+        let why_decision = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--entity",
+            &value(&decision, "record_entity_id"),
+        ])
+        .expect("parse why decision"))
+        .expect("why decision");
+        assert!(why_decision.contains("relation_edges=1"));
+        assert!(why_decision.contains("relation.0.relation_kind=record_supports"));
+        assert!(why_decision.contains("relation.0.direction=incoming"));
     }
 
     fn value(output: &str, key: &str) -> String {

@@ -1,3 +1,4 @@
+mod containment;
 mod entity;
 mod genesis;
 mod integrity;
@@ -6,6 +7,10 @@ mod query;
 mod replay;
 mod task;
 
+pub use containment::{
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
+    PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
+};
 pub use entity::{EntityTransitionCommit, EntityTransitionOptions};
 pub use genesis::{WorkspaceInfo, WorkspaceInitOptions};
 pub use integrity::IntegrityReport;
@@ -28,6 +33,7 @@ pub use task::{
     VerificationSnapshot, VerificationState, VerificationTarget,
 };
 
+pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
 pub(crate) use entity::commit_entity_transition;
 pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use integrity::validate_integrity;

@@ -10,8 +10,9 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
     EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot, ReplayedState,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
     TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
     TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
     VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -106,6 +107,13 @@ impl Engine {
         self.store.create_task_scheduling_relation(&options)
     }
 
+    pub fn create_primary_containment(
+        &mut self,
+        options: PrimaryContainmentCreateOptions,
+    ) -> Result<PrimaryContainmentCreateCommit> {
+        self.store.create_primary_containment(&options)
+    }
+
     pub fn create_acceptance_criterion(
         &mut self,
         options: AcceptanceCriterionCreateOptions,
@@ -181,6 +189,13 @@ impl Engine {
         commit_id: CommitId,
     ) -> Result<Vec<TaskSchedulingRelationSnapshot>> {
         self.store.task_scheduling_relations_at(commit_id)
+    }
+
+    pub fn primary_containment_relations_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<PrimaryContainmentSnapshot>> {
+        self.store.primary_containment_relations_at(commit_id)
     }
 
     pub fn acceptance_criterion_effective_status(

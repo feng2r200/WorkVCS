@@ -50,6 +50,7 @@ recorded as Accepted ADRs:
 - [ADR-0022: Phase 3H Task Scheduling Relation Foundation](decisions/adr/0022-phase-3h-task-scheduling-relation-foundation.md)
 - [ADR-0023: Phase 3I Runnable Dependency Readiness](decisions/adr/0023-phase-3i-runnable-dependency-readiness.md)
 - [ADR-0024: Phase 3J Plan Semantic Kernel](decisions/adr/0024-phase-3j-plan-semantic-kernel.md)
+- [ADR-0025: Phase 3K Primary Containment Relations](decisions/adr/0025-phase-3k-primary-containment-relations.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

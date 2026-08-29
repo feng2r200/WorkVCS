@@ -4,8 +4,9 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
     EntityTransitionCommit, EntityTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot, ReplayedState,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
     TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
     TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
     VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -140,6 +141,15 @@ impl Store {
         history::create_task_scheduling_relation(&mut self.connection, options)
     }
 
+    pub(crate) fn create_primary_containment(
+        &mut self,
+        options: &PrimaryContainmentCreateOptions,
+    ) -> Result<PrimaryContainmentCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_primary_containment(&mut self.connection, options)
+    }
+
     pub(crate) fn create_acceptance_criterion(
         &mut self,
         options: &AcceptanceCriterionCreateOptions,
@@ -250,6 +260,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::task_scheduling_relations_at(&self.connection, commit_id)
+    }
+
+    pub(crate) fn primary_containment_relations_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<PrimaryContainmentSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::primary_containment_relations_at(&self.connection, commit_id)
     }
 
     pub(crate) fn acceptance_criterion_effective_status(

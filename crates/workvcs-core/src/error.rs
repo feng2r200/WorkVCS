@@ -11,6 +11,7 @@ pub enum ErrorCategory {
     Mutation,
     Plan,
     Query,
+    Relation,
     Replay,
     Runtime,
     Store,
@@ -38,6 +39,7 @@ pub enum ErrorCode {
     PlanNotFound,
     QueryInvalid,
     QueryUnsupported,
+    RelationInvalid,
     ReplayInvalid,
     ReplayUnsupported,
     SessionInvalid,
@@ -103,6 +105,9 @@ pub enum WorkVcsError {
     #[error("query unsupported: {0}")]
     QueryUnsupported(String),
 
+    #[error("relation invalid: {0}")]
+    RelationInvalid(String),
+
     #[error("replay invalid: {0}")]
     ReplayInvalid(String),
 
@@ -162,6 +167,7 @@ impl WorkVcsError {
             Self::PlanNotFound(_) => ErrorCode::PlanNotFound,
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
             Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
+            Self::RelationInvalid(_) => ErrorCode::RelationInvalid,
             Self::ReplayInvalid(_) => ErrorCode::ReplayInvalid,
             Self::ReplayUnsupported(_) => ErrorCode::ReplayUnsupported,
             Self::SessionInvalid(_) => ErrorCode::SessionInvalid,
@@ -190,6 +196,7 @@ impl WorkVcsError {
             | Self::EntityTransitionInvalid(_) => ErrorCategory::Mutation,
             Self::PlanInvalid(_) | Self::PlanNotFound(_) => ErrorCategory::Plan,
             Self::QueryInvalid(_) | Self::QueryUnsupported(_) => ErrorCategory::Query,
+            Self::RelationInvalid(_) => ErrorCategory::Relation,
             Self::CommitNotFound(_) | Self::ReplayInvalid(_) | Self::ReplayUnsupported(_) => {
                 ErrorCategory::Replay
             }

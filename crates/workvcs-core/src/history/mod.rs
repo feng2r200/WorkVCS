@@ -95,8 +95,8 @@ pub(crate) use integrity::validate_integrity;
 pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use query::{branch_head, query_history};
 pub(crate) use record::{
-    create_record, create_record_relation, record_at, record_relations_at, records_at,
-    transition_record,
+    create_record, create_record_relation, record_at, record_relation_at, record_relations_at,
+    records_at, transition_record,
 };
 pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::state_at;

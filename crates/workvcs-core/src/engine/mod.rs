@@ -3,6 +3,7 @@ use crate::ClaimId;
 use crate::CommitId;
 use crate::EntityId;
 use crate::EvidenceId;
+use crate::RelationId;
 use crate::ResourceId;
 use crate::ResourceObservationId;
 use crate::SessionId;
@@ -20,12 +21,12 @@ use crate::history::{
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
     RecordCreateOptions, RecordListOptions, RecordListResult, RecordRelationCreateCommit,
     RecordRelationCreateOptions, RecordRelationListOptions, RecordRelationListResult,
-    RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
-    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
-    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -306,6 +307,14 @@ impl Engine {
         options: RecordRelationListOptions,
     ) -> Result<RecordRelationListResult> {
         self.store.record_relations_at(&options)
+    }
+
+    pub fn record_relation_at(
+        &self,
+        commit_id: CommitId,
+        relation_id: RelationId,
+    ) -> Result<RecordRelationSnapshot> {
+        self.store.record_relation_at(commit_id, relation_id)
     }
 
     pub fn acceptance_criterion_at(

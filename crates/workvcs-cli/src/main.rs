@@ -11,15 +11,16 @@ use workvcs_core::{
     Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
     NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
     RecordListOptions, RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationType, RecordSnapshot,
-    RecordStatus, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
-    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationSnapshot,
+    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions, RelationId, ReplayedState, ResolvedWhyQuerySubject,
+    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
@@ -473,6 +474,16 @@ enum RecordCommand {
 
         #[arg(long)]
         target_record: Option<String>,
+    },
+    RelationShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+
+        #[arg(long)]
+        relation: String,
     },
     Assumption {
         #[arg(value_name = "STORE")]
@@ -1374,6 +1385,22 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(render_record_relation_list(
                 &engine.record_relations_at(options)?,
+            ))
+        }
+        Command::Record {
+            command:
+                RecordCommand::RelationShow {
+                    store,
+                    commit,
+                    relation,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            Ok(render_record_relation_snapshot(
+                &engine.record_relation_at(
+                    CommitId::parse_canonical(&commit)?,
+                    RelationId::parse_canonical(&relation)?,
+                )?,
             ))
         }
         Command::Record {
@@ -2322,6 +2349,20 @@ fn render_record_relation_list(result: &RecordRelationListResult) -> String {
         .expect("write to String");
     }
     output
+}
+
+fn render_record_relation_snapshot(relation: &RecordRelationSnapshot) -> String {
+    format!(
+        "workspace_id={}\ncommit_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nrelation_state_digest={}\n",
+        relation.workspace_id,
+        relation.commit_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.source_record_entity_id,
+        relation.target_record_entity_id,
+        relation.state_digest
+    )
 }
 
 fn render_session_start(session: &SessionStartResult) -> String {
@@ -4764,6 +4805,32 @@ mod tests {
             value(&relation, "relation_id")
         );
         assert!(listed.contains("relation.0.relation_type=supports"));
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-show",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+        ])
+        .expect("parse relation show"))
+        .expect("show record relation");
+        assert_eq!(
+            value(&shown, "relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert!(shown.contains("relation_type=supports"));
+        assert_eq!(
+            value(&shown, "source_record_entity_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(&shown, "target_record_entity_id"),
+            value(&decision, "record_entity_id")
+        );
 
         let why_decision = run(Cli::try_parse_from([
             "workvcs",

@@ -8,14 +8,14 @@ use workvcs_core::{
     BranchForkResult, BranchHead, BranchId, CanonicalValue, ClaimId, ClaimLifecycleState,
     ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
-    Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, ReplayedState,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
+    NextWorkResult, ReplayedState, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
@@ -102,6 +102,13 @@ enum Command {
         command: ClaimCommand,
     },
     Context {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+    },
+    Next {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -982,6 +989,12 @@ fn run(cli: Cli) -> Result<String> {
             ))?;
             Ok(render_context_overview(&context))
         }
+        Command::Next { store, session } => {
+            let mut engine = Engine::open(store)?;
+            let next =
+                engine.next_work(NextWorkOptions::new(SessionId::parse_canonical(&session)?))?;
+            Ok(render_next_work(&next))
+        }
         Command::Runnable {
             command: RunnableCommand::Tasks { store, session },
         } => {
@@ -1506,6 +1519,49 @@ fn render_context_overview(context: &ContextOverview) -> String {
     output
 }
 
+fn render_next_work(result: &NextWorkResult) -> String {
+    let selected = result.claim_next.selected.is_some();
+    let focus_entity_id = result
+        .context
+        .session
+        .focus
+        .as_ref()
+        .map(|focus| focus.focus_entity_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let runnable_ready = result
+        .context
+        .runnable_tasks
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.runnable)
+        .count();
+    let mut output = format!(
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\n",
+        result.claim_next.session_id,
+        result.claim_next.workspace_id,
+        result.claim_next.branch_id,
+        result.claim_next.head_commit_id,
+        result.claim_next.inspected_candidates,
+        selected,
+        focus_entity_id,
+        result.context.session.context_workspaces.len(),
+        result.context.runnable_tasks.candidates.len(),
+        runnable_ready
+    );
+    if let Some(claim) = &result.claim_next.selected {
+        let _ = writeln!(output, "claim_id={}", claim.claim_id);
+        let _ = writeln!(output, "task_entity_id={}", claim.task_entity_id);
+        let _ = writeln!(output, "mode={}", claim_mode(claim.mode));
+        let _ = writeln!(output, "claimed_at_us={}", claim.claimed_at_us);
+        let _ = writeln!(
+            output,
+            "lifecycle_state={}",
+            claim_lifecycle_state(claim.state.lifecycle_state)
+        );
+    }
+    output
+}
+
 fn render_runnable_tasks(projection: &RunnableTasksProjection) -> String {
     let mut output = format!(
         "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ncandidates={}\n",
@@ -1690,6 +1746,7 @@ mod tests {
                 "session",
                 "claim",
                 "context",
+                "next",
                 "runnable",
                 "verification"
             ]
@@ -2573,6 +2630,85 @@ mod tests {
         .expect("parse session end"))
         .expect("end session");
         assert!(ended.contains("lifecycle_state=ended"));
+    }
+
+    #[test]
+    fn cli_runs_next_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Next workflow task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let next = run(
+            Cli::try_parse_from(["workvcs", "next", store, "--session", &session_id])
+                .expect("parse next"),
+        )
+        .expect("next work");
+        let claim_id = value(&next, "claim_id");
+        assert!(next.contains("selected=true"));
+        assert!(next.contains(&format!("task_entity_id={task_id}")));
+        assert!(next.contains(&format!("context_focus_entity_id={task_id}")));
+        assert!(next.contains("context_runnable_candidates=1"));
+
+        let runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse runnable"))
+        .expect("runnable after next");
+        assert!(runnable.contains(&format!("candidate.0.claim=claimed_by_session:{claim_id}")));
     }
 
     fn value(output: &str, key: &str) -> String {

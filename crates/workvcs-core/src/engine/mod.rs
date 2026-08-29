@@ -34,10 +34,10 @@ use crate::history::{
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
-    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, NextWorkOptions,
+    NextWorkResult, RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -397,5 +397,9 @@ impl Engine {
 
     pub fn context_overview(&self, options: ContextOverviewOptions) -> Result<ContextOverview> {
         self.store.context_overview(&options)
+    }
+
+    pub fn next_work(&mut self, options: NextWorkOptions) -> Result<NextWorkResult> {
+        self.store.next_work(&options)
     }
 }

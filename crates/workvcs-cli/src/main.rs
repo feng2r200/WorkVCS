@@ -5833,7 +5833,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nknowledge={}\nknowledge_relations={}\nrecords={}\nrecord_relations={}\nrecord_knowledge_relations={}\n",
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nknowledge={}\nknowledge_relations={}\nknowledge_exposure_relations={}\nrecords={}\nrecord_relations={}\nrecord_knowledge_relations={}\n",
         session.session_id,
         session_lifecycle_state(session.lifecycle_state),
         context.branch.workspace_id,
@@ -5854,6 +5854,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         runnable_ready,
         context.knowledge.knowledge.len(),
         context.knowledge_relations.relations.len(),
+        context.knowledge_exposure_relations.len(),
         context.records.records.len(),
         context.record_relations.relations.len(),
         context.record_knowledge_relations.relations.len()
@@ -5934,6 +5935,52 @@ fn render_context_overview(context: &ContextOverview) -> String {
         let _ = writeln!(
             output,
             "context_knowledge_relation.{index}.relation_state_digest={}",
+            relation.state_digest
+        );
+    }
+    for (index, relation) in context.knowledge_exposure_relations.iter().enumerate() {
+        let source_knowledge_entity_id = match relation.source {
+            WhyRelationEndpoint::Entity {
+                entity_kind: WhyEntityKind::Knowledge,
+                entity_id,
+            } => entity_id.to_string(),
+            _ => String::new(),
+        };
+        let target_exposure_id = match relation.target {
+            WhyRelationEndpoint::KnowledgeExposure { exposure_id } => exposure_id.to_string(),
+            _ => String::new(),
+        };
+        let _ = writeln!(
+            output,
+            "context_knowledge_exposure_relation.{index}.relation_id={}",
+            relation.relation_id
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_exposure_relation.{index}.relation_version_id={}",
+            relation.relation_version_id
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_exposure_relation.{index}.relation_kind={}",
+            why_relation_kind(relation.relation_kind)
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_exposure_relation.{index}.direction={}",
+            why_relation_direction(relation.direction)
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_exposure_relation.{index}.source_knowledge_entity_id={source_knowledge_entity_id}"
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_exposure_relation.{index}.target_exposure_id={target_exposure_id}"
+        );
+        let _ = writeln!(
+            output,
+            "context_knowledge_exposure_relation.{index}.relation_state_digest={}",
             relation.state_digest
         );
     }
@@ -6069,7 +6116,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_knowledge={}\ncontext_knowledge_relations={}\ncontext_records={}\ncontext_record_relations={}\ncontext_record_knowledge_relations={}\n",
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_knowledge={}\ncontext_knowledge_relations={}\ncontext_knowledge_exposure_relations={}\ncontext_records={}\ncontext_record_relations={}\ncontext_record_knowledge_relations={}\n",
         result.claim_next.session_id,
         result.claim_next.workspace_id,
         result.claim_next.branch_id,
@@ -6082,6 +6129,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         runnable_ready,
         result.context.knowledge.knowledge.len(),
         result.context.knowledge_relations.relations.len(),
+        result.context.knowledge_exposure_relations.len(),
         result.context.records.records.len(),
         result.context.record_relations.relations.len(),
         result.context.record_knowledge_relations.relations.len()
@@ -11516,6 +11564,149 @@ mod tests {
         assert!(next.contains("selected=false"));
         assert!(next.contains("context_knowledge=1"));
         assert!(next.contains("context_knowledge_relations=1"));
+    }
+
+    #[test]
+    fn cli_context_includes_knowledge_exposure_provenance_relations() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let source = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Reusable context exposure knowledge",
+        ])
+        .expect("parse source knowledge create"))
+        .expect("create source knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&source, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&source, "knowledge_entity_version_id"),
+        ])
+        .expect("parse exposure create"))
+        .expect("create exposure");
+        let adoption = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-adopt",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&source, "commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--rationale",
+            "adopt current exposure",
+        ])
+        .expect("parse adoption"))
+        .expect("adopt exposure");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context =
+            run(
+                Cli::try_parse_from(["workvcs", "context", store, "--session", &session_id])
+                    .expect("parse context"),
+            )
+            .expect("context overview");
+        assert_eq!(value(&context, "knowledge"), "2");
+        assert_eq!(value(&context, "knowledge_exposure_relations"), "1");
+        assert_eq!(
+            value(
+                &context,
+                "context_knowledge_exposure_relation.0.relation_id"
+            ),
+            value(&adoption, "relation_id")
+        );
+        assert_eq!(
+            value(
+                &context,
+                "context_knowledge_exposure_relation.0.relation_kind"
+            ),
+            "knowledge_exposure_derived_from"
+        );
+        assert_eq!(
+            value(&context, "context_knowledge_exposure_relation.0.direction"),
+            "outgoing"
+        );
+        assert_eq!(
+            value(
+                &context,
+                "context_knowledge_exposure_relation.0.source_knowledge_entity_id"
+            ),
+            value(&adoption, "adopted_knowledge_entity_id")
+        );
+        assert_eq!(
+            value(
+                &context,
+                "context_knowledge_exposure_relation.0.target_exposure_id"
+            ),
+            value(&exposure, "exposure_id")
+        );
+
+        let next = run(
+            Cli::try_parse_from(["workvcs", "next", store, "--session", &session_id])
+                .expect("parse next"),
+        )
+        .expect("next work");
+        assert!(next.contains("context_knowledge=2"));
+        assert!(next.contains("context_knowledge_exposure_relations=1"));
     }
 
     #[test]

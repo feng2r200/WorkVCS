@@ -5,7 +5,8 @@ use crate::history::{
     self, BranchHead, KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeStatus, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordListOptions, RecordListResult,
-    RecordRelationListOptions, RecordRelationListResult,
+    RecordRelationListOptions, RecordRelationListResult, WhyQueryOptions, WhyQueryTarget,
+    WhyRelationEdge, WhyRelationKind,
 };
 use crate::identity::{SessionId, WorkspaceId};
 use crate::store::StoreConnection;
@@ -32,6 +33,7 @@ pub struct ContextOverview {
     pub runnable_tasks: RunnableTasksProjection,
     pub knowledge: KnowledgeListResult,
     pub knowledge_relations: KnowledgeRelationListResult,
+    pub knowledge_exposure_relations: Vec<WhyRelationEdge>,
     pub records: RecordListResult,
     pub record_relations: RecordRelationListResult,
     pub record_knowledge_relations: RecordKnowledgeRelationListResult,
@@ -103,6 +105,8 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let knowledge_exposure_relations =
+        knowledge_exposure_relations_for_context(connection, &branch, &knowledge)?;
     let record_relations = history::record_relations_at(
         connection,
         &RecordRelationListOptions::new(branch.head_commit_id),
@@ -134,10 +138,42 @@ pub(crate) fn context_overview(
         runnable_tasks,
         knowledge,
         knowledge_relations,
+        knowledge_exposure_relations,
         records,
         record_relations,
         record_knowledge_relations,
     })
+}
+
+fn knowledge_exposure_relations_for_context(
+    connection: &StoreConnection,
+    branch: &BranchHead,
+    knowledge: &KnowledgeListResult,
+) -> Result<Vec<WhyRelationEdge>> {
+    let mut relations = Vec::new();
+    for knowledge in &knowledge.knowledge {
+        let why = history::explain_why(
+            connection,
+            &WhyQueryOptions::for_entity(
+                WhyQueryTarget::commit(branch.head_commit_id),
+                knowledge.knowledge_entity_id,
+            ),
+        )?;
+        relations.extend(
+            why.relation_edges
+                .into_iter()
+                .filter(|edge| edge.relation_kind == WhyRelationKind::KnowledgeExposureDerivedFrom),
+        );
+    }
+    relations.sort_by(|left, right| {
+        left.relation_kind
+            .cmp(&right.relation_kind)
+            .then_with(|| left.direction.cmp(&right.direction))
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.target.cmp(&right.target))
+            .then_with(|| left.relation_id.cmp(&right.relation_id))
+    });
+    Ok(relations)
 }
 
 fn ensure_active_session(session: &SessionSnapshot) -> Result<()> {

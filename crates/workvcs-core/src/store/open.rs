@@ -54,6 +54,7 @@ use crate::history::{
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
     KnowledgeExposureSnapshot, KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
+    KnowledgeSpaceAvailableExposuresOptions, KnowledgeSpaceAvailableExposuresResult,
 };
 use crate::history::{
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
@@ -465,6 +466,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::refresh_knowledge_exposure_source_status(&mut self.connection, options)
+    }
+
+    pub(crate) fn knowledge_space_available_exposures(
+        &self,
+        options: KnowledgeSpaceAvailableExposuresOptions,
+    ) -> Result<KnowledgeSpaceAvailableExposuresResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::knowledge_space_available_exposures(&self.connection, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

@@ -32,42 +32,43 @@ use workvcs_core::{
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
-    KnowledgeSnapshot, KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceId,
-    KnowledgeSpaceListOptions, KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeStatus,
-    KnowledgeTransitionCommit, KnowledgeTransitionOptions, LineageId, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
-    MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId, MergeItemId,
-    MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject, MergeListOptions,
-    MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind, MergeResolveOptions,
-    MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
-    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
-    content_object_digest, parse_canonical_json,
+    KnowledgeSnapshot, KnowledgeSpaceAvailableExposuresOptions,
+    KnowledgeSpaceAvailableExposuresResult, KnowledgeSpaceCreateOptions,
+    KnowledgeSpaceCreateResult, KnowledgeSpaceId, KnowledgeSpaceListOptions,
+    KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeStatus, KnowledgeTransitionCommit,
+    KnowledgeTransitionOptions, LineageId, MergeAbortOptions, MergeAbortResult,
+    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
+    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot,
+    MergeResolutionKind, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
+    MergeStartResult, MigrationId, NextWorkOptions, NextWorkResult, RecordCreateCommit,
+    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
+    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreId, StoreInitOptions, StoreLineageListOptions,
+    StoreLineageListResult, StoreLineageRecordOptions, StoreLineageRecordResult,
+    StoreLineageSnapshot, StoreMigrationAttemptSnapshot, StoreMigrationListOptions,
+    StoreMigrationListResult, StoreMigrationRecordOptions, StoreMigrationRecordResult,
+    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
+    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -399,6 +400,17 @@ enum StoreCommand {
     KnowledgeSpaceList {
         #[arg(value_name = "STORE")]
         store: PathBuf,
+
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    #[command(name = "knowledge-space-available-exposures")]
+    KnowledgeSpaceAvailableExposures {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        knowledge_space: String,
 
         #[arg(long)]
         limit: Option<usize>,
@@ -2135,6 +2147,22 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 let result = engine.knowledge_spaces(options)?;
                 Ok(render_knowledge_space_list(&result))
+            }
+            StoreCommand::KnowledgeSpaceAvailableExposures {
+                store,
+                knowledge_space,
+                limit,
+            } => {
+                let engine = Engine::open(store)?;
+                let mut options = KnowledgeSpaceAvailableExposuresOptions::new(
+                    KnowledgeSpaceId::parse_canonical(&knowledge_space)?,
+                );
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                render_knowledge_space_available_exposures(
+                    &engine.knowledge_space_available_exposures(options)?,
+                )
             }
             StoreCommand::KnowledgeExposureCreateLocal {
                 store,
@@ -6511,6 +6539,24 @@ fn render_knowledge_space_list(result: &KnowledgeSpaceListResult) -> String {
     output
 }
 
+fn render_knowledge_space_available_exposures(
+    result: &KnowledgeSpaceAvailableExposuresResult,
+) -> Result<String> {
+    let mut output = format!(
+        "knowledge_space_id={}\nexposures={}\n",
+        result.knowledge_space_id,
+        result.exposures.len()
+    );
+    for (index, snapshot) in result.exposures.iter().enumerate() {
+        write_knowledge_exposure_snapshot_fields(
+            &mut output,
+            Some(&format!("exposure[{index}]")),
+            snapshot,
+        )?;
+    }
+    Ok(output)
+}
+
 fn write_knowledge_space_snapshot_fields(
     output: &mut String,
     prefix: Option<&str>,
@@ -8015,6 +8061,158 @@ mod tests {
             value(&refreshed, "source_knowledge_entity_version_id"),
             value(&exposure, "source_knowledge_entity_version_id")
         );
+    }
+
+    #[test]
+    fn cli_lists_available_knowledge_space_exposures() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-space-available-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let current_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Available reusable knowledge",
+        ])
+        .expect("parse current knowledge create"))
+        .expect("create current knowledge");
+        let stale_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&current_knowledge, "commit_id"),
+            "--statement",
+            "Unavailable stale knowledge",
+        ])
+        .expect("parse stale knowledge create"))
+        .expect("create stale knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+
+        let current_exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&current_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&current_knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse current exposure create"))
+        .expect("create current exposure");
+        let stale_exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&stale_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&stale_knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse stale exposure create"))
+        .expect("create stale exposure");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "invalidate",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&stale_knowledge, "commit_id"),
+            "--knowledge",
+            &value(&stale_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&stale_knowledge, "knowledge_entity_version_id"),
+            "--rationale",
+            "source claim changed",
+        ])
+        .expect("parse knowledge invalidate"))
+        .expect("invalidate stale knowledge");
+        let stale_refreshed = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-refresh-source-status",
+            store,
+            "--exposure",
+            &value(&stale_exposure, "exposure_id"),
+        ])
+        .expect("parse stale exposure refresh"))
+        .expect("refresh stale exposure");
+        assert_eq!(value(&stale_refreshed, "source_status"), "stale");
+
+        let available = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-available-exposures",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+        ])
+        .expect("parse knowledge-space-available-exposures"))
+        .expect("list available exposures");
+
+        assert_eq!(
+            value(&available, "knowledge_space_id"),
+            value(&knowledge_space, "knowledge_space_id")
+        );
+        assert_eq!(value(&available, "exposures"), "1");
+        assert_eq!(
+            value(&available, "exposure[0].exposure_id"),
+            value(&current_exposure, "exposure_id")
+        );
+        assert_eq!(value(&available, "exposure[0].source_status"), "current");
     }
 
     #[test]

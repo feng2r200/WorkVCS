@@ -49,6 +49,7 @@ pub use history::{
     KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
     KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
     KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
+    KnowledgeSpaceAvailableExposuresOptions, KnowledgeSpaceAvailableExposuresResult,
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
     KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeState, KnowledgeStatus,
     KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,

@@ -952,6 +952,25 @@ pub struct RecordKnowledgeRelationCreateOptions {
 }
 
 impl RecordKnowledgeRelationCreateOptions {
+    pub fn invalidates(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_knowledge_entity_id: EntityId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::Invalidates,
+            source_record_entity_id,
+            target_knowledge_entity_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
     pub fn supports(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -2593,6 +2612,21 @@ fn validate_record_knowledge_relation_endpoints_for_create(
     target: &KnowledgeSnapshot,
 ) -> Result<()> {
     match relation_type {
+        RecordRelationType::Invalidates => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "invalidates source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            if target.state.status != KnowledgeStatus::Invalidated {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "invalidates target Knowledge must be invalidated, found {}",
+                    target.state.status
+                )));
+            }
+            Ok(())
+        }
         RecordRelationType::Supports => {
             if source.state.kind != RecordKind::Finding {
                 return Err(WorkVcsError::RecordInvalid(format!(
@@ -2619,6 +2653,15 @@ fn validate_record_knowledge_relation_endpoints_for_projection(
     source: &RecordSnapshot,
 ) -> Result<()> {
     match relation_type {
+        RecordRelationType::Invalidates => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "invalidates source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            Ok(())
+        }
         RecordRelationType::Supports => {
             if source.state.kind != RecordKind::Finding {
                 return Err(WorkVcsError::RecordInvalid(format!(
@@ -4220,7 +4263,10 @@ fn load_record_knowledge_relation_version(
     let Some(relation_type) = RecordRelationType::parse(&relation_type) else {
         return Ok(None);
     };
-    if relation_type != RecordRelationType::Supports {
+    if !matches!(
+        relation_type,
+        RecordRelationType::Invalidates | RecordRelationType::Supports
+    ) {
         return Ok(None);
     }
     if !relation_discriminator.is_empty() {

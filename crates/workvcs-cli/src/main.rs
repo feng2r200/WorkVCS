@@ -5,15 +5,20 @@ use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchId,
-    CanonicalValue, CommitId, Digest, Engine, EntityId, EntityVersionId, HistoryEntry,
-    HistoryQueryOptions, ReplayedState, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
-    WorkspaceInfo, WorkspaceInitOptions, content_object_digest, parse_canonical_json,
+    CanonicalValue, ClaimId, ClaimLifecycleState, ClaimMode, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, Digest, Engine, EntityId,
+    EntityVersionId, HistoryEntry, HistoryQueryOptions, ReplayedState, ResourceCreateOptions,
+    ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions,
+    TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WorkState, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
+    content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -82,6 +87,18 @@ enum Command {
     Resource {
         #[command(subcommand)]
         command: ResourceCommand,
+    },
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+    Claim {
+        #[command(subcommand)]
+        command: ClaimCommand,
+    },
+    Runnable {
+        #[command(subcommand)]
+        command: RunnableCommand,
     },
     Verification {
         #[command(subcommand)]
@@ -246,6 +263,68 @@ enum ResourceCommand {
 
         #[arg(long, default_value = "{}")]
         summary_json: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    Start {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        workspace: String,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long, default_value = "{}")]
+        metadata_json: String,
+    },
+    End {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long, default_value = "{}")]
+        summary_json: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ClaimCommand {
+    Task {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        task: String,
+    },
+    Release {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        claim: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RunnableCommand {
+    Tasks {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
     },
 }
 
@@ -689,6 +768,79 @@ fn run(cli: Cli) -> Result<String> {
             )?;
             Ok(render_verification_applicability_cache(&snapshot))
         }
+        Command::Session {
+            command:
+                SessionCommand::Start {
+                    store,
+                    workspace,
+                    branch,
+                    metadata_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let session = engine.start_session(
+                SessionStartOptions::new(
+                    workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
+                    BranchId::parse_canonical(&branch)?,
+                )?
+                .with_metadata(parse_cli_object("session metadata", &metadata_json)?)?,
+            )?;
+            Ok(render_session_start(&session))
+        }
+        Command::Session {
+            command:
+                SessionCommand::End {
+                    store,
+                    session,
+                    summary_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let ended = engine.end_session(
+                SessionEndOptions::new(SessionId::parse_canonical(&session)?)?
+                    .with_summary(parse_cli_object("session summary", &summary_json)?)?,
+            )?;
+            Ok(render_session_end(&ended))
+        }
+        Command::Claim {
+            command:
+                ClaimCommand::Task {
+                    store,
+                    session,
+                    task,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let claim = engine.claim_task(ClaimTaskOptions::new(
+                SessionId::parse_canonical(&session)?,
+                EntityId::parse_canonical(&task)?,
+            ))?;
+            Ok(render_claim_task(&claim))
+        }
+        Command::Claim {
+            command:
+                ClaimCommand::Release {
+                    store,
+                    session,
+                    claim,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let released = engine.release_claim(ClaimReleaseOptions::new(
+                SessionId::parse_canonical(&session)?,
+                ClaimId::parse_canonical(&claim)?,
+            ))?;
+            Ok(render_claim_release(&released))
+        }
+        Command::Runnable {
+            command: RunnableCommand::Tasks { store, session },
+        } => {
+            let engine = Engine::open(store)?;
+            let projection = engine.runnable_tasks(RunnableTasksOptions::new(
+                SessionId::parse_canonical(&session)?,
+            ))?;
+            Ok(render_runnable_tasks(&projection))
+        }
     }
 }
 
@@ -1006,6 +1158,166 @@ fn render_verification_applicability_cache(
     )
 }
 
+fn render_session_start(session: &SessionStartResult) -> String {
+    format!(
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nstarted_at_us={}\nlifecycle_state={}\n",
+        session.session_id,
+        session.workspace_id,
+        session.branch_id,
+        session.started_at_us,
+        session_lifecycle_state(session.state.lifecycle_state)
+    )
+}
+
+fn render_session_end(session: &SessionEndResult) -> String {
+    format!(
+        "session_id={}\nsession_diff_id={}\nended_at_us={}\nlifecycle_state={}\n",
+        session.session_id,
+        session.session_diff_id,
+        session.ended_at_us,
+        session_lifecycle_state(session.state.lifecycle_state)
+    )
+}
+
+fn render_claim_task(claim: &ClaimTaskResult) -> String {
+    format!(
+        "claim_id={}\nsession_id={}\nworkspace_id={}\nbranch_id={}\ntask_entity_id={}\nmode={}\nclaimed_at_us={}\nlifecycle_state={}\n",
+        claim.claim_id,
+        claim.session_id,
+        claim.workspace_id,
+        claim.branch_id,
+        claim.task_entity_id,
+        claim_mode(claim.mode),
+        claim.claimed_at_us,
+        claim_lifecycle_state(claim.state.lifecycle_state)
+    )
+}
+
+fn render_claim_release(claim: &ClaimReleaseResult) -> String {
+    format!(
+        "claim_id={}\nsession_id={}\nreleased_at_us={}\nlifecycle_state={}\n",
+        claim.claim_id,
+        claim.session_id,
+        claim.released_at_us,
+        claim_lifecycle_state(claim.state.lifecycle_state)
+    )
+}
+
+fn render_runnable_tasks(projection: &RunnableTasksProjection) -> String {
+    let mut output = format!(
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ncandidates={}\n",
+        projection.session_id,
+        projection.workspace_id,
+        projection.branch_id,
+        projection.head_commit_id,
+        projection.candidates.len()
+    );
+    for (index, candidate) in projection.candidates.iter().enumerate() {
+        render_runnable_candidate(&mut output, index, candidate);
+    }
+    output
+}
+
+fn render_runnable_candidate(output: &mut String, index: usize, candidate: &RunnableTaskCandidate) {
+    let blocked_reasons = candidate
+        .blocked_reasons
+        .iter()
+        .map(|reason| runnable_blocked_reason(*reason))
+        .collect::<Vec<_>>()
+        .join(",");
+    let unsatisfied_dependencies = candidate
+        .unsatisfied_dependency_entity_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let _ = writeln!(
+        output,
+        "candidate.{index}.task_entity_id={}",
+        candidate.task.task_entity_id
+    );
+    let _ = writeln!(
+        output,
+        "candidate.{index}.task_entity_version_id={}",
+        candidate.task.task_entity_version_id
+    );
+    let _ = writeln!(
+        output,
+        "candidate.{index}.status={}",
+        candidate.task.state.status
+    );
+    let _ = writeln!(
+        output,
+        "candidate.{index}.priority={}",
+        candidate.task.state.priority
+    );
+    let _ = writeln!(output, "candidate.{index}.runnable={}", candidate.runnable);
+    let _ = writeln!(
+        output,
+        "candidate.{index}.lifecycle_eligible={}",
+        candidate.lifecycle_eligible
+    );
+    let _ = writeln!(
+        output,
+        "candidate.{index}.dependency_ready={}",
+        candidate.dependency_ready
+    );
+    let _ = writeln!(
+        output,
+        "candidate.{index}.claim={}",
+        runnable_claim_coordination(&candidate.claim_coordination)
+    );
+    let _ = writeln!(
+        output,
+        "candidate.{index}.unsatisfied_dependencies={unsatisfied_dependencies}"
+    );
+    let _ = writeln!(
+        output,
+        "candidate.{index}.blocked_reasons={blocked_reasons}"
+    );
+}
+
+fn session_lifecycle_state(state: SessionLifecycleState) -> &'static str {
+    match state {
+        SessionLifecycleState::Active => "active",
+        SessionLifecycleState::Ended => "ended",
+    }
+}
+
+fn claim_lifecycle_state(state: ClaimLifecycleState) -> &'static str {
+    match state {
+        ClaimLifecycleState::Active => "active",
+        ClaimLifecycleState::Released => "released",
+    }
+}
+
+fn claim_mode(mode: ClaimMode) -> &'static str {
+    match mode {
+        ClaimMode::Exclusive => "exclusive",
+    }
+}
+
+fn runnable_claim_coordination(claim: &RunnableTaskClaimCoordination) -> String {
+    match claim {
+        RunnableTaskClaimCoordination::Unclaimed => "unclaimed".to_owned(),
+        RunnableTaskClaimCoordination::ClaimedBySession { claim_id } => {
+            format!("claimed_by_session:{claim_id}")
+        }
+        RunnableTaskClaimCoordination::ClaimedByOtherSession {
+            claim_id,
+            session_id,
+        } => format!("claimed_by_other_session:{claim_id}:{session_id}"),
+    }
+}
+
+fn runnable_blocked_reason(reason: RunnableTaskBlockedReason) -> &'static str {
+    match reason {
+        RunnableTaskBlockedReason::LifecycleIneligible => "lifecycle_ineligible",
+        RunnableTaskBlockedReason::DependencyBlocked => "dependency_blocked",
+        RunnableTaskBlockedReason::ClaimBlocked => "claim_blocked",
+    }
+}
+
 fn render_history_entry(output: &mut String, entry: &HistoryEntry) {
     let parent = entry
         .parent_commit_id
@@ -1071,6 +1383,9 @@ mod tests {
                 "ac",
                 "vr",
                 "resource",
+                "session",
+                "claim",
+                "runnable",
                 "verification"
             ]
         );
@@ -1467,6 +1782,134 @@ mod tests {
         .expect("parse transition"))
         .expect("transition task");
         assert!(transition.contains("status=done"));
+    }
+
+    #[test]
+    fn cli_runs_runtime_runnable_and_claim_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Claim runnable task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+        assert!(session.contains("lifecycle_state=active"));
+
+        let runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse runnable"))
+        .expect("runnable tasks");
+        assert!(runnable.contains("candidates=1"));
+        assert!(runnable.contains(&format!("candidate.0.task_entity_id={task_id}")));
+        assert!(runnable.contains("candidate.0.runnable=true"));
+        assert!(runnable.contains("candidate.0.claim=unclaimed"));
+
+        let claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+        ])
+        .expect("parse claim"))
+        .expect("claim task");
+        let claim_id = value(&claim, "claim_id");
+        assert!(claim.contains("mode=exclusive"));
+        assert!(claim.contains("lifecycle_state=active"));
+
+        let claimed_runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse claimed runnable"))
+        .expect("claimed runnable tasks");
+        assert!(
+            claimed_runnable.contains(&format!("candidate.0.claim=claimed_by_session:{claim_id}"))
+        );
+
+        let release = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "release",
+            store,
+            "--session",
+            &session_id,
+            "--claim",
+            &claim_id,
+        ])
+        .expect("parse release"))
+        .expect("release claim");
+        assert!(release.contains("lifecycle_state=released"));
+
+        let ended = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "end",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse session end"))
+        .expect("end session");
+        assert!(ended.contains("lifecycle_state=ended"));
     }
 
     fn value(output: &str, key: &str) -> String {

@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     CanonicalValue, Engine, EntityTransitionOptions, ErrorCode, KnowledgeCreateOptions,
-    KnowledgeListOptions, KnowledgeStatus, StoreInitOptions, WorkspaceInfo, WorkspaceInitOptions,
+    KnowledgeListOptions, KnowledgeStatus, KnowledgeTransitionOptions, StoreInitOptions,
+    WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -206,4 +207,101 @@ fn knowledge_kind_requires_semantic_api() {
         .commit_entity_transition(options)
         .expect_err("reserved knowledge kind should require semantic API");
     assert_eq!(error.code(), ErrorCode::EntityTransitionInvalid);
+}
+
+#[test]
+fn transition_knowledge_invalidates_current_state_without_erasing_history() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+
+    let knowledge = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Legacy cache keys include schema version",
+            )
+            .expect("knowledge options"),
+        )
+        .expect("create knowledge");
+
+    let invalidated = engine
+        .transition_knowledge(
+            KnowledgeTransitionOptions::invalidate(
+                workspace.initial_branch_id,
+                knowledge.commit_id,
+                knowledge.knowledge_entity_id,
+                knowledge.knowledge_entity_version_id,
+                "Cache key contract changed",
+            )
+            .expect("invalidate options"),
+        )
+        .expect("invalidate knowledge");
+
+    assert_eq!(invalidated.workspace_id, workspace.workspace_id);
+    assert_eq!(invalidated.previous_head_commit_id, knowledge.commit_id);
+    assert_eq!(
+        invalidated.previous_knowledge_entity_version_id,
+        knowledge.knowledge_entity_version_id
+    );
+    assert_eq!(
+        invalidated.knowledge_entity_id,
+        knowledge.knowledge_entity_id
+    );
+    assert_ne!(
+        invalidated.knowledge_entity_version_id,
+        knowledge.knowledge_entity_version_id
+    );
+    assert_eq!(invalidated.previous_state.status, KnowledgeStatus::Active);
+    assert_eq!(invalidated.state.status, KnowledgeStatus::Invalidated);
+    assert_eq!(invalidated.state.statement, knowledge.state.statement);
+
+    let historical = engine
+        .knowledge_at(knowledge.commit_id, knowledge.knowledge_entity_id)
+        .expect("historical knowledge");
+    assert_eq!(historical.state.status, KnowledgeStatus::Active);
+
+    let current = engine
+        .knowledge_at(invalidated.commit_id, knowledge.knowledge_entity_id)
+        .expect("current knowledge");
+    assert_eq!(current.state.status, KnowledgeStatus::Invalidated);
+
+    let active = engine
+        .knowledges_at(
+            KnowledgeListOptions::new(invalidated.commit_id).with_status(KnowledgeStatus::Active),
+        )
+        .expect("active knowledge list");
+    assert!(active.knowledge.is_empty());
+
+    let invalidated_list = engine
+        .knowledges_at(
+            KnowledgeListOptions::new(invalidated.commit_id)
+                .with_status(KnowledgeStatus::Invalidated),
+        )
+        .expect("invalidated knowledge list");
+    assert_eq!(invalidated_list.knowledge.len(), 1);
+
+    let duplicate = engine
+        .transition_knowledge(
+            KnowledgeTransitionOptions::invalidate(
+                workspace.initial_branch_id,
+                invalidated.commit_id,
+                knowledge.knowledge_entity_id,
+                invalidated.knowledge_entity_version_id,
+                "Still invalid",
+            )
+            .expect("duplicate invalidate options"),
+        )
+        .expect_err("invalidated knowledge should not invalidate again");
+    assert_eq!(duplicate.code(), ErrorCode::KnowledgeInvalid);
+
+    let empty_rationale = KnowledgeTransitionOptions::invalidate(
+        workspace.initial_branch_id,
+        invalidated.commit_id,
+        knowledge.knowledge_entity_id,
+        invalidated.knowledge_entity_version_id,
+        " ",
+    )
+    .expect_err("empty rationale should fail");
+    assert_eq!(empty_rationale.code(), ErrorCode::KnowledgeInvalid);
 }

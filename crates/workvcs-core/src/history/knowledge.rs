@@ -100,6 +100,23 @@ impl KnowledgeState {
         ])
         .map_err(knowledge_invalid_from)
     }
+
+    fn transition(&self, next_status: KnowledgeStatus, rationale_text: &str) -> Result<Self> {
+        validate_transition_rationale(rationale_text)?;
+        validate_knowledge_lifecycle_transition(self.status, next_status)?;
+        let next = Self {
+            statement: self.statement.clone(),
+            scope: self.scope.clone(),
+            status: next_status,
+            provenance: self.provenance.clone(),
+        };
+        if next == *self {
+            return Err(WorkVcsError::KnowledgeInvalid(
+                "knowledge transition must change status".to_owned(),
+            ));
+        }
+        Ok(next)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,6 +158,62 @@ impl KnowledgeCreateOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeTransitionOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    knowledge_entity_id: EntityId,
+    expected_knowledge_entity_version_id: EntityVersionId,
+    next_status: KnowledgeStatus,
+    rationale_text: String,
+    rationale: CanonicalValue,
+}
+
+impl KnowledgeTransitionOptions {
+    pub fn invalidate(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        knowledge_entity_id: EntityId,
+        expected_knowledge_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            knowledge_entity_id,
+            expected_knowledge_entity_version_id,
+            KnowledgeStatus::Invalidated,
+            rationale,
+        )
+    }
+
+    fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        knowledge_entity_id: EntityId,
+        expected_knowledge_entity_version_id: EntityVersionId,
+        next_status: KnowledgeStatus,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale_text = rationale.into();
+        validate_transition_rationale(&rationale_text)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            knowledge_entity_id,
+            expected_knowledge_entity_version_id,
+            next_status,
+            rationale: rationale_value(&rationale_text)?,
+            rationale_text,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeCreateCommit {
     pub workspace_id: WorkspaceId,
     pub branch_id: BranchId,
@@ -152,6 +225,23 @@ pub struct KnowledgeCreateCommit {
     pub knowledge_entity_version_id: EntityVersionId,
     pub knowledge_state_digest: Digest,
     pub work_state_digest: Digest,
+    pub state: KnowledgeState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeTransitionCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub knowledge_entity_id: EntityId,
+    pub previous_knowledge_entity_version_id: EntityVersionId,
+    pub knowledge_entity_version_id: EntityVersionId,
+    pub knowledge_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub previous_state: KnowledgeState,
     pub state: KnowledgeState,
 }
 
@@ -242,6 +332,56 @@ pub(crate) fn create_knowledge(
         knowledge_state_digest: commit.entity_state_digest,
         work_state_digest: commit.work_state_digest,
         state: options.state.clone(),
+    })
+}
+
+pub(crate) fn transition_knowledge(
+    connection: &mut StoreConnection,
+    options: &KnowledgeTransitionOptions,
+) -> Result<KnowledgeTransitionCommit> {
+    require_non_empty_rationale_object(&options.rationale)?;
+    let current = knowledge_at(
+        connection,
+        options.expected_head_commit_id,
+        options.knowledge_entity_id,
+    )?;
+    if current.knowledge_entity_version_id != options.expected_knowledge_entity_version_id {
+        return Err(WorkVcsError::KnowledgeInvalid(format!(
+            "knowledge entity {} expected version {}, found {} at commit {}",
+            options.knowledge_entity_id,
+            options.expected_knowledge_entity_version_id,
+            current.knowledge_entity_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+
+    let next_state = current
+        .state
+        .transition(options.next_status, &options.rationale_text)?;
+    let entity_options = EntityTransitionOptions::update(
+        options.branch_id,
+        options.expected_head_commit_id,
+        options.knowledge_entity_id,
+        options.expected_knowledge_entity_version_id,
+        next_state.to_canonical_value()?,
+    )?
+    .with_rationale(options.rationale.clone());
+    let commit = commit_entity_transition(connection, &entity_options)?;
+
+    Ok(KnowledgeTransitionCommit {
+        workspace_id: commit.workspace_id,
+        branch_id: commit.branch_id,
+        previous_head_commit_id: commit.previous_head_commit_id,
+        commit_id: commit.commit_id,
+        changeset_id: commit.changeset_id,
+        operation_id: commit.operation_id,
+        knowledge_entity_id: commit.entity_id,
+        previous_knowledge_entity_version_id: options.expected_knowledge_entity_version_id,
+        knowledge_entity_version_id: commit.entity_version_id,
+        knowledge_state_digest: commit.entity_state_digest,
+        work_state_digest: commit.work_state_digest,
+        previous_state: current.state,
+        state: next_state,
     })
 }
 
@@ -501,6 +641,53 @@ fn validate_statement(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_transition_rationale(value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(WorkVcsError::KnowledgeInvalid(
+            "knowledge transition rationale must not be empty".to_owned(),
+        ));
+    }
+    if value.contains('\0') {
+        return Err(WorkVcsError::KnowledgeInvalid(
+            "knowledge transition rationale must not contain NUL".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_knowledge_lifecycle_transition(
+    current: KnowledgeStatus,
+    next: KnowledgeStatus,
+) -> Result<()> {
+    match (current, next) {
+        (KnowledgeStatus::Active, KnowledgeStatus::Invalidated) => Ok(()),
+        (current, next) => Err(WorkVcsError::KnowledgeInvalid(format!(
+            "knowledge transition {current:?} -> {next:?} is not allowed in Phase 3BQ"
+        ))),
+    }
+}
+
+fn require_non_empty_rationale_object(value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(entries) if !entries.is_empty() => Ok(()),
+        CanonicalValue::Object(_) => Err(WorkVcsError::KnowledgeInvalid(
+            "knowledge lifecycle transition requires a non-empty rationale object".to_owned(),
+        )),
+        _ => Err(WorkVcsError::KnowledgeInvalid(
+            "knowledge lifecycle transition requires a rationale object".to_owned(),
+        )),
+    }
+}
+
+fn rationale_value(reason: &str) -> Result<CanonicalValue> {
+    validate_transition_rationale(reason)?;
+    CanonicalValue::object(vec![(
+        "reason".to_owned(),
+        CanonicalValue::String(reason.to_owned()),
+    )])
+    .map_err(knowledge_invalid_from)
 }
 
 fn require_string(field: &str, value: CanonicalValue) -> Result<String> {

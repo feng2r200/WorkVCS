@@ -11,26 +11,26 @@ use workvcs_core::{
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
     EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult, KnowledgeSnapshot,
-    KnowledgeStatus, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
-    RecordKind, RecordListOptions, RecordListResult, RecordRelationCreateCommit,
-    RecordRelationCreateOptions, RecordRelationListOptions, RecordRelationListResult,
-    RecordRelationRemoveCommit, RecordRelationRemoveOptions, RecordRelationRestoreCommit,
-    RecordRelationRestoreOptions, RecordRelationSnapshot, RecordRelationType, RecordSnapshot,
-    RecordStatus, RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId,
-    ReplayedState, ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult,
-    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
-    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
-    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
-    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
-    WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, content_object_digest,
-    parse_canonical_json,
+    KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions, NextWorkOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
+    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
+    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkVcsError, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -284,6 +284,25 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         statement_contains: Option<String>,
+    },
+    Invalidate {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        knowledge: String,
+
+        #[arg(long)]
+        knowledge_version: String,
+
+        #[arg(long)]
+        rationale: String,
     },
 }
 
@@ -1295,6 +1314,29 @@ fn run(cli: Cli) -> Result<String> {
                 options = options.with_statement_contains(statement_contains)?;
             }
             Ok(render_knowledge_list(&engine.knowledges_at(options)?)?)
+        }
+        Command::Knowledge {
+            command:
+                KnowledgeCommand::Invalidate {
+                    store,
+                    branch,
+                    head,
+                    knowledge,
+                    knowledge_version,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let options = KnowledgeTransitionOptions::invalidate(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&knowledge)?,
+                EntityVersionId::parse_canonical(&knowledge_version)?,
+                rationale,
+            )?;
+            Ok(render_knowledge_transition(
+                &engine.transition_knowledge(options)?,
+            )?)
         }
         Command::Task {
             command:
@@ -2647,6 +2689,32 @@ fn render_knowledge_snapshot(knowledge: &KnowledgeSnapshot) -> Result<String> {
         knowledge.knowledge_entity_id,
         knowledge.knowledge_entity_version_id,
         knowledge.state_digest,
+        knowledge.state.status,
+        statement_json,
+        scope_json,
+        provenance_json
+    ))
+}
+
+fn render_knowledge_transition(knowledge: &KnowledgeTransitionCommit) -> Result<String> {
+    let statement_json = knowledge_statement_json(&knowledge.state.statement)?;
+    let scope_json = knowledge_value_json("knowledge scope", &knowledge.state.scope)?;
+    let provenance_json =
+        knowledge_value_json("knowledge provenance", &knowledge.state.provenance)?;
+    Ok(format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nknowledge_entity_id={}\nprevious_knowledge_entity_version_id={}\nknowledge_entity_version_id={}\nknowledge_state_digest={}\nwork_state_digest={}\nprevious_knowledge_status={}\nknowledge_status={}\nknowledge_statement_json={}\nknowledge_scope_json={}\nknowledge_provenance_json={}\n",
+        knowledge.workspace_id,
+        knowledge.branch_id,
+        knowledge.previous_head_commit_id,
+        knowledge.commit_id,
+        knowledge.changeset_id,
+        knowledge.operation_id,
+        knowledge.knowledge_entity_id,
+        knowledge.previous_knowledge_entity_version_id,
+        knowledge.knowledge_entity_version_id,
+        knowledge.knowledge_state_digest,
+        knowledge.work_state_digest,
+        knowledge.previous_state.status,
         knowledge.state.status,
         statement_json,
         scope_json,
@@ -6848,6 +6916,83 @@ mod tests {
             value(&listed, "knowledge.0.knowledge_entity_id"),
             value(&knowledge, "knowledge_entity_id")
         );
+
+        let invalidated = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "invalidate",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+            "--rationale",
+            "Later evidence invalidated the statement",
+        ])
+        .expect("parse knowledge invalidate"))
+        .expect("invalidate knowledge");
+        assert_eq!(value(&invalidated, "previous_knowledge_status"), "active");
+        assert_eq!(value(&invalidated, "knowledge_status"), "invalidated");
+
+        let current = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+        ])
+        .expect("parse current knowledge show"))
+        .expect("show current knowledge");
+        assert_eq!(value(&current, "knowledge_status"), "invalidated");
+
+        let historical_active = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "show",
+            store,
+            "--commit",
+            &value(&knowledge, "commit_id"),
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+        ])
+        .expect("parse historical knowledge show"))
+        .expect("show historical knowledge");
+        assert_eq!(value(&historical_active, "knowledge_status"), "active");
+
+        let active_after_invalidation = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "active",
+        ])
+        .expect("parse active knowledge list"))
+        .expect("list active knowledge");
+        assert_eq!(value(&active_after_invalidation, "knowledge"), "0");
+
+        let invalidated_list = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "invalidated",
+        ])
+        .expect("parse invalidated knowledge list"))
+        .expect("list invalidated knowledge");
+        assert_eq!(value(&invalidated_list, "knowledge"), "1");
 
         let empty =
             run(

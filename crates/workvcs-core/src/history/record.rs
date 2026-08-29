@@ -62,8 +62,11 @@ impl fmt::Display for RecordKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordStatus {
     Active,
+    Failed,
+    Inconclusive,
     Invalidated,
     Running,
+    Succeeded,
     Unverified,
     Validated,
 }
@@ -72,8 +75,11 @@ impl RecordStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
+            Self::Failed => "failed",
+            Self::Inconclusive => "inconclusive",
             Self::Invalidated => "invalidated",
             Self::Running => "running",
+            Self::Succeeded => "succeeded",
             Self::Unverified => "unverified",
             Self::Validated => "validated",
         }
@@ -82,8 +88,11 @@ impl RecordStatus {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "active" => Ok(Self::Active),
+            "failed" => Ok(Self::Failed),
+            "inconclusive" => Ok(Self::Inconclusive),
             "invalidated" => Ok(Self::Invalidated),
             "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
             "unverified" => Ok(Self::Unverified),
             "validated" => Ok(Self::Validated),
             other => Err(WorkVcsError::RecordInvalid(format!(
@@ -227,6 +236,24 @@ impl RecordState {
         }
         Ok(next)
     }
+
+    fn transition_attempt(&self, next_status: RecordStatus, rationale_text: &str) -> Result<Self> {
+        if self.kind != RecordKind::Attempt {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record kind {:?} does not use the Attempt lifecycle",
+                self.kind
+            )));
+        }
+        validate_transition_rationale(rationale_text)?;
+        validate_attempt_lifecycle_transition(self.status, next_status)?;
+        let next = Self {
+            kind: self.kind,
+            statement: self.statement.clone(),
+            scope: self.scope.clone(),
+            status: next_status,
+        };
+        Ok(next)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -249,6 +276,57 @@ pub struct RecordTransitionOptions {
 }
 
 impl RecordTransitionOptions {
+    pub fn complete_attempt_succeeded(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::attempt_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Succeeded,
+            rationale,
+        )
+    }
+
+    pub fn complete_attempt_failed(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::attempt_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Failed,
+            rationale,
+        )
+    }
+
+    pub fn complete_attempt_inconclusive(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::attempt_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Inconclusive,
+            rationale,
+        )
+    }
+
     pub fn validate_assumption(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -284,6 +362,27 @@ impl RecordTransitionOptions {
     }
 
     fn assumption_transition(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        next_status: RecordStatus,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale_text = rationale.into();
+        validate_transition_rationale(&rationale_text)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            next_status,
+            rationale: rationale_value(&rationale_text)?,
+            rationale_text,
+        })
+    }
+
+    fn attempt_transition(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
         record_entity_id: EntityId,
@@ -525,9 +624,19 @@ pub(crate) fn transition_record(
         )));
     }
 
-    let next_state = current
-        .state
-        .transition_assumption(options.next_status, &options.rationale_text)?;
+    let next_state = match current.state.kind {
+        RecordKind::Assumption => current
+            .state
+            .transition_assumption(options.next_status, &options.rationale_text)?,
+        RecordKind::Attempt => current
+            .state
+            .transition_attempt(options.next_status, &options.rationale_text)?,
+        kind => {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record kind {kind:?} does not use a transition lifecycle in this slice"
+            )));
+        }
+    };
     let entity_options = EntityTransitionOptions::update(
         options.branch_id,
         options.expected_head_commit_id,
@@ -844,13 +953,31 @@ fn validate_assumption_lifecycle_transition(
     }
 }
 
+fn validate_attempt_lifecycle_transition(current: RecordStatus, next: RecordStatus) -> Result<()> {
+    match (current, next) {
+        (
+            RecordStatus::Running,
+            RecordStatus::Succeeded | RecordStatus::Failed | RecordStatus::Inconclusive,
+        ) => Ok(()),
+        (current, next) => Err(WorkVcsError::RecordInvalid(format!(
+            "attempt transition {current:?} -> {next:?} is not allowed"
+        ))),
+    }
+}
+
 fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
     match (kind, status) {
         (
             RecordKind::Finding | RecordKind::Decision | RecordKind::Question | RecordKind::Risk,
             RecordStatus::Active,
         )
-        | (RecordKind::Attempt, RecordStatus::Running)
+        | (
+            RecordKind::Attempt,
+            RecordStatus::Running
+            | RecordStatus::Succeeded
+            | RecordStatus::Failed
+            | RecordStatus::Inconclusive,
+        )
         | (
             RecordKind::Assumption,
             RecordStatus::Unverified | RecordStatus::Validated | RecordStatus::Invalidated,

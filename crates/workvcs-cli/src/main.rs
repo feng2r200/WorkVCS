@@ -383,6 +383,28 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    AttemptStatus {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        record: String,
+
+        #[arg(long)]
+        record_version: String,
+
+        #[arg(long)]
+        status: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
     AssumptionStatus {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1112,6 +1134,56 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::AttemptStatus {
+                    store,
+                    branch,
+                    head,
+                    record,
+                    record_version,
+                    status,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let record_id = EntityId::parse_canonical(&record)?;
+            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
+            let options = match parse_attempt_record_status(&status)? {
+                RecordStatus::Succeeded => RecordTransitionOptions::complete_attempt_succeeded(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Failed => RecordTransitionOptions::complete_attempt_failed(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Inconclusive => {
+                    RecordTransitionOptions::complete_attempt_inconclusive(
+                        branch_id,
+                        head_id,
+                        record_id,
+                        record_version_id,
+                        rationale,
+                    )?
+                }
+                _ => {
+                    return Err(WorkVcsError::RecordInvalid(format!(
+                        "attempt status {status:?} is not a transition target"
+                    )));
+                }
+            };
+            let record = engine.transition_record(options)?;
+            Ok(render_record_transition(&record))
+        }
+        Command::Record {
+            command:
                 RecordCommand::AssumptionStatus {
                     store,
                     branch,
@@ -1401,6 +1473,17 @@ fn parse_assumption_record_status(value: &str) -> Result<RecordStatus> {
         "invalidated" => Ok(RecordStatus::Invalidated),
         other => Err(WorkVcsError::RecordInvalid(format!(
             "assumption status {other:?} is not in the CLI transition vocabulary"
+        ))),
+    }
+}
+
+fn parse_attempt_record_status(value: &str) -> Result<RecordStatus> {
+    match value {
+        "succeeded" => Ok(RecordStatus::Succeeded),
+        "failed" => Ok(RecordStatus::Failed),
+        "inconclusive" => Ok(RecordStatus::Inconclusive),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "attempt status {other:?} is not in the CLI transition vocabulary"
         ))),
     }
 }
@@ -3624,6 +3707,44 @@ mod tests {
         assert!(show.contains("record_kind=attempt"));
         assert!(show.contains("record_status=running"));
         assert!(show.contains("record_statement_json=\"Run the next validation command\""));
+
+        let terminal = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "attempt-status",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&record, "commit_id"),
+            "--record",
+            &value(&record, "record_entity_id"),
+            "--record-version",
+            &value(&record, "record_entity_version_id"),
+            "--status",
+            "failed",
+            "--rationale",
+            "Validation command failed",
+        ])
+        .expect("parse attempt status"))
+        .expect("transition attempt");
+        assert!(terminal.contains("previous_record_status=running"));
+        assert!(terminal.contains("record_status=failed"));
+
+        let terminal_show = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--commit",
+            &value(&terminal, "commit_id"),
+            "--record",
+            &value(&terminal, "record_entity_id"),
+        ])
+        .expect("parse terminal attempt show"))
+        .expect("show terminal attempt record");
+        assert!(terminal_show.contains("record_kind=attempt"));
+        assert!(terminal_show.contains("record_status=failed"));
     }
 
     fn value(output: &str, key: &str) -> String {

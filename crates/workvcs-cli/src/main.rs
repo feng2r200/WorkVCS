@@ -6339,7 +6339,7 @@ fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> Str
 
 fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
     let mut output = format!(
-        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nentities={}\nrelations={}\nentity_versions={}\nrelation_versions={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
+        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nentities={}\nrelations={}\nentity_versions={}\nrelation_versions={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
         manifest.manifest_profile,
         manifest.manifest_version,
         manifest.store_id,
@@ -6353,6 +6353,11 @@ fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
         manifest.relation_count,
         manifest.entity_versions.len(),
         manifest.relation_versions.len(),
+        manifest.knowledge_spaces.len(),
+        manifest.knowledge_exposures.len(),
+        manifest.knowledge_exposure_local_sources.len(),
+        manifest.knowledge_exposure_transitions.len(),
+        manifest.knowledge_exposure_source_statuses.len(),
         manifest.entity_membership_changes.len(),
         manifest.relation_membership_changes.len(),
         manifest.checkpoint_candidates.len()
@@ -9352,6 +9357,108 @@ mod tests {
         let provenance = value(&adoption, "adopted_knowledge_provenance_json");
         assert!(provenance.contains("\"knowledge_exposure_adoption_v1\""));
         assert!(provenance.contains("\"source_provenance\":{\"source\":\"cli\"}"));
+    }
+
+    #[test]
+    fn cli_bundle_export_reports_knowledge_exposure_closure() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "bundle-knowledge-exposure-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Reusable bundle exposure knowledge",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse exposure create"))
+        .expect("create exposure");
+        let adoption = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-adopt",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--rationale",
+            "adopt current exposure",
+        ])
+        .expect("parse adoption"))
+        .expect("adopt exposure");
+
+        let exported = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+        ])
+        .expect("parse bundle export"))
+        .expect("export bundle manifest");
+
+        assert_eq!(value(&exported, "knowledge_spaces"), "1");
+        assert_eq!(value(&exported, "knowledge_exposures"), "1");
+        assert_eq!(value(&exported, "knowledge_exposure_local_sources"), "1");
+        assert_eq!(value(&exported, "knowledge_exposure_transitions"), "1");
+        assert_eq!(value(&exported, "knowledge_exposure_source_statuses"), "1");
     }
 
     #[test]

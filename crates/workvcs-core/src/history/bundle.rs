@@ -4,8 +4,9 @@ use crate::canonical::{
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, ImportId, OperationId,
-    RelationId, RelationVersionId, SessionId, StoreId, WorkspaceId,
+    ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, EventId, ExposureId,
+    ExposureTransitionId, ImportId, KnowledgeSpaceId, OperationId, RelationId, RelationVersionId,
+    SessionId, StoreId, WorkspaceId,
 };
 use crate::store::{StoreConnection, StoreInfo, StoreManifest, current_epoch_micros};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -201,6 +202,11 @@ pub struct BundleExportManifest {
     pub commit_count: usize,
     pub entity_versions: Vec<BundleEntityVersionRef>,
     pub relation_versions: Vec<BundleRelationVersionRef>,
+    pub knowledge_spaces: Vec<BundleKnowledgeSpaceRef>,
+    pub knowledge_exposures: Vec<BundleKnowledgeExposureRef>,
+    pub knowledge_exposure_local_sources: Vec<BundleKnowledgeExposureLocalSourceRef>,
+    pub knowledge_exposure_transitions: Vec<BundleKnowledgeExposureTransitionRef>,
+    pub knowledge_exposure_source_statuses: Vec<BundleKnowledgeExposureSourceStatusRef>,
     pub entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
     pub relation_membership_changes: Vec<BundleRelationMembershipChangeRef>,
     pub checkpoint_candidates: Vec<BundleCheckpointCandidate>,
@@ -461,6 +467,52 @@ pub struct BundleRelationVersionRef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleKnowledgeSpaceRef {
+    pub knowledge_space_id: KnowledgeSpaceId,
+    pub name: String,
+    pub created_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleKnowledgeExposureRef {
+    pub exposure_id: ExposureId,
+    pub knowledge_space_id: KnowledgeSpaceId,
+    pub created_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleKnowledgeExposureLocalSourceRef {
+    pub exposure_id: ExposureId,
+    pub source_workspace_id: WorkspaceId,
+    pub source_knowledge_entity_id: EntityId,
+    pub source_knowledge_entity_version_id: EntityVersionId,
+    pub source_knowledge_state_digest: Digest,
+    pub source_knowledge_state_json_digest: Digest,
+    pub source_knowledge_state_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleKnowledgeExposureTransitionRef {
+    pub exposure_id: ExposureId,
+    pub transition_id: ExposureTransitionId,
+    pub previous_transition_id: Option<ExposureTransitionId>,
+    pub lifecycle_status: String,
+    pub changed_at_us: i64,
+    pub event_id: Option<EventId>,
+    pub detail_digest: Digest,
+    pub detail_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleKnowledgeExposureSourceStatusRef {
+    pub exposure_id: ExposureId,
+    pub source_status: String,
+    pub checked_at_us: i64,
+    pub detail_digest: Digest,
+    pub detail_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleEntityMembershipChangeRef {
     pub changeset_id: ChangeSetId,
     pub operation_id: OperationId,
@@ -598,6 +650,14 @@ pub(crate) fn export_bundle_manifest(
         &replayed.state,
         &relation_membership_changes,
     )?;
+    let knowledge_exposures = knowledge_exposure_closure_refs(connection, &relation_versions)?;
+    let knowledge_spaces = knowledge_space_closure_refs(connection, &knowledge_exposures)?;
+    let knowledge_exposure_local_sources =
+        knowledge_exposure_local_source_refs(connection, &knowledge_exposures)?;
+    let knowledge_exposure_transitions =
+        knowledge_exposure_transition_refs(connection, &knowledge_exposures)?;
+    let knowledge_exposure_source_statuses =
+        knowledge_exposure_source_status_refs(connection, &knowledge_exposures)?;
 
     let mut checkpoint_candidates = super::checkpoints(
         connection,
@@ -622,6 +682,11 @@ pub(crate) fn export_bundle_manifest(
         commits: &commits,
         entity_versions: &entity_versions,
         relation_versions: &relation_versions,
+        knowledge_spaces: &knowledge_spaces,
+        knowledge_exposures: &knowledge_exposures,
+        knowledge_exposure_local_sources: &knowledge_exposure_local_sources,
+        knowledge_exposure_transitions: &knowledge_exposure_transitions,
+        knowledge_exposure_source_statuses: &knowledge_exposure_source_statuses,
         entity_membership_changes: &entity_membership_changes,
         relation_membership_changes: &relation_membership_changes,
         checkpoint_candidates: &checkpoint_candidates,
@@ -644,6 +709,11 @@ pub(crate) fn export_bundle_manifest(
         commit_count: commits.len(),
         entity_versions,
         relation_versions,
+        knowledge_spaces,
+        knowledge_exposures,
+        knowledge_exposure_local_sources,
+        knowledge_exposure_transitions,
+        knowledge_exposure_source_statuses,
         entity_membership_changes,
         relation_membership_changes,
         checkpoint_candidates,
@@ -713,6 +783,27 @@ pub(crate) fn export_bundle_payloads(
     }
     for relation_version in &manifest.relation_versions {
         load_relation_version_payload_candidate(connection, relation_version, &mut candidates)?;
+    }
+    for source in &manifest.knowledge_exposure_local_sources {
+        load_knowledge_exposure_source_knowledge_payload_candidate(
+            connection,
+            source,
+            &mut candidates,
+        )?;
+    }
+    for transition in &manifest.knowledge_exposure_transitions {
+        load_knowledge_exposure_transition_detail_payload_candidate(
+            connection,
+            transition,
+            &mut candidates,
+        )?;
+    }
+    for source_status in &manifest.knowledge_exposure_source_statuses {
+        load_knowledge_exposure_source_status_detail_payload_candidate(
+            connection,
+            source_status,
+            &mut candidates,
+        )?;
     }
 
     build_payload_export(manifest, manifest_bytes, candidates)
@@ -1351,6 +1442,415 @@ fn load_relation_version_ref(
     })
 }
 
+fn knowledge_exposure_closure_refs(
+    connection: &StoreConnection,
+    relation_versions: &[BundleRelationVersionRef],
+) -> Result<Vec<BundleKnowledgeExposureRef>> {
+    let mut exposure_ids = BTreeSet::new();
+    for relation_version in relation_versions {
+        collect_knowledge_exposure_endpoint(
+            connection,
+            "relation.source_object_id",
+            &relation_version.source_object_id,
+            &mut exposure_ids,
+        )?;
+        collect_knowledge_exposure_endpoint(
+            connection,
+            "relation.target_object_id",
+            &relation_version.target_object_id,
+            &mut exposure_ids,
+        )?;
+    }
+    exposure_ids
+        .into_iter()
+        .map(|exposure_id| load_knowledge_exposure_ref(connection, exposure_id))
+        .collect()
+}
+
+fn collect_knowledge_exposure_endpoint(
+    connection: &StoreConnection,
+    label: &str,
+    object_id: &str,
+    exposure_ids: &mut BTreeSet<ExposureId>,
+) -> Result<()> {
+    let exposure_id = ExposureId::parse_canonical(object_id)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{label}: {error}")))?;
+    let present = connection
+        .inner()
+        .query_row(
+            "SELECT 1
+             FROM knowledge_exposure
+             WHERE exposure_id = ?1",
+            params![&exposure_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if present.is_some() {
+        exposure_ids.insert(exposure_id);
+    }
+    Ok(())
+}
+
+fn load_knowledge_exposure_ref(
+    connection: &StoreConnection,
+    exposure_id: ExposureId,
+) -> Result<BundleKnowledgeExposureRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    knowledge_exposure.knowledge_space_id,
+                    knowledge_exposure.created_at_us
+             FROM knowledge_exposure
+             JOIN object_identity
+               ON object_identity.object_id = knowledge_exposure.exposure_id
+             WHERE knowledge_exposure.exposure_id = ?1",
+            params![&exposure_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((object_kind, knowledge_space_id, created_at_us)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {exposure_id} does not exist"
+        )));
+    };
+    validate_object_kind_exact(
+        "knowledge_exposure.object_kind",
+        &object_kind,
+        "knowledge_exposure",
+    )?;
+    validate_positive_i64("knowledge_exposure.created_at_us", created_at_us)?;
+    Ok(BundleKnowledgeExposureRef {
+        exposure_id,
+        knowledge_space_id: decode_knowledge_space_id(
+            "knowledge_exposure.knowledge_space_id",
+            knowledge_space_id,
+        )?,
+        created_at_us,
+    })
+}
+
+fn knowledge_space_closure_refs(
+    connection: &StoreConnection,
+    exposures: &[BundleKnowledgeExposureRef],
+) -> Result<Vec<BundleKnowledgeSpaceRef>> {
+    let mut knowledge_space_ids = BTreeSet::new();
+    for exposure in exposures {
+        knowledge_space_ids.insert(exposure.knowledge_space_id);
+    }
+    knowledge_space_ids
+        .into_iter()
+        .map(|knowledge_space_id| load_knowledge_space_ref(connection, knowledge_space_id))
+        .collect()
+}
+
+fn load_knowledge_space_ref(
+    connection: &StoreConnection,
+    knowledge_space_id: KnowledgeSpaceId,
+) -> Result<BundleKnowledgeSpaceRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    knowledge_space.name,
+                    knowledge_space.created_at_us
+             FROM knowledge_space
+             JOIN object_identity
+               ON object_identity.object_id = knowledge_space.knowledge_space_id
+             WHERE knowledge_space.knowledge_space_id = ?1",
+            params![&knowledge_space_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((object_kind, name, created_at_us)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeSpace {knowledge_space_id} does not exist"
+        )));
+    };
+    validate_object_kind_exact(
+        "knowledge_space.object_kind",
+        &object_kind,
+        "knowledge_space",
+    )?;
+    validate_stored_text("knowledge_space.name", &name)?;
+    validate_positive_i64("knowledge_space.created_at_us", created_at_us)?;
+    Ok(BundleKnowledgeSpaceRef {
+        knowledge_space_id,
+        name,
+        created_at_us,
+    })
+}
+
+fn knowledge_exposure_local_source_refs(
+    connection: &StoreConnection,
+    exposures: &[BundleKnowledgeExposureRef],
+) -> Result<Vec<BundleKnowledgeExposureLocalSourceRef>> {
+    exposures
+        .iter()
+        .map(|exposure| load_knowledge_exposure_local_source_ref(connection, exposure.exposure_id))
+        .collect()
+}
+
+fn load_knowledge_exposure_local_source_ref(
+    connection: &StoreConnection,
+    exposure_id: ExposureId,
+) -> Result<BundleKnowledgeExposureLocalSourceRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT knowledge_exposure_local_source.workspace_id,
+                    knowledge_exposure_local_source.knowledge_entity_id,
+                    knowledge_exposure_local_source.knowledge_entity_version_id,
+                    entity.workspace_id,
+                    entity.entity_kind,
+                    entity_version.state_json,
+                    entity_version.state_digest
+             FROM knowledge_exposure_local_source
+             JOIN entity
+               ON entity.object_id = knowledge_exposure_local_source.knowledge_entity_id
+             JOIN entity_version
+               ON entity_version.entity_id = knowledge_exposure_local_source.knowledge_entity_id
+              AND entity_version.entity_version_id = knowledge_exposure_local_source.knowledge_entity_version_id
+             WHERE knowledge_exposure_local_source.exposure_id = ?1",
+            params![&exposure_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((
+        source_workspace_id,
+        source_knowledge_entity_id,
+        source_knowledge_entity_version_id,
+        entity_workspace_id,
+        entity_kind,
+        state_json,
+        state_digest,
+    )) = row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {exposure_id} local source does not exist"
+        )));
+    };
+    validate_object_kind_exact(
+        "knowledge_exposure_local_source.entity_kind",
+        &entity_kind,
+        "knowledge",
+    )?;
+    let source_workspace_id = decode_workspace_id(
+        "knowledge_exposure_local_source.workspace_id",
+        source_workspace_id,
+    )?;
+    let entity_workspace_id = decode_workspace_id("entity.workspace_id", entity_workspace_id)?;
+    if source_workspace_id != entity_workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {exposure_id} source workspace does not match source entity workspace"
+        )));
+    }
+    let source_knowledge_state_digest = decode_digest("entity_version.state_digest", state_digest)?;
+    let value = validate_canonical_json_value(
+        "knowledge_exposure_local_source.source_knowledge_state_json",
+        &state_json,
+    )?;
+    let actual_digest = entity_version_digest(&value)?;
+    if actual_digest != source_knowledge_state_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {exposure_id} source KnowledgeVersion digest does not match state JSON"
+        )));
+    }
+
+    Ok(BundleKnowledgeExposureLocalSourceRef {
+        exposure_id,
+        source_workspace_id,
+        source_knowledge_entity_id: decode_entity_id(
+            "knowledge_exposure_local_source.knowledge_entity_id",
+            source_knowledge_entity_id,
+        )?,
+        source_knowledge_entity_version_id: decode_entity_version_id(
+            "knowledge_exposure_local_source.knowledge_entity_version_id",
+            source_knowledge_entity_version_id,
+        )?,
+        source_knowledge_state_digest,
+        source_knowledge_state_json_digest: content_object_digest(state_json.as_bytes()),
+        source_knowledge_state_json_size_bytes: usize_to_i64(
+            "knowledge_exposure_local_source source state_json size",
+            state_json.len(),
+        )?,
+    })
+}
+
+fn knowledge_exposure_transition_refs(
+    connection: &StoreConnection,
+    exposures: &[BundleKnowledgeExposureRef],
+) -> Result<Vec<BundleKnowledgeExposureTransitionRef>> {
+    let mut refs = Vec::new();
+    for exposure in exposures {
+        refs.extend(load_knowledge_exposure_transition_refs(
+            connection,
+            exposure.exposure_id,
+        )?);
+    }
+    Ok(refs)
+}
+
+fn load_knowledge_exposure_transition_refs(
+    connection: &StoreConnection,
+    exposure_id: ExposureId,
+) -> Result<Vec<BundleKnowledgeExposureTransitionRef>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT transition_id,
+                    previous_transition_id,
+                    lifecycle_status,
+                    changed_at_us,
+                    event_id,
+                    detail_json
+             FROM knowledge_exposure_transition
+             WHERE exposure_id = ?1
+             ORDER BY changed_at_us, transition_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&exposure_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Option<Vec<u8>>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<Vec<u8>>>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut refs = Vec::new();
+    for row in rows {
+        let (
+            transition_id,
+            previous_transition_id,
+            lifecycle_status,
+            changed_at_us,
+            event_id,
+            detail_json,
+        ) = row.map_err(storage_error)?;
+        validate_knowledge_exposure_lifecycle_status(
+            "knowledge_exposure_transition.lifecycle_status",
+            &lifecycle_status,
+        )?;
+        validate_positive_i64("knowledge_exposure_transition.changed_at_us", changed_at_us)?;
+        validate_canonical_json_text("knowledge_exposure_transition.detail_json", &detail_json)?;
+        refs.push(BundleKnowledgeExposureTransitionRef {
+            exposure_id,
+            transition_id: decode_exposure_transition_id(
+                "knowledge_exposure_transition.transition_id",
+                transition_id,
+            )?,
+            previous_transition_id: decode_optional_exposure_transition_id(
+                "knowledge_exposure_transition.previous_transition_id",
+                previous_transition_id,
+            )?,
+            lifecycle_status,
+            changed_at_us,
+            event_id: decode_optional_event_id("knowledge_exposure_transition.event_id", event_id)?,
+            detail_digest: content_object_digest(detail_json.as_bytes()),
+            detail_size_bytes: usize_to_i64(
+                "knowledge_exposure_transition.detail_json size",
+                detail_json.len(),
+            )?,
+        });
+    }
+    if refs.is_empty() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {exposure_id} has no transition history"
+        )));
+    }
+    Ok(refs)
+}
+
+fn knowledge_exposure_source_status_refs(
+    connection: &StoreConnection,
+    exposures: &[BundleKnowledgeExposureRef],
+) -> Result<Vec<BundleKnowledgeExposureSourceStatusRef>> {
+    exposures
+        .iter()
+        .map(|exposure| load_knowledge_exposure_source_status_ref(connection, exposure.exposure_id))
+        .collect()
+}
+
+fn load_knowledge_exposure_source_status_ref(
+    connection: &StoreConnection,
+    exposure_id: ExposureId,
+) -> Result<BundleKnowledgeExposureSourceStatusRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT source_status,
+                    checked_at_us,
+                    detail_json
+             FROM knowledge_exposure_source_status
+             WHERE exposure_id = ?1",
+            params![&exposure_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((source_status, checked_at_us, detail_json)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {exposure_id} has no source-status projection"
+        )));
+    };
+    validate_knowledge_exposure_source_status(
+        "knowledge_exposure_source_status.source_status",
+        &source_status,
+    )?;
+    validate_positive_i64(
+        "knowledge_exposure_source_status.checked_at_us",
+        checked_at_us,
+    )?;
+    validate_canonical_json_text("knowledge_exposure_source_status.detail_json", &detail_json)?;
+    Ok(BundleKnowledgeExposureSourceStatusRef {
+        exposure_id,
+        source_status,
+        checked_at_us,
+        detail_digest: content_object_digest(detail_json.as_bytes()),
+        detail_size_bytes: usize_to_i64(
+            "knowledge_exposure_source_status.detail_json size",
+            detail_json.len(),
+        )?,
+    })
+}
+
 fn entity_membership_change_refs(
     connection: &StoreConnection,
     commits: &[BundleCommitRef],
@@ -1871,6 +2371,147 @@ fn load_relation_version_payload_candidate(
     )
 }
 
+fn load_knowledge_exposure_source_knowledge_payload_candidate(
+    connection: &StoreConnection,
+    source: &BundleKnowledgeExposureLocalSourceRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let state_json = connection
+        .inner()
+        .query_row(
+            "SELECT state_json
+             FROM entity_version
+             WHERE entity_id = ?1
+               AND entity_version_id = ?2",
+            params![
+                &source.source_knowledge_entity_id.raw_bytes()[..],
+                &source.source_knowledge_entity_version_id.raw_bytes()[..]
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "KnowledgeExposure {} source KnowledgeVersion {} for entity {} does not exist",
+                source.exposure_id,
+                source.source_knowledge_entity_version_id,
+                source.source_knowledge_entity_id
+            ))
+        })?;
+    if content_object_digest(state_json.as_bytes()) != source.source_knowledge_state_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} source KnowledgeVersion raw state JSON digest changed during payload export",
+            source.exposure_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "knowledge_exposure_source_knowledge_state",
+        CanonicalValue::object(vec![
+            string_field("exposure_id", source.exposure_id.to_string()),
+            string_field(
+                "source_workspace_id",
+                source.source_workspace_id.to_string(),
+            ),
+            string_field(
+                "source_knowledge_entity_id",
+                source.source_knowledge_entity_id.to_string(),
+            ),
+            string_field(
+                "source_knowledge_entity_version_id",
+                source.source_knowledge_entity_version_id.to_string(),
+            ),
+        ])?,
+        "knowledge_exposure_local_source.source_knowledge_state_json",
+        state_json,
+    )
+}
+
+fn load_knowledge_exposure_transition_detail_payload_candidate(
+    connection: &StoreConnection,
+    transition: &BundleKnowledgeExposureTransitionRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let detail_json = connection
+        .inner()
+        .query_row(
+            "SELECT detail_json
+             FROM knowledge_exposure_transition
+             WHERE exposure_id = ?1
+               AND transition_id = ?2",
+            params![
+                &transition.exposure_id.raw_bytes()[..],
+                &transition.transition_id.raw_bytes()[..]
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "KnowledgeExposure {} transition {} does not exist",
+                transition.exposure_id, transition.transition_id
+            ))
+        })?;
+    if content_object_digest(detail_json.as_bytes()) != transition.detail_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} transition {} detail JSON digest changed during payload export",
+            transition.exposure_id, transition.transition_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "knowledge_exposure_transition_detail",
+        CanonicalValue::object(vec![
+            string_field("exposure_id", transition.exposure_id.to_string()),
+            string_field("transition_id", transition.transition_id.to_string()),
+        ])?,
+        "knowledge_exposure_transition.detail_json",
+        detail_json,
+    )
+}
+
+fn load_knowledge_exposure_source_status_detail_payload_candidate(
+    connection: &StoreConnection,
+    source_status: &BundleKnowledgeExposureSourceStatusRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let detail_json = connection
+        .inner()
+        .query_row(
+            "SELECT detail_json
+             FROM knowledge_exposure_source_status
+             WHERE exposure_id = ?1",
+            params![&source_status.exposure_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "KnowledgeExposure {} source-status projection does not exist",
+                source_status.exposure_id
+            ))
+        })?;
+    if content_object_digest(detail_json.as_bytes()) != source_status.detail_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} source-status detail JSON digest changed during payload export",
+            source_status.exposure_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "knowledge_exposure_source_status_detail",
+        CanonicalValue::object(vec![string_field(
+            "exposure_id",
+            source_status.exposure_id.to_string(),
+        )])?,
+        "knowledge_exposure_source_status.detail_json",
+        detail_json,
+    )
+}
+
 fn push_canonical_payload(
     candidates: &mut Vec<BundlePayloadCandidate>,
     role: &str,
@@ -2153,6 +2794,11 @@ struct BundleManifestValueInput<'a> {
     commits: &'a [BundleCommitRef],
     entity_versions: &'a [BundleEntityVersionRef],
     relation_versions: &'a [BundleRelationVersionRef],
+    knowledge_spaces: &'a [BundleKnowledgeSpaceRef],
+    knowledge_exposures: &'a [BundleKnowledgeExposureRef],
+    knowledge_exposure_local_sources: &'a [BundleKnowledgeExposureLocalSourceRef],
+    knowledge_exposure_transitions: &'a [BundleKnowledgeExposureTransitionRef],
+    knowledge_exposure_source_statuses: &'a [BundleKnowledgeExposureSourceStatusRef],
     entity_membership_changes: &'a [BundleEntityMembershipChangeRef],
     relation_membership_changes: &'a [BundleRelationMembershipChangeRef],
     checkpoint_candidates: &'a [BundleCheckpointCandidate],
@@ -2226,6 +2872,56 @@ fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue>
                     .relation_versions
                     .iter()
                     .map(relation_version_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "knowledge_spaces".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .knowledge_spaces
+                    .iter()
+                    .map(knowledge_space_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "knowledge_exposures".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .knowledge_exposures
+                    .iter()
+                    .map(knowledge_exposure_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "knowledge_exposure_local_sources".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .knowledge_exposure_local_sources
+                    .iter()
+                    .map(knowledge_exposure_local_source_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "knowledge_exposure_transitions".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .knowledge_exposure_transitions
+                    .iter()
+                    .map(knowledge_exposure_transition_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "knowledge_exposure_source_statuses".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .knowledge_exposure_source_statuses
+                    .iter()
+                    .map(knowledge_exposure_source_status_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
@@ -2433,6 +3129,87 @@ fn relation_version_ref_value(
             "metadata_json_size_bytes",
             relation_version.metadata_json_size_bytes,
         )?,
+    ])
+}
+
+fn knowledge_space_ref_value(knowledge_space: &BundleKnowledgeSpaceRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field(
+            "knowledge_space_id",
+            knowledge_space.knowledge_space_id.to_string(),
+        ),
+        string_field("name", knowledge_space.name.clone()),
+        integer_field("created_at_us", knowledge_space.created_at_us)?,
+    ])
+}
+
+fn knowledge_exposure_ref_value(exposure: &BundleKnowledgeExposureRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("exposure_id", exposure.exposure_id.to_string()),
+        string_field(
+            "knowledge_space_id",
+            exposure.knowledge_space_id.to_string(),
+        ),
+        integer_field("created_at_us", exposure.created_at_us)?,
+    ])
+}
+
+fn knowledge_exposure_local_source_ref_value(
+    source: &BundleKnowledgeExposureLocalSourceRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("exposure_id", source.exposure_id.to_string()),
+        string_field(
+            "source_workspace_id",
+            source.source_workspace_id.to_string(),
+        ),
+        string_field(
+            "source_knowledge_entity_id",
+            source.source_knowledge_entity_id.to_string(),
+        ),
+        string_field(
+            "source_knowledge_entity_version_id",
+            source.source_knowledge_entity_version_id.to_string(),
+        ),
+        string_field(
+            "source_knowledge_state_digest",
+            source.source_knowledge_state_digest.to_string(),
+        ),
+        string_field(
+            "source_knowledge_state_json_digest",
+            source.source_knowledge_state_json_digest.to_string(),
+        ),
+        integer_field(
+            "source_knowledge_state_json_size_bytes",
+            source.source_knowledge_state_json_size_bytes,
+        )?,
+    ])
+}
+
+fn knowledge_exposure_transition_ref_value(
+    transition: &BundleKnowledgeExposureTransitionRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("exposure_id", transition.exposure_id.to_string()),
+        string_field("transition_id", transition.transition_id.to_string()),
+        optional_display_field("previous_transition_id", transition.previous_transition_id),
+        string_field("lifecycle_status", transition.lifecycle_status.clone()),
+        integer_field("changed_at_us", transition.changed_at_us)?,
+        optional_display_field("event_id", transition.event_id),
+        string_field("detail_digest", transition.detail_digest.to_string()),
+        integer_field("detail_size_bytes", transition.detail_size_bytes)?,
+    ])
+}
+
+fn knowledge_exposure_source_status_ref_value(
+    source_status: &BundleKnowledgeExposureSourceStatusRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("exposure_id", source_status.exposure_id.to_string()),
+        string_field("source_status", source_status.source_status.clone()),
+        integer_field("checked_at_us", source_status.checked_at_us)?,
+        string_field("detail_digest", source_status.detail_digest.to_string()),
+        integer_field("detail_size_bytes", source_status.detail_size_bytes)?,
     ])
 }
 
@@ -2969,6 +3746,35 @@ fn validate_stored_text_allow_empty(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_object_kind_exact(label: &str, actual: &str, expected: &str) -> Result<()> {
+    validate_stored_text(label, actual)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(WorkVcsError::QueryInvalid(format!(
+            "{label} expected {expected}, found {actual}"
+        )))
+    }
+}
+
+fn validate_knowledge_exposure_lifecycle_status(label: &str, value: &str) -> Result<()> {
+    match value {
+        "active" | "withdrawn" => Ok(()),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be active or withdrawn"
+        ))),
+    }
+}
+
+fn validate_knowledge_exposure_source_status(label: &str, value: &str) -> Result<()> {
+    match value {
+        "current" | "stale" | "unknown" | "unresolved" => Ok(()),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be current, stale, unknown, or unresolved"
+        ))),
+    }
+}
+
 fn validate_nonnegative_i64(label: &str, value: i64) -> Result<()> {
     if value < 0 {
         return Err(WorkVcsError::QueryInvalid(format!(
@@ -3216,6 +4022,24 @@ fn decode_relation_id(column: &str, bytes: Vec<u8>) -> Result<RelationId> {
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 
+fn decode_knowledge_space_id(column: &str, bytes: Vec<u8>) -> Result<KnowledgeSpaceId> {
+    let bytes = decode_16(column, bytes)?;
+    KnowledgeSpaceId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_exposure_transition_id(column: &str, bytes: Vec<u8>) -> Result<ExposureTransitionId> {
+    let bytes = decode_16(column, bytes)?;
+    ExposureTransitionId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_entity_version_id(column: &str, bytes: Vec<u8>) -> Result<EntityVersionId> {
+    let bytes = decode_16(column, bytes)?;
+    EntityVersionId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
 fn decode_optional_entity_version_id(
     column: &str,
     bytes: Option<Vec<u8>>,
@@ -3237,6 +4061,29 @@ fn decode_optional_relation_version_id(
         .map(|bytes| {
             let bytes = decode_16(column, bytes)?;
             RelationVersionId::from_bytes(bytes)
+                .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+        })
+        .transpose()
+}
+
+fn decode_optional_exposure_transition_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<ExposureTransitionId>> {
+    bytes
+        .map(|bytes| {
+            let bytes = decode_16(column, bytes)?;
+            ExposureTransitionId::from_bytes(bytes)
+                .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+        })
+        .transpose()
+}
+
+fn decode_optional_event_id(column: &str, bytes: Option<Vec<u8>>) -> Result<Option<EventId>> {
+    bytes
+        .map(|bytes| {
+            let bytes = decode_16(column, bytes)?;
+            EventId::from_bytes(bytes)
                 .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
         })
         .transpose()

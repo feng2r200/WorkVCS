@@ -337,6 +337,11 @@ pub struct BundleImportPreflightResult {
     pub payload_index_digest: Digest,
     pub payload_files: usize,
     pub payload_references: usize,
+    pub exported_branch_heads: usize,
+    pub branch_heads_already_present: usize,
+    pub branch_heads_missing: usize,
+    pub branch_heads_fast_forward: usize,
+    pub branch_heads_diverged: usize,
     pub problem: Option<String>,
 }
 
@@ -591,6 +596,34 @@ struct BundleManifestSummary {
     workspace_id: WorkspaceId,
     commit_id: CommitId,
     state_digest: Digest,
+    commits: Vec<BundleCommitSummary>,
+    exported_branch_heads: Vec<BundleBranchHeadSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundleCommitSummary {
+    commit_id: CommitId,
+    state_digest: Digest,
+    parent_commit_ids: Vec<CommitId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundleBranchHeadSummary {
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    name: String,
+    head_commit_id: CommitId,
+    head_state_digest: Digest,
+    lifecycle_state: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BundleBranchPreflightSummary {
+    exported_branch_heads: usize,
+    already_present: usize,
+    missing: usize,
+    fast_forward: usize,
+    diverged: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -883,12 +916,18 @@ pub(crate) fn preflight_bundle_import(
                 payload_index_digest,
                 payload_files,
                 payload_references: 0,
+                exported_branch_heads: 0,
+                branch_heads_already_present: 0,
+                branch_heads_missing: 0,
+                branch_heads_fast_forward: 0,
+                branch_heads_diverged: 0,
                 problem: Some(problem),
             });
         }
     };
 
     let format_compatible = bundle_format_compatible(store_info, &checked.manifest);
+    let branch_preflight = bundle_branch_preflight_summary(connection, &checked.manifest)?;
     let existing_commit_digest =
         load_commit_state_digest_optional(connection, checked.manifest.commit_id)?;
     if let Some(existing_digest) = existing_commit_digest
@@ -913,6 +952,11 @@ pub(crate) fn preflight_bundle_import(
             payload_index_digest,
             payload_files,
             payload_references: checked.payload_index.reference_count,
+            exported_branch_heads: branch_preflight.exported_branch_heads,
+            branch_heads_already_present: branch_preflight.already_present,
+            branch_heads_missing: branch_preflight.missing,
+            branch_heads_fast_forward: branch_preflight.fast_forward,
+            branch_heads_diverged: branch_preflight.diverged,
             problem: Some(format!(
                 "local commit {} exists with a different state digest",
                 checked.manifest.commit_id
@@ -949,6 +993,11 @@ pub(crate) fn preflight_bundle_import(
         payload_index_digest,
         payload_files,
         payload_references: checked.payload_index.reference_count,
+        exported_branch_heads: branch_preflight.exported_branch_heads,
+        branch_heads_already_present: branch_preflight.already_present,
+        branch_heads_missing: branch_preflight.missing,
+        branch_heads_fast_forward: branch_preflight.fast_forward,
+        branch_heads_diverged: branch_preflight.diverged,
         problem: None,
     })
 }
@@ -3518,6 +3567,32 @@ fn bundle_import_attempt_detail_json(preflight: &BundleImportPreflightResult) ->
             "payload_references",
             usize_to_i64("payload_references", preflight.payload_references)?,
         )?,
+        integer_field(
+            "exported_branch_heads",
+            usize_to_i64("exported_branch_heads", preflight.exported_branch_heads)?,
+        )?,
+        integer_field(
+            "branch_heads_already_present",
+            usize_to_i64(
+                "branch_heads_already_present",
+                preflight.branch_heads_already_present,
+            )?,
+        )?,
+        integer_field(
+            "branch_heads_missing",
+            usize_to_i64("branch_heads_missing", preflight.branch_heads_missing)?,
+        )?,
+        integer_field(
+            "branch_heads_fast_forward",
+            usize_to_i64(
+                "branch_heads_fast_forward",
+                preflight.branch_heads_fast_forward,
+            )?,
+        )?,
+        integer_field(
+            "branch_heads_diverged",
+            usize_to_i64("branch_heads_diverged", preflight.branch_heads_diverged)?,
+        )?,
         ("problem".to_owned(), problem),
     ])?;
     let bytes = canonical_bytes(&value)?;
@@ -3571,6 +3646,14 @@ fn parse_bundle_manifest_summary(
     )?;
     let store = object_field_ref(value, "bundle manifest", "store")?;
     let target = object_field_ref(value, "bundle manifest", "target")?;
+    let commits = array_field_ref(value, "bundle manifest", "commit_closure")?
+        .iter()
+        .map(parse_bundle_commit_summary)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let exported_branch_heads = array_field_ref(value, "bundle manifest", "exported_branch_heads")?
+        .iter()
+        .map(parse_bundle_branch_head_summary)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(BundleManifestSummary {
         source_store_id: parse_store_id_field(store, "bundle manifest store", "store_id")?,
         store_format_version: integer_field_value(
@@ -3596,6 +3679,61 @@ fn parse_bundle_manifest_summary(
         workspace_id: parse_workspace_id_field(target, "bundle manifest target", "workspace_id")?,
         commit_id: parse_commit_id_field(target, "bundle manifest target", "commit_id")?,
         state_digest: parse_digest_field(target, "bundle manifest target", "state_digest")?,
+        commits,
+        exported_branch_heads,
+    })
+}
+
+fn parse_bundle_commit_summary(
+    value: &CanonicalValue,
+) -> std::result::Result<BundleCommitSummary, String> {
+    let parents = array_field_ref(value, "bundle manifest commit", "parents")?
+        .iter()
+        .map(|parent| {
+            parse_commit_id_field(parent, "bundle manifest commit parent", "parent_commit_id")
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(BundleCommitSummary {
+        commit_id: parse_commit_id_field(value, "bundle manifest commit", "commit_id")?,
+        state_digest: parse_digest_field(value, "bundle manifest commit", "state_digest")?,
+        parent_commit_ids: parents,
+    })
+}
+
+fn parse_bundle_branch_head_summary(
+    value: &CanonicalValue,
+) -> std::result::Result<BundleBranchHeadSummary, String> {
+    let name = string_field_value(value, "bundle manifest branch head", "name")?.to_owned();
+    validate_portable_text("bundle manifest branch head name", &name)?;
+    let lifecycle_state =
+        string_field_value(value, "bundle manifest branch head", "lifecycle_state")?.to_owned();
+    validate_portable_text(
+        "bundle manifest branch head lifecycle_state",
+        &lifecycle_state,
+    )?;
+    let created_at_us = integer_field_value(value, "bundle manifest branch head", "created_at_us")?;
+    if created_at_us <= 0 {
+        return Err("bundle manifest branch head created_at_us must be positive".to_owned());
+    }
+    Ok(BundleBranchHeadSummary {
+        workspace_id: parse_workspace_id_field(
+            value,
+            "bundle manifest branch head",
+            "workspace_id",
+        )?,
+        branch_id: parse_branch_id_field(value, "bundle manifest branch head", "branch_id")?,
+        name,
+        head_commit_id: parse_commit_id_field(
+            value,
+            "bundle manifest branch head",
+            "head_commit_id",
+        )?,
+        head_state_digest: parse_digest_field(
+            value,
+            "bundle manifest branch head",
+            "head_state_digest",
+        )?,
+        lifecycle_state,
     })
 }
 
@@ -3768,6 +3906,15 @@ fn parse_store_id_field(
         .map_err(|error| error.to_string())
 }
 
+fn parse_branch_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<BranchId, String> {
+    BranchId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_workspace_id_field(
     value: &CanonicalValue,
     label: &str,
@@ -3792,6 +3939,16 @@ fn parse_digest_field(
     field: &str,
 ) -> std::result::Result<Digest, String> {
     Digest::from_hex(string_field_value(value, label, field)?).map_err(|error| error.to_string())
+}
+
+fn validate_portable_text(label: &str, value: &str) -> std::result::Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{label} cannot be empty"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!("{label} cannot contain control characters"));
+    }
+    Ok(())
 }
 
 fn string_field(name: &str, value: impl Into<String>) -> (String, CanonicalValue) {
@@ -3958,6 +4115,131 @@ fn bundle_format_compatible(store_info: &StoreInfo, manifest: &BundleManifestSum
         && manifest.id_scheme == store_info.manifest.id_scheme
         && manifest.digest_algorithm == store_info.manifest.digest_algorithm
         && manifest.canonical_json_profile == store_info.manifest.canonical_json_profile
+}
+
+fn bundle_branch_preflight_summary(
+    connection: &StoreConnection,
+    manifest: &BundleManifestSummary,
+) -> Result<BundleBranchPreflightSummary> {
+    let mut summary = BundleBranchPreflightSummary {
+        exported_branch_heads: manifest.exported_branch_heads.len(),
+        ..BundleBranchPreflightSummary::default()
+    };
+    for branch in &manifest.exported_branch_heads {
+        if branch.workspace_id != manifest.workspace_id {
+            summary.diverged += 1;
+            continue;
+        }
+        let Some((local_workspace_id, local_head_commit_id, local_head_state_digest)) =
+            load_local_branch_head_for_preflight(connection, branch.branch_id)?
+        else {
+            summary.missing += 1;
+            continue;
+        };
+        if local_workspace_id != branch.workspace_id {
+            summary.diverged += 1;
+            continue;
+        }
+        if local_head_commit_id == branch.head_commit_id {
+            if local_head_state_digest == branch.head_state_digest {
+                summary.already_present += 1;
+            } else {
+                summary.diverged += 1;
+            }
+            continue;
+        }
+        let local_digest_matches_manifest =
+            manifest_commit_digest(manifest, local_head_commit_id) == Some(local_head_state_digest);
+        if local_digest_matches_manifest
+            && manifest_commit_is_descendant(manifest, branch.head_commit_id, local_head_commit_id)
+        {
+            summary.fast_forward += 1;
+        } else {
+            summary.diverged += 1;
+        }
+    }
+    Ok(summary)
+}
+
+fn load_local_branch_head_for_preflight(
+    connection: &StoreConnection,
+    branch_id: BranchId,
+) -> Result<Option<(WorkspaceId, CommitId, Digest)>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT branch.workspace_id,
+                    branch.name,
+                    branch.head_commit_id,
+                    branch.lifecycle_state,
+                    workstate_commit.state_digest
+             FROM branch
+             JOIN workstate_commit
+               ON workstate_commit.workspace_id = branch.workspace_id
+              AND workstate_commit.commit_id = branch.head_commit_id
+             WHERE branch.branch_id = ?1",
+            params![&branch_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((workspace_id, name, head_commit_id, lifecycle_state, state_digest)) = row else {
+        return Ok(None);
+    };
+    validate_stored_text("branch.name", &name)?;
+    validate_stored_text("branch.lifecycle_state", &lifecycle_state)?;
+    Ok(Some((
+        decode_workspace_id("branch.workspace_id", workspace_id)?,
+        decode_commit_id("branch.head_commit_id", head_commit_id)?,
+        decode_digest("workstate_commit.state_digest", state_digest)?,
+    )))
+}
+
+fn manifest_commit_digest(manifest: &BundleManifestSummary, commit_id: CommitId) -> Option<Digest> {
+    manifest
+        .commits
+        .iter()
+        .find_map(|commit| (commit.commit_id == commit_id).then_some(commit.state_digest))
+}
+
+fn manifest_commit_is_descendant(
+    manifest: &BundleManifestSummary,
+    descendant: CommitId,
+    ancestor: CommitId,
+) -> bool {
+    if descendant == ancestor {
+        return true;
+    }
+    let parents_by_commit = manifest
+        .commits
+        .iter()
+        .map(|commit| (commit.commit_id, commit.parent_commit_ids.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+    let mut stack = vec![descendant];
+    let mut seen = BTreeSet::new();
+    while let Some(commit_id) = stack.pop() {
+        if !seen.insert(commit_id) {
+            continue;
+        }
+        let Some(parents) = parents_by_commit.get(&commit_id) else {
+            continue;
+        };
+        for parent in *parents {
+            if *parent == ancestor {
+                return true;
+            }
+            stack.push(*parent);
+        }
+    }
+    false
 }
 
 fn source_store_relation(local_store_id: StoreId, source_store_id: StoreId) -> String {

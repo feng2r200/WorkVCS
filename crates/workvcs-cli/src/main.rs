@@ -6519,7 +6519,7 @@ fn render_bundle_payload_validation(result: &BundlePayloadValidationResult) -> S
 
 fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> String {
     format!(
-        "valid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\naction={}\nmanifest_digest={}\npayload_index_digest={}\npayload_files={}\npayload_references={}\nproblem={}\n",
+        "valid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\naction={}\nmanifest_digest={}\npayload_index_digest={}\npayload_files={}\npayload_references={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nproblem={}\n",
         result.valid,
         result.format_compatible,
         result
@@ -6547,13 +6547,18 @@ fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> Strin
         result.payload_index_digest,
         result.payload_files,
         result.payload_references,
+        result.exported_branch_heads,
+        result.branch_heads_already_present,
+        result.branch_heads_missing,
+        result.branch_heads_fast_forward,
+        result.branch_heads_diverged,
         result.problem.as_deref().unwrap_or("none")
     )
 }
 
 fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
     format!(
-        "recorded={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nproblem={}\n",
+        "recorded={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nproblem={}\n",
         result.recorded,
         render_optional_display_or_none(result.import_id.as_ref()),
         result.bundle_digest,
@@ -6571,6 +6576,11 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
         result.preflight.incoming_commit_present,
         result.preflight.import_required,
         result.preflight.can_apply,
+        result.preflight.exported_branch_heads,
+        result.preflight.branch_heads_already_present,
+        result.preflight.branch_heads_missing,
+        result.preflight.branch_heads_fast_forward,
+        result.preflight.branch_heads_diverged,
         result.preflight.problem.as_deref().unwrap_or("none")
     )
 }
@@ -10211,6 +10221,10 @@ mod tests {
         assert_eq!(value(&preflight, "incoming_commit_present"), "true");
         assert_eq!(value(&preflight, "import_required"), "false");
         assert_eq!(value(&preflight, "action"), "already_present");
+        assert_eq!(value(&preflight, "exported_branch_heads"), "1");
+        assert_eq!(value(&preflight, "branch_heads_already_present"), "1");
+        assert_eq!(value(&preflight, "branch_heads_fast_forward"), "0");
+        assert_eq!(value(&preflight, "branch_heads_diverged"), "0");
         assert_eq!(value(&preflight, "problem"), "none");
 
         let import_attempt = run(Cli::try_parse_from([
@@ -10238,6 +10252,8 @@ mod tests {
         assert_eq!(value(&import_attempt, "incoming_commit_present"), "true");
         assert_eq!(value(&import_attempt, "import_required"), "false");
         assert_eq!(value(&import_attempt, "can_apply"), "false");
+        assert_eq!(value(&import_attempt, "exported_branch_heads"), "1");
+        assert_eq!(value(&import_attempt, "branch_heads_already_present"), "1");
         assert_eq!(value(&import_attempt, "problem"), "none");
         let import_id = value(&import_attempt, "import_id");
 

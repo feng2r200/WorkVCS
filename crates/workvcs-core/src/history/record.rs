@@ -50,21 +50,27 @@ impl fmt::Display for RecordKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordStatus {
     Active,
+    Invalidated,
     Unverified,
+    Validated,
 }
 
 impl RecordStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
+            Self::Invalidated => "invalidated",
             Self::Unverified => "unverified",
+            Self::Validated => "validated",
         }
     }
 
     fn parse(value: &str) -> Result<Self> {
         match value {
             "active" => Ok(Self::Active),
+            "invalidated" => Ok(Self::Invalidated),
             "unverified" => Ok(Self::Unverified),
+            "validated" => Ok(Self::Validated),
             other => Err(WorkVcsError::RecordInvalid(format!(
                 "record status {other:?} is not in the semantic Record lifecycle vocabulary"
             ))),
@@ -135,6 +141,33 @@ impl RecordState {
             ),
         ])
     }
+
+    fn transition_assumption(
+        &self,
+        next_status: RecordStatus,
+        rationale_text: &str,
+    ) -> Result<Self> {
+        if self.kind != RecordKind::Assumption {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record kind {:?} does not use the Assumption lifecycle",
+                self.kind
+            )));
+        }
+        validate_transition_rationale(rationale_text)?;
+        validate_assumption_lifecycle_transition(self.status, next_status)?;
+        let next = Self {
+            kind: self.kind,
+            statement: self.statement.clone(),
+            scope: self.scope.clone(),
+            status: next_status,
+        };
+        if next == *self {
+            return Err(WorkVcsError::RecordInvalid(
+                "record transition must change status".to_owned(),
+            ));
+        }
+        Ok(next)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,6 +176,79 @@ pub struct RecordCreateOptions {
     expected_head_commit_id: CommitId,
     state: RecordState,
     rationale: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordTransitionOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    record_entity_id: EntityId,
+    expected_record_entity_version_id: EntityVersionId,
+    next_status: RecordStatus,
+    rationale_text: String,
+    rationale: CanonicalValue,
+}
+
+impl RecordTransitionOptions {
+    pub fn validate_assumption(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::assumption_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Validated,
+            rationale,
+        )
+    }
+
+    pub fn invalidate_assumption(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::assumption_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Invalidated,
+            rationale,
+        )
+    }
+
+    fn assumption_transition(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        next_status: RecordStatus,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale_text = rationale.into();
+        validate_transition_rationale(&rationale_text)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            next_status,
+            rationale: rationale_value(&rationale_text)?,
+            rationale_text,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
 }
 
 impl RecordCreateOptions {
@@ -199,6 +305,23 @@ pub struct RecordCreateCommit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordTransitionCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub record_entity_id: EntityId,
+    pub previous_record_entity_version_id: EntityVersionId,
+    pub record_entity_version_id: EntityVersionId,
+    pub record_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub previous_state: RecordState,
+    pub state: RecordState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordSnapshot {
     pub workspace_id: WorkspaceId,
     pub commit_id: CommitId,
@@ -233,6 +356,56 @@ pub(crate) fn create_record(
         record_state_digest: commit.entity_state_digest,
         work_state_digest: commit.work_state_digest,
         state: options.state.clone(),
+    })
+}
+
+pub(crate) fn transition_record(
+    connection: &mut StoreConnection,
+    options: &RecordTransitionOptions,
+) -> Result<RecordTransitionCommit> {
+    require_non_empty_rationale_object(&options.rationale)?;
+    let current = record_at(
+        connection,
+        options.expected_head_commit_id,
+        options.record_entity_id,
+    )?;
+    if current.record_entity_version_id != options.expected_record_entity_version_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record entity {} expected version {}, found {} at commit {}",
+            options.record_entity_id,
+            options.expected_record_entity_version_id,
+            current.record_entity_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+
+    let next_state = current
+        .state
+        .transition_assumption(options.next_status, &options.rationale_text)?;
+    let entity_options = EntityTransitionOptions::update(
+        options.branch_id,
+        options.expected_head_commit_id,
+        options.record_entity_id,
+        options.expected_record_entity_version_id,
+        next_state.to_canonical_value()?,
+    )?
+    .with_rationale(options.rationale.clone());
+    let commit = commit_entity_transition(connection, &entity_options)?;
+
+    Ok(RecordTransitionCommit {
+        workspace_id: commit.workspace_id,
+        branch_id: commit.branch_id,
+        previous_head_commit_id: commit.previous_head_commit_id,
+        commit_id: commit.commit_id,
+        changeset_id: commit.changeset_id,
+        operation_id: commit.operation_id,
+        record_entity_id: commit.entity_id,
+        previous_record_entity_version_id: options.expected_record_entity_version_id,
+        record_entity_version_id: commit.entity_version_id,
+        record_state_digest: commit.entity_state_digest,
+        work_state_digest: commit.work_state_digest,
+        previous_state: current.state,
+        state: next_state,
     })
 }
 
@@ -443,10 +616,36 @@ fn validate_statement(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_transition_rationale(value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(WorkVcsError::RecordInvalid(
+            "record transition rationale must not be empty".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_assumption_lifecycle_transition(
+    current: RecordStatus,
+    next: RecordStatus,
+) -> Result<()> {
+    match (current, next) {
+        (RecordStatus::Unverified, RecordStatus::Validated)
+        | (RecordStatus::Unverified, RecordStatus::Invalidated)
+        | (RecordStatus::Validated, RecordStatus::Invalidated) => Ok(()),
+        (current, next) => Err(WorkVcsError::RecordInvalid(format!(
+            "assumption transition {current:?} -> {next:?} is not allowed"
+        ))),
+    }
+}
+
 fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
     match (kind, status) {
         (RecordKind::Finding, RecordStatus::Active)
-        | (RecordKind::Assumption, RecordStatus::Unverified) => Ok(()),
+        | (
+            RecordKind::Assumption,
+            RecordStatus::Unverified | RecordStatus::Validated | RecordStatus::Invalidated,
+        ) => Ok(()),
         (kind, status) => Err(WorkVcsError::RecordInvalid(format!(
             "record kind {kind:?} cannot use status {status:?}"
         ))),
@@ -473,6 +672,26 @@ fn require_object_value(label: &str, value: &CanonicalValue) -> Result<()> {
 
 fn missing_field(field: &str) -> WorkVcsError {
     WorkVcsError::RecordInvalid(format!("record state missing required field {field:?}"))
+}
+
+fn require_non_empty_rationale_object(value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(entries) if !entries.is_empty() => Ok(()),
+        CanonicalValue::Object(_) => Err(WorkVcsError::RecordInvalid(
+            "record transition rationale must not be empty".to_owned(),
+        )),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "record transition rationale must be a canonical object, found {other:?}"
+        ))),
+    }
+}
+
+fn rationale_value(reason: &str) -> Result<CanonicalValue> {
+    validate_transition_rationale(reason)?;
+    CanonicalValue::object(vec![(
+        "reason".to_owned(),
+        CanonicalValue::String(reason.to_owned()),
+    )])
 }
 
 fn record_invalid_from(error: WorkVcsError) -> WorkVcsError {

@@ -18,19 +18,19 @@ use crate::history::{
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions,
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
-    RecordCreateOptions, RecordSnapshot, ReplayedState, ResourceBindOptions, ResourceBindResult,
-    ResourceCreateOptions, ResourceCreateResult, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationSnapshot, ResourceSnapshot,
-    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions, StructuralReferenceSnapshot,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
-    VerificationRequirementSnapshot, VerificationSnapshot, WhyQueryOptions, WhyQueryResult,
-    WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo, WorkspaceInitOptions,
-    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    RecordCreateOptions, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
+    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
+    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
+    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
@@ -252,6 +252,13 @@ impl Engine {
 
     pub fn create_record(&mut self, options: RecordCreateOptions) -> Result<RecordCreateCommit> {
         self.store.create_record(&options)
+    }
+
+    pub fn transition_record(
+        &mut self,
+        options: RecordTransitionOptions,
+    ) -> Result<RecordTransitionCommit> {
+        self.store.transition_record(&options)
     }
 
     pub fn record_verification_applicability(

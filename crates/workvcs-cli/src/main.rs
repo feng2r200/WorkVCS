@@ -9,18 +9,19 @@ use workvcs_core::{
     ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
     Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, ReplayedState, ResourceCreateOptions,
-    ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
-    WorkspaceInfo, WorkspaceInitOptions, content_object_digest, parse_canonical_json,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions, ReplayedState, ResourceCreateOptions, ResourceCreateResult,
+    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
+    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WorkState, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
+    content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -344,6 +345,28 @@ enum RecordCommand {
 
         #[arg(long)]
         scope_json: Option<String>,
+    },
+    AssumptionStatus {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        record: String,
+
+        #[arg(long)]
+        record_version: String,
+
+        #[arg(long)]
+        status: String,
+
+        #[arg(long)]
+        rationale: String,
     },
     Finding {
         #[arg(value_name = "STORE")]
@@ -953,6 +976,47 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::AssumptionStatus {
+                    store,
+                    branch,
+                    head,
+                    record,
+                    record_version,
+                    status,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let record_id = EntityId::parse_canonical(&record)?;
+            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
+            let options = match parse_assumption_record_status(&status)? {
+                RecordStatus::Validated => RecordTransitionOptions::validate_assumption(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Invalidated => RecordTransitionOptions::invalidate_assumption(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                _ => {
+                    return Err(WorkVcsError::RecordInvalid(format!(
+                        "assumption status {status:?} is not a transition target"
+                    )));
+                }
+            };
+            let record = engine.transition_record(options)?;
+            Ok(render_record_transition(&record))
+        }
+        Command::Record {
+            command:
                 RecordCommand::Finding {
                     store,
                     branch,
@@ -1125,6 +1189,16 @@ fn parse_verification_result(value: &str) -> Result<VerificationResult> {
         "inconclusive" => Ok(VerificationResult::Inconclusive),
         other => Err(WorkVcsError::TaskInvalid(format!(
             "verification result {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_assumption_record_status(value: &str) -> Result<RecordStatus> {
+    match value {
+        "validated" => Ok(RecordStatus::Validated),
+        "invalidated" => Ok(RecordStatus::Invalidated),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "assumption status {other:?} is not in the CLI transition vocabulary"
         ))),
     }
 }
@@ -1478,6 +1552,26 @@ fn render_record_create(record: &RecordCreateCommit) -> String {
         record.record_state_digest,
         record.work_state_digest,
         record.state.kind,
+        record.state.status
+    )
+}
+
+fn render_record_transition(record: &RecordTransitionCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrecord_entity_id={}\nprevious_record_entity_version_id={}\nrecord_entity_version_id={}\nrecord_state_digest={}\nwork_state_digest={}\nrecord_kind={}\nprevious_record_status={}\nrecord_status={}\n",
+        record.workspace_id,
+        record.branch_id,
+        record.previous_head_commit_id,
+        record.commit_id,
+        record.changeset_id,
+        record.operation_id,
+        record.record_entity_id,
+        record.previous_record_entity_version_id,
+        record.record_entity_version_id,
+        record.record_state_digest,
+        record.work_state_digest,
+        record.state.kind,
+        record.previous_state.status,
         record.state.status
     )
 }
@@ -2904,6 +2998,29 @@ mod tests {
         assert!(record.contains("record_kind=assumption"));
         assert!(record.contains("record_status=unverified"));
         assert!(record.contains("record_entity_id="));
+
+        let transition = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "assumption-status",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&record, "commit_id"),
+            "--record",
+            &value(&record, "record_entity_id"),
+            "--record-version",
+            &value(&record, "record_entity_version_id"),
+            "--status",
+            "validated",
+            "--rationale",
+            "Confirmed by local validation",
+        ])
+        .expect("parse assumption status"))
+        .expect("transition assumption");
+        assert!(transition.contains("previous_record_status=unverified"));
+        assert!(transition.contains("record_status=validated"));
     }
 
     fn value(output: &str, key: &str) -> String {

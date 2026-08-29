@@ -25,13 +25,14 @@ use workvcs_core::{
     ExternalRefId, ExternalVersionId, HistoryEntry, HistoryQueryOptions, ImportId,
     KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureCreateLocalOptions,
     KnowledgeExposureCreateResult, KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions,
-    KnowledgeExposureListResult, KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus,
-    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult, KnowledgeListOptions,
-    KnowledgeListResult, KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions,
-    KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
-    KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
-    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
-    KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceId,
+    KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
+    KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
+    KnowledgeExposureSourceStatus, KnowledgeExposureWithdrawOptions,
+    KnowledgeExposureWithdrawResult, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
+    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
+    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
+    KnowledgeSnapshot, KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceId,
     KnowledgeSpaceListOptions, KnowledgeSpaceListResult, KnowledgeSpaceSnapshot, KnowledgeStatus,
     KnowledgeTransitionCommit, KnowledgeTransitionOptions, LineageId, MergeAbortOptions,
     MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
@@ -443,6 +444,14 @@ enum StoreCommand {
 
         #[arg(long, default_value = "{}")]
         detail_json: String,
+    },
+    #[command(name = "knowledge-exposure-refresh-source-status")]
+    KnowledgeExposureRefreshSourceStatus {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        exposure: String,
     },
     #[command(name = "knowledge-exposure-list")]
     KnowledgeExposureList {
@@ -2172,6 +2181,15 @@ fn run(cli: Cli) -> Result<String> {
                 )?)?;
                 let result = engine.withdraw_knowledge_exposure(options)?;
                 render_knowledge_exposure_withdraw_result(&result)
+            }
+            StoreCommand::KnowledgeExposureRefreshSourceStatus { store, exposure } => {
+                let mut engine = Engine::open(store)?;
+                let result = engine.refresh_knowledge_exposure_source_status(
+                    KnowledgeExposureRefreshSourceStatusOptions::new(ExposureId::parse_canonical(
+                        &exposure,
+                    )?),
+                )?;
+                render_knowledge_exposure_refresh_source_status_result(&result)
             }
             StoreCommand::KnowledgeExposureList {
                 store,
@@ -6532,6 +6550,12 @@ fn render_knowledge_exposure_withdraw_result(
     render_knowledge_exposure_snapshot(&result.exposure)
 }
 
+fn render_knowledge_exposure_refresh_source_status_result(
+    result: &KnowledgeExposureRefreshSourceStatusResult,
+) -> Result<String> {
+    render_knowledge_exposure_snapshot(&result.exposure)
+}
+
 fn render_knowledge_exposure_snapshot(snapshot: &KnowledgeExposureSnapshot) -> Result<String> {
     let mut output = String::new();
     write_knowledge_exposure_snapshot_fields(&mut output, None, snapshot)?;
@@ -7877,6 +7901,119 @@ mod tests {
         assert_eq!(
             value(&withdrawn_list, "exposure[0].exposure_id"),
             value(&exposure, "exposure_id")
+        );
+    }
+
+    #[test]
+    fn cli_refreshes_local_knowledge_exposure_source_status() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-exposure-refresh-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Refresh this reusable knowledge exposure",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse knowledge-exposure-create-local"))
+        .expect("create local exposure");
+
+        let invalidated = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "invalidate",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&knowledge, "knowledge_entity_version_id"),
+            "--rationale",
+            "source claim changed",
+        ])
+        .expect("parse knowledge invalidate"))
+        .expect("invalidate knowledge");
+        assert_ne!(
+            value(&invalidated, "knowledge_entity_version_id"),
+            value(&exposure, "source_knowledge_entity_version_id")
+        );
+
+        let refreshed = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-refresh-source-status",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+        ])
+        .expect("parse knowledge-exposure-refresh-source-status"))
+        .expect("refresh exposure source status");
+
+        assert_eq!(value(&refreshed, "source_status"), "stale");
+        assert_eq!(
+            value(&refreshed, "source_status_detail_json"),
+            "{\"checked_branch_heads\":1,\"drifted_branch_heads\":1,\"matching_branch_heads\":0,\"missing_branch_heads\":0}"
+        );
+        assert_eq!(
+            value(&refreshed, "source_knowledge_entity_version_id"),
+            value(&exposure, "source_knowledge_entity_version_id")
         );
     }
 

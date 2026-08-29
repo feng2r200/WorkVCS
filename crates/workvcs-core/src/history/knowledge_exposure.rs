@@ -1,11 +1,11 @@
-use super::{knowledge_space, knowledge_version_state_digest};
+use super::{knowledge_space, knowledge_version_state_digest, state_at};
 use crate::canonical::{
     CanonicalValue, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    Digest, EntityId, EntityVersionId, ExposureId, ExposureTransitionId, KnowledgeSpaceId,
-    WorkspaceId,
+    CommitId, Digest, EntityId, EntityVersionId, ExposureId, ExposureTransitionId,
+    KnowledgeSpaceId, WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -171,6 +171,21 @@ impl KnowledgeExposureWithdrawOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureRefreshSourceStatusOptions {
+    exposure_id: ExposureId,
+}
+
+impl KnowledgeExposureRefreshSourceStatusOptions {
+    pub fn new(exposure_id: ExposureId) -> Self {
+        Self { exposure_id }
+    }
+
+    fn exposure_id(&self) -> ExposureId {
+        self.exposure_id
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureCreateResult {
     pub exposure: KnowledgeExposureSnapshot,
@@ -178,6 +193,11 @@ pub struct KnowledgeExposureCreateResult {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureWithdrawResult {
+    pub exposure: KnowledgeExposureSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureRefreshSourceStatusResult {
     pub exposure: KnowledgeExposureSnapshot,
 }
 
@@ -567,6 +587,50 @@ pub(crate) fn withdraw_knowledge_exposure(
     })
 }
 
+pub(crate) fn refresh_knowledge_exposure_source_status(
+    connection: &mut StoreConnection,
+    options: KnowledgeExposureRefreshSourceStatusOptions,
+) -> Result<KnowledgeExposureRefreshSourceStatusResult> {
+    connection.verify_foreign_keys()?;
+    let exposure = knowledge_exposure(connection, options.exposure_id())?;
+    let assessment = assess_local_source_status(connection, &exposure.source)?;
+    let detail = assessment.to_detail()?;
+    let detail_json = canonical_object_json("knowledge exposure source status detail", &detail)?;
+    let checked_at_us = current_epoch_micros()?;
+    let exposure_id_bytes = options.exposure_id().raw_bytes();
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let updated = transaction
+        .execute(
+            "UPDATE knowledge_exposure_source_status
+             SET source_status = ?2,
+                 checked_at_us = ?3,
+                 detail_json = ?4
+             WHERE exposure_id = ?1",
+            params![
+                &exposure_id_bytes[..],
+                assessment.source_status.as_str(),
+                checked_at_us,
+                detail_json
+            ],
+        )
+        .map_err(storage_error)?;
+    if updated != 1 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} has no source-status projection",
+            options.exposure_id()
+        )));
+    }
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(KnowledgeExposureRefreshSourceStatusResult {
+        exposure: knowledge_exposure(connection, options.exposure_id())?,
+    })
+}
+
 pub(crate) fn knowledge_exposure(
     connection: &StoreConnection,
     exposure_id: ExposureId,
@@ -635,6 +699,126 @@ pub(crate) fn knowledge_exposures(
         exposures.push(knowledge_exposure(connection, exposure_id)?);
     }
     Ok(KnowledgeExposureListResult { exposures })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalSourceStatusAssessment {
+    source_status: KnowledgeExposureSourceStatus,
+    checked_branch_heads: usize,
+    matching_branch_heads: usize,
+    drifted_branch_heads: usize,
+    missing_branch_heads: usize,
+}
+
+impl LocalSourceStatusAssessment {
+    fn to_detail(&self) -> Result<CanonicalValue> {
+        CanonicalValue::object(vec![
+            (
+                "checked_branch_heads".to_owned(),
+                CanonicalValue::safe_integer(usize_to_i64(
+                    "checked_branch_heads",
+                    self.checked_branch_heads,
+                )?)?,
+            ),
+            (
+                "drifted_branch_heads".to_owned(),
+                CanonicalValue::safe_integer(usize_to_i64(
+                    "drifted_branch_heads",
+                    self.drifted_branch_heads,
+                )?)?,
+            ),
+            (
+                "matching_branch_heads".to_owned(),
+                CanonicalValue::safe_integer(usize_to_i64(
+                    "matching_branch_heads",
+                    self.matching_branch_heads,
+                )?)?,
+            ),
+            (
+                "missing_branch_heads".to_owned(),
+                CanonicalValue::safe_integer(usize_to_i64(
+                    "missing_branch_heads",
+                    self.missing_branch_heads,
+                )?)?,
+            ),
+        ])
+    }
+}
+
+fn assess_local_source_status(
+    connection: &StoreConnection,
+    source: &KnowledgeExposureLocalSourceSnapshot,
+) -> Result<LocalSourceStatusAssessment> {
+    let head_commits = load_workspace_head_commits(connection, source.workspace_id)?;
+    let mut matching_branch_heads = 0;
+    let mut drifted_branch_heads = 0;
+    let mut missing_branch_heads = 0;
+    for head_commit_id in &head_commits {
+        let replayed = state_at(connection, *head_commit_id)?;
+        if replayed.workspace_id != source.workspace_id {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "branch head {head_commit_id} belongs to workspace {}, not {}",
+                replayed.workspace_id, source.workspace_id
+            )));
+        }
+        match replayed
+            .state
+            .entities()
+            .iter()
+            .find_map(|(entity_id, entity_version_id)| {
+                (*entity_id == source.knowledge_entity_id).then_some(*entity_version_id)
+            }) {
+            Some(entity_version_id) if entity_version_id == source.knowledge_entity_version_id => {
+                matching_branch_heads += 1;
+            }
+            Some(_) => drifted_branch_heads += 1,
+            None => missing_branch_heads += 1,
+        }
+    }
+    let source_status = if matching_branch_heads > 0 {
+        KnowledgeExposureSourceStatus::Current
+    } else if drifted_branch_heads > 0 || missing_branch_heads > 0 {
+        KnowledgeExposureSourceStatus::Stale
+    } else {
+        KnowledgeExposureSourceStatus::Unknown
+    };
+    Ok(LocalSourceStatusAssessment {
+        source_status,
+        checked_branch_heads: head_commits.len(),
+        matching_branch_heads,
+        drifted_branch_heads,
+        missing_branch_heads,
+    })
+}
+
+fn load_workspace_head_commits(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+) -> Result<Vec<CommitId>> {
+    let workspace_id_bytes = workspace_id.raw_bytes();
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT head_commit_id
+             FROM branch
+             WHERE workspace_id = ?1
+             ORDER BY branch_id ASC",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&workspace_id_bytes[..]], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(storage_error)?;
+
+    let mut head_commits = Vec::new();
+    for row in rows {
+        head_commits.push(decode_commit_id(
+            "branch.head_commit_id",
+            row.map_err(storage_error)?,
+        )?);
+    }
+    Ok(head_commits)
 }
 
 fn ensure_local_source_available(
@@ -981,6 +1165,12 @@ fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
 fn decode_entity_version_id(column: &str, bytes: Vec<u8>) -> Result<EntityVersionId> {
     let bytes = decode_uuid_bytes(column, bytes)?;
     EntityVersionId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
+    let bytes = decode_uuid_bytes(column, bytes)?;
+    CommitId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 

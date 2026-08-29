@@ -34,11 +34,12 @@ use crate::history::{
     GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureListOptions, KnowledgeExposureListResult, KnowledgeExposureSnapshot,
-    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult, KnowledgeListOptions,
-    KnowledgeListResult, KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions,
-    KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
-    KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    KnowledgeExposureListOptions, KnowledgeExposureListResult,
+    KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
+    KnowledgeExposureSnapshot, KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
+    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
+    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
+    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
     KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
     KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
@@ -359,6 +360,13 @@ impl Engine {
         options: KnowledgeExposureWithdrawOptions,
     ) -> Result<KnowledgeExposureWithdrawResult> {
         self.store.withdraw_knowledge_exposure(options)
+    }
+
+    pub fn refresh_knowledge_exposure_source_status(
+        &mut self,
+        options: KnowledgeExposureRefreshSourceStatusOptions,
+    ) -> Result<KnowledgeExposureRefreshSourceStatusResult> {
+        self.store.refresh_knowledge_exposure_source_status(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

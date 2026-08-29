@@ -1,5 +1,8 @@
+use super::evidence::EVIDENCE_OBJECT_KIND;
+use super::resource::{RESOURCE_OBJECT_KIND, RESOURCE_OBSERVATION_OBJECT_KIND};
 use super::task::{
-    ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_REQUIREMENT_ENTITY_KIND,
+    ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_ENTITY_KIND,
+    VERIFICATION_REQUIREMENT_ENTITY_KIND,
 };
 use crate::canonical::{
     CanonicalValue, WorkState, canonical_bytes, content_object_digest, entity_version_digest,
@@ -8,8 +11,9 @@ use crate::canonical::{
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
     BranchId, ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, EventId,
-    ExposureId, ExposureTransitionId, ImportId, KnowledgeSpaceId, OperationId, RelationId,
-    RelationVersionId, SessionId, StoreId, WorkspaceId,
+    EvidenceId, ExposureId, ExposureTransitionId, ImportId, KnowledgeSpaceId, OperationId,
+    RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionId, StoreId,
+    WorkspaceId,
 };
 use crate::store::{StoreConnection, StoreInfo, StoreManifest, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -22,6 +26,7 @@ const BUNDLE_PAYLOAD_INDEX_PROFILE: &str = "workvcs-local-payload-index-v1";
 const BUNDLE_PAYLOAD_INDEX_VERSION: i64 = 1;
 const BUNDLE_PAYLOAD_MEDIA_TYPE: &str = "application/json";
 const BUNDLE_IMPORT_PROFILE: &str = "workvcs-local-payload-directory-v1";
+const EVIDENCED_BY_RELATION_TYPE: &str = "evidenced_by";
 const RELATION_OBJECT_KIND: &str = "relation";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,6 +254,14 @@ pub struct BundleExportManifest {
     pub acceptance_criterion_identities: Vec<BundleAcceptanceCriterionIdentityRef>,
     pub verification_requirement_identities: Vec<BundleVerificationRequirementIdentityRef>,
     pub relation_versions: Vec<BundleRelationVersionRef>,
+    pub content_objects: Vec<BundleContentObjectRef>,
+    pub evidences: Vec<BundleEvidenceRef>,
+    pub evidence_contents: Vec<BundleEvidenceContentRef>,
+    pub resources: Vec<BundleResourceRef>,
+    pub resource_observations: Vec<BundleResourceObservationRef>,
+    pub verification_bases: Vec<BundleVerificationBasisRef>,
+    pub verification_resource_bases: Vec<BundleVerificationResourceBasisRef>,
+    pub verification_semantic_dependencies: Vec<BundleVerificationSemanticDependencyRef>,
     pub knowledge_spaces: Vec<BundleKnowledgeSpaceRef>,
     pub knowledge_exposures: Vec<BundleKnowledgeExposureRef>,
     pub knowledge_exposure_local_sources: Vec<BundleKnowledgeExposureLocalSourceRef>,
@@ -417,6 +430,11 @@ pub struct BundleImportApplyResult {
     pub imported_entity_versions: usize,
     pub imported_acceptance_criterion_identities: usize,
     pub imported_verification_requirement_identities: usize,
+    pub imported_content_objects: usize,
+    pub imported_evidences: usize,
+    pub imported_resources: usize,
+    pub imported_resource_observations: usize,
+    pub imported_verification_bases: usize,
     pub imported_relation_versions: usize,
     pub updated_branch_heads: usize,
 }
@@ -559,6 +577,86 @@ pub struct BundleRelationVersionRef {
     pub state_digest: Digest,
     pub metadata_json_digest: Digest,
     pub metadata_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleContentObjectRef {
+    pub content_digest: Digest,
+    pub size_bytes: i64,
+    pub media_type: Option<String>,
+    pub format_metadata_json_digest: Digest,
+    pub format_metadata_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleEvidenceRef {
+    pub evidence_id: EvidenceId,
+    pub evidence_kind: String,
+    pub captured_at_us: i64,
+    pub source_session_id: Option<SessionId>,
+    pub metadata_json_digest: Digest,
+    pub metadata_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleEvidenceContentRef {
+    pub evidence_id: EvidenceId,
+    pub ordinal: i64,
+    pub content_digest: Digest,
+    pub role: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleResourceRef {
+    pub resource_id: ResourceId,
+    pub resource_kind: String,
+    pub created_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleResourceObservationRef {
+    pub observation_id: ResourceObservationId,
+    pub resource_id: ResourceId,
+    pub adapter_kind: String,
+    pub adapter_schema_version: i64,
+    pub captured_at_us: i64,
+    pub fingerprint: Digest,
+    pub summary_json_digest: Digest,
+    pub summary_json_size_bytes: i64,
+    pub detail_content_digest: Option<Digest>,
+    pub source_session_id: Option<SessionId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleVerificationBasisRef {
+    pub verification_entity_id: EntityId,
+    pub verified_at_commit_id: CommitId,
+    pub basis_schema_version: i64,
+    pub basis_json_digest: Digest,
+    pub basis_json_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleVerificationResourceBasisRef {
+    pub verification_entity_id: EntityId,
+    pub ordinal: i64,
+    pub resource_id: ResourceId,
+    pub adapter_kind: String,
+    pub adapter_schema_version: i64,
+    pub scope_kind: String,
+    pub scope_schema_version: i64,
+    pub scope_payload_json_digest: Digest,
+    pub scope_payload_json_size_bytes: i64,
+    pub baseline_observation_id: Option<ResourceObservationId>,
+    pub baseline_fingerprint: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleVerificationSemanticDependencyRef {
+    pub verification_entity_id: EntityId,
+    pub ordinal: i64,
+    pub dependency_entity_id: EntityId,
+    pub expected_entity_version_id: EntityVersionId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -736,6 +834,14 @@ struct BundleSameStoreApplyDocument {
     acceptance_criterion_identities: Vec<BundleAcceptanceCriterionIdentityRef>,
     verification_requirement_identities: Vec<BundleVerificationRequirementIdentityRef>,
     relation_versions: Vec<BundleRelationVersionRef>,
+    content_objects: Vec<BundleContentObjectRef>,
+    evidences: Vec<BundleEvidenceRef>,
+    evidence_contents: Vec<BundleEvidenceContentRef>,
+    resources: Vec<BundleResourceRef>,
+    resource_observations: Vec<BundleResourceObservationRef>,
+    verification_bases: Vec<BundleVerificationBasisRef>,
+    verification_resource_bases: Vec<BundleVerificationResourceBasisRef>,
+    verification_semantic_dependencies: Vec<BundleVerificationSemanticDependencyRef>,
     entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
     relation_membership_changes: Vec<BundleRelationMembershipChangeRef>,
 }
@@ -762,6 +868,21 @@ struct ImportAttemptOutcomeInsert<'a> {
     now_us: i64,
     outcome: &'a str,
     detail_json: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BundleImportApplyCounts {
+    imported_commits: usize,
+    imported_entity_versions: usize,
+    imported_acceptance_criterion_identities: usize,
+    imported_verification_requirement_identities: usize,
+    imported_content_objects: usize,
+    imported_evidences: usize,
+    imported_resources: usize,
+    imported_resource_observations: usize,
+    imported_verification_bases: usize,
+    imported_relation_versions: usize,
+    updated_branch_heads: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -820,6 +941,18 @@ pub(crate) fn export_bundle_manifest(
         &replayed.state,
         &relation_membership_changes,
     )?;
+    let verification_bases = verification_basis_refs(connection, &entity_versions)?;
+    let verification_resource_bases =
+        verification_resource_basis_refs(connection, &verification_bases)?;
+    let verification_semantic_dependencies =
+        verification_semantic_dependency_refs(connection, &verification_bases)?;
+    let evidences = evidence_closure_refs(connection, &relation_versions)?;
+    let evidence_contents = evidence_content_refs(connection, &evidences)?;
+    let resources = resource_closure_refs(connection, &verification_resource_bases)?;
+    let resource_observations =
+        resource_observation_closure_refs(connection, &verification_resource_bases)?;
+    let content_objects =
+        content_object_closure_refs(connection, &evidence_contents, &resource_observations)?;
     let knowledge_exposures = knowledge_exposure_closure_refs(connection, &relation_versions)?;
     let knowledge_spaces = knowledge_space_closure_refs(connection, &knowledge_exposures)?;
     let knowledge_exposure_local_sources =
@@ -855,6 +988,14 @@ pub(crate) fn export_bundle_manifest(
         acceptance_criterion_identities: &acceptance_criterion_identities,
         verification_requirement_identities: &verification_requirement_identities,
         relation_versions: &relation_versions,
+        content_objects: &content_objects,
+        evidences: &evidences,
+        evidence_contents: &evidence_contents,
+        resources: &resources,
+        resource_observations: &resource_observations,
+        verification_bases: &verification_bases,
+        verification_resource_bases: &verification_resource_bases,
+        verification_semantic_dependencies: &verification_semantic_dependencies,
         knowledge_spaces: &knowledge_spaces,
         knowledge_exposures: &knowledge_exposures,
         knowledge_exposure_local_sources: &knowledge_exposure_local_sources,
@@ -885,6 +1026,14 @@ pub(crate) fn export_bundle_manifest(
         acceptance_criterion_identities,
         verification_requirement_identities,
         relation_versions,
+        content_objects,
+        evidences,
+        evidence_contents,
+        resources,
+        resource_observations,
+        verification_bases,
+        verification_resource_bases,
+        verification_semantic_dependencies,
         knowledge_spaces,
         knowledge_exposures,
         knowledge_exposure_local_sources,
@@ -959,6 +1108,21 @@ pub(crate) fn export_bundle_payloads(
     }
     for relation_version in &manifest.relation_versions {
         load_relation_version_payload_candidate(connection, relation_version, &mut candidates)?;
+    }
+    for content in &manifest.content_objects {
+        load_content_object_payload_candidate(connection, content, &mut candidates)?;
+    }
+    for evidence in &manifest.evidences {
+        load_evidence_payload_candidate(connection, evidence, &mut candidates)?;
+    }
+    for observation in &manifest.resource_observations {
+        load_resource_observation_payload_candidate(connection, observation, &mut candidates)?;
+    }
+    for basis in &manifest.verification_bases {
+        load_verification_basis_payload_candidate(connection, basis, &mut candidates)?;
+    }
+    for basis in &manifest.verification_resource_bases {
+        load_verification_resource_basis_payload_candidate(connection, basis, &mut candidates)?;
     }
     for source in &manifest.knowledge_exposure_local_sources {
         load_knowledge_exposure_source_knowledge_payload_candidate(
@@ -1259,6 +1423,11 @@ pub(crate) fn apply_bundle_import(
             imported_entity_versions: 0,
             imported_acceptance_criterion_identities: 0,
             imported_verification_requirement_identities: 0,
+            imported_content_objects: 0,
+            imported_evidences: 0,
+            imported_resources: 0,
+            imported_resource_observations: 0,
+            imported_verification_bases: 0,
             imported_relation_versions: 0,
             updated_branch_heads: 0,
         });
@@ -1300,6 +1469,13 @@ pub(crate) fn apply_bundle_import(
         apply_acceptance_criterion_identities(&transaction, &document)?;
     let imported_verification_requirement_identities =
         apply_verification_requirement_identities(&transaction, &document)?;
+    let imported_content_objects = apply_content_objects(&transaction, &document, &payload_lookup)?;
+    let imported_resources = apply_resources(&transaction, &document)?;
+    let imported_resource_observations =
+        apply_resource_observations(&transaction, &document, &payload_lookup)?;
+    let imported_evidences = apply_evidences(&transaction, &document, &payload_lookup)?;
+    let imported_verification_bases =
+        apply_verification_bases(&transaction, &document, &payload_lookup)?;
     let imported_relation_versions =
         apply_relation_versions(&transaction, &document, &payload_lookup, now_us)?;
     let imported_commits = apply_commit_closure(&transaction, &document, &payload_lookup)?;
@@ -1307,15 +1483,20 @@ pub(crate) fn apply_bundle_import(
         apply_same_store_branch_fast_forwards(&transaction, &document, now_us)?;
 
     let outcome = "same_store_fast_forward_applied".to_owned();
-    let detail_json = bundle_import_apply_detail_json(
-        &preflight,
+    let counts = BundleImportApplyCounts {
         imported_commits,
         imported_entity_versions,
         imported_acceptance_criterion_identities,
         imported_verification_requirement_identities,
+        imported_content_objects,
+        imported_evidences,
+        imported_resources,
+        imported_resource_observations,
+        imported_verification_bases,
         imported_relation_versions,
         updated_branch_heads,
-    )?;
+    };
+    let detail_json = bundle_import_apply_detail_json(&preflight, counts)?;
     insert_import_attempt_outcome(
         &transaction,
         ImportAttemptOutcomeInsert {
@@ -1340,12 +1521,18 @@ pub(crate) fn apply_bundle_import(
         completed_at_us: Some(now_us),
         outcome,
         preflight,
-        imported_commits,
-        imported_entity_versions,
-        imported_acceptance_criterion_identities,
-        imported_verification_requirement_identities,
-        imported_relation_versions,
-        updated_branch_heads,
+        imported_commits: counts.imported_commits,
+        imported_entity_versions: counts.imported_entity_versions,
+        imported_acceptance_criterion_identities: counts.imported_acceptance_criterion_identities,
+        imported_verification_requirement_identities: counts
+            .imported_verification_requirement_identities,
+        imported_content_objects: counts.imported_content_objects,
+        imported_evidences: counts.imported_evidences,
+        imported_resources: counts.imported_resources,
+        imported_resource_observations: counts.imported_resource_observations,
+        imported_verification_bases: counts.imported_verification_bases,
+        imported_relation_versions: counts.imported_relation_versions,
+        updated_branch_heads: counts.updated_branch_heads,
     })
 }
 
@@ -1919,6 +2106,584 @@ fn load_relation_version_ref(
         metadata_json_size_bytes: usize_to_i64(
             "relation_version.metadata_json size",
             metadata_json.len(),
+        )?,
+    })
+}
+
+fn verification_basis_refs(
+    connection: &StoreConnection,
+    entity_versions: &[BundleEntityVersionRef],
+) -> Result<Vec<BundleVerificationBasisRef>> {
+    let entity_ids = typed_entity_ids(entity_versions, VERIFICATION_ENTITY_KIND);
+    entity_ids
+        .into_iter()
+        .map(|entity_id| load_verification_basis_ref(connection, entity_id))
+        .collect()
+}
+
+fn load_verification_basis_ref(
+    connection: &StoreConnection,
+    verification_entity_id: EntityId,
+) -> Result<BundleVerificationBasisRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT verified_at_commit_id,
+                    basis_schema_version,
+                    basis_json
+             FROM verification_basis
+             WHERE verification_entity_id = ?1",
+            params![&verification_entity_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((verified_at_commit_id, basis_schema_version, basis_json)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Verification basis for entity {verification_entity_id} does not exist"
+        )));
+    };
+    validate_positive_i64(
+        "verification_basis.basis_schema_version",
+        basis_schema_version,
+    )?;
+    validate_canonical_json_text("verification_basis.basis_json", &basis_json)?;
+    Ok(BundleVerificationBasisRef {
+        verification_entity_id,
+        verified_at_commit_id: decode_commit_id(
+            "verification_basis.verified_at_commit_id",
+            verified_at_commit_id,
+        )?,
+        basis_schema_version,
+        basis_json_digest: content_object_digest(basis_json.as_bytes()),
+        basis_json_size_bytes: usize_to_i64(
+            "verification_basis.basis_json size",
+            basis_json.len(),
+        )?,
+    })
+}
+
+fn verification_resource_basis_refs(
+    connection: &StoreConnection,
+    verification_bases: &[BundleVerificationBasisRef],
+) -> Result<Vec<BundleVerificationResourceBasisRef>> {
+    let mut refs = Vec::new();
+    for basis in verification_bases {
+        refs.extend(load_verification_resource_basis_refs(
+            connection,
+            basis.verification_entity_id,
+        )?);
+    }
+    refs.sort_by_key(|basis| (basis.verification_entity_id.raw_bytes(), basis.ordinal));
+    Ok(refs)
+}
+
+fn load_verification_resource_basis_refs(
+    connection: &StoreConnection,
+    verification_entity_id: EntityId,
+) -> Result<Vec<BundleVerificationResourceBasisRef>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT ordinal,
+                    resource_id,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_kind,
+                    scope_schema_version,
+                    scope_payload_json,
+                    baseline_observation_id,
+                    baseline_fingerprint
+             FROM verification_resource_basis
+             WHERE verification_entity_id = ?1
+             ORDER BY ordinal",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&verification_entity_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<Vec<u8>>>(7)?,
+                row.get::<_, Vec<u8>>(8)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut refs = Vec::new();
+    for row in rows {
+        let (
+            ordinal,
+            resource_id,
+            adapter_kind,
+            adapter_schema_version,
+            scope_kind,
+            scope_schema_version,
+            scope_payload_json,
+            baseline_observation_id,
+            baseline_fingerprint,
+        ) = row.map_err(storage_error)?;
+        validate_nonnegative_i64("verification_resource_basis.ordinal", ordinal)?;
+        validate_stored_text("verification_resource_basis.adapter_kind", &adapter_kind)?;
+        validate_positive_i64(
+            "verification_resource_basis.adapter_schema_version",
+            adapter_schema_version,
+        )?;
+        validate_stored_text("verification_resource_basis.scope_kind", &scope_kind)?;
+        validate_positive_i64(
+            "verification_resource_basis.scope_schema_version",
+            scope_schema_version,
+        )?;
+        validate_canonical_json_text(
+            "verification_resource_basis.scope_payload_json",
+            &scope_payload_json,
+        )?;
+        refs.push(BundleVerificationResourceBasisRef {
+            verification_entity_id,
+            ordinal,
+            resource_id: decode_resource_id(
+                "verification_resource_basis.resource_id",
+                resource_id,
+            )?,
+            adapter_kind,
+            adapter_schema_version,
+            scope_kind,
+            scope_schema_version,
+            scope_payload_json_digest: content_object_digest(scope_payload_json.as_bytes()),
+            scope_payload_json_size_bytes: usize_to_i64(
+                "verification_resource_basis.scope_payload_json size",
+                scope_payload_json.len(),
+            )?,
+            baseline_observation_id: decode_optional_resource_observation_id(
+                "verification_resource_basis.baseline_observation_id",
+                baseline_observation_id,
+            )?,
+            baseline_fingerprint: decode_digest(
+                "verification_resource_basis.baseline_fingerprint",
+                baseline_fingerprint,
+            )?,
+        });
+    }
+    Ok(refs)
+}
+
+fn verification_semantic_dependency_refs(
+    connection: &StoreConnection,
+    verification_bases: &[BundleVerificationBasisRef],
+) -> Result<Vec<BundleVerificationSemanticDependencyRef>> {
+    let mut refs = Vec::new();
+    for basis in verification_bases {
+        refs.extend(load_verification_semantic_dependency_refs(
+            connection,
+            basis.verification_entity_id,
+        )?);
+    }
+    refs.sort_by_key(|dependency| {
+        (
+            dependency.verification_entity_id.raw_bytes(),
+            dependency.ordinal,
+        )
+    });
+    Ok(refs)
+}
+
+fn load_verification_semantic_dependency_refs(
+    connection: &StoreConnection,
+    verification_entity_id: EntityId,
+) -> Result<Vec<BundleVerificationSemanticDependencyRef>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT ordinal,
+                    dependency_entity_id,
+                    expected_entity_version_id
+             FROM verification_semantic_dependency
+             WHERE verification_entity_id = ?1
+             ORDER BY ordinal",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&verification_entity_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut refs = Vec::new();
+    for row in rows {
+        let (ordinal, dependency_entity_id, expected_entity_version_id) =
+            row.map_err(storage_error)?;
+        validate_nonnegative_i64("verification_semantic_dependency.ordinal", ordinal)?;
+        refs.push(BundleVerificationSemanticDependencyRef {
+            verification_entity_id,
+            ordinal,
+            dependency_entity_id: decode_entity_id(
+                "verification_semantic_dependency.dependency_entity_id",
+                dependency_entity_id,
+            )?,
+            expected_entity_version_id: decode_entity_version_id(
+                "verification_semantic_dependency.expected_entity_version_id",
+                expected_entity_version_id,
+            )?,
+        });
+    }
+    Ok(refs)
+}
+
+fn evidence_closure_refs(
+    connection: &StoreConnection,
+    relation_versions: &[BundleRelationVersionRef],
+) -> Result<Vec<BundleEvidenceRef>> {
+    let mut evidence_ids = BTreeSet::new();
+    for relation_version in relation_versions {
+        if relation_version.relation_type == EVIDENCED_BY_RELATION_TYPE {
+            evidence_ids.insert(EvidenceId::from_bytes(parse_object_id_bytes(
+                "relation.target_object_id",
+                &relation_version.target_object_id,
+            )?)?);
+        }
+    }
+    evidence_ids
+        .into_iter()
+        .map(|evidence_id| load_evidence_ref(connection, evidence_id))
+        .collect()
+}
+
+fn load_evidence_ref(
+    connection: &StoreConnection,
+    evidence_id: EvidenceId,
+) -> Result<BundleEvidenceRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    evidence.evidence_kind,
+                    evidence.captured_at_us,
+                    evidence.source_session_id,
+                    evidence.metadata_json
+             FROM evidence
+             JOIN object_identity
+               ON object_identity.object_id = evidence.evidence_id
+             WHERE evidence.evidence_id = ?1",
+            params![&evidence_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((object_kind, evidence_kind, captured_at_us, source_session_id, metadata_json)) = row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Evidence {evidence_id} does not exist"
+        )));
+    };
+    validate_object_kind_exact("evidence.object_kind", &object_kind, EVIDENCE_OBJECT_KIND)?;
+    validate_stored_text("evidence.evidence_kind", &evidence_kind)?;
+    validate_nonnegative_i64("evidence.captured_at_us", captured_at_us)?;
+    validate_canonical_json_text("evidence.metadata_json", &metadata_json)?;
+    Ok(BundleEvidenceRef {
+        evidence_id,
+        evidence_kind,
+        captured_at_us,
+        source_session_id: decode_optional_session_id(
+            "evidence.source_session_id",
+            source_session_id,
+        )?,
+        metadata_json_digest: content_object_digest(metadata_json.as_bytes()),
+        metadata_json_size_bytes: usize_to_i64("evidence.metadata_json size", metadata_json.len())?,
+    })
+}
+
+fn evidence_content_refs(
+    connection: &StoreConnection,
+    evidences: &[BundleEvidenceRef],
+) -> Result<Vec<BundleEvidenceContentRef>> {
+    let mut refs = Vec::new();
+    for evidence in evidences {
+        refs.extend(load_evidence_content_refs(
+            connection,
+            evidence.evidence_id,
+        )?);
+    }
+    refs.sort_by_key(|content| (content.evidence_id.raw_bytes(), content.ordinal));
+    Ok(refs)
+}
+
+fn load_evidence_content_refs(
+    connection: &StoreConnection,
+    evidence_id: EvidenceId,
+) -> Result<Vec<BundleEvidenceContentRef>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT ordinal,
+                    content_digest,
+                    role
+             FROM evidence_content
+             WHERE evidence_id = ?1
+             ORDER BY ordinal",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&evidence_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut refs = Vec::new();
+    for row in rows {
+        let (ordinal, content_digest, role) = row.map_err(storage_error)?;
+        validate_nonnegative_i64("evidence_content.ordinal", ordinal)?;
+        validate_stored_text("evidence_content.role", &role)?;
+        refs.push(BundleEvidenceContentRef {
+            evidence_id,
+            ordinal,
+            content_digest: decode_digest("evidence_content.content_digest", content_digest)?,
+            role,
+        });
+    }
+    Ok(refs)
+}
+
+fn resource_closure_refs(
+    connection: &StoreConnection,
+    resource_basis: &[BundleVerificationResourceBasisRef],
+) -> Result<Vec<BundleResourceRef>> {
+    resource_basis
+        .iter()
+        .map(|basis| basis.resource_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|resource_id| load_resource_ref(connection, resource_id))
+        .collect()
+}
+
+fn load_resource_ref(
+    connection: &StoreConnection,
+    resource_id: ResourceId,
+) -> Result<BundleResourceRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    resource.resource_kind,
+                    resource.created_at_us
+             FROM resource
+             JOIN object_identity
+               ON object_identity.object_id = resource.resource_id
+             WHERE resource.resource_id = ?1",
+            params![&resource_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((object_kind, resource_kind, created_at_us)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Resource {resource_id} does not exist"
+        )));
+    };
+    validate_object_kind_exact("resource.object_kind", &object_kind, RESOURCE_OBJECT_KIND)?;
+    validate_stored_text("resource.resource_kind", &resource_kind)?;
+    validate_nonnegative_i64("resource.created_at_us", created_at_us)?;
+    Ok(BundleResourceRef {
+        resource_id,
+        resource_kind,
+        created_at_us,
+    })
+}
+
+fn resource_observation_closure_refs(
+    connection: &StoreConnection,
+    resource_basis: &[BundleVerificationResourceBasisRef],
+) -> Result<Vec<BundleResourceObservationRef>> {
+    resource_basis
+        .iter()
+        .filter_map(|basis| basis.baseline_observation_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|observation_id| load_resource_observation_ref(connection, observation_id))
+        .collect()
+}
+
+fn load_resource_observation_ref(
+    connection: &StoreConnection,
+    observation_id: ResourceObservationId,
+) -> Result<BundleResourceObservationRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    resource_observation.resource_id,
+                    resource_observation.adapter_kind,
+                    resource_observation.adapter_schema_version,
+                    resource_observation.captured_at_us,
+                    resource_observation.fingerprint,
+                    resource_observation.summary_json,
+                    resource_observation.detail_content_digest,
+                    resource_observation.source_session_id
+             FROM resource_observation
+             JOIN object_identity
+               ON object_identity.object_id = resource_observation.observation_id
+             WHERE resource_observation.observation_id = ?1",
+            params![&observation_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<Vec<u8>>>(7)?,
+                    row.get::<_, Option<Vec<u8>>>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((
+        object_kind,
+        resource_id,
+        adapter_kind,
+        adapter_schema_version,
+        captured_at_us,
+        fingerprint,
+        summary_json,
+        detail_content_digest,
+        source_session_id,
+    )) = row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ResourceObservation {observation_id} does not exist"
+        )));
+    };
+    validate_object_kind_exact(
+        "resource_observation.object_kind",
+        &object_kind,
+        RESOURCE_OBSERVATION_OBJECT_KIND,
+    )?;
+    validate_stored_text("resource_observation.adapter_kind", &adapter_kind)?;
+    validate_positive_i64(
+        "resource_observation.adapter_schema_version",
+        adapter_schema_version,
+    )?;
+    validate_nonnegative_i64("resource_observation.captured_at_us", captured_at_us)?;
+    validate_canonical_json_text("resource_observation.summary_json", &summary_json)?;
+    Ok(BundleResourceObservationRef {
+        observation_id,
+        resource_id: decode_resource_id("resource_observation.resource_id", resource_id)?,
+        adapter_kind,
+        adapter_schema_version,
+        captured_at_us,
+        fingerprint: decode_digest("resource_observation.fingerprint", fingerprint)?,
+        summary_json_digest: content_object_digest(summary_json.as_bytes()),
+        summary_json_size_bytes: usize_to_i64(
+            "resource_observation.summary_json size",
+            summary_json.len(),
+        )?,
+        detail_content_digest: detail_content_digest
+            .map(|bytes| decode_digest("resource_observation.detail_content_digest", bytes))
+            .transpose()?,
+        source_session_id: decode_optional_session_id(
+            "resource_observation.source_session_id",
+            source_session_id,
+        )?,
+    })
+}
+
+fn content_object_closure_refs(
+    connection: &StoreConnection,
+    evidence_contents: &[BundleEvidenceContentRef],
+    resource_observations: &[BundleResourceObservationRef],
+) -> Result<Vec<BundleContentObjectRef>> {
+    let mut content_digests = evidence_contents
+        .iter()
+        .map(|content| content.content_digest)
+        .collect::<BTreeSet<_>>();
+    content_digests.extend(
+        resource_observations
+            .iter()
+            .filter_map(|observation| observation.detail_content_digest),
+    );
+    content_digests
+        .into_iter()
+        .map(|content_digest| load_content_object_ref(connection, content_digest))
+        .collect()
+}
+
+fn load_content_object_ref(
+    connection: &StoreConnection,
+    content_digest: Digest,
+) -> Result<BundleContentObjectRef> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT size_bytes,
+                    media_type,
+                    format_metadata_json
+             FROM content_object
+             WHERE content_digest = ?1",
+            params![&content_digest.as_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((size_bytes, media_type, format_metadata_json)) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ContentObject {content_digest} does not exist"
+        )));
+    };
+    validate_nonnegative_i64("content_object.size_bytes", size_bytes)?;
+    if let Some(media_type) = &media_type {
+        validate_stored_text("content_object.media_type", media_type)?;
+    }
+    validate_canonical_json_text("content_object.format_metadata_json", &format_metadata_json)?;
+    Ok(BundleContentObjectRef {
+        content_digest,
+        size_bytes,
+        media_type,
+        format_metadata_json_digest: content_object_digest(format_metadata_json.as_bytes()),
+        format_metadata_json_size_bytes: usize_to_i64(
+            "content_object.format_metadata_json size",
+            format_metadata_json.len(),
         )?,
     })
 }
@@ -2852,6 +3617,208 @@ fn load_relation_version_payload_candidate(
     )
 }
 
+fn load_content_object_payload_candidate(
+    connection: &StoreConnection,
+    content: &BundleContentObjectRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let format_metadata_json = connection
+        .inner()
+        .query_row(
+            "SELECT format_metadata_json
+             FROM content_object
+             WHERE content_digest = ?1",
+            params![&content.content_digest.as_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "ContentObject {} does not exist",
+                content.content_digest
+            ))
+        })?;
+    if content_object_digest(format_metadata_json.as_bytes()) != content.format_metadata_json_digest
+    {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ContentObject {} format metadata JSON digest changed during payload export",
+            content.content_digest
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "content_object_format_metadata",
+        CanonicalValue::object(vec![string_field(
+            "content_digest",
+            content.content_digest.to_string(),
+        )])?,
+        "content_object.format_metadata_json",
+        format_metadata_json,
+    )
+}
+
+fn load_evidence_payload_candidate(
+    connection: &StoreConnection,
+    evidence: &BundleEvidenceRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let metadata_json = connection
+        .inner()
+        .query_row(
+            "SELECT metadata_json
+             FROM evidence
+             WHERE evidence_id = ?1",
+            params![&evidence.evidence_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!("Evidence {} does not exist", evidence.evidence_id))
+        })?;
+    if content_object_digest(metadata_json.as_bytes()) != evidence.metadata_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Evidence {} metadata JSON digest changed during payload export",
+            evidence.evidence_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "evidence_metadata",
+        CanonicalValue::object(vec![string_field(
+            "evidence_id",
+            evidence.evidence_id.to_string(),
+        )])?,
+        "evidence.metadata_json",
+        metadata_json,
+    )
+}
+
+fn load_resource_observation_payload_candidate(
+    connection: &StoreConnection,
+    observation: &BundleResourceObservationRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let summary_json = connection
+        .inner()
+        .query_row(
+            "SELECT summary_json
+             FROM resource_observation
+             WHERE observation_id = ?1",
+            params![&observation.observation_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "ResourceObservation {} does not exist",
+                observation.observation_id
+            ))
+        })?;
+    if content_object_digest(summary_json.as_bytes()) != observation.summary_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ResourceObservation {} summary JSON digest changed during payload export",
+            observation.observation_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "resource_observation_summary",
+        CanonicalValue::object(vec![string_field(
+            "observation_id",
+            observation.observation_id.to_string(),
+        )])?,
+        "resource_observation.summary_json",
+        summary_json,
+    )
+}
+
+fn load_verification_basis_payload_candidate(
+    connection: &StoreConnection,
+    basis: &BundleVerificationBasisRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let basis_json = connection
+        .inner()
+        .query_row(
+            "SELECT basis_json
+             FROM verification_basis
+             WHERE verification_entity_id = ?1",
+            params![&basis.verification_entity_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "Verification basis for entity {} does not exist",
+                basis.verification_entity_id
+            ))
+        })?;
+    if content_object_digest(basis_json.as_bytes()) != basis.basis_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Verification basis for entity {} JSON digest changed during payload export",
+            basis.verification_entity_id
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "verification_basis",
+        CanonicalValue::object(vec![string_field(
+            "verification_entity_id",
+            basis.verification_entity_id.to_string(),
+        )])?,
+        "verification_basis.basis_json",
+        basis_json,
+    )
+}
+
+fn load_verification_resource_basis_payload_candidate(
+    connection: &StoreConnection,
+    basis: &BundleVerificationResourceBasisRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let scope_payload_json = connection
+        .inner()
+        .query_row(
+            "SELECT scope_payload_json
+             FROM verification_resource_basis
+             WHERE verification_entity_id = ?1
+               AND ordinal = ?2",
+            params![&basis.verification_entity_id.raw_bytes()[..], basis.ordinal],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "Verification resource basis {} ordinal {} does not exist",
+                basis.verification_entity_id, basis.ordinal
+            ))
+        })?;
+    if content_object_digest(scope_payload_json.as_bytes()) != basis.scope_payload_json_digest {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "Verification resource basis {} ordinal {} scope payload digest changed during payload export",
+            basis.verification_entity_id, basis.ordinal
+        )));
+    }
+    push_canonical_payload(
+        candidates,
+        "verification_resource_scope_payload",
+        CanonicalValue::object(vec![
+            string_field(
+                "verification_entity_id",
+                basis.verification_entity_id.to_string(),
+            ),
+            integer_field("ordinal", basis.ordinal)?,
+        ])?,
+        "verification_resource_basis.scope_payload_json",
+        scope_payload_json,
+    )
+}
+
 fn load_knowledge_exposure_source_knowledge_payload_candidate(
     connection: &StoreConnection,
     source: &BundleKnowledgeExposureLocalSourceRef,
@@ -3278,6 +4245,14 @@ struct BundleManifestValueInput<'a> {
     acceptance_criterion_identities: &'a [BundleAcceptanceCriterionIdentityRef],
     verification_requirement_identities: &'a [BundleVerificationRequirementIdentityRef],
     relation_versions: &'a [BundleRelationVersionRef],
+    content_objects: &'a [BundleContentObjectRef],
+    evidences: &'a [BundleEvidenceRef],
+    evidence_contents: &'a [BundleEvidenceContentRef],
+    resources: &'a [BundleResourceRef],
+    resource_observations: &'a [BundleResourceObservationRef],
+    verification_bases: &'a [BundleVerificationBasisRef],
+    verification_resource_bases: &'a [BundleVerificationResourceBasisRef],
+    verification_semantic_dependencies: &'a [BundleVerificationSemanticDependencyRef],
     knowledge_spaces: &'a [BundleKnowledgeSpaceRef],
     knowledge_exposures: &'a [BundleKnowledgeExposureRef],
     knowledge_exposure_local_sources: &'a [BundleKnowledgeExposureLocalSourceRef],
@@ -3386,6 +4361,86 @@ fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue>
                     .relation_versions
                     .iter()
                     .map(relation_version_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "content_objects".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .content_objects
+                    .iter()
+                    .map(content_object_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "evidences".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .evidences
+                    .iter()
+                    .map(evidence_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "evidence_contents".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .evidence_contents
+                    .iter()
+                    .map(evidence_content_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "resources".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .resources
+                    .iter()
+                    .map(resource_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "resource_observations".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .resource_observations
+                    .iter()
+                    .map(resource_observation_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "verification_bases".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .verification_bases
+                    .iter()
+                    .map(verification_basis_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "verification_resource_bases".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .verification_resource_bases
+                    .iter()
+                    .map(verification_resource_basis_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "verification_semantic_dependencies".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .verification_semantic_dependencies
+                    .iter()
+                    .map(verification_semantic_dependency_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
@@ -3685,6 +4740,169 @@ fn relation_version_ref_value(
             "metadata_json_size_bytes",
             relation_version.metadata_json_size_bytes,
         )?,
+    ])
+}
+
+fn content_object_ref_value(content: &BundleContentObjectRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("content_digest", content.content_digest.to_string()),
+        integer_field("size_bytes", content.size_bytes)?,
+        optional_string_field("media_type", content.media_type.as_deref()),
+        string_field(
+            "format_metadata_json_digest",
+            content.format_metadata_json_digest.to_string(),
+        ),
+        integer_field(
+            "format_metadata_json_size_bytes",
+            content.format_metadata_json_size_bytes,
+        )?,
+    ])
+}
+
+fn evidence_ref_value(evidence: &BundleEvidenceRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("evidence_id", evidence.evidence_id.to_string()),
+        string_field("evidence_kind", evidence.evidence_kind.clone()),
+        integer_field("captured_at_us", evidence.captured_at_us)?,
+        optional_string_field(
+            "source_session_id",
+            evidence
+                .source_session_id
+                .map(|id| id.to_string())
+                .as_deref(),
+        ),
+        string_field(
+            "metadata_json_digest",
+            evidence.metadata_json_digest.to_string(),
+        ),
+        integer_field(
+            "metadata_json_size_bytes",
+            evidence.metadata_json_size_bytes,
+        )?,
+    ])
+}
+
+fn evidence_content_ref_value(content: &BundleEvidenceContentRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("evidence_id", content.evidence_id.to_string()),
+        integer_field("ordinal", content.ordinal)?,
+        string_field("content_digest", content.content_digest.to_string()),
+        string_field("role", content.role.clone()),
+    ])
+}
+
+fn resource_ref_value(resource: &BundleResourceRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("resource_id", resource.resource_id.to_string()),
+        string_field("resource_kind", resource.resource_kind.clone()),
+        integer_field("created_at_us", resource.created_at_us)?,
+    ])
+}
+
+fn resource_observation_ref_value(
+    observation: &BundleResourceObservationRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("observation_id", observation.observation_id.to_string()),
+        string_field("resource_id", observation.resource_id.to_string()),
+        string_field("adapter_kind", observation.adapter_kind.clone()),
+        integer_field("adapter_schema_version", observation.adapter_schema_version)?,
+        integer_field("captured_at_us", observation.captured_at_us)?,
+        string_field("fingerprint", observation.fingerprint.to_string()),
+        string_field(
+            "summary_json_digest",
+            observation.summary_json_digest.to_string(),
+        ),
+        integer_field(
+            "summary_json_size_bytes",
+            observation.summary_json_size_bytes,
+        )?,
+        optional_string_field(
+            "detail_content_digest",
+            observation
+                .detail_content_digest
+                .map(|digest| digest.to_string())
+                .as_deref(),
+        ),
+        optional_string_field(
+            "source_session_id",
+            observation
+                .source_session_id
+                .map(|id| id.to_string())
+                .as_deref(),
+        ),
+    ])
+}
+
+fn verification_basis_ref_value(basis: &BundleVerificationBasisRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field(
+            "verification_entity_id",
+            basis.verification_entity_id.to_string(),
+        ),
+        string_field(
+            "verified_at_commit_id",
+            basis.verified_at_commit_id.to_string(),
+        ),
+        integer_field("basis_schema_version", basis.basis_schema_version)?,
+        string_field("basis_json_digest", basis.basis_json_digest.to_string()),
+        integer_field("basis_json_size_bytes", basis.basis_json_size_bytes)?,
+    ])
+}
+
+fn verification_resource_basis_ref_value(
+    basis: &BundleVerificationResourceBasisRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field(
+            "verification_entity_id",
+            basis.verification_entity_id.to_string(),
+        ),
+        integer_field("ordinal", basis.ordinal)?,
+        string_field("resource_id", basis.resource_id.to_string()),
+        string_field("adapter_kind", basis.adapter_kind.clone()),
+        integer_field("adapter_schema_version", basis.adapter_schema_version)?,
+        string_field("scope_kind", basis.scope_kind.clone()),
+        integer_field("scope_schema_version", basis.scope_schema_version)?,
+        string_field(
+            "scope_payload_json_digest",
+            basis.scope_payload_json_digest.to_string(),
+        ),
+        integer_field(
+            "scope_payload_json_size_bytes",
+            basis.scope_payload_json_size_bytes,
+        )?,
+        optional_string_field(
+            "baseline_observation_id",
+            basis
+                .baseline_observation_id
+                .map(|id| id.to_string())
+                .as_deref(),
+        ),
+        string_field(
+            "baseline_fingerprint",
+            basis.baseline_fingerprint.to_string(),
+        ),
+    ])
+}
+
+fn verification_semantic_dependency_ref_value(
+    dependency: &BundleVerificationSemanticDependencyRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field(
+            "verification_entity_id",
+            dependency.verification_entity_id.to_string(),
+        ),
+        integer_field("ordinal", dependency.ordinal)?,
+        string_field(
+            "dependency_entity_id",
+            dependency.dependency_entity_id.to_string(),
+        ),
+        string_field(
+            "expected_entity_version_id",
+            dependency.expected_entity_version_id.to_string(),
+        ),
     ])
 }
 
@@ -4010,12 +5228,7 @@ fn bundle_import_attempt_detail_json(preflight: &BundleImportPreflightResult) ->
 
 fn bundle_import_apply_detail_json(
     preflight: &BundleImportPreflightResult,
-    imported_commits: usize,
-    imported_entity_versions: usize,
-    imported_acceptance_criterion_identities: usize,
-    imported_verification_requirement_identities: usize,
-    imported_relation_versions: usize,
-    updated_branch_heads: usize,
+    counts: BundleImportApplyCounts,
 ) -> Result<String> {
     let value = CanonicalValue::object(vec![
         ("valid".to_owned(), CanonicalValue::Bool(preflight.valid)),
@@ -4046,33 +5259,62 @@ fn bundle_import_apply_detail_json(
         string_field("action", preflight.action.clone()),
         integer_field(
             "imported_commits",
-            usize_to_i64("imported_commits", imported_commits)?,
+            usize_to_i64("imported_commits", counts.imported_commits)?,
         )?,
         integer_field(
             "imported_entity_versions",
-            usize_to_i64("imported_entity_versions", imported_entity_versions)?,
+            usize_to_i64("imported_entity_versions", counts.imported_entity_versions)?,
         )?,
         integer_field(
             "imported_acceptance_criterion_identities",
             usize_to_i64(
                 "imported_acceptance_criterion_identities",
-                imported_acceptance_criterion_identities,
+                counts.imported_acceptance_criterion_identities,
             )?,
         )?,
         integer_field(
             "imported_verification_requirement_identities",
             usize_to_i64(
                 "imported_verification_requirement_identities",
-                imported_verification_requirement_identities,
+                counts.imported_verification_requirement_identities,
+            )?,
+        )?,
+        integer_field(
+            "imported_content_objects",
+            usize_to_i64("imported_content_objects", counts.imported_content_objects)?,
+        )?,
+        integer_field(
+            "imported_evidences",
+            usize_to_i64("imported_evidences", counts.imported_evidences)?,
+        )?,
+        integer_field(
+            "imported_resources",
+            usize_to_i64("imported_resources", counts.imported_resources)?,
+        )?,
+        integer_field(
+            "imported_resource_observations",
+            usize_to_i64(
+                "imported_resource_observations",
+                counts.imported_resource_observations,
+            )?,
+        )?,
+        integer_field(
+            "imported_verification_bases",
+            usize_to_i64(
+                "imported_verification_bases",
+                counts.imported_verification_bases,
             )?,
         )?,
         integer_field(
             "imported_relation_versions",
-            usize_to_i64("imported_relation_versions", imported_relation_versions)?,
+            usize_to_i64(
+                "imported_relation_versions",
+                counts.imported_relation_versions,
+            )?,
         )?,
         integer_field(
             "updated_branch_heads",
-            usize_to_i64("updated_branch_heads", updated_branch_heads)?,
+            usize_to_i64("updated_branch_heads", counts.updated_branch_heads)?,
         )?,
     ])?;
     let bytes = canonical_bytes(&value)?;
@@ -4185,7 +5427,10 @@ fn apply_entity_versions(
 fn same_store_entity_kind_supported(entity_kind: &str) -> bool {
     matches!(
         entity_kind,
-        TASK_ENTITY_KIND | ACCEPTANCE_CRITERION_ENTITY_KIND | VERIFICATION_REQUIREMENT_ENTITY_KIND
+        TASK_ENTITY_KIND
+            | ACCEPTANCE_CRITERION_ENTITY_KIND
+            | VERIFICATION_REQUIREMENT_ENTITY_KIND
+            | VERIFICATION_ENTITY_KIND
     )
 }
 
@@ -4226,6 +5471,225 @@ fn apply_verification_requirement_identities(
         )?;
         if ensure_verification_requirement_identity_row(transaction, identity)? {
             imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_content_objects(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<usize> {
+    let mut imported = 0;
+    for content in &document.content_objects {
+        let owner = CanonicalValue::object(vec![string_field(
+            "content_digest",
+            content.content_digest.to_string(),
+        )])?;
+        let format_metadata_json = payload_lookup.required_json(
+            "content_object_format_metadata",
+            owner,
+            Some(content.format_metadata_json_digest),
+            Some(content.format_metadata_json_size_bytes),
+        )?;
+        require_canonical_object_json(
+            "bundle content_object.format_metadata_json",
+            &format_metadata_json,
+        )?;
+        if ensure_content_object_row(transaction, content, &format_metadata_json)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_resources(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+) -> Result<usize> {
+    let mut imported = 0;
+    for resource in &document.resources {
+        ensure_object_identity_row(
+            transaction,
+            "resource",
+            &resource.resource_id.raw_bytes(),
+            RESOURCE_OBJECT_KIND,
+            resource.created_at_us,
+        )?;
+        if ensure_resource_row(transaction, resource)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_resource_observations(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<usize> {
+    let mut imported = 0;
+    for observation in &document.resource_observations {
+        require_resource_row(transaction, observation.resource_id)?;
+        if let Some(content_digest) = observation.detail_content_digest {
+            require_content_object(transaction, content_digest)?;
+        }
+        if observation.source_session_id.is_some() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle resource observation source_session_id is outside same-Store apply scope"
+                    .to_owned(),
+            ));
+        }
+        let owner = CanonicalValue::object(vec![string_field(
+            "observation_id",
+            observation.observation_id.to_string(),
+        )])?;
+        let summary_json = payload_lookup.required_json(
+            "resource_observation_summary",
+            owner,
+            Some(observation.summary_json_digest),
+            Some(observation.summary_json_size_bytes),
+        )?;
+        require_canonical_object_json("bundle resource_observation.summary_json", &summary_json)?;
+        ensure_object_identity_row(
+            transaction,
+            "resource_observation",
+            &observation.observation_id.raw_bytes(),
+            RESOURCE_OBSERVATION_OBJECT_KIND,
+            observation.captured_at_us,
+        )?;
+        if ensure_resource_observation_row(transaction, observation, &summary_json)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_evidences(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<usize> {
+    let mut imported = 0;
+    for evidence in &document.evidences {
+        if evidence.source_session_id.is_some() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle evidence source_session_id is outside same-Store apply scope".to_owned(),
+            ));
+        }
+        let owner = CanonicalValue::object(vec![string_field(
+            "evidence_id",
+            evidence.evidence_id.to_string(),
+        )])?;
+        let metadata_json = payload_lookup.required_json(
+            "evidence_metadata",
+            owner,
+            Some(evidence.metadata_json_digest),
+            Some(evidence.metadata_json_size_bytes),
+        )?;
+        require_canonical_object_json("bundle evidence.metadata_json", &metadata_json)?;
+        ensure_object_identity_row(
+            transaction,
+            "evidence",
+            &evidence.evidence_id.raw_bytes(),
+            EVIDENCE_OBJECT_KIND,
+            evidence.captured_at_us,
+        )?;
+        if ensure_evidence_row(transaction, evidence, &metadata_json)? {
+            imported += 1;
+        }
+        for content in document
+            .evidence_contents
+            .iter()
+            .filter(|content| content.evidence_id == evidence.evidence_id)
+        {
+            require_content_object(transaction, content.content_digest)?;
+            ensure_evidence_content_row(transaction, content)?;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_verification_bases(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<usize> {
+    let mut imported = 0;
+    for basis in &document.verification_bases {
+        require_entity_kind(
+            transaction,
+            basis.verification_entity_id,
+            VERIFICATION_ENTITY_KIND,
+        )?;
+        require_commit_present(transaction, basis.verified_at_commit_id)?;
+        let owner = CanonicalValue::object(vec![string_field(
+            "verification_entity_id",
+            basis.verification_entity_id.to_string(),
+        )])?;
+        let basis_json = payload_lookup.required_json(
+            "verification_basis",
+            owner,
+            Some(basis.basis_json_digest),
+            Some(basis.basis_json_size_bytes),
+        )?;
+        require_canonical_object_json("bundle verification_basis.basis_json", &basis_json)?;
+        if ensure_verification_basis_row(transaction, basis, &basis_json)? {
+            imported += 1;
+        }
+        for dependency in document
+            .verification_semantic_dependencies
+            .iter()
+            .filter(|dependency| dependency.verification_entity_id == basis.verification_entity_id)
+        {
+            require_entity_version_row(
+                transaction,
+                dependency.dependency_entity_id,
+                dependency.expected_entity_version_id,
+            )?;
+            ensure_verification_semantic_dependency_row(transaction, dependency)?;
+        }
+        for resource_basis in document
+            .verification_resource_bases
+            .iter()
+            .filter(|resource_basis| {
+                resource_basis.verification_entity_id == basis.verification_entity_id
+            })
+        {
+            require_resource_row(transaction, resource_basis.resource_id)?;
+            if let Some(observation_id) = resource_basis.baseline_observation_id {
+                require_resource_observation_row(
+                    transaction,
+                    observation_id,
+                    resource_basis.resource_id,
+                    resource_basis.adapter_kind.as_str(),
+                    resource_basis.adapter_schema_version,
+                    resource_basis.baseline_fingerprint,
+                )?;
+            }
+            let owner = CanonicalValue::object(vec![
+                string_field(
+                    "verification_entity_id",
+                    resource_basis.verification_entity_id.to_string(),
+                ),
+                integer_field("ordinal", resource_basis.ordinal)?,
+            ])?;
+            let scope_payload_json = payload_lookup.required_json(
+                "verification_resource_scope_payload",
+                owner,
+                Some(resource_basis.scope_payload_json_digest),
+                Some(resource_basis.scope_payload_json_size_bytes),
+            )?;
+            require_canonical_object_json(
+                "bundle verification_resource_basis.scope_payload_json",
+                &scope_payload_json,
+            )?;
+            ensure_verification_resource_basis_row(
+                transaction,
+                resource_basis,
+                &scope_payload_json,
+            )?;
         }
     }
     Ok(imported)
@@ -4537,6 +6001,48 @@ fn require_entity_kind(
     Ok(())
 }
 
+fn require_entity_version_row(
+    transaction: &Transaction<'_>,
+    entity_id: EntityId,
+    entity_version_id: EntityVersionId,
+) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM entity_version
+             WHERE entity_id = ?1
+               AND entity_version_id = ?2",
+            params![
+                &entity_id.raw_bytes()[..],
+                &entity_version_id.raw_bytes()[..],
+            ],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!(
+                "EntityVersion {entity_version_id} for entity {entity_id} is missing"
+            ))
+        })
+}
+
+fn require_commit_present(transaction: &Transaction<'_>, commit_id: CommitId) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM workstate_commit
+             WHERE commit_id = ?1",
+            params![&commit_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!("Commit {commit_id} is missing"))
+        })
+}
+
 fn ensure_acceptance_criterion_identity_row(
     transaction: &Transaction<'_>,
     identity: &BundleAcceptanceCriterionIdentityRef,
@@ -4633,6 +6139,636 @@ fn ensure_typed_identity_row(
         )
         .map_err(storage_error)?;
     Ok(true)
+}
+
+fn ensure_object_identity_row(
+    transaction: &Transaction<'_>,
+    label: &str,
+    object_id_bytes: &[u8; 16],
+    expected_kind: &str,
+    created_at_us: i64,
+) -> Result<()> {
+    let existing_object_kind = transaction
+        .query_row(
+            "SELECT object_kind
+             FROM object_identity
+             WHERE object_id = ?1",
+            params![&object_id_bytes[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    match existing_object_kind {
+        Some(object_kind) if object_kind == expected_kind => Ok(()),
+        Some(object_kind) => Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "{label} object exists with kind {object_kind}, not {expected_kind}"
+        ))),
+        None => {
+            transaction
+                .execute(
+                    "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+                     VALUES (?1, ?2, ?3)",
+                    params![&object_id_bytes[..], expected_kind, created_at_us],
+                )
+                .map_err(storage_error)?;
+            Ok(())
+        }
+    }
+}
+
+fn ensure_content_object_row(
+    transaction: &Transaction<'_>,
+    content: &BundleContentObjectRef,
+    format_metadata_json: &str,
+) -> Result<bool> {
+    let row = transaction
+        .query_row(
+            "SELECT size_bytes, media_type, format_metadata_json
+             FROM content_object
+             WHERE content_digest = ?1",
+            params![&content.content_digest.as_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((size_bytes, media_type, stored_format_metadata_json)) = row {
+        if size_bytes != content.size_bytes
+            || media_type != content.media_type
+            || stored_format_metadata_json != format_metadata_json
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "ContentObject {} exists with different content",
+                content.content_digest
+            )));
+        }
+        return Ok(false);
+    }
+    transaction
+        .execute(
+            "INSERT INTO content_object(
+                content_digest,
+                size_bytes,
+                media_type,
+                format_metadata_json
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &content.content_digest.as_bytes()[..],
+                content.size_bytes,
+                content.media_type.as_deref(),
+                format_metadata_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn require_content_object(transaction: &Transaction<'_>, content_digest: Digest) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM content_object
+             WHERE content_digest = ?1",
+            params![&content_digest.as_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!(
+                "ContentObject {content_digest} is missing"
+            ))
+        })
+}
+
+fn ensure_resource_row(
+    transaction: &Transaction<'_>,
+    resource: &BundleResourceRef,
+) -> Result<bool> {
+    let row = transaction
+        .query_row(
+            "SELECT resource_kind, created_at_us
+             FROM resource
+             WHERE resource_id = ?1",
+            params![&resource.resource_id.raw_bytes()[..]],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((resource_kind, created_at_us)) = row {
+        if resource_kind != resource.resource_kind || created_at_us != resource.created_at_us {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Resource {} exists with different content",
+                resource.resource_id
+            )));
+        }
+        return Ok(false);
+    }
+    transaction
+        .execute(
+            "INSERT INTO resource(resource_id, resource_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &resource.resource_id.raw_bytes()[..],
+                resource.resource_kind,
+                resource.created_at_us,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn require_resource_row(transaction: &Transaction<'_>, resource_id: ResourceId) -> Result<()> {
+    transaction
+        .query_row(
+            "SELECT 1
+             FROM resource
+             WHERE resource_id = ?1",
+            params![&resource_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            WorkVcsError::ImmutableImportInvalid(format!("Resource {resource_id} is missing"))
+        })
+}
+
+fn ensure_resource_observation_row(
+    transaction: &Transaction<'_>,
+    observation: &BundleResourceObservationRef,
+    summary_json: &str,
+) -> Result<bool> {
+    let row = transaction
+        .query_row(
+            "SELECT resource_id,
+                    adapter_kind,
+                    adapter_schema_version,
+                    captured_at_us,
+                    fingerprint,
+                    summary_json,
+                    detail_content_digest,
+                    source_session_id
+             FROM resource_observation
+             WHERE observation_id = ?1",
+            params![&observation.observation_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                    row.get::<_, Option<Vec<u8>>>(7)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((
+        resource_id,
+        adapter_kind,
+        adapter_schema_version,
+        captured_at_us,
+        fingerprint,
+        stored_summary_json,
+        detail_content_digest,
+        source_session_id,
+    )) = row
+    {
+        let detail_content_digest = detail_content_digest
+            .map(|bytes| decode_digest("resource_observation.detail_content_digest", bytes))
+            .transpose()?;
+        let source_session_id = decode_optional_session_id(
+            "resource_observation.source_session_id",
+            source_session_id,
+        )?;
+        if decode_resource_id("resource_observation.resource_id", resource_id)?
+            != observation.resource_id
+            || adapter_kind != observation.adapter_kind
+            || adapter_schema_version != observation.adapter_schema_version
+            || captured_at_us != observation.captured_at_us
+            || decode_digest("resource_observation.fingerprint", fingerprint)?
+                != observation.fingerprint
+            || stored_summary_json != summary_json
+            || detail_content_digest != observation.detail_content_digest
+            || source_session_id != observation.source_session_id
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "ResourceObservation {} exists with different content",
+                observation.observation_id
+            )));
+        }
+        return Ok(false);
+    }
+    let detail_content_digest_bytes = observation
+        .detail_content_digest
+        .map(|digest| *digest.as_bytes());
+    let source_session_id_bytes = observation.source_session_id.map(|id| id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO resource_observation(
+                observation_id,
+                resource_id,
+                adapter_kind,
+                adapter_schema_version,
+                captured_at_us,
+                fingerprint,
+                summary_json,
+                detail_content_digest,
+                source_session_id
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                &observation.observation_id.raw_bytes()[..],
+                &observation.resource_id.raw_bytes()[..],
+                observation.adapter_kind,
+                observation.adapter_schema_version,
+                observation.captured_at_us,
+                &observation.fingerprint.as_bytes()[..],
+                summary_json,
+                detail_content_digest_bytes.as_ref().map(|bytes| &bytes[..]),
+                source_session_id_bytes.as_ref().map(|bytes| &bytes[..]),
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn require_resource_observation_row(
+    transaction: &Transaction<'_>,
+    observation_id: ResourceObservationId,
+    resource_id: ResourceId,
+    adapter_kind: &str,
+    adapter_schema_version: i64,
+    fingerprint: Digest,
+) -> Result<()> {
+    let row = transaction
+        .query_row(
+            "SELECT resource_id, adapter_kind, adapter_schema_version, fingerprint
+             FROM resource_observation
+             WHERE observation_id = ?1",
+            params![&observation_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((
+        stored_resource_id,
+        stored_adapter_kind,
+        stored_adapter_schema_version,
+        stored_fingerprint,
+    )) = row
+    else {
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "ResourceObservation {observation_id} is missing"
+        )));
+    };
+    if decode_resource_id("resource_observation.resource_id", stored_resource_id)? != resource_id
+        || stored_adapter_kind != adapter_kind
+        || stored_adapter_schema_version != adapter_schema_version
+        || decode_digest("resource_observation.fingerprint", stored_fingerprint)? != fingerprint
+    {
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "ResourceObservation {observation_id} does not match verification resource basis"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_evidence_row(
+    transaction: &Transaction<'_>,
+    evidence: &BundleEvidenceRef,
+    metadata_json: &str,
+) -> Result<bool> {
+    let row = transaction
+        .query_row(
+            "SELECT evidence_kind,
+                    captured_at_us,
+                    source_session_id,
+                    metadata_json
+             FROM evidence
+             WHERE evidence_id = ?1",
+            params![&evidence.evidence_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((evidence_kind, captured_at_us, source_session_id, stored_metadata_json)) = row {
+        let source_session_id =
+            decode_optional_session_id("evidence.source_session_id", source_session_id)?;
+        if evidence_kind != evidence.evidence_kind
+            || captured_at_us != evidence.captured_at_us
+            || source_session_id != evidence.source_session_id
+            || stored_metadata_json != metadata_json
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Evidence {} exists with different content",
+                evidence.evidence_id
+            )));
+        }
+        return Ok(false);
+    }
+    let source_session_id_bytes = evidence.source_session_id.map(|id| id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO evidence(
+                evidence_id,
+                evidence_kind,
+                captured_at_us,
+                source_session_id,
+                metadata_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &evidence.evidence_id.raw_bytes()[..],
+                evidence.evidence_kind,
+                evidence.captured_at_us,
+                source_session_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                metadata_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn ensure_evidence_content_row(
+    transaction: &Transaction<'_>,
+    content: &BundleEvidenceContentRef,
+) -> Result<()> {
+    let row = transaction
+        .query_row(
+            "SELECT content_digest, role
+             FROM evidence_content
+             WHERE evidence_id = ?1
+               AND ordinal = ?2",
+            params![&content.evidence_id.raw_bytes()[..], content.ordinal],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((stored_content_digest, role)) = row {
+        if decode_digest("evidence_content.content_digest", stored_content_digest)?
+            != content.content_digest
+            || role != content.role
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Evidence {} content ordinal {} exists with different content",
+                content.evidence_id, content.ordinal
+            )));
+        }
+        return Ok(());
+    }
+    transaction
+        .execute(
+            "INSERT INTO evidence_content(evidence_id, ordinal, content_digest, role)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &content.evidence_id.raw_bytes()[..],
+                content.ordinal,
+                &content.content_digest.as_bytes()[..],
+                content.role,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn ensure_verification_basis_row(
+    transaction: &Transaction<'_>,
+    basis: &BundleVerificationBasisRef,
+    basis_json: &str,
+) -> Result<bool> {
+    let row = transaction
+        .query_row(
+            "SELECT verified_at_commit_id, basis_schema_version, basis_json
+             FROM verification_basis
+             WHERE verification_entity_id = ?1",
+            params![&basis.verification_entity_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((verified_at_commit_id, basis_schema_version, stored_basis_json)) = row {
+        if decode_commit_id(
+            "verification_basis.verified_at_commit_id",
+            verified_at_commit_id,
+        )? != basis.verified_at_commit_id
+            || basis_schema_version != basis.basis_schema_version
+            || stored_basis_json != basis_json
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Verification basis for entity {} exists with different content",
+                basis.verification_entity_id
+            )));
+        }
+        return Ok(false);
+    }
+    transaction
+        .execute(
+            "INSERT INTO verification_basis(
+                verification_entity_id,
+                verified_at_commit_id,
+                basis_schema_version,
+                basis_json
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &basis.verification_entity_id.raw_bytes()[..],
+                &basis.verified_at_commit_id.raw_bytes()[..],
+                basis.basis_schema_version,
+                basis_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn ensure_verification_semantic_dependency_row(
+    transaction: &Transaction<'_>,
+    dependency: &BundleVerificationSemanticDependencyRef,
+) -> Result<()> {
+    let row = transaction
+        .query_row(
+            "SELECT dependency_entity_id, expected_entity_version_id
+             FROM verification_semantic_dependency
+             WHERE verification_entity_id = ?1
+               AND ordinal = ?2",
+            params![
+                &dependency.verification_entity_id.raw_bytes()[..],
+                dependency.ordinal,
+            ],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((dependency_entity_id, expected_entity_version_id)) = row {
+        if decode_entity_id(
+            "verification_semantic_dependency.dependency_entity_id",
+            dependency_entity_id,
+        )? != dependency.dependency_entity_id
+            || decode_entity_version_id(
+                "verification_semantic_dependency.expected_entity_version_id",
+                expected_entity_version_id,
+            )? != dependency.expected_entity_version_id
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Verification semantic dependency {} ordinal {} exists with different content",
+                dependency.verification_entity_id, dependency.ordinal
+            )));
+        }
+        return Ok(());
+    }
+    transaction
+        .execute(
+            "INSERT INTO verification_semantic_dependency(
+                verification_entity_id,
+                ordinal,
+                dependency_entity_id,
+                expected_entity_version_id
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &dependency.verification_entity_id.raw_bytes()[..],
+                dependency.ordinal,
+                &dependency.dependency_entity_id.raw_bytes()[..],
+                &dependency.expected_entity_version_id.raw_bytes()[..],
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn ensure_verification_resource_basis_row(
+    transaction: &Transaction<'_>,
+    basis: &BundleVerificationResourceBasisRef,
+    scope_payload_json: &str,
+) -> Result<()> {
+    let row = transaction
+        .query_row(
+            "SELECT resource_id,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_kind,
+                    scope_schema_version,
+                    scope_payload_json,
+                    baseline_observation_id,
+                    baseline_fingerprint
+             FROM verification_resource_basis
+             WHERE verification_entity_id = ?1
+               AND ordinal = ?2",
+            params![&basis.verification_entity_id.raw_bytes()[..], basis.ordinal],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                    row.get::<_, Vec<u8>>(7)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((
+        resource_id,
+        adapter_kind,
+        adapter_schema_version,
+        scope_kind,
+        scope_schema_version,
+        stored_scope_payload_json,
+        baseline_observation_id,
+        baseline_fingerprint,
+    )) = row
+    {
+        let baseline_observation_id = decode_optional_resource_observation_id(
+            "verification_resource_basis.baseline_observation_id",
+            baseline_observation_id,
+        )?;
+        if decode_resource_id("verification_resource_basis.resource_id", resource_id)?
+            != basis.resource_id
+            || adapter_kind != basis.adapter_kind
+            || adapter_schema_version != basis.adapter_schema_version
+            || scope_kind != basis.scope_kind
+            || scope_schema_version != basis.scope_schema_version
+            || stored_scope_payload_json != scope_payload_json
+            || baseline_observation_id != basis.baseline_observation_id
+            || decode_digest(
+                "verification_resource_basis.baseline_fingerprint",
+                baseline_fingerprint,
+            )? != basis.baseline_fingerprint
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "Verification resource basis {} ordinal {} exists with different content",
+                basis.verification_entity_id, basis.ordinal
+            )));
+        }
+        return Ok(());
+    }
+    let baseline_observation_id_bytes = basis.baseline_observation_id.map(|id| id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO verification_resource_basis(
+                verification_entity_id,
+                ordinal,
+                resource_id,
+                adapter_kind,
+                adapter_schema_version,
+                scope_kind,
+                scope_schema_version,
+                scope_payload_json,
+                baseline_observation_id,
+                baseline_fingerprint
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                &basis.verification_entity_id.raw_bytes()[..],
+                basis.ordinal,
+                &basis.resource_id.raw_bytes()[..],
+                basis.adapter_kind,
+                basis.adapter_schema_version,
+                basis.scope_kind,
+                basis.scope_schema_version,
+                scope_payload_json,
+                baseline_observation_id_bytes
+                    .as_ref()
+                    .map(|bytes| &bytes[..]),
+                &basis.baseline_fingerprint.as_bytes()[..],
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
 }
 
 fn ensure_relation_object_identity(
@@ -5484,6 +7620,7 @@ fn bundle_manifest_supports_same_store_apply(
     }
     let mut expected_acceptance_criterion_ids = BTreeSet::new();
     let mut expected_verification_requirement_ids = BTreeSet::new();
+    let mut expected_verification_ids = BTreeSet::new();
     let mut entity_kinds_by_id = BTreeMap::new();
     for entity_version in array_field_ref(value, "bundle manifest", "entity_versions")? {
         let entity_id = parse_entity_id_field(
@@ -5510,6 +7647,9 @@ fn bundle_manifest_supports_same_store_apply(
             }
             VERIFICATION_REQUIREMENT_ENTITY_KIND => {
                 expected_verification_requirement_ids.insert(entity_id);
+            }
+            VERIFICATION_ENTITY_KIND => {
+                expected_verification_ids.insert(entity_id);
             }
             _ => return Ok(false),
         }
@@ -5539,9 +7679,43 @@ fn bundle_manifest_supports_same_store_apply(
     let verification_requirement_ids =
         unique_verification_requirement_identity_ids(&verification_requirement_identities)
             .map_err(|error| error.to_string())?;
+    let verification_bases =
+        optional_array_field_ref(value, "bundle manifest", "verification_bases")?
+            .iter()
+            .map(|basis| {
+                parse_bundle_verification_basis_ref(basis).map_err(|error| error.to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    let verification_basis_ids =
+        unique_verification_basis_ids(&verification_bases).map_err(|error| error.to_string())?;
+    let evidences = optional_array_field_ref(value, "bundle manifest", "evidences")?
+        .iter()
+        .map(|evidence| parse_bundle_evidence_ref(evidence).map_err(|error| error.to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if evidences
+        .iter()
+        .any(|evidence| evidence.source_session_id.is_some())
+    {
+        return Ok(false);
+    }
+    let resource_observations =
+        optional_array_field_ref(value, "bundle manifest", "resource_observations")?
+            .iter()
+            .map(|observation| {
+                parse_bundle_resource_observation_ref(observation)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    if resource_observations
+        .iter()
+        .any(|observation| observation.source_session_id.is_some())
+    {
+        return Ok(false);
+    }
     Ok(
         acceptance_criterion_ids == expected_acceptance_criterion_ids
-            && verification_requirement_ids == expected_verification_requirement_ids,
+            && verification_requirement_ids == expected_verification_requirement_ids
+            && verification_basis_ids == expected_verification_ids,
     )
 }
 
@@ -5903,6 +8077,53 @@ fn parse_bundle_same_store_apply_document(
         .iter()
         .map(parse_bundle_relation_version_ref)
         .collect::<Result<Vec<_>>>()?;
+    let content_objects = optional_array_field_ref(value, "bundle manifest", "content_objects")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_content_object_ref)
+        .collect::<Result<Vec<_>>>()?;
+    let evidences = optional_array_field_ref(value, "bundle manifest", "evidences")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_evidence_ref)
+        .collect::<Result<Vec<_>>>()?;
+    let evidence_contents = optional_array_field_ref(value, "bundle manifest", "evidence_contents")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_evidence_content_ref)
+        .collect::<Result<Vec<_>>>()?;
+    let resources = optional_array_field_ref(value, "bundle manifest", "resources")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_resource_ref)
+        .collect::<Result<Vec<_>>>()?;
+    let resource_observations =
+        optional_array_field_ref(value, "bundle manifest", "resource_observations")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_resource_observation_ref)
+            .collect::<Result<Vec<_>>>()?;
+    let verification_bases =
+        optional_array_field_ref(value, "bundle manifest", "verification_bases")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_verification_basis_ref)
+            .collect::<Result<Vec<_>>>()?;
+    let verification_resource_bases =
+        optional_array_field_ref(value, "bundle manifest", "verification_resource_bases")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_verification_resource_basis_ref)
+            .collect::<Result<Vec<_>>>()?;
+    let verification_semantic_dependencies = optional_array_field_ref(
+        value,
+        "bundle manifest",
+        "verification_semantic_dependencies",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .iter()
+    .map(parse_bundle_verification_semantic_dependency_ref)
+    .collect::<Result<Vec<_>>>()?;
     let entity_membership_changes =
         array_field_ref(value, "bundle manifest", "entity_membership_changes")
             .map_err(WorkVcsError::QueryInvalid)?
@@ -5927,10 +8148,19 @@ fn parse_bundle_same_store_apply_document(
         acceptance_criterion_identities,
         verification_requirement_identities,
         relation_versions,
+        content_objects,
+        evidences,
+        evidence_contents,
+        resources,
+        resource_observations,
+        verification_bases,
+        verification_resource_bases,
+        verification_semantic_dependencies,
         entity_membership_changes,
         relation_membership_changes,
     };
     validate_same_store_apply_identity_coverage(&document)?;
+    validate_same_store_apply_provenance_coverage(&document)?;
     validate_same_store_apply_relation_coverage(&document)?;
     Ok(document)
 }
@@ -6141,6 +8371,7 @@ fn validate_same_store_apply_identity_coverage(
     let mut entity_kinds_by_id = BTreeMap::new();
     let mut expected_acceptance_criterion_ids = BTreeSet::new();
     let mut expected_verification_requirement_ids = BTreeSet::new();
+    let mut expected_verification_ids = BTreeSet::new();
     for entity_version in &document.entity_versions {
         if let Some(existing_kind) =
             entity_kinds_by_id.insert(entity_version.entity_id, entity_version.entity_kind.clone())
@@ -6158,6 +8389,9 @@ fn validate_same_store_apply_identity_coverage(
             }
             VERIFICATION_REQUIREMENT_ENTITY_KIND => {
                 expected_verification_requirement_ids.insert(entity_version.entity_id);
+            }
+            VERIFICATION_ENTITY_KIND => {
+                expected_verification_ids.insert(entity_version.entity_id);
             }
             _ => {
                 return Err(WorkVcsError::QueryInvalid(format!(
@@ -6182,6 +8416,12 @@ fn validate_same_store_apply_identity_coverage(
         return Err(WorkVcsError::QueryInvalid(
             "bundle verification requirement identities do not cover verification requirement entity versions"
                 .to_owned(),
+        ));
+    }
+    let verification_basis_ids = unique_verification_basis_ids(&document.verification_bases)?;
+    if verification_basis_ids != expected_verification_ids {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle verification bases do not cover verification entity versions".to_owned(),
         ));
     }
     Ok(())
@@ -6237,6 +8477,231 @@ fn unique_verification_requirement_identity_ids(
         }
     }
     Ok(ids)
+}
+
+fn unique_verification_basis_ids(
+    bases: &[BundleVerificationBasisRef],
+) -> Result<BTreeSet<EntityId>> {
+    let mut ids = BTreeSet::new();
+    for basis in bases {
+        if !ids.insert(basis.verification_entity_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification basis for entity {} appears more than once",
+                basis.verification_entity_id
+            )));
+        }
+    }
+    Ok(ids)
+}
+
+fn validate_same_store_apply_provenance_coverage(
+    document: &BundleSameStoreApplyDocument,
+) -> Result<()> {
+    let content_digests = unique_content_object_digests(&document.content_objects)?;
+    let evidence_ids = unique_evidence_ids(&document.evidences)?;
+    let resource_ids = unique_resource_ids(&document.resources)?;
+    let observation_ids = unique_resource_observation_ids(&document.resource_observations)?;
+    let entity_versions = document
+        .entity_versions
+        .iter()
+        .map(|entity_version| (entity_version.entity_id, entity_version.entity_version_id))
+        .collect::<BTreeSet<_>>();
+    let verification_ids = document
+        .verification_bases
+        .iter()
+        .map(|basis| basis.verification_entity_id)
+        .collect::<BTreeSet<_>>();
+
+    for evidence in &document.evidences {
+        if evidence.source_session_id.is_some() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle evidence source_session_id is outside same-Store apply scope".to_owned(),
+            ));
+        }
+    }
+    for observation in &document.resource_observations {
+        if !resource_ids.contains(&observation.resource_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle resource observation {} references missing resource {}",
+                observation.observation_id, observation.resource_id
+            )));
+        }
+        if let Some(content_digest) = observation.detail_content_digest
+            && !content_digests.contains(&content_digest)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle resource observation {} references missing content object {}",
+                observation.observation_id, content_digest
+            )));
+        }
+        if observation.source_session_id.is_some() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle resource observation source_session_id is outside same-Store apply scope"
+                    .to_owned(),
+            ));
+        }
+    }
+    for content in &document.evidence_contents {
+        if !evidence_ids.contains(&content.evidence_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle evidence content ordinal {} references missing evidence {}",
+                content.ordinal, content.evidence_id
+            )));
+        }
+        if !content_digests.contains(&content.content_digest) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle evidence content {} ordinal {} references missing content object {}",
+                content.evidence_id, content.ordinal, content.content_digest
+            )));
+        }
+    }
+    unique_evidence_content_ordinals(&document.evidence_contents)?;
+    unique_verification_resource_basis_ordinals(&document.verification_resource_bases)?;
+    unique_verification_semantic_dependency_ordinals(&document.verification_semantic_dependencies)?;
+    for resource_basis in &document.verification_resource_bases {
+        if !verification_ids.contains(&resource_basis.verification_entity_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification resource basis {} ordinal {} references missing verification basis",
+                resource_basis.verification_entity_id, resource_basis.ordinal
+            )));
+        }
+        if !resource_ids.contains(&resource_basis.resource_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification resource basis {} ordinal {} references missing resource {}",
+                resource_basis.verification_entity_id,
+                resource_basis.ordinal,
+                resource_basis.resource_id
+            )));
+        }
+        if let Some(observation_id) = resource_basis.baseline_observation_id
+            && !observation_ids.contains(&observation_id)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification resource basis {} ordinal {} references missing observation {}",
+                resource_basis.verification_entity_id, resource_basis.ordinal, observation_id
+            )));
+        }
+    }
+    for dependency in &document.verification_semantic_dependencies {
+        if !verification_ids.contains(&dependency.verification_entity_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification semantic dependency {} ordinal {} references missing verification basis",
+                dependency.verification_entity_id, dependency.ordinal
+            )));
+        }
+        if !entity_versions.contains(&(
+            dependency.dependency_entity_id,
+            dependency.expected_entity_version_id,
+        )) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification semantic dependency {} ordinal {} references missing entity version {} for entity {}",
+                dependency.verification_entity_id,
+                dependency.ordinal,
+                dependency.expected_entity_version_id,
+                dependency.dependency_entity_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn unique_content_object_digests(
+    content_objects: &[BundleContentObjectRef],
+) -> Result<BTreeSet<Digest>> {
+    let mut digests = BTreeSet::new();
+    for content in content_objects {
+        if !digests.insert(content.content_digest) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle content object {} appears more than once",
+                content.content_digest
+            )));
+        }
+    }
+    Ok(digests)
+}
+
+fn unique_evidence_ids(evidences: &[BundleEvidenceRef]) -> Result<BTreeSet<EvidenceId>> {
+    let mut ids = BTreeSet::new();
+    for evidence in evidences {
+        if !ids.insert(evidence.evidence_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle evidence {} appears more than once",
+                evidence.evidence_id
+            )));
+        }
+    }
+    Ok(ids)
+}
+
+fn unique_resource_ids(resources: &[BundleResourceRef]) -> Result<BTreeSet<ResourceId>> {
+    let mut ids = BTreeSet::new();
+    for resource in resources {
+        if !ids.insert(resource.resource_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle resource {} appears more than once",
+                resource.resource_id
+            )));
+        }
+    }
+    Ok(ids)
+}
+
+fn unique_resource_observation_ids(
+    observations: &[BundleResourceObservationRef],
+) -> Result<BTreeSet<ResourceObservationId>> {
+    let mut ids = BTreeSet::new();
+    for observation in observations {
+        if !ids.insert(observation.observation_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle resource observation {} appears more than once",
+                observation.observation_id
+            )));
+        }
+    }
+    Ok(ids)
+}
+
+fn unique_evidence_content_ordinals(contents: &[BundleEvidenceContentRef]) -> Result<()> {
+    let mut keys = BTreeSet::new();
+    for content in contents {
+        if !keys.insert((content.evidence_id, content.ordinal)) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle evidence {} content ordinal {} appears more than once",
+                content.evidence_id, content.ordinal
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn unique_verification_resource_basis_ordinals(
+    bases: &[BundleVerificationResourceBasisRef],
+) -> Result<()> {
+    let mut keys = BTreeSet::new();
+    for basis in bases {
+        if !keys.insert((basis.verification_entity_id, basis.ordinal)) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification resource basis {} ordinal {} appears more than once",
+                basis.verification_entity_id, basis.ordinal
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn unique_verification_semantic_dependency_ordinals(
+    dependencies: &[BundleVerificationSemanticDependencyRef],
+) -> Result<()> {
+    let mut keys = BTreeSet::new();
+    for dependency in dependencies {
+        if !keys.insert((dependency.verification_entity_id, dependency.ordinal)) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle verification semantic dependency {} ordinal {} appears more than once",
+                dependency.verification_entity_id, dependency.ordinal
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_same_store_apply_relation_coverage(
@@ -6378,6 +8843,404 @@ fn parse_bundle_relation_version_ref(value: &CanonicalValue) -> Result<BundleRel
         )
         .map_err(WorkVcsError::QueryInvalid)?,
         metadata_json_size_bytes,
+    })
+}
+
+fn parse_bundle_content_object_ref(value: &CanonicalValue) -> Result<BundleContentObjectRef> {
+    let size_bytes = integer_field_value(value, "bundle manifest content object", "size_bytes")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest content object size_bytes", size_bytes)?;
+    let format_metadata_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest content object",
+        "format_metadata_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest content object format_metadata_json_size_bytes",
+        format_metadata_json_size_bytes,
+    )?;
+    let media_type =
+        parse_optional_string_field(value, "bundle manifest content object", "media_type")?;
+    if let Some(media_type) = &media_type {
+        validate_portable_text("bundle manifest content object media_type", media_type)
+            .map_err(WorkVcsError::QueryInvalid)?;
+    }
+    Ok(BundleContentObjectRef {
+        content_digest: parse_digest_field(
+            value,
+            "bundle manifest content object",
+            "content_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        size_bytes,
+        media_type,
+        format_metadata_json_digest: parse_digest_field(
+            value,
+            "bundle manifest content object",
+            "format_metadata_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        format_metadata_json_size_bytes,
+    })
+}
+
+fn parse_bundle_evidence_ref(value: &CanonicalValue) -> Result<BundleEvidenceRef> {
+    let evidence_kind = string_field_value(value, "bundle manifest evidence", "evidence_kind")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest evidence_kind", &evidence_kind)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let captured_at_us = integer_field_value(value, "bundle manifest evidence", "captured_at_us")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest evidence captured_at_us", captured_at_us)?;
+    let metadata_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest evidence",
+        "metadata_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest evidence metadata_json_size_bytes",
+        metadata_json_size_bytes,
+    )?;
+    Ok(BundleEvidenceRef {
+        evidence_id: parse_evidence_id_field(value, "bundle manifest evidence", "evidence_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        evidence_kind,
+        captured_at_us,
+        source_session_id: parse_optional_session_field(
+            value,
+            "bundle manifest evidence",
+            "source_session_id",
+        )?,
+        metadata_json_digest: parse_digest_field(
+            value,
+            "bundle manifest evidence",
+            "metadata_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        metadata_json_size_bytes,
+    })
+}
+
+fn parse_bundle_evidence_content_ref(value: &CanonicalValue) -> Result<BundleEvidenceContentRef> {
+    let ordinal = integer_field_value(value, "bundle manifest evidence content", "ordinal")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest evidence content ordinal", ordinal)?;
+    let role = string_field_value(value, "bundle manifest evidence content", "role")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest evidence content role", &role)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    Ok(BundleEvidenceContentRef {
+        evidence_id: parse_evidence_id_field(
+            value,
+            "bundle manifest evidence content",
+            "evidence_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        ordinal,
+        content_digest: parse_digest_field(
+            value,
+            "bundle manifest evidence content",
+            "content_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        role,
+    })
+}
+
+fn parse_bundle_resource_ref(value: &CanonicalValue) -> Result<BundleResourceRef> {
+    let resource_kind = string_field_value(value, "bundle manifest resource", "resource_kind")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest resource_kind", &resource_kind)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let created_at_us = integer_field_value(value, "bundle manifest resource", "created_at_us")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest resource created_at_us", created_at_us)?;
+    Ok(BundleResourceRef {
+        resource_id: parse_resource_id_field(value, "bundle manifest resource", "resource_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        resource_kind,
+        created_at_us,
+    })
+}
+
+fn parse_bundle_resource_observation_ref(
+    value: &CanonicalValue,
+) -> Result<BundleResourceObservationRef> {
+    let adapter_kind = string_field_value(
+        value,
+        "bundle manifest resource observation",
+        "adapter_kind",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_portable_text(
+        "bundle manifest resource observation adapter_kind",
+        &adapter_kind,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    let adapter_schema_version = integer_field_value(
+        value,
+        "bundle manifest resource observation",
+        "adapter_schema_version",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_positive_i64(
+        "bundle manifest resource observation adapter_schema_version",
+        adapter_schema_version,
+    )?;
+    let captured_at_us = integer_field_value(
+        value,
+        "bundle manifest resource observation",
+        "captured_at_us",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest resource observation captured_at_us",
+        captured_at_us,
+    )?;
+    let summary_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest resource observation",
+        "summary_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest resource observation summary_json_size_bytes",
+        summary_json_size_bytes,
+    )?;
+    Ok(BundleResourceObservationRef {
+        observation_id: parse_resource_observation_id_field(
+            value,
+            "bundle manifest resource observation",
+            "observation_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        resource_id: parse_resource_id_field(
+            value,
+            "bundle manifest resource observation",
+            "resource_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        adapter_kind,
+        adapter_schema_version,
+        captured_at_us,
+        fingerprint: parse_digest_field(
+            value,
+            "bundle manifest resource observation",
+            "fingerprint",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        summary_json_digest: parse_digest_field(
+            value,
+            "bundle manifest resource observation",
+            "summary_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        summary_json_size_bytes,
+        detail_content_digest: parse_optional_digest_field(
+            value,
+            "bundle manifest resource observation",
+            "detail_content_digest",
+        )?,
+        source_session_id: parse_optional_session_field(
+            value,
+            "bundle manifest resource observation",
+            "source_session_id",
+        )?,
+    })
+}
+
+fn parse_bundle_verification_basis_ref(
+    value: &CanonicalValue,
+) -> Result<BundleVerificationBasisRef> {
+    let basis_schema_version = integer_field_value(
+        value,
+        "bundle manifest verification basis",
+        "basis_schema_version",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_positive_i64(
+        "bundle manifest verification basis basis_schema_version",
+        basis_schema_version,
+    )?;
+    let basis_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest verification basis",
+        "basis_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest verification basis basis_json_size_bytes",
+        basis_json_size_bytes,
+    )?;
+    Ok(BundleVerificationBasisRef {
+        verification_entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest verification basis",
+            "verification_entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        verified_at_commit_id: parse_commit_id_field(
+            value,
+            "bundle manifest verification basis",
+            "verified_at_commit_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        basis_schema_version,
+        basis_json_digest: parse_digest_field(
+            value,
+            "bundle manifest verification basis",
+            "basis_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        basis_json_size_bytes,
+    })
+}
+
+fn parse_bundle_verification_resource_basis_ref(
+    value: &CanonicalValue,
+) -> Result<BundleVerificationResourceBasisRef> {
+    let ordinal = integer_field_value(
+        value,
+        "bundle manifest verification resource basis",
+        "ordinal",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest verification resource basis ordinal",
+        ordinal,
+    )?;
+    let adapter_kind = string_field_value(
+        value,
+        "bundle manifest verification resource basis",
+        "adapter_kind",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_portable_text(
+        "bundle manifest verification resource basis adapter_kind",
+        &adapter_kind,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    let adapter_schema_version = integer_field_value(
+        value,
+        "bundle manifest verification resource basis",
+        "adapter_schema_version",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_positive_i64(
+        "bundle manifest verification resource basis adapter_schema_version",
+        adapter_schema_version,
+    )?;
+    let scope_kind = string_field_value(
+        value,
+        "bundle manifest verification resource basis",
+        "scope_kind",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_portable_text(
+        "bundle manifest verification resource basis scope_kind",
+        &scope_kind,
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    let scope_schema_version = integer_field_value(
+        value,
+        "bundle manifest verification resource basis",
+        "scope_schema_version",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_positive_i64(
+        "bundle manifest verification resource basis scope_schema_version",
+        scope_schema_version,
+    )?;
+    let scope_payload_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest verification resource basis",
+        "scope_payload_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest verification resource basis scope_payload_json_size_bytes",
+        scope_payload_json_size_bytes,
+    )?;
+    Ok(BundleVerificationResourceBasisRef {
+        verification_entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest verification resource basis",
+            "verification_entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        ordinal,
+        resource_id: parse_resource_id_field(
+            value,
+            "bundle manifest verification resource basis",
+            "resource_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        adapter_kind,
+        adapter_schema_version,
+        scope_kind,
+        scope_schema_version,
+        scope_payload_json_digest: parse_digest_field(
+            value,
+            "bundle manifest verification resource basis",
+            "scope_payload_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        scope_payload_json_size_bytes,
+        baseline_observation_id: parse_optional_resource_observation_field(
+            value,
+            "bundle manifest verification resource basis",
+            "baseline_observation_id",
+        )?,
+        baseline_fingerprint: parse_digest_field(
+            value,
+            "bundle manifest verification resource basis",
+            "baseline_fingerprint",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+    })
+}
+
+fn parse_bundle_verification_semantic_dependency_ref(
+    value: &CanonicalValue,
+) -> Result<BundleVerificationSemanticDependencyRef> {
+    let ordinal = integer_field_value(
+        value,
+        "bundle manifest verification semantic dependency",
+        "ordinal",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest verification semantic dependency ordinal",
+        ordinal,
+    )?;
+    Ok(BundleVerificationSemanticDependencyRef {
+        verification_entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest verification semantic dependency",
+            "verification_entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        ordinal,
+        dependency_entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest verification semantic dependency",
+            "dependency_entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        expected_entity_version_id: parse_entity_version_id_field(
+            value,
+            "bundle manifest verification semantic dependency",
+            "expected_entity_version_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
     })
 }
 
@@ -6565,6 +9428,20 @@ fn string_field_value<'a>(
     }
 }
 
+fn parse_optional_string_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<String>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => Ok(Some(value.clone())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
 fn integer_field_value(
     value: &CanonicalValue,
     label: &str,
@@ -6680,6 +9557,33 @@ fn parse_entity_version_id_field(
         .map_err(|error| error.to_string())
 }
 
+fn parse_evidence_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<EvidenceId, String> {
+    EvidenceId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_resource_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<ResourceId, String> {
+    ResourceId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_resource_observation_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<ResourceObservationId, String> {
+    ResourceObservationId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_relation_id_field(
     value: &CanonicalValue,
     label: &str,
@@ -6730,6 +9634,54 @@ fn parse_optional_relation_version_field(
     }
 }
 
+fn parse_optional_session_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<SessionId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => SessionId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
+fn parse_optional_digest_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<Digest>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => Digest::from_hex(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
+fn parse_optional_resource_observation_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<ResourceObservationId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => ResourceObservationId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
 fn parse_digest_field(
     value: &CanonicalValue,
     label: &str,
@@ -6763,6 +9715,15 @@ fn string_field(name: &str, value: impl Into<String>) -> (String, CanonicalValue
     (name.to_owned(), CanonicalValue::String(value.into()))
 }
 
+fn optional_string_field(name: &str, value: Option<&str>) -> (String, CanonicalValue) {
+    (
+        name.to_owned(),
+        value
+            .map(|value| CanonicalValue::String(value.to_owned()))
+            .unwrap_or(CanonicalValue::Null),
+    )
+}
+
 fn integer_field(name: &str, value: i64) -> Result<(String, CanonicalValue)> {
     Ok((name.to_owned(), CanonicalValue::safe_integer(value)?))
 }
@@ -6774,6 +9735,16 @@ fn usize_to_i64(label: &str, value: usize) -> Result<i64> {
 
 fn validate_canonical_json_text(label: &str, input: &str) -> Result<()> {
     validate_canonical_json_value(label, input).map(|_| ())
+}
+
+fn require_canonical_object_json(label: &str, input: &str) -> Result<CanonicalValue> {
+    let value = validate_canonical_json_value(label, input)?;
+    match value {
+        CanonicalValue::Object(_) => Ok(value),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be a canonical JSON object"
+        ))),
+    }
 }
 
 fn validate_canonical_json_value(label: &str, input: &str) -> Result<CanonicalValue> {
@@ -7214,6 +10185,18 @@ fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 
+fn decode_resource_id(column: &str, bytes: Vec<u8>) -> Result<ResourceId> {
+    let bytes = decode_16(column, bytes)?;
+    ResourceId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_resource_observation_id(column: &str, bytes: Vec<u8>) -> Result<ResourceObservationId> {
+    let bytes = decode_16(column, bytes)?;
+    ResourceObservationId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
 fn decode_relation_id(column: &str, bytes: Vec<u8>) -> Result<RelationId> {
     let bytes = decode_16(column, bytes)?;
     RelationId::from_bytes(bytes)
@@ -7284,6 +10267,15 @@ fn decode_optional_event_id(column: &str, bytes: Option<Vec<u8>>) -> Result<Opti
             EventId::from_bytes(bytes)
                 .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
         })
+        .transpose()
+}
+
+fn decode_optional_resource_observation_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<ResourceObservationId>> {
+    bytes
+        .map(|bytes| decode_resource_observation_id(column, bytes))
         .transpose()
 }
 

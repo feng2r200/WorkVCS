@@ -5,12 +5,13 @@ use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
-    BranchForkResult, BranchHead, BranchId, CanonicalValue, ClaimId, ClaimLifecycleState,
-    ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
-    ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
+    BranchProjectionRefreshResult, BranchProjectionSnapshot, CanonicalValue, ClaimId,
+    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview,
+    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
+    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -200,6 +201,10 @@ enum Command {
         #[command(subcommand)]
         command: VerificationCommand,
     },
+    Projection {
+        #[command(subcommand)]
+        command: ProjectionCommand,
+    },
     Merge {
         #[command(subcommand)]
         command: MergeCommand,
@@ -254,6 +259,24 @@ enum BranchCommand {
 
         #[arg(long)]
         name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProjectionCommand {
+    Refresh {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
     },
 }
 
@@ -1580,6 +1603,20 @@ fn run(cli: Cli) -> Result<String> {
                 &engine.restore_work_state(options)?,
             ))
         }
+        Command::Projection { command } => match command {
+            ProjectionCommand::Refresh { store, branch } => {
+                let mut engine = Engine::open(store)?;
+                let result = engine.refresh_branch_projection(
+                    BranchProjectionRefreshOptions::new(BranchId::parse_canonical(&branch)?),
+                )?;
+                Ok(render_branch_projection_refresh(&result))
+            }
+            ProjectionCommand::Show { store, branch } => {
+                let engine = Engine::open(store)?;
+                let snapshot = engine.branch_projection(BranchId::parse_canonical(&branch)?)?;
+                Ok(render_branch_projection_snapshot(&snapshot))
+            }
+        },
         Command::Why {
             store,
             branch,
@@ -5163,6 +5200,40 @@ fn render_work_state_restore(restore: &WorkStateRestoreCommit) -> String {
     )
 }
 
+fn render_branch_projection_refresh(refresh: &BranchProjectionRefreshResult) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprojected_commit_id={}\nprojection_state_digest={}\nentity_count={}\nrelation_count={}\nupdated_at_us={}\n",
+        refresh.workspace_id,
+        refresh.branch_id,
+        refresh.projected_commit_id,
+        refresh.projection_state_digest,
+        refresh.entity_count,
+        refresh.relation_count,
+        refresh.updated_at_us
+    )
+}
+
+fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nhead_commit_id={}\nhead_state_digest={}\nstatus={}\nstored_status={}\nprojected_commit_id={}\nprojection_state_digest={}\nentity_count={}\nrelation_count={}\nupdated_at_us={}\nis_current={}\n",
+        snapshot.workspace_id,
+        snapshot.branch_id,
+        snapshot.head_commit_id,
+        snapshot.head_state_digest,
+        snapshot.status.as_str(),
+        snapshot.stored_status.as_deref().unwrap_or("none"),
+        render_optional_display(snapshot.projected_commit_id.as_ref()),
+        render_optional_display(snapshot.projection_state_digest.as_ref()),
+        snapshot.entity_count,
+        snapshot.relation_count,
+        snapshot
+            .updated_at_us
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        snapshot.is_current()
+    )
+}
+
 fn render_why(result: &WhyQueryResult) -> String {
     let mut output = String::new();
     match result.target.target {
@@ -5377,6 +5448,7 @@ mod tests {
                 "next",
                 "runnable",
                 "verification",
+                "projection",
                 "merge"
             ]
         );
@@ -5507,6 +5579,101 @@ mod tests {
             .expect("show restore state");
         assert_eq!(value(&state, "entities"), "0");
         assert_eq!(value(&state, "relations"), "0");
+    }
+
+    #[test]
+    fn cli_refreshes_and_shows_branch_projection() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let initial =
+            run(
+                Cli::try_parse_from(["workvcs", "projection", "show", store, "--branch", &branch])
+                    .expect("parse projection show"),
+            )
+            .expect("show initial projection");
+        assert_eq!(value(&initial, "status"), "not_materialized");
+        assert_eq!(value(&initial, "is_current"), "false");
+
+        let refreshed = run(Cli::try_parse_from([
+            "workvcs",
+            "projection",
+            "refresh",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse projection refresh"))
+        .expect("refresh projection");
+        assert_eq!(value(&refreshed, "projected_commit_id"), genesis);
+        assert_eq!(value(&refreshed, "entity_count"), "0");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Move projection stale",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_commit = value(&task, "commit_id");
+
+        let stale =
+            run(
+                Cli::try_parse_from(["workvcs", "projection", "show", store, "--branch", &branch])
+                    .expect("parse stale projection show"),
+            )
+            .expect("show stale projection");
+        assert_eq!(value(&stale, "status"), "stale");
+        assert_eq!(value(&stale, "projected_commit_id"), genesis);
+        assert_eq!(value(&stale, "head_commit_id"), task_commit);
+
+        let refreshed = run(Cli::try_parse_from([
+            "workvcs",
+            "projection",
+            "refresh",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse second projection refresh"))
+        .expect("refresh stale projection");
+        assert_eq!(value(&refreshed, "projected_commit_id"), task_commit);
+        assert_eq!(value(&refreshed, "entity_count"), "1");
+
+        let current =
+            run(
+                Cli::try_parse_from(["workvcs", "projection", "show", store, "--branch", &branch])
+                    .expect("parse current projection show"),
+            )
+            .expect("show current projection");
+        assert_eq!(value(&current, "status"), "complete");
+        assert_eq!(value(&current, "is_current"), "true");
     }
 
     #[test]

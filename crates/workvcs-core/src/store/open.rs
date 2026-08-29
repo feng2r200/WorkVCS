@@ -3,7 +3,8 @@ use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
-    BranchForkResult, BranchHead, EntityTransitionCommit, EntityTransitionOptions,
+    BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
+    BranchProjectionSnapshot, EntityTransitionCommit, EntityTransitionOptions,
     EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
     GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
@@ -142,6 +143,24 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::diff_work_state(&self.connection, options)
+    }
+
+    pub(crate) fn refresh_branch_projection(
+        &mut self,
+        options: BranchProjectionRefreshOptions,
+    ) -> Result<BranchProjectionRefreshResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::refresh_branch_projection(&mut self.connection, options)
+    }
+
+    pub(crate) fn branch_projection(
+        &self,
+        branch_id: BranchId,
+    ) -> Result<BranchProjectionSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::branch_projection(&self.connection, branch_id)
     }
 
     pub(crate) fn restore_work_state(

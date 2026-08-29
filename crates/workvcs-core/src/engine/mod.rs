@@ -13,7 +13,8 @@ use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
-    BranchForkResult, BranchHead, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions,
+    BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
+    BranchProjectionSnapshot, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions,
     EntityTransitionCommit, EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult,
     EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
     GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
@@ -115,6 +116,17 @@ impl Engine {
 
     pub fn diff(&self, options: WorkStateDiffOptions) -> Result<WorkStateDiff> {
         self.store.diff(&options)
+    }
+
+    pub fn refresh_branch_projection(
+        &mut self,
+        options: BranchProjectionRefreshOptions,
+    ) -> Result<BranchProjectionRefreshResult> {
+        self.store.refresh_branch_projection(options)
+    }
+
+    pub fn branch_projection(&self, branch_id: BranchId) -> Result<BranchProjectionSnapshot> {
+        self.store.branch_projection(branch_id)
     }
 
     pub fn restore_work_state(

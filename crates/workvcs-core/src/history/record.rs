@@ -680,6 +680,7 @@ pub struct RecordListOptions {
     commit_id: CommitId,
     kind: Option<RecordKind>,
     status: Option<RecordStatus>,
+    statement_contains: Option<String>,
 }
 
 impl RecordListOptions {
@@ -688,6 +689,7 @@ impl RecordListOptions {
             commit_id,
             kind: None,
             status: None,
+            statement_contains: None,
         }
     }
 
@@ -701,6 +703,17 @@ impl RecordListOptions {
         self
     }
 
+    pub fn with_statement_contains(mut self, fragment: impl Into<String>) -> Result<Self> {
+        let fragment = fragment.into();
+        if fragment.trim().is_empty() {
+            return Err(WorkVcsError::RecordInvalid(
+                "record statement filter must not be empty".to_owned(),
+            ));
+        }
+        self.statement_contains = Some(fragment);
+        Ok(self)
+    }
+
     pub fn commit_id(&self) -> CommitId {
         self.commit_id
     }
@@ -711,6 +724,10 @@ impl RecordListOptions {
 
     pub fn status(&self) -> Option<RecordStatus> {
         self.status
+    }
+
+    pub fn statement_contains(&self) -> Option<&str> {
+        self.statement_contains.as_deref()
     }
 }
 
@@ -1898,6 +1915,9 @@ pub(crate) fn records_at(
                     && options
                         .status()
                         .is_none_or(|status| loaded.state.status == status)
+                    && options
+                        .statement_contains()
+                        .is_none_or(|fragment| loaded.state.statement.contains(fragment))
                 {
                     records.push(RecordSnapshot {
                         workspace_id: replayed.workspace_id,

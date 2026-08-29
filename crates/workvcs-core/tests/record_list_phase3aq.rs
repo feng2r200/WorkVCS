@@ -136,4 +136,46 @@ fn records_at_lists_current_records_and_filters_by_kind() {
         transition.record_entity_version_id
     );
     assert_eq!(assumptions.records[0].state.status, RecordStatus::Validated);
+
+    let containing_validation = engine
+        .records_at(
+            RecordListOptions::new(decision.commit_id)
+                .with_statement_contains("validation")
+                .expect("statement filter"),
+        )
+        .expect("statement-filtered records");
+    assert_eq!(containing_validation.records.len(), 1);
+    assert_eq!(
+        containing_validation.records[0].record_entity_id,
+        finding.record_entity_id
+    );
+
+    let combined = engine
+        .records_at(
+            RecordListOptions::new(decision.commit_id)
+                .with_kind(RecordKind::Assumption)
+                .with_status(RecordStatus::Validated)
+                .with_statement_contains("writes")
+                .expect("combined statement filter"),
+        )
+        .expect("combined-filtered records");
+    assert_eq!(combined.records.len(), 1);
+    assert_eq!(
+        combined.records[0].record_entity_id,
+        assumption.record_entity_id
+    );
+
+    let empty = engine
+        .records_at(
+            RecordListOptions::new(decision.commit_id)
+                .with_statement_contains("not present")
+                .expect("missing statement filter"),
+        )
+        .expect("empty statement-filtered records");
+    assert!(empty.records.is_empty());
+
+    let empty_filter = RecordListOptions::new(decision.commit_id)
+        .with_statement_contains(" ")
+        .expect_err("empty statement filter should fail");
+    assert!(empty_filter.to_string().contains("must not be empty"));
 }

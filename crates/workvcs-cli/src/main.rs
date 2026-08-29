@@ -405,6 +405,9 @@ enum RecordCommand {
 
         #[arg(long)]
         status: Option<String>,
+
+        #[arg(long)]
+        statement_contains: Option<String>,
     },
     LinkInvalidates {
         #[arg(value_name = "STORE")]
@@ -1437,6 +1440,7 @@ fn run(cli: Cli) -> Result<String> {
                     commit,
                     kind,
                     status,
+                    statement_contains,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -1447,6 +1451,9 @@ fn run(cli: Cli) -> Result<String> {
             }
             if let Some(status) = status {
                 options = options.with_status(parse_record_status(&status)?);
+            }
+            if let Some(statement_contains) = statement_contains {
+                options = options.with_statement_contains(statement_contains)?;
             }
             Ok(render_record_list(&engine.records_at(options)?))
         }
@@ -5292,6 +5299,22 @@ mod tests {
         assert_eq!(value(&filtered, "records"), "1");
         assert!(filtered.contains("record_kind=assumption"));
         assert!(!filtered.contains("record_kind=finding"));
+
+        let statement_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--statement-contains",
+            "validation",
+        ])
+        .expect("parse statement-filtered record list"))
+        .expect("list statement-filtered records");
+        assert_eq!(value(&statement_filtered, "records"), "1");
+        assert!(statement_filtered.contains("record_kind=finding"));
+        assert!(!statement_filtered.contains("record_kind=assumption"));
     }
 
     #[test]

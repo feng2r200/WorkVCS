@@ -4,16 +4,16 @@ use std::path::PathBuf;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
-    ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchId,
-    CanonicalValue, ClaimId, ClaimLifecycleState, ClaimMode, ClaimReleaseOptions,
-    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, Digest, Engine, EntityId,
-    EntityVersionId, HistoryEntry, HistoryQueryOptions, ReplayedState, ResourceCreateOptions,
-    ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions,
-    TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
+    BranchForkResult, BranchHead, BranchId, CanonicalValue, ClaimId, ClaimLifecycleState,
+    ClaimMode, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
+    CommitId, Digest, Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions,
+    ReplayedState, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, StoreInitOptions,
+    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
@@ -72,6 +72,10 @@ enum Command {
         #[command(subcommand)]
         command: WorkspaceCommand,
     },
+    Branch {
+        #[command(subcommand)]
+        command: BranchCommand,
+    },
     Task {
         #[command(subcommand)]
         command: TaskCommand,
@@ -117,6 +121,36 @@ enum WorkspaceCommand {
 
         #[arg(long)]
         initial_branch_name: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BranchCommand {
+    Head {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+    },
+    #[command(group(
+        ArgGroup::new("branch-fork-source")
+            .required(true)
+            .multiple(false)
+            .args(["from_branch", "from_commit"])
+    ))]
+    Fork {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        from_branch: Option<String>,
+
+        #[arg(long)]
+        from_commit: Option<String>,
+
+        #[arg(long)]
+        name: String,
     },
 }
 
@@ -511,6 +545,39 @@ fn run(cli: Cli) -> Result<String> {
             }
             let workspace = engine.create_workspace(options)?;
             Ok(render_workspace_info(&workspace))
+        }
+        Command::Branch {
+            command: BranchCommand::Head { store, branch },
+        } => {
+            let engine = Engine::open(store)?;
+            let head = engine.branch_head(BranchId::parse_canonical(&branch)?)?;
+            Ok(render_branch_head(&head))
+        }
+        Command::Branch {
+            command:
+                BranchCommand::Fork {
+                    store,
+                    from_branch,
+                    from_commit,
+                    name,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let options = match (from_branch, from_commit) {
+                (Some(branch), None) => {
+                    BranchForkOptions::from_branch(BranchId::parse_canonical(&branch)?, name)?
+                }
+                (None, Some(commit)) => {
+                    BranchForkOptions::from_commit(CommitId::parse_canonical(&commit)?, name)?
+                }
+                _ => {
+                    return Err(WorkVcsError::WorkspaceInvalid(
+                        "branch fork requires exactly one source".to_owned(),
+                    ));
+                }
+            };
+            let forked = engine.fork_branch(options)?;
+            Ok(render_branch_fork(&forked))
         }
         Command::Task {
             command:
@@ -1030,6 +1097,36 @@ fn render_workspace_info(workspace: &WorkspaceInfo) -> String {
     )
 }
 
+fn render_branch_head(head: &BranchHead) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nlifecycle_state={}\nstate_digest={}\n",
+        head.workspace_id,
+        head.branch_id,
+        head.name,
+        head.head_commit_id,
+        head.lifecycle_state,
+        head.state_digest
+    )
+}
+
+fn render_branch_fork(branch: &BranchForkResult) -> String {
+    let source_branch_id = branch
+        .source_branch_id
+        .map(|branch_id| branch_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    format!(
+        "workspace_id={}\nbranch_id={}\nbranch_name={}\nsource_branch_id={}\nhead_commit_id={}\nstate_digest={}\nevent_id={}\ncreated_at_us={}\n",
+        branch.workspace_id,
+        branch.branch_id,
+        branch.name,
+        source_branch_id,
+        branch.head_commit_id,
+        branch.state_digest,
+        branch.event_id,
+        branch.created_at_us
+    )
+}
+
 fn render_task_create(task: &TaskCreateCommit) -> String {
     format!(
         "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\ntask_entity_id={}\ntask_entity_version_id={}\ntask_state_digest={}\nwork_state_digest={}\nstatus={}\n",
@@ -1379,6 +1476,7 @@ mod tests {
                 "history",
                 "show-at",
                 "workspace",
+                "branch",
                 "task",
                 "ac",
                 "vr",
@@ -1437,6 +1535,118 @@ mod tests {
         assert!(doctor.contains("canonical_json_profile=workvcs-jcs-v1"));
         assert!(doctor.contains("checked_branches=0"));
         assert!(doctor.contains("checked_commits=0"));
+    }
+
+    #[test]
+    fn cli_runs_branch_head_and_fork_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let source_branch = value(&workspace, "branch_id");
+        let mut source_head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &source_branch,
+            "--head",
+            &source_head,
+            "--description",
+            "Create fork source state",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        source_head = value(&task, "commit_id");
+
+        let source = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            store,
+            "--branch",
+            &source_branch,
+        ])
+        .expect("parse source head"))
+        .expect("source head");
+        assert_eq!(value(&source, "head_commit_id"), source_head);
+
+        let fork = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "fork",
+            store,
+            "--from-branch",
+            &source_branch,
+            "--name",
+            "experiment",
+        ])
+        .expect("parse fork"))
+        .expect("fork branch");
+        let fork_branch = value(&fork, "branch_id");
+        assert_eq!(value(&fork, "source_branch_id"), source_branch);
+        assert_eq!(value(&fork, "head_commit_id"), source_head);
+
+        let later_source = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &source_branch,
+            "--head",
+            &source_head,
+            "--description",
+            "Advance source after fork",
+        ])
+        .expect("parse later task"))
+        .expect("advance source branch");
+        assert_ne!(value(&later_source, "commit_id"), source_head);
+
+        let fork_head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            store,
+            "--branch",
+            &fork_branch,
+        ])
+        .expect("parse fork head"))
+        .expect("fork head");
+        assert_eq!(value(&fork_head, "branch_name"), "experiment");
+        assert_eq!(value(&fork_head, "head_commit_id"), source_head);
+
+        let fork_history = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &fork_branch,
+            "--limit",
+            "1",
+        ])
+        .expect("parse fork history"))
+        .expect("fork history");
+        assert!(fork_history.contains(&format!("start_commit_id={source_head}")));
+        assert!(fork_history.contains("entries=1"));
     }
 
     #[test]

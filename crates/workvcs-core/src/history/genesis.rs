@@ -1,5 +1,6 @@
 use crate::canonical::{CanonicalValue, WorkState, canonical_bytes, work_state_mapping_digest};
 use crate::error::{Result, WorkVcsError, storage_error};
+use crate::history::branch::validate_branch_name;
 use crate::identity::{BranchId, ChangeSetId, CommitId, Digest, EventId, StoreId, WorkspaceId};
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Params, TransactionBehavior, params};
@@ -464,29 +465,6 @@ fn validate_workspace_display_name(value: &str) -> Result<()> {
     } else {
         Ok(())
     }
-}
-
-fn validate_branch_name(value: &str) -> Result<()> {
-    if value.is_empty() {
-        return Err(WorkVcsError::WorkspaceInvalid(
-            "branch name must not be empty".to_owned(),
-        ));
-    }
-    if value.trim() != value {
-        return Err(WorkVcsError::WorkspaceInvalid(
-            "branch name must not have leading or trailing whitespace".to_owned(),
-        ));
-    }
-    if value
-        .as_bytes()
-        .iter()
-        .any(|byte| *byte == b'\0' || *byte < 0x20 || *byte == 0x7f)
-    {
-        return Err(WorkVcsError::WorkspaceInvalid(
-            "branch name must not contain NUL or ASCII control characters".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 fn canonical_empty_object_json() -> Result<String> {

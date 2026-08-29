@@ -1,8 +1,9 @@
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
 use workvcs_core::{
-    BranchId, CanonicalValue, CheckpointCreateOptions, CommitId, Digest, Engine, StoreInitOptions,
-    TaskCreateCommit, TaskCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
+    BranchId, CanonicalValue, CheckpointCreateOptions, CheckpointListOptions, CommitId, Digest,
+    Engine, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, std::path::PathBuf) {
@@ -293,4 +294,50 @@ fn checkpoint_validation_marks_state_digest_drift_invalid() {
         .checkpoint(created.checkpoint.checkpoint_id)
         .expect("load checkpoint");
     assert_eq!(loaded.usability_state, "invalid");
+}
+
+#[test]
+fn checkpoints_list_returns_only_requested_commit_checkpoints() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = create_task(
+        &mut engine,
+        workspace.initial_branch_id,
+        workspace.genesis_commit_id,
+        "List checkpoint target",
+    );
+    let first = engine
+        .create_checkpoint(CheckpointCreateOptions::new(task.commit_id))
+        .expect("first task checkpoint");
+    let second = engine
+        .create_checkpoint(CheckpointCreateOptions::new(task.commit_id))
+        .expect("second task checkpoint");
+    engine
+        .create_checkpoint(CheckpointCreateOptions::new(workspace.genesis_commit_id))
+        .expect("genesis checkpoint");
+
+    let listed = engine
+        .checkpoints(CheckpointListOptions::for_commit(task.commit_id))
+        .expect("list checkpoints");
+
+    assert_eq!(listed.commit_id, task.commit_id);
+    assert_eq!(listed.checkpoints.len(), 2);
+    assert!(
+        listed
+            .checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.checkpoint_id == first.checkpoint.checkpoint_id)
+    );
+    assert!(
+        listed
+            .checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.checkpoint_id == second.checkpoint.checkpoint_id)
+    );
+    assert!(
+        listed
+            .checkpoints
+            .iter()
+            .all(|checkpoint| checkpoint.commit_id == task.commit_id)
+    );
 }

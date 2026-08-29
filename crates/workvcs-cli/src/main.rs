@@ -7,23 +7,24 @@ use workvcs_core::{
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, CanonicalValue,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointSnapshot,
-    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
-    CommitId, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EvidenceId,
-    HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
-    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
-    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
-    KnowledgeTransitionCommit, KnowledgeTransitionOptions, MergeAbortOptions, MergeAbortResult,
-    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
-    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot,
-    MergeResolutionKind, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
-    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, ClaimId,
+    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview,
+    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
+    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
+    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
+    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
+    KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
+    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
+    MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
+    MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
+    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
@@ -307,6 +308,13 @@ enum CheckpointCommand {
 
         #[arg(long)]
         checkpoint: String,
+    },
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
     },
 }
 
@@ -1665,6 +1673,13 @@ fn run(cli: Cli) -> Result<String> {
                 let result =
                     engine.validate_checkpoint(CheckpointId::parse_canonical(&checkpoint)?)?;
                 Ok(render_checkpoint_validation(&result))
+            }
+            CheckpointCommand::List { store, commit } => {
+                let engine = Engine::open(store)?;
+                let result = engine.checkpoints(CheckpointListOptions::for_commit(
+                    CommitId::parse_canonical(&commit)?,
+                ))?;
+                Ok(render_checkpoint_list(&result))
             }
         },
         Command::Why {
@@ -5338,6 +5353,35 @@ fn render_checkpoint_validation(result: &CheckpointValidationResult) -> String {
     output
 }
 
+fn render_checkpoint_list(result: &CheckpointListResult) -> String {
+    let mut output = format!(
+        "commit_id={}\ncheckpoints={}\n",
+        result.commit_id,
+        result.checkpoints.len()
+    );
+    for (index, checkpoint) in result.checkpoints.iter().enumerate() {
+        writeln!(
+            output,
+            "checkpoint[{index}].id={}",
+            checkpoint.checkpoint_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "checkpoint[{index}].content_digest={}",
+            checkpoint.content_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "checkpoint[{index}].usability_state={}",
+            checkpoint.usability_state
+        )
+        .expect("write to String");
+    }
+    output
+}
+
 fn render_why(result: &WhyQueryResult) -> String {
     let mut output = String::new();
     match result.target.target {
@@ -5854,6 +5898,20 @@ mod tests {
             value(&validated, "expected_content_digest"),
             value(&created, "content_digest")
         );
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+        ])
+        .expect("parse checkpoint list"))
+        .expect("list checkpoints");
+        assert_eq!(value(&listed, "commit_id"), genesis);
+        assert_eq!(value(&listed, "checkpoints"), "1");
+        assert_eq!(value(&listed, "checkpoint[0].id"), checkpoint);
     }
 
     #[test]

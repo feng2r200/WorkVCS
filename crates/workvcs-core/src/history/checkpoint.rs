@@ -66,6 +66,27 @@ pub struct CheckpointValidationResult {
     pub problem: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheckpointListOptions {
+    commit_id: CommitId,
+}
+
+impl CheckpointListOptions {
+    pub fn for_commit(commit_id: CommitId) -> Self {
+        Self { commit_id }
+    }
+
+    pub fn commit_id(self) -> CommitId {
+        self.commit_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckpointListResult {
+    pub commit_id: CommitId,
+    pub checkpoints: Vec<CheckpointSnapshot>,
+}
+
 pub(crate) fn create_checkpoint(
     connection: &mut StoreConnection,
     options: CheckpointCreateOptions,
@@ -247,6 +268,22 @@ pub(crate) fn validate_checkpoint(
         expected_content_digest,
         expected_content_size_bytes,
         problem,
+    })
+}
+
+pub(crate) fn checkpoints(
+    connection: &StoreConnection,
+    options: CheckpointListOptions,
+) -> Result<CheckpointListResult> {
+    connection.verify_foreign_keys()?;
+    let checkpoint_ids = checkpoint_ids_for_commit(connection, options.commit_id())?;
+    let checkpoints = checkpoint_ids
+        .into_iter()
+        .map(|checkpoint_id| load_checkpoint(connection, checkpoint_id))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(CheckpointListResult {
+        commit_id: options.commit_id(),
+        checkpoints,
     })
 }
 
@@ -582,6 +619,35 @@ fn load_checkpoint(
     })
 }
 
+fn checkpoint_ids_for_commit(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<CheckpointId>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT checkpoint_id
+             FROM checkpoint
+             WHERE commit_id = ?1
+             ORDER BY created_at_us, checkpoint_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&commit_id.raw_bytes()[..]], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(storage_error)?;
+
+    let mut checkpoint_ids = Vec::new();
+    for row in rows {
+        checkpoint_ids.push(decode_checkpoint_id(
+            "checkpoint.checkpoint_id",
+            row.map_err(storage_error)?,
+        )?);
+    }
+    Ok(checkpoint_ids)
+}
+
 fn string_field(name: &str, value: impl Into<String>) -> (String, CanonicalValue) {
     (name.to_owned(), CanonicalValue::String(value.into()))
 }
@@ -650,6 +716,12 @@ fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
 
 fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
     CommitId::from_bytes(fixed_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::StorageFailure(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_checkpoint_id(column: &str, bytes: Vec<u8>) -> Result<CheckpointId> {
+    CheckpointId::from_bytes(fixed_bytes(column, bytes)?).map_err(|error| {
         WorkVcsError::StorageFailure(format!("{column} is not a UUIDv7 value: {error}"))
     })
 }

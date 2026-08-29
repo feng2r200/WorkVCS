@@ -55,6 +55,7 @@ recorded as Accepted ADRs:
 - [ADR-0027: Phase 3M Goal Semantic Kernel](decisions/adr/0027-phase-3m-goal-semantic-kernel.md)
 - [ADR-0028: Phase 3N Goal Containment Endpoints](decisions/adr/0028-phase-3n-goal-containment-endpoints.md)
 - [ADR-0029: Phase 3O Goal Lifecycle Transition](decisions/adr/0029-phase-3o-goal-lifecycle-transition.md)
+- [ADR-0030: Phase 3P Plan Lifecycle Transition](decisions/adr/0030-phase-3p-plan-lifecycle-transition.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

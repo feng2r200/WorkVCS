@@ -12,11 +12,11 @@ use crate::history::{
     EntityTransitionCommit, EntityTransitionOptions, GoalCreateCommit, GoalCreateOptions,
     GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
     HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -88,6 +88,13 @@ impl Engine {
 
     pub fn create_plan(&mut self, options: PlanCreateOptions) -> Result<PlanCreateCommit> {
         self.store.create_plan(&options)
+    }
+
+    pub fn transition_plan(
+        &mut self,
+        options: PlanTransitionOptions,
+    ) -> Result<PlanTransitionCommit> {
+        self.store.transition_plan(&options)
     }
 
     pub fn create_goal(&mut self, options: GoalCreateOptions) -> Result<GoalCreateCommit> {

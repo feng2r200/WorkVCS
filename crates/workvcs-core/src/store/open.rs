@@ -6,11 +6,11 @@ use crate::history::{
     EntityTransitionCommit, EntityTransitionOptions, GoalCreateCommit, GoalCreateOptions,
     GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
     HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
+    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -116,6 +116,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::create_plan(&mut self.connection, options)
+    }
+
+    pub(crate) fn transition_plan(
+        &mut self,
+        options: &PlanTransitionOptions,
+    ) -> Result<PlanTransitionCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::transition_plan(&mut self.connection, options)
     }
 
     pub(crate) fn create_goal(&mut self, options: &GoalCreateOptions) -> Result<GoalCreateCommit> {

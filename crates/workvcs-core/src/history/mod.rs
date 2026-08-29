@@ -19,7 +19,10 @@ pub use goal::{
     GoalTransitionOptions,
 };
 pub use integrity::IntegrityReport;
-pub use plan::{PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanState, PlanStatus};
+pub use plan::{
+    PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanState, PlanStatus, PlanTransitionCommit,
+    PlanTransitionOptions,
+};
 pub use query::{BranchHead, HistoryEntry, HistoryQueryOptions, HistoryQueryResult, HistoryStart};
 pub use replay::ReplayedState;
 pub use task::{
@@ -43,7 +46,7 @@ pub(crate) use entity::commit_entity_transition;
 pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
-pub(crate) use plan::{create_plan, plan_at};
+pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use query::{branch_head, query_history};
 pub(crate) use replay::state_at;
 pub(crate) use task::{

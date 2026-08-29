@@ -45,6 +45,10 @@ impl PlanStatus {
             ))),
         }
     }
+
+    fn is_terminal_without_supersession(self) -> bool {
+        matches!(self, Self::Completed | Self::Abandoned)
+    }
 }
 
 impl fmt::Display for PlanStatus {
@@ -81,6 +85,7 @@ impl PlanState {
         validate_description(&self.description)?;
         validate_strategy(&self.strategy)?;
         validate_constraints(&self.constraints)?;
+        validate_plan_state_rationale(self.status, self.completion_rationale.as_deref())?;
         if let Some(completion_rationale) = &self.completion_rationale {
             validate_completion_rationale(completion_rationale)?;
         }
@@ -115,6 +120,42 @@ impl PlanState {
             ),
             ("task_refs".to_owned(), CanonicalValue::Array(Vec::new())),
         ])
+    }
+
+    fn transition(
+        &self,
+        next_status: PlanStatus,
+        completion_rationale: Option<&str>,
+        rationale: &CanonicalValue,
+    ) -> Result<Self> {
+        validate_plan_lifecycle_transition(self.status, next_status, rationale)?;
+        if completion_rationale.is_some() && next_status != PlanStatus::Completed {
+            return Err(WorkVcsError::PlanInvalid(
+                "plan completion_rationale can only be set when completing a Plan".to_owned(),
+            ));
+        }
+        if let Some(completion_rationale) = completion_rationale {
+            validate_completion_rationale(completion_rationale)?;
+        }
+
+        let next_completion_rationale = if next_status == PlanStatus::Completed {
+            completion_rationale.map(str::to_owned)
+        } else {
+            None
+        };
+        let next = Self {
+            description: self.description.clone(),
+            status: next_status,
+            constraints: self.constraints.clone(),
+            strategy: self.strategy.clone(),
+            completion_rationale: next_completion_rationale,
+        };
+        if next == *self {
+            return Err(WorkVcsError::PlanInvalid(
+                "plan transition must change status or completion_rationale".to_owned(),
+            ));
+        }
+        Ok(next)
     }
 }
 
@@ -159,6 +200,111 @@ impl PlanCreateOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanTransitionOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    plan_entity_id: EntityId,
+    expected_plan_entity_version_id: EntityVersionId,
+    next_status: PlanStatus,
+    completion_rationale: Option<String>,
+    rationale: CanonicalValue,
+}
+
+impl PlanTransitionOptions {
+    pub fn complete(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        plan_entity_id: EntityId,
+        expected_plan_entity_version_id: EntityVersionId,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            plan_entity_id,
+            expected_plan_entity_version_id,
+            PlanStatus::Completed,
+        )
+    }
+
+    pub fn abandon(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        plan_entity_id: EntityId,
+        expected_plan_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            plan_entity_id,
+            expected_plan_entity_version_id,
+            PlanStatus::Abandoned,
+        )?
+        .with_transition_rationale(rationale)
+    }
+
+    pub fn reopen(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        plan_entity_id: EntityId,
+        expected_plan_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            plan_entity_id,
+            expected_plan_entity_version_id,
+            PlanStatus::Active,
+        )?
+        .with_transition_rationale(rationale)
+    }
+
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        plan_entity_id: EntityId,
+        expected_plan_entity_version_id: EntityVersionId,
+        next_status: PlanStatus,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            plan_entity_id,
+            expected_plan_entity_version_id,
+            next_status,
+            completion_rationale: None,
+            rationale: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_completion_rationale(mut self, rationale: impl Into<String>) -> Result<Self> {
+        if self.next_status != PlanStatus::Completed {
+            return Err(WorkVcsError::PlanInvalid(
+                "plan completion_rationale can only be set when completing a Plan".to_owned(),
+            ));
+        }
+        let rationale = rationale.into();
+        validate_completion_rationale(&rationale)?;
+        self.rationale = rationale_value(&rationale)?;
+        self.completion_rationale = Some(rationale);
+        Ok(self)
+    }
+
+    pub fn with_transition_rationale(mut self, rationale: impl Into<String>) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        self.rationale = rationale_value(&rationale)?;
+        Ok(self)
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanCreateCommit {
     pub workspace_id: WorkspaceId,
     pub branch_id: BranchId,
@@ -170,6 +316,23 @@ pub struct PlanCreateCommit {
     pub plan_entity_version_id: EntityVersionId,
     pub plan_state_digest: Digest,
     pub work_state_digest: Digest,
+    pub state: PlanState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanTransitionCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub plan_entity_id: EntityId,
+    pub previous_plan_entity_version_id: EntityVersionId,
+    pub plan_entity_version_id: EntityVersionId,
+    pub plan_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub previous_state: PlanState,
     pub state: PlanState,
 }
 
@@ -208,6 +371,57 @@ pub(crate) fn create_plan(
         plan_state_digest: commit.entity_state_digest,
         work_state_digest: commit.work_state_digest,
         state: options.state.clone(),
+    })
+}
+
+pub(crate) fn transition_plan(
+    connection: &mut StoreConnection,
+    options: &PlanTransitionOptions,
+) -> Result<PlanTransitionCommit> {
+    let current = plan_at(
+        connection,
+        options.expected_head_commit_id,
+        options.plan_entity_id,
+    )?;
+    if current.plan_entity_version_id != options.expected_plan_entity_version_id {
+        return Err(WorkVcsError::PlanInvalid(format!(
+            "plan entity {} expected version {}, found {} at commit {}",
+            options.plan_entity_id,
+            options.expected_plan_entity_version_id,
+            current.plan_entity_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+
+    let next_state = current.state.transition(
+        options.next_status,
+        options.completion_rationale.as_deref(),
+        &options.rationale,
+    )?;
+    let entity_options = EntityTransitionOptions::update(
+        options.branch_id,
+        options.expected_head_commit_id,
+        options.plan_entity_id,
+        options.expected_plan_entity_version_id,
+        next_state.to_canonical_value()?,
+    )?
+    .with_rationale(options.rationale.clone());
+    let commit = commit_entity_transition(connection, &entity_options)?;
+
+    Ok(PlanTransitionCommit {
+        workspace_id: commit.workspace_id,
+        branch_id: commit.branch_id,
+        previous_head_commit_id: commit.previous_head_commit_id,
+        commit_id: commit.commit_id,
+        changeset_id: commit.changeset_id,
+        operation_id: commit.operation_id,
+        plan_entity_id: commit.entity_id,
+        previous_plan_entity_version_id: options.expected_plan_entity_version_id,
+        plan_entity_version_id: commit.entity_version_id,
+        plan_state_digest: commit.entity_state_digest,
+        work_state_digest: commit.work_state_digest,
+        previous_state: current.state,
+        state: next_state,
     })
 }
 
@@ -434,7 +648,7 @@ fn parse_plan_state(value: CanonicalValue) -> Result<PlanState> {
     task_refs
         .ok_or_else(|| WorkVcsError::PlanInvalid("plan state is missing task_refs".to_owned()))?;
 
-    Ok(PlanState {
+    PlanState {
         description: description.ok_or_else(|| {
             WorkVcsError::PlanInvalid("plan state is missing description".to_owned())
         })?,
@@ -449,7 +663,8 @@ fn parse_plan_state(value: CanonicalValue) -> Result<PlanState> {
         completion_rationale: completion_rationale.ok_or_else(|| {
             WorkVcsError::PlanInvalid("plan state is missing completion_rationale".to_owned())
         })?,
-    })
+    }
+    .validate()
 }
 
 fn parse_constraints(value: CanonicalValue) -> Result<Vec<String>> {
@@ -508,12 +723,79 @@ fn validate_constraint(value: &str) -> Result<()> {
 }
 
 fn validate_completion_rationale(value: &str) -> Result<()> {
-    if value.contains('\0') {
+    validate_non_empty_text("plan completion rationale", value)
+}
+
+fn validate_transition_rationale(value: &str) -> Result<()> {
+    validate_non_empty_text("plan transition rationale", value)
+}
+
+fn validate_plan_state_rationale(
+    status: PlanStatus,
+    completion_rationale: Option<&str>,
+) -> Result<()> {
+    match (status, completion_rationale) {
+        (PlanStatus::Completed, Some(value)) => validate_completion_rationale(value),
+        (PlanStatus::Completed, None) => Ok(()),
+        (PlanStatus::Active | PlanStatus::Abandoned | PlanStatus::Superseded, None) => Ok(()),
+        (PlanStatus::Active | PlanStatus::Abandoned | PlanStatus::Superseded, Some(_)) => {
+            Err(WorkVcsError::PlanInvalid(
+                "plan completion_rationale is only valid for completed Plans".to_owned(),
+            ))
+        }
+    }
+}
+
+fn validate_plan_lifecycle_transition(
+    current_status: PlanStatus,
+    next_status: PlanStatus,
+    rationale: &CanonicalValue,
+) -> Result<()> {
+    if current_status == PlanStatus::Superseded || next_status == PlanStatus::Superseded {
         return Err(WorkVcsError::PlanInvalid(
-            "plan completion rationale must not contain NUL".to_owned(),
+            "ordinary plan transition involving superseded requires supersession-aware resolution"
+                .to_owned(),
         ));
     }
+    if current_status == next_status {
+        return Err(WorkVcsError::PlanInvalid(
+            "plan transition must change status or completion_rationale".to_owned(),
+        ));
+    }
+    if current_status.is_terminal_without_supersession()
+        && next_status.is_terminal_without_supersession()
+    {
+        return Err(WorkVcsError::PlanInvalid(format!(
+            "terminal plan status {current_status} cannot transition directly to {next_status}; reopen first"
+        )));
+    }
+    if next_status == PlanStatus::Abandoned
+        || (current_status.is_terminal_without_supersession() && next_status == PlanStatus::Active)
+    {
+        require_non_empty_rationale_object(rationale)?;
+    }
     Ok(())
+}
+
+fn require_non_empty_rationale_object(value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(entries) if !entries.is_empty() => Ok(()),
+        CanonicalValue::Object(_) => Err(WorkVcsError::PlanInvalid(
+            "plan lifecycle transition requires a non-empty rationale object".to_owned(),
+        )),
+        _ => Err(WorkVcsError::PlanInvalid(
+            "plan lifecycle transition requires a rationale object".to_owned(),
+        )),
+    }
+}
+
+fn rationale_value(reason: &str) -> Result<CanonicalValue> {
+    validate_transition_rationale(reason)?;
+    CanonicalValue::object(vec![(
+        "reason".to_owned(),
+        CanonicalValue::String(reason.to_owned()),
+    )])
+    .map_err(plan_invalid_from)
 }
 
 fn validate_non_empty_text(field: &str, value: &str) -> Result<()> {
@@ -532,6 +814,19 @@ fn validate_non_empty_text(field: &str, value: &str) -> Result<()> {
 
 fn plan_invalid_from(error: WorkVcsError) -> WorkVcsError {
     WorkVcsError::PlanInvalid(error.to_string())
+}
+
+trait PlanStateValidation {
+    fn validate(self) -> Result<Self>
+    where
+        Self: Sized;
+}
+
+impl PlanStateValidation for PlanState {
+    fn validate(self) -> Result<Self> {
+        validate_plan_state_rationale(self.status, self.completion_rationale.as_deref())?;
+        Ok(self)
+    }
 }
 
 fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {

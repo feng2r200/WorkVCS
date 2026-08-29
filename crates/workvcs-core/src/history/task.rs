@@ -715,10 +715,226 @@ impl fmt::Display for AcceptanceCriterionEffectiveStatus {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum VerificationApplicability {
+pub enum VerificationApplicability {
     Applicable,
     Stale,
     Unknown,
+}
+
+impl VerificationApplicability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Applicable => "applicable",
+            Self::Stale => "stale",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "applicable" => Ok(Self::Applicable),
+            "stale" => Ok(Self::Stale),
+            "unknown" => Ok(Self::Unknown),
+            other => Err(WorkVcsError::TaskInvalid(format!(
+                "verification applicability {other:?} is not in the confirmed vocabulary"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for VerificationApplicability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplicabilityResourceObservationStatus {
+    Observed,
+    Unavailable,
+    Error,
+}
+
+impl ApplicabilityResourceObservationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::Unavailable => "unavailable",
+            Self::Error => "error",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "observed" => Ok(Self::Observed),
+            "unavailable" => Ok(Self::Unavailable),
+            "error" => Ok(Self::Error),
+            other => Err(WorkVcsError::TaskInvalid(format!(
+                "applicability resource observation status {other:?} is not in the confirmed vocabulary"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for ApplicabilityResourceObservationStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplicabilityResourceStampInput {
+    pub resource_basis_ordinal: i64,
+    pub adapter_kind: String,
+    pub adapter_schema_version: i64,
+    pub scope_schema_version: i64,
+    pub observation_status: ApplicabilityResourceObservationStatus,
+    pub observed_fingerprint: Option<Digest>,
+    pub observation_id: Option<ResourceObservationId>,
+}
+
+impl ApplicabilityResourceStampInput {
+    pub fn observed(
+        resource_basis_ordinal: i64,
+        adapter_kind: impl Into<String>,
+        adapter_schema_version: i64,
+        scope_schema_version: i64,
+        observed_fingerprint: Digest,
+    ) -> Result<Self> {
+        let stamp = Self {
+            resource_basis_ordinal,
+            adapter_kind: adapter_kind.into(),
+            adapter_schema_version,
+            scope_schema_version,
+            observation_status: ApplicabilityResourceObservationStatus::Observed,
+            observed_fingerprint: Some(observed_fingerprint),
+            observation_id: None,
+        };
+        validate_applicability_resource_stamp_input(&stamp)?;
+        Ok(stamp)
+    }
+
+    pub fn unavailable(
+        resource_basis_ordinal: i64,
+        adapter_kind: impl Into<String>,
+        adapter_schema_version: i64,
+        scope_schema_version: i64,
+    ) -> Result<Self> {
+        Self::unobserved(
+            resource_basis_ordinal,
+            adapter_kind,
+            adapter_schema_version,
+            scope_schema_version,
+            ApplicabilityResourceObservationStatus::Unavailable,
+        )
+    }
+
+    pub fn error(
+        resource_basis_ordinal: i64,
+        adapter_kind: impl Into<String>,
+        adapter_schema_version: i64,
+        scope_schema_version: i64,
+    ) -> Result<Self> {
+        Self::unobserved(
+            resource_basis_ordinal,
+            adapter_kind,
+            adapter_schema_version,
+            scope_schema_version,
+            ApplicabilityResourceObservationStatus::Error,
+        )
+    }
+
+    pub fn with_observation_id(mut self, observation_id: ResourceObservationId) -> Result<Self> {
+        self.observation_id = Some(observation_id);
+        validate_applicability_resource_stamp_input(&self)?;
+        Ok(self)
+    }
+
+    fn unobserved(
+        resource_basis_ordinal: i64,
+        adapter_kind: impl Into<String>,
+        adapter_schema_version: i64,
+        scope_schema_version: i64,
+        observation_status: ApplicabilityResourceObservationStatus,
+    ) -> Result<Self> {
+        let stamp = Self {
+            resource_basis_ordinal,
+            adapter_kind: adapter_kind.into(),
+            adapter_schema_version,
+            scope_schema_version,
+            observation_status,
+            observed_fingerprint: None,
+            observation_id: None,
+        };
+        validate_applicability_resource_stamp_input(&stamp)?;
+        Ok(stamp)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplicabilityResourceStampSnapshot {
+    pub resource_basis_ordinal: i64,
+    pub adapter_kind: String,
+    pub adapter_schema_version: i64,
+    pub scope_schema_version: i64,
+    pub observation_status: ApplicabilityResourceObservationStatus,
+    pub observed_fingerprint: Option<Digest>,
+    pub observation_id: Option<ResourceObservationId>,
+    pub observed_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationApplicabilityRecordOptions {
+    branch_id: BranchId,
+    verification_entity_id: EntityId,
+    evaluated_commit_id: CommitId,
+    resource_stamps: Vec<ApplicabilityResourceStampInput>,
+    detail: CanonicalValue,
+}
+
+impl VerificationApplicabilityRecordOptions {
+    pub fn new(
+        branch_id: BranchId,
+        verification_entity_id: EntityId,
+        evaluated_commit_id: CommitId,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            verification_entity_id,
+            evaluated_commit_id,
+            resource_stamps: Vec::new(),
+            detail: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_resource_stamps<I>(mut self, resource_stamps: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = ApplicabilityResourceStampInput>,
+    {
+        self.resource_stamps = resource_stamps.into_iter().collect();
+        self.resource_stamps
+            .sort_by_key(|stamp| stamp.resource_basis_ordinal);
+        validate_applicability_resource_stamp_inputs(&self.resource_stamps)?;
+        Ok(self)
+    }
+
+    pub fn with_detail(mut self, detail: CanonicalValue) -> Result<Self> {
+        require_object("verification applicability detail", &detail)?;
+        self.detail = detail;
+        Ok(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationApplicabilityCacheSnapshot {
+    pub branch_id: BranchId,
+    pub verification_entity_id: EntityId,
+    pub evaluated_commit_id: CommitId,
+    pub applicability: VerificationApplicability,
+    pub reason_code: String,
+    pub detail: CanonicalValue,
+    pub evaluated_at_us: i64,
+    pub resource_stamps: Vec<ApplicabilityResourceStampSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2792,6 +3008,160 @@ pub(crate) fn verification_at(
     })
 }
 
+pub(crate) fn record_verification_applicability(
+    connection: &mut StoreConnection,
+    options: &VerificationApplicabilityRecordOptions,
+) -> Result<VerificationApplicabilityCacheSnapshot> {
+    connection.verify_foreign_keys()?;
+    require_object("verification applicability detail", &options.detail)?;
+    validate_applicability_resource_stamp_inputs(&options.resource_stamps)?;
+
+    let replayed = state_at(connection, options.evaluated_commit_id)?;
+    let verification = verification_at(
+        connection,
+        options.evaluated_commit_id,
+        options.verification_entity_id,
+    )?;
+    validate_applicability_resource_stamp_inputs_against_basis(
+        connection,
+        &verification.state.resource_basis,
+        &options.resource_stamps,
+    )?;
+    let (applicability, reason_code) = compute_recorded_verification_applicability(
+        &replayed.state,
+        &verification.state,
+        &options.resource_stamps,
+    )?;
+    validate_local_key("verification applicability reason_code", reason_code)?;
+    let detail_json = canonical_json_string(&options.detail)?;
+    let evaluated_at_us = current_epoch_micros()?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.workspace_id != verification.workspace_id {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "branch {} belongs to workspace {}, but verification {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.verification_entity_id,
+            verification.workspace_id
+        )));
+    }
+    if branch.head_commit_id != options.evaluated_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.evaluated_commit_id, branch.head_commit_id
+        )));
+    }
+    write_verification_applicability_cache(
+        &transaction,
+        options,
+        applicability,
+        reason_code,
+        &detail_json,
+        evaluated_at_us,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    verification_applicability_cache(
+        connection,
+        options.branch_id,
+        options.verification_entity_id,
+    )?
+    .ok_or_else(|| {
+        WorkVcsError::TaskInvalid(format!(
+            "verification applicability cache for branch {} verification {} was not persisted",
+            options.branch_id, options.verification_entity_id
+        ))
+    })
+}
+
+pub(crate) fn verification_applicability_cache(
+    connection: &StoreConnection,
+    branch_id: BranchId,
+    verification_entity_id: EntityId,
+) -> Result<Option<VerificationApplicabilityCacheSnapshot>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT evaluated_commit_id,
+                    applicability,
+                    reason_code,
+                    detail_json,
+                    evaluated_at_us
+             FROM verification_applicability_cache
+             WHERE branch_id = ?1
+               AND verification_entity_id = ?2",
+            params![
+                &branch_id.raw_bytes()[..],
+                &verification_entity_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((evaluated_commit_id, applicability, reason_code, detail_json, evaluated_at_us)) = row
+    else {
+        return Ok(None);
+    };
+    let evaluated_commit_id = decode_commit_id(
+        "verification_applicability_cache.evaluated_commit_id",
+        evaluated_commit_id,
+    )?;
+    let applicability = VerificationApplicability::parse(&applicability)?;
+    validate_local_key("verification_applicability_cache.reason_code", &reason_code)?;
+    let detail =
+        parse_canonical_object_json("verification_applicability_cache.detail_json", &detail_json)?;
+    if evaluated_at_us < 0 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification applicability cache for branch {branch_id} verification {verification_entity_id} has negative evaluated_at_us"
+        )));
+    }
+
+    let replayed = state_at(connection, evaluated_commit_id)?;
+    let verification = verification_at(connection, evaluated_commit_id, verification_entity_id)?;
+    let resource_stamps =
+        load_applicability_resource_stamps(connection, branch_id, verification_entity_id)?;
+    validate_applicability_resource_stamp_snapshots_against_basis(
+        connection,
+        &verification.state.resource_basis,
+        &resource_stamps,
+    )?;
+    let (expected_applicability, expected_reason_code) = compute_cached_verification_applicability(
+        &replayed.state,
+        &verification.state,
+        &resource_stamps,
+    )?;
+    if applicability != expected_applicability || reason_code != expected_reason_code {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification applicability cache for branch {branch_id} verification {verification_entity_id} does not match basis stamps"
+        )));
+    }
+
+    Ok(Some(VerificationApplicabilityCacheSnapshot {
+        branch_id,
+        verification_entity_id,
+        evaluated_commit_id,
+        applicability,
+        reason_code,
+        detail,
+        evaluated_at_us,
+        resource_stamps,
+    }))
+}
+
 pub(crate) fn acceptance_criterion_effective_status(
     connection: &StoreConnection,
     commit_id: CommitId,
@@ -3671,6 +4041,93 @@ fn load_verification_resource_basis(
     }
     validate_verification_resource_basis(&resource_basis)?;
     Ok(resource_basis)
+}
+
+fn load_applicability_resource_stamps(
+    connection: &StoreConnection,
+    branch_id: BranchId,
+    verification_entity_id: EntityId,
+) -> Result<Vec<ApplicabilityResourceStampSnapshot>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT resource_basis_ordinal,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_schema_version,
+                    observation_status,
+                    observed_fingerprint,
+                    observation_id,
+                    observed_at_us
+             FROM applicability_resource_stamp
+             WHERE branch_id = ?1
+               AND verification_entity_id = ?2
+             ORDER BY resource_basis_ordinal",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(
+            params![
+                &branch_id.raw_bytes()[..],
+                &verification_entity_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            },
+        )
+        .map_err(storage_error)?;
+
+    let mut stamps = Vec::new();
+    for row in rows {
+        let (
+            resource_basis_ordinal,
+            adapter_kind,
+            adapter_schema_version,
+            scope_schema_version,
+            observation_status,
+            observed_fingerprint,
+            observation_id,
+            observed_at_us,
+        ) = row.map_err(storage_error)?;
+        if resource_basis_ordinal != stamps.len() as i64 {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "applicability resource stamps for branch {branch_id} verification {verification_entity_id} are not contiguous"
+            )));
+        }
+        let stamp = ApplicabilityResourceStampSnapshot {
+            resource_basis_ordinal,
+            adapter_kind,
+            adapter_schema_version,
+            scope_schema_version,
+            observation_status: ApplicabilityResourceObservationStatus::parse(&observation_status)?,
+            observed_fingerprint: observed_fingerprint
+                .map(|bytes| {
+                    decode_digest("applicability_resource_stamp.observed_fingerprint", bytes)
+                })
+                .transpose()?,
+            observation_id: observation_id
+                .map(|bytes| {
+                    decode_resource_observation_id(
+                        "applicability_resource_stamp.observation_id",
+                        bytes,
+                    )
+                })
+                .transpose()?,
+            observed_at_us,
+        };
+        validate_applicability_resource_stamp_snapshot(&stamp)?;
+        stamps.push(stamp);
+    }
+    Ok(stamps)
 }
 
 fn load_verifies_relation_version(
@@ -5437,6 +5894,93 @@ fn write_verification_create(
     Ok(())
 }
 
+fn write_verification_applicability_cache(
+    transaction: &Transaction<'_>,
+    options: &VerificationApplicabilityRecordOptions,
+    applicability: VerificationApplicability,
+    reason_code: &str,
+    detail_json: &str,
+    evaluated_at_us: i64,
+) -> Result<()> {
+    let branch_id_bytes = options.branch_id.raw_bytes();
+    let verification_entity_id_bytes = options.verification_entity_id.raw_bytes();
+    let evaluated_commit_id_bytes = options.evaluated_commit_id.raw_bytes();
+
+    transaction
+        .execute(
+            "INSERT INTO verification_applicability_cache(
+                branch_id,
+                verification_entity_id,
+                evaluated_commit_id,
+                applicability,
+                reason_code,
+                detail_json,
+                evaluated_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(branch_id, verification_entity_id) DO UPDATE SET
+                evaluated_commit_id = excluded.evaluated_commit_id,
+                applicability = excluded.applicability,
+                reason_code = excluded.reason_code,
+                detail_json = excluded.detail_json,
+                evaluated_at_us = excluded.evaluated_at_us",
+            params![
+                &branch_id_bytes[..],
+                &verification_entity_id_bytes[..],
+                &evaluated_commit_id_bytes[..],
+                applicability.as_str(),
+                reason_code,
+                detail_json,
+                evaluated_at_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "DELETE FROM applicability_resource_stamp
+             WHERE branch_id = ?1
+               AND verification_entity_id = ?2",
+            params![&branch_id_bytes[..], &verification_entity_id_bytes[..]],
+        )
+        .map_err(storage_error)?;
+    for stamp in &options.resource_stamps {
+        let observed_fingerprint_bytes = stamp
+            .observed_fingerprint
+            .map(|fingerprint| *fingerprint.as_bytes());
+        let observation_id_bytes = stamp.observation_id.map(|id| id.raw_bytes());
+        transaction
+            .execute(
+                "INSERT INTO applicability_resource_stamp(
+                    branch_id,
+                    verification_entity_id,
+                    resource_basis_ordinal,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_schema_version,
+                    observation_status,
+                    observed_fingerprint,
+                    observation_id,
+                    observed_at_us
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    &branch_id_bytes[..],
+                    &verification_entity_id_bytes[..],
+                    stamp.resource_basis_ordinal,
+                    stamp.adapter_kind.as_str(),
+                    stamp.adapter_schema_version,
+                    stamp.scope_schema_version,
+                    stamp.observation_status.as_str(),
+                    observed_fingerprint_bytes.as_ref().map(|bytes| &bytes[..]),
+                    observation_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                    evaluated_at_us
+                ],
+            )
+            .map_err(storage_error)?;
+    }
+    Ok(())
+}
+
 fn write_task_scheduling_relation_create(
     transaction: &Transaction<'_>,
     rows: &TaskSchedulingRelationCreateRows,
@@ -6676,6 +7220,118 @@ fn work_state_basis_is_applicable(
     })
 }
 
+struct ResourceStampView<'a> {
+    resource_basis_ordinal: i64,
+    adapter_kind: &'a str,
+    adapter_schema_version: i64,
+    scope_schema_version: i64,
+    observation_status: ApplicabilityResourceObservationStatus,
+    observed_fingerprint: Option<Digest>,
+    observation_id: Option<ResourceObservationId>,
+}
+
+impl<'a> From<&'a ApplicabilityResourceStampInput> for ResourceStampView<'a> {
+    fn from(stamp: &'a ApplicabilityResourceStampInput) -> Self {
+        Self {
+            resource_basis_ordinal: stamp.resource_basis_ordinal,
+            adapter_kind: &stamp.adapter_kind,
+            adapter_schema_version: stamp.adapter_schema_version,
+            scope_schema_version: stamp.scope_schema_version,
+            observation_status: stamp.observation_status,
+            observed_fingerprint: stamp.observed_fingerprint,
+            observation_id: stamp.observation_id,
+        }
+    }
+}
+
+impl<'a> From<&'a ApplicabilityResourceStampSnapshot> for ResourceStampView<'a> {
+    fn from(stamp: &'a ApplicabilityResourceStampSnapshot) -> Self {
+        Self {
+            resource_basis_ordinal: stamp.resource_basis_ordinal,
+            adapter_kind: &stamp.adapter_kind,
+            adapter_schema_version: stamp.adapter_schema_version,
+            scope_schema_version: stamp.scope_schema_version,
+            observation_status: stamp.observation_status,
+            observed_fingerprint: stamp.observed_fingerprint,
+            observation_id: stamp.observation_id,
+        }
+    }
+}
+
+fn compute_recorded_verification_applicability(
+    state: &WorkState,
+    verification: &VerificationState,
+    resource_stamps: &[ApplicabilityResourceStampInput],
+) -> Result<(VerificationApplicability, &'static str)> {
+    if !work_state_basis_is_applicable(state, &verification.semantic_dependencies) {
+        return Ok((VerificationApplicability::Stale, "work_state_stale"));
+    }
+    compute_resource_stamp_applicability(
+        &verification.resource_basis,
+        resource_stamps.iter().map(ResourceStampView::from),
+    )
+}
+
+fn compute_cached_verification_applicability(
+    state: &WorkState,
+    verification: &VerificationState,
+    resource_stamps: &[ApplicabilityResourceStampSnapshot],
+) -> Result<(VerificationApplicability, &'static str)> {
+    if !work_state_basis_is_applicable(state, &verification.semantic_dependencies) {
+        return Ok((VerificationApplicability::Stale, "work_state_stale"));
+    }
+    compute_resource_stamp_applicability(
+        &verification.resource_basis,
+        resource_stamps.iter().map(ResourceStampView::from),
+    )
+}
+
+fn compute_resource_stamp_applicability<'a>(
+    resource_basis: &[VerificationResourceBasis],
+    resource_stamps: impl Iterator<Item = ResourceStampView<'a>>,
+) -> Result<(VerificationApplicability, &'static str)> {
+    if resource_basis.is_empty() {
+        return Ok((
+            VerificationApplicability::Applicable,
+            "work_state_applicable",
+        ));
+    }
+
+    let mut has_unavailable = false;
+    let mut has_error = false;
+    for (basis, stamp) in resource_basis.iter().zip(resource_stamps) {
+        match stamp.observation_status {
+            ApplicabilityResourceObservationStatus::Observed => {
+                let observed_fingerprint = stamp.observed_fingerprint.ok_or_else(|| {
+                    WorkVcsError::TaskInvalid(
+                        "observed applicability resource stamp is missing observed_fingerprint"
+                            .to_owned(),
+                    )
+                })?;
+                if observed_fingerprint != basis.baseline_fingerprint {
+                    return Ok((VerificationApplicability::Stale, "resource_drift"));
+                }
+            }
+            ApplicabilityResourceObservationStatus::Unavailable => {
+                has_unavailable = true;
+            }
+            ApplicabilityResourceObservationStatus::Error => {
+                has_error = true;
+            }
+        }
+    }
+    if has_error {
+        Ok((VerificationApplicability::Unknown, "resource_error"))
+    } else if has_unavailable {
+        Ok((VerificationApplicability::Unknown, "resource_unavailable"))
+    } else {
+        Ok((
+            VerificationApplicability::Applicable,
+            "all_basis_applicable",
+        ))
+    }
+}
+
 fn combine_acceptance_criterion_status(
     left: AcceptanceCriterionEffectiveStatus,
     right: AcceptanceCriterionEffectiveStatus,
@@ -6838,6 +7494,27 @@ fn require_empty_array(label: &str, value: &CanonicalValue) -> Result<()> {
             "{label} is deferred in the current implementation slice and must be empty"
         )))
     }
+}
+
+fn require_object(label: &str, value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(_) => Ok(()),
+        _ => Err(WorkVcsError::TaskInvalid(format!(
+            "{label} must be a canonical JSON object"
+        ))),
+    }
+}
+
+fn parse_canonical_object_json(label: &str, input: &str) -> Result<CanonicalValue> {
+    let value = parse_canonical_json(input.as_bytes()).map_err(task_invalid_from)?;
+    require_object(label, &value)?;
+    let encoded = canonical_json_string(&value)?;
+    if encoded != input {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "{label} is not canonical fixed-point JSON"
+        )));
+    }
+    Ok(value)
 }
 
 fn require_string(label: &str, value: CanonicalValue) -> Result<String> {
@@ -7080,6 +7757,172 @@ fn require_verification_resource_basis_references(
             return Err(WorkVcsError::TaskInvalid(format!(
                 "verification resource basis observation {observation_id} fingerprint does not match baseline_fingerprint"
             )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_applicability_resource_stamp_inputs(
+    stamps: &[ApplicabilityResourceStampInput],
+) -> Result<()> {
+    let mut ordinals = HashSet::new();
+    for stamp in stamps {
+        validate_applicability_resource_stamp_view(ResourceStampView::from(stamp))?;
+        if !ordinals.insert(stamp.resource_basis_ordinal) {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "applicability resource stamps contain duplicate resource basis ordinal {}",
+                stamp.resource_basis_ordinal
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_applicability_resource_stamp_input(
+    stamp: &ApplicabilityResourceStampInput,
+) -> Result<()> {
+    validate_applicability_resource_stamp_view(ResourceStampView::from(stamp))
+}
+
+fn validate_applicability_resource_stamp_snapshot(
+    stamp: &ApplicabilityResourceStampSnapshot,
+) -> Result<()> {
+    validate_applicability_resource_stamp_view(ResourceStampView::from(stamp))?;
+    if stamp.observed_at_us < 0 {
+        return Err(WorkVcsError::TaskInvalid(
+            "applicability resource stamp observed_at_us must be non-negative".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_applicability_resource_stamp_view(stamp: ResourceStampView<'_>) -> Result<()> {
+    if stamp.resource_basis_ordinal < 0 {
+        return Err(WorkVcsError::TaskInvalid(
+            "applicability resource stamp ordinal must be non-negative".to_owned(),
+        ));
+    }
+    validate_local_key(
+        "applicability resource stamp adapter_kind",
+        stamp.adapter_kind,
+    )?;
+    validate_positive_i64(
+        "applicability resource stamp adapter_schema_version",
+        stamp.adapter_schema_version,
+    )?;
+    validate_positive_i64(
+        "applicability resource stamp scope_schema_version",
+        stamp.scope_schema_version,
+    )?;
+    match stamp.observation_status {
+        ApplicabilityResourceObservationStatus::Observed => {
+            if stamp.observed_fingerprint.is_none() {
+                return Err(WorkVcsError::TaskInvalid(
+                    "observed applicability resource stamp requires observed_fingerprint"
+                        .to_owned(),
+                ));
+            }
+        }
+        ApplicabilityResourceObservationStatus::Unavailable
+        | ApplicabilityResourceObservationStatus::Error => {
+            if stamp.observed_fingerprint.is_some() || stamp.observation_id.is_some() {
+                return Err(WorkVcsError::TaskInvalid(
+                    "unavailable/error applicability resource stamp must not contain observed data"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_applicability_resource_stamp_inputs_against_basis(
+    connection: &StoreConnection,
+    resource_basis: &[VerificationResourceBasis],
+    stamps: &[ApplicabilityResourceStampInput],
+) -> Result<()> {
+    validate_applicability_resource_stamps_against_basis(
+        connection,
+        resource_basis,
+        stamps.iter().map(ResourceStampView::from),
+    )
+}
+
+fn validate_applicability_resource_stamp_snapshots_against_basis(
+    connection: &StoreConnection,
+    resource_basis: &[VerificationResourceBasis],
+    stamps: &[ApplicabilityResourceStampSnapshot],
+) -> Result<()> {
+    validate_applicability_resource_stamps_against_basis(
+        connection,
+        resource_basis,
+        stamps.iter().map(ResourceStampView::from),
+    )
+}
+
+fn validate_applicability_resource_stamps_against_basis<'a>(
+    connection: &StoreConnection,
+    resource_basis: &[VerificationResourceBasis],
+    stamps: impl Iterator<Item = ResourceStampView<'a>>,
+) -> Result<()> {
+    let stamps = stamps.collect::<Vec<_>>();
+    if stamps.len() != resource_basis.len() {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "applicability resource stamp count {} does not match verification resource basis count {}",
+            stamps.len(),
+            resource_basis.len()
+        )));
+    }
+    for (index, (basis, stamp)) in resource_basis.iter().zip(stamps.iter()).enumerate() {
+        if stamp.resource_basis_ordinal != index as i64 {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "applicability resource stamp ordinal {} does not match expected ordinal {index}",
+                stamp.resource_basis_ordinal
+            )));
+        }
+        if stamp.adapter_kind != basis.adapter_kind {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "applicability resource stamp ordinal {index} adapter kind {:?} does not match basis adapter kind {:?}",
+                stamp.adapter_kind, basis.adapter_kind
+            )));
+        }
+        if stamp.adapter_schema_version != basis.adapter_schema_version {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "applicability resource stamp ordinal {index} adapter schema version {} does not match basis adapter schema version {}",
+                stamp.adapter_schema_version, basis.adapter_schema_version
+            )));
+        }
+        if stamp.scope_schema_version != basis.scope_schema_version {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "applicability resource stamp ordinal {index} scope schema version {} does not match basis scope schema version {}",
+                stamp.scope_schema_version, basis.scope_schema_version
+            )));
+        }
+        if let Some(observation_id) = stamp.observation_id {
+            let observation = resource_observation(connection, observation_id)?;
+            if observation.resource_id != basis.resource_id {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "applicability resource stamp observation {observation_id} belongs to resource {}, not {}",
+                    observation.resource_id, basis.resource_id
+                )));
+            }
+            if observation.adapter_kind != stamp.adapter_kind {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "applicability resource stamp observation {observation_id} adapter kind {:?} does not match stamp adapter kind {:?}",
+                    observation.adapter_kind, stamp.adapter_kind
+                )));
+            }
+            if observation.adapter_schema_version != stamp.adapter_schema_version {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "applicability resource stamp observation {observation_id} adapter schema version {} does not match stamp adapter schema version {}",
+                    observation.adapter_schema_version, stamp.adapter_schema_version
+                )));
+            }
+            if Some(observation.fingerprint) != stamp.observed_fingerprint {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "applicability resource stamp observation {observation_id} fingerprint does not match observed_fingerprint"
+                )));
+            }
         }
     }
     Ok(())

@@ -23,6 +23,7 @@ use crate::history::{
     StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
     TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
@@ -238,6 +239,13 @@ impl Engine {
         self.store.create_verification(&options)
     }
 
+    pub fn record_verification_applicability(
+        &mut self,
+        options: VerificationApplicabilityRecordOptions,
+    ) -> Result<VerificationApplicabilityCacheSnapshot> {
+        self.store.record_verification_applicability(&options)
+    }
+
     pub fn task_at(&self, commit_id: CommitId, task_entity_id: EntityId) -> Result<TaskSnapshot> {
         self.store.task_at(commit_id, task_entity_id)
     }
@@ -275,6 +283,15 @@ impl Engine {
     ) -> Result<VerificationSnapshot> {
         self.store
             .verification_at(commit_id, verification_entity_id)
+    }
+
+    pub fn verification_applicability_cache(
+        &self,
+        branch_id: BranchId,
+        verification_entity_id: EntityId,
+    ) -> Result<Option<VerificationApplicabilityCacheSnapshot>> {
+        self.store
+            .verification_applicability_cache(branch_id, verification_entity_id)
     }
 
     pub fn task_scheduling_relations_at(

@@ -14,6 +14,7 @@ use crate::history::{
     StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
     TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
@@ -315,6 +316,15 @@ impl Store {
         history::create_verification(&mut self.connection, options)
     }
 
+    pub(crate) fn record_verification_applicability(
+        &mut self,
+        options: &VerificationApplicabilityRecordOptions,
+    ) -> Result<VerificationApplicabilityCacheSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_verification_applicability(&mut self.connection, options)
+    }
+
     pub(crate) fn task_at(
         &self,
         commit_id: CommitId,
@@ -381,6 +391,20 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::verification_at(&self.connection, commit_id, verification_entity_id)
+    }
+
+    pub(crate) fn verification_applicability_cache(
+        &self,
+        branch_id: BranchId,
+        verification_entity_id: EntityId,
+    ) -> Result<Option<VerificationApplicabilityCacheSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::verification_applicability_cache(
+            &self.connection,
+            branch_id,
+            verification_entity_id,
+        )
     }
 
     pub(crate) fn task_scheduling_relations_at(

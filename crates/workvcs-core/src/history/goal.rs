@@ -42,6 +42,10 @@ impl GoalStatus {
             ))),
         }
     }
+
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Achieved | Self::Abandoned)
+    }
 }
 
 impl fmt::Display for GoalStatus {
@@ -70,9 +74,7 @@ impl GoalState {
 
     pub fn to_canonical_value(&self) -> Result<CanonicalValue> {
         validate_description(&self.description)?;
-        if let Some(terminal_rationale) = &self.terminal_rationale {
-            validate_terminal_rationale(terminal_rationale)?;
-        }
+        validate_goal_state_rationale(self.status, self.terminal_rationale.as_deref())?;
 
         let terminal_rationale = self
             .terminal_rationale
@@ -94,6 +96,27 @@ impl GoalState {
             ("terminal_rationale".to_owned(), terminal_rationale),
             ("work_refs".to_owned(), CanonicalValue::Array(Vec::new())),
         ])
+    }
+
+    fn transition(&self, next_status: GoalStatus, rationale_text: &str) -> Result<Self> {
+        validate_goal_lifecycle_transition(self.status, next_status)?;
+        validate_transition_rationale(rationale_text)?;
+        let next_terminal_rationale = if next_status.is_terminal() {
+            Some(rationale_text.to_owned())
+        } else {
+            None
+        };
+        let next = Self {
+            description: self.description.clone(),
+            status: next_status,
+            terminal_rationale: next_terminal_rationale,
+        };
+        if next == *self {
+            return Err(WorkVcsError::GoalInvalid(
+                "goal transition must change status".to_owned(),
+            ));
+        }
+        Ok(next)
     }
 }
 
@@ -126,6 +149,96 @@ impl GoalCreateOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoalTransitionOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    goal_entity_id: EntityId,
+    expected_goal_entity_version_id: EntityVersionId,
+    next_status: GoalStatus,
+    rationale_text: String,
+    rationale: CanonicalValue,
+}
+
+impl GoalTransitionOptions {
+    pub fn achieve(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        goal_entity_id: EntityId,
+        expected_goal_entity_version_id: EntityVersionId,
+        terminal_rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            goal_entity_id,
+            expected_goal_entity_version_id,
+            GoalStatus::Achieved,
+            terminal_rationale,
+        )
+    }
+
+    pub fn abandon(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        goal_entity_id: EntityId,
+        expected_goal_entity_version_id: EntityVersionId,
+        terminal_rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            goal_entity_id,
+            expected_goal_entity_version_id,
+            GoalStatus::Abandoned,
+            terminal_rationale,
+        )
+    }
+
+    pub fn reopen(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        goal_entity_id: EntityId,
+        expected_goal_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            goal_entity_id,
+            expected_goal_entity_version_id,
+            GoalStatus::Active,
+            rationale,
+        )
+    }
+
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        goal_entity_id: EntityId,
+        expected_goal_entity_version_id: EntityVersionId,
+        next_status: GoalStatus,
+        rationale_text: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale_text = rationale_text.into();
+        validate_transition_rationale(&rationale_text)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            goal_entity_id,
+            expected_goal_entity_version_id,
+            next_status,
+            rationale: rationale_value(&rationale_text)?,
+            rationale_text,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GoalCreateCommit {
     pub workspace_id: WorkspaceId,
     pub branch_id: BranchId,
@@ -137,6 +250,23 @@ pub struct GoalCreateCommit {
     pub goal_entity_version_id: EntityVersionId,
     pub goal_state_digest: Digest,
     pub work_state_digest: Digest,
+    pub state: GoalState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoalTransitionCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub goal_entity_id: EntityId,
+    pub previous_goal_entity_version_id: EntityVersionId,
+    pub goal_entity_version_id: EntityVersionId,
+    pub goal_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub previous_state: GoalState,
     pub state: GoalState,
 }
 
@@ -175,6 +305,56 @@ pub(crate) fn create_goal(
         goal_state_digest: commit.entity_state_digest,
         work_state_digest: commit.work_state_digest,
         state: options.state.clone(),
+    })
+}
+
+pub(crate) fn transition_goal(
+    connection: &mut StoreConnection,
+    options: &GoalTransitionOptions,
+) -> Result<GoalTransitionCommit> {
+    require_non_empty_rationale_object(&options.rationale)?;
+    let current = goal_at(
+        connection,
+        options.expected_head_commit_id,
+        options.goal_entity_id,
+    )?;
+    if current.goal_entity_version_id != options.expected_goal_entity_version_id {
+        return Err(WorkVcsError::GoalInvalid(format!(
+            "goal entity {} expected version {}, found {} at commit {}",
+            options.goal_entity_id,
+            options.expected_goal_entity_version_id,
+            current.goal_entity_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+
+    let next_state = current
+        .state
+        .transition(options.next_status, &options.rationale_text)?;
+    let entity_options = EntityTransitionOptions::update(
+        options.branch_id,
+        options.expected_head_commit_id,
+        options.goal_entity_id,
+        options.expected_goal_entity_version_id,
+        next_state.to_canonical_value()?,
+    )?
+    .with_rationale(options.rationale.clone());
+    let commit = commit_entity_transition(connection, &entity_options)?;
+
+    Ok(GoalTransitionCommit {
+        workspace_id: commit.workspace_id,
+        branch_id: commit.branch_id,
+        previous_head_commit_id: commit.previous_head_commit_id,
+        commit_id: commit.commit_id,
+        changeset_id: commit.changeset_id,
+        operation_id: commit.operation_id,
+        goal_entity_id: commit.entity_id,
+        previous_goal_entity_version_id: options.expected_goal_entity_version_id,
+        goal_entity_version_id: commit.entity_version_id,
+        goal_state_digest: commit.entity_state_digest,
+        work_state_digest: commit.work_state_digest,
+        previous_state: current.state,
+        state: next_state,
     })
 }
 
@@ -391,7 +571,7 @@ fn parse_goal_state(value: CanonicalValue) -> Result<GoalState> {
     work_refs
         .ok_or_else(|| WorkVcsError::GoalInvalid("goal state is missing work_refs".to_owned()))?;
 
-    Ok(GoalState {
+    GoalState {
         description: description.ok_or_else(|| {
             WorkVcsError::GoalInvalid("goal state is missing description".to_owned())
         })?,
@@ -400,7 +580,8 @@ fn parse_goal_state(value: CanonicalValue) -> Result<GoalState> {
         terminal_rationale: terminal_rationale.ok_or_else(|| {
             WorkVcsError::GoalInvalid("goal state is missing terminal_rationale".to_owned())
         })?,
-    })
+    }
+    .validate()
 }
 
 fn require_string(field: &str, value: CanonicalValue) -> Result<String> {
@@ -429,12 +610,71 @@ fn validate_description(value: &str) -> Result<()> {
 }
 
 fn validate_terminal_rationale(value: &str) -> Result<()> {
-    if value.contains('\0') {
-        return Err(WorkVcsError::GoalInvalid(
-            "goal terminal rationale must not contain NUL".to_owned(),
-        ));
+    validate_non_empty_text("goal terminal rationale", value)
+}
+
+fn validate_transition_rationale(value: &str) -> Result<()> {
+    validate_non_empty_text("goal transition rationale", value)
+}
+
+fn validate_goal_state_rationale(
+    status: GoalStatus,
+    terminal_rationale: Option<&str>,
+) -> Result<()> {
+    match (status, terminal_rationale) {
+        (GoalStatus::Active, None) => Ok(()),
+        (GoalStatus::Active, Some(_)) => Err(WorkVcsError::GoalInvalid(
+            "active goal state must not carry terminal_rationale".to_owned(),
+        )),
+        (GoalStatus::Achieved | GoalStatus::Abandoned, Some(value)) => {
+            validate_terminal_rationale(value)
+        }
+        (GoalStatus::Achieved | GoalStatus::Abandoned, None) => Err(WorkVcsError::GoalInvalid(
+            "terminal goal state requires terminal_rationale".to_owned(),
+        )),
     }
-    Ok(())
+}
+
+fn validate_goal_lifecycle_transition(
+    current_status: GoalStatus,
+    next_status: GoalStatus,
+) -> Result<()> {
+    match (current_status, next_status) {
+        (GoalStatus::Active, GoalStatus::Active)
+        | (GoalStatus::Achieved, GoalStatus::Achieved)
+        | (GoalStatus::Abandoned, GoalStatus::Abandoned) => Err(WorkVcsError::GoalInvalid(
+            "goal transition must change status".to_owned(),
+        )),
+        (GoalStatus::Active, GoalStatus::Achieved | GoalStatus::Abandoned)
+        | (GoalStatus::Achieved | GoalStatus::Abandoned, GoalStatus::Active) => Ok(()),
+        (
+            GoalStatus::Achieved | GoalStatus::Abandoned,
+            GoalStatus::Achieved | GoalStatus::Abandoned,
+        ) => Err(WorkVcsError::GoalInvalid(format!(
+            "terminal goal status {current_status} cannot transition directly to {next_status}; reopen first"
+        ))),
+    }
+}
+
+fn require_non_empty_rationale_object(value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(entries) if !entries.is_empty() => Ok(()),
+        CanonicalValue::Object(_) => Err(WorkVcsError::GoalInvalid(
+            "goal lifecycle transition requires a non-empty rationale object".to_owned(),
+        )),
+        _ => Err(WorkVcsError::GoalInvalid(
+            "goal lifecycle transition requires a rationale object".to_owned(),
+        )),
+    }
+}
+
+fn rationale_value(reason: &str) -> Result<CanonicalValue> {
+    validate_transition_rationale(reason)?;
+    CanonicalValue::object(vec![(
+        "reason".to_owned(),
+        CanonicalValue::String(reason.to_owned()),
+    )])
+    .map_err(goal_invalid_from)
 }
 
 fn validate_non_empty_text(field: &str, value: &str) -> Result<()> {
@@ -453,6 +693,19 @@ fn validate_non_empty_text(field: &str, value: &str) -> Result<()> {
 
 fn goal_invalid_from(error: WorkVcsError) -> WorkVcsError {
     WorkVcsError::GoalInvalid(error.to_string())
+}
+
+trait GoalStateValidation {
+    fn validate(self) -> Result<Self>
+    where
+        Self: Sized;
+}
+
+impl GoalStateValidation for GoalState {
+    fn validate(self) -> Result<Self> {
+        validate_goal_state_rationale(self.status, self.terminal_rationale.as_deref())?;
+        Ok(self)
+    }
 }
 
 fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {

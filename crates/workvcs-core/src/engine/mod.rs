@@ -10,12 +10,13 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchHead,
     EntityTransitionCommit, EntityTransitionOptions, GoalCreateCommit, GoalCreateOptions,
-    GoalSnapshot, HistoryQueryOptions, HistoryQueryResult, IntegrityReport, PlanCreateCommit,
-    PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, ReplayedState, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
+    HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    ReplayedState, TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WorkspaceInfo, WorkspaceInitOptions,
@@ -91,6 +92,13 @@ impl Engine {
 
     pub fn create_goal(&mut self, options: GoalCreateOptions) -> Result<GoalCreateCommit> {
         self.store.create_goal(&options)
+    }
+
+    pub fn transition_goal(
+        &mut self,
+        options: GoalTransitionOptions,
+    ) -> Result<GoalTransitionCommit> {
+        self.store.transition_goal(&options)
     }
 
     pub fn create_task(&mut self, options: TaskCreateOptions) -> Result<TaskCreateCommit> {

@@ -14,7 +14,10 @@ pub use containment::{
 };
 pub use entity::{EntityTransitionCommit, EntityTransitionOptions};
 pub use genesis::{WorkspaceInfo, WorkspaceInitOptions};
-pub use goal::{GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalState, GoalStatus};
+pub use goal::{
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalState, GoalStatus, GoalTransitionCommit,
+    GoalTransitionOptions,
+};
 pub use integrity::IntegrityReport;
 pub use plan::{PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanState, PlanStatus};
 pub use query::{BranchHead, HistoryEntry, HistoryQueryOptions, HistoryQueryResult, HistoryStart};
@@ -38,7 +41,7 @@ pub use task::{
 pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
 pub(crate) use entity::commit_entity_transition;
 pub(crate) use genesis::{create_workspace, load_workspace_info};
-pub(crate) use goal::{create_goal, goal_at};
+pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use plan::{create_plan, plan_at};
 pub(crate) use query::{branch_head, query_history};

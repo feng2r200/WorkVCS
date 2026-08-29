@@ -3,6 +3,7 @@ use crate::CheckpointId;
 use crate::ClaimId;
 use crate::CommitId;
 use crate::EntityId;
+use crate::EventId;
 use crate::EvidenceId;
 use crate::ExposureId;
 use crate::ExternalRefId;
@@ -30,8 +31,9 @@ use crate::history::{
     CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
     CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
-    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
-    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
+    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
@@ -155,6 +157,14 @@ impl Engine {
 
     pub fn history(&self, options: HistoryQueryOptions) -> Result<HistoryQueryResult> {
         self.store.history(&options)
+    }
+
+    pub fn event(&self, event_id: EventId) -> Result<EventSnapshot> {
+        self.store.event(event_id)
+    }
+
+    pub fn events(&self, options: EventListOptions) -> Result<EventListResult> {
+        self.store.events(&options)
     }
 
     pub fn diff(&self, options: WorkStateDiffOptions) -> Result<WorkStateDiff> {

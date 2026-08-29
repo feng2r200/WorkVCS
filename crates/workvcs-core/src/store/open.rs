@@ -12,8 +12,9 @@ use crate::history::{
     BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
     CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
     CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
-    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
-    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
+    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
@@ -94,8 +95,8 @@ use crate::store::bootstrap::{
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
 use crate::{
-    BranchId, ClaimId, CommitId, EntityId, EvidenceId, ImportId, ResourceId, ResourceObservationId,
-    SessionId, WorkspaceId, history, runtime,
+    BranchId, ClaimId, CommitId, EntityId, EventId, EvidenceId, ImportId, ResourceId,
+    ResourceObservationId, SessionId, WorkspaceId, history, runtime,
 };
 use std::path::Path;
 
@@ -176,6 +177,18 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::query_history(&self.connection, options)
+    }
+
+    pub(crate) fn event(&self, event_id: EventId) -> Result<EventSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::event(&self.connection, event_id)
+    }
+
+    pub(crate) fn events(&self, options: &EventListOptions) -> Result<EventListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::query_events(&self.connection, options)
     }
 
     pub(crate) fn diff(&self, options: &WorkStateDiffOptions) -> Result<WorkStateDiff> {

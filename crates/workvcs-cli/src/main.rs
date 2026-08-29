@@ -13,17 +13,18 @@ use workvcs_core::{
     BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
     BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue, ChangeSetId,
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
     CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
     ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
     CommitId, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EvidenceId,
-    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
-    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
-    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EventId,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceId, ExposureId, ExposureTransitionId,
+    ExternalObjectId, ExternalObjectRefListOptions, ExternalObjectRefListResult,
+    ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
+    ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, HistoryEntry,
+    HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
     KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
@@ -122,6 +123,10 @@ enum Command {
 
         #[arg(long)]
         limit: Option<usize>,
+    },
+    Event {
+        #[command(subcommand)]
+        command: EventCommand,
     },
     ShowAt {
         #[arg(value_name = "STORE")]
@@ -645,6 +650,39 @@ enum ProjectionCommand {
 
         #[arg(long)]
         branch: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum EventCommand {
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        event: String,
+    },
+    #[command(group(
+        ArgGroup::new("event-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["changeset", "session", "workspace"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        changeset: Option<String>,
+
+        #[arg(long)]
+        session: Option<String>,
+
+        #[arg(long)]
+        workspace: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -2485,6 +2523,43 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(output)
         }
+        Command::Event { command } => match command {
+            EventCommand::Show { store, event } => {
+                let engine = Engine::open(store)?;
+                let snapshot = engine.event(EventId::parse_canonical(&event)?)?;
+                Ok(render_event_snapshot(&snapshot))
+            }
+            EventCommand::List {
+                store,
+                changeset,
+                session,
+                workspace,
+                limit,
+            } => {
+                let engine = Engine::open(store)?;
+                let mut options = match (changeset, session, workspace) {
+                    (Some(changeset), None, None) => {
+                        EventListOptions::for_changeset(ChangeSetId::parse_canonical(&changeset)?)
+                    }
+                    (None, Some(session), None) => {
+                        EventListOptions::for_session(SessionId::parse_canonical(&session)?)
+                    }
+                    (None, None, Some(workspace)) => EventListOptions::for_workspace(
+                        workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
+                    ),
+                    _ => {
+                        return Err(WorkVcsError::QueryInvalid(
+                            "event list requires exactly one of --changeset, --session, or --workspace"
+                                .to_owned(),
+                        ));
+                    }
+                };
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                Ok(render_event_list(&engine.events(options)?))
+            }
+        },
         Command::ShowAt { store, commit } => {
             let engine = Engine::open(store)?;
             let state = engine.show_at(CommitId::parse_canonical(&commit)?)?;
@@ -6300,6 +6375,51 @@ fn render_history_entry(output: &mut String, entry: &HistoryEntry) {
     );
 }
 
+fn render_event_snapshot(event: &EventSnapshot) -> String {
+    let mut output = String::new();
+    render_event_fields(&mut output, None, event);
+    output
+}
+
+fn render_event_list(result: &EventListResult) -> String {
+    let mut output = format!("events={}\n", result.events.len());
+    for (index, event) in result.events.iter().enumerate() {
+        render_event_fields(&mut output, Some(index), event);
+    }
+    output
+}
+
+fn render_event_fields(output: &mut String, index: Option<usize>, event: &EventSnapshot) {
+    let prefix = index
+        .map(|index| format!("event[{index}]."))
+        .unwrap_or_default();
+    let workspace_id = event
+        .workspace_id
+        .map(|workspace_id| workspace_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let changeset_id = event
+        .changeset_id
+        .map(|changeset_id| changeset_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let session_id = event
+        .session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let _ = writeln!(output, "{prefix}event_id={}", event.event_id);
+    let _ = writeln!(output, "{prefix}workspace_id={workspace_id}");
+    let _ = writeln!(output, "{prefix}changeset_id={changeset_id}");
+    let _ = writeln!(output, "{prefix}session_id={session_id}");
+    let _ = writeln!(output, "{prefix}event_kind={}", event.event_kind);
+    let _ = writeln!(output, "{prefix}occurred_at_us={}", event.occurred_at_us);
+    let _ = writeln!(output, "{prefix}payload_digest={}", event.payload_digest);
+    let _ = writeln!(
+        output,
+        "{prefix}payload_size_bytes={}",
+        event.payload_size_bytes
+    );
+    let _ = writeln!(output, "{prefix}payload_json={}", event.payload_json);
+}
+
 fn render_replayed_state(state: &ReplayedState) -> String {
     let mut output = format!(
         "workspace_id={}\ncommit_id={}\nstate_digest={}\n",
@@ -7781,6 +7901,7 @@ mod tests {
                 "doctor",
                 "store",
                 "history",
+                "event",
                 "show-at",
                 "restore",
                 "why",
@@ -7826,6 +7947,26 @@ mod tests {
     }
 
     #[test]
+    fn event_list_requires_one_target_selector() {
+        let missing = Cli::try_parse_from(["workvcs", "event", "list", "store.sqlite"]);
+        assert!(missing.is_err());
+
+        let changeset = ChangeSetId::new_v7().to_string();
+        let session = SessionId::new_v7().to_string();
+        let both = Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            "store.sqlite",
+            "--changeset",
+            &changeset,
+            "--session",
+            &session,
+        ]);
+        assert!(both.is_err());
+    }
+
+    #[test]
     fn init_and_doctor_use_engine_store_boundary() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
@@ -7854,6 +7995,73 @@ mod tests {
         assert!(doctor.contains("checked_commits=0"));
         assert!(doctor.contains("checked_checkpoints=0"));
         assert!(doctor.contains("invalid_checkpoints=0"));
+    }
+
+    #[test]
+    fn cli_shows_and_lists_events_by_changeset() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(Cli::try_parse_from(["workvcs", "init", store]).expect("parse init"))
+            .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "event-query workspace",
+        ])
+        .expect("parse workspace create"))
+        .expect("create workspace");
+        let branch_id = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch_id,
+            "--head",
+            &head,
+            "--description",
+            "cli event query task",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+        let changeset_id = value(&task, "changeset_id");
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+        ])
+        .expect("parse event list"))
+        .expect("list events");
+        assert_eq!(value(&listed, "events"), "1");
+        assert_eq!(value(&listed, "event[0].changeset_id"), changeset_id);
+        assert_eq!(value(&listed, "event[0].event_kind"), "entity.transitioned");
+        assert_ne!(value(&listed, "event[0].payload_json"), "");
+        let event_id = value(&listed, "event[0].event_id");
+
+        let shown =
+            run(
+                Cli::try_parse_from(["workvcs", "event", "show", store, "--event", &event_id])
+                    .expect("parse event show"),
+            )
+            .expect("show event");
+        assert_eq!(value(&shown, "event_id"), event_id);
+        assert_eq!(value(&shown, "changeset_id"), changeset_id);
+        assert_eq!(
+            value(&shown, "payload_digest"),
+            value(&listed, "event[0].payload_digest")
+        );
     }
 
     #[test]

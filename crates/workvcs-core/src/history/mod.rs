@@ -110,7 +110,10 @@ pub use projection::{
     BranchProjectionRefreshOptions, BranchProjectionRefreshResult, BranchProjectionSnapshot,
     BranchProjectionStatus,
 };
-pub use query::{BranchHead, HistoryEntry, HistoryQueryOptions, HistoryQueryResult, HistoryStart};
+pub use query::{
+    BranchHead, EventListOptions, EventListResult, EventListTarget, EventSnapshot, HistoryEntry,
+    HistoryQueryOptions, HistoryQueryResult, HistoryStart,
+};
 pub use record::{
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, KnowledgeRelationCreateCommit,
     KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
@@ -201,7 +204,7 @@ pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use projection::{
     branch_projection, mark_branch_projection_not_materialized, refresh_branch_projection,
 };
-pub(crate) use query::{branch_head, query_history};
+pub(crate) use query::{branch_head, event, query_events, query_history};
 pub(crate) use record::{
     create_knowledge_relation, create_record, create_record_knowledge_relation,
     create_record_relation, knowledge_relation_at, knowledge_relations_at, record_at,

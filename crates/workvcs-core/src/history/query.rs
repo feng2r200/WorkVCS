@@ -1,7 +1,8 @@
+use crate::canonical::{canonical_bytes, content_object_digest, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
-use crate::identity::{BranchId, ChangeSetId, CommitId, Digest, WorkspaceId};
+use crate::identity::{BranchId, ChangeSetId, CommitId, Digest, EventId, SessionId, WorkspaceId};
 use crate::store::StoreConnection;
-use rusqlite::{OptionalExtension, Params, params};
+use rusqlite::{OptionalExtension, Params, Row, params};
 use std::collections::HashSet;
 
 const GENESIS_COMMIT_KIND: &str = "genesis";
@@ -85,6 +86,78 @@ pub struct HistoryEntry {
     pub parent_commit_id: Option<CommitId>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventListTarget {
+    ChangeSet(ChangeSetId),
+    Session(SessionId),
+    Workspace(WorkspaceId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventListOptions {
+    target: EventListTarget,
+    limit: Option<usize>,
+}
+
+impl EventListOptions {
+    pub fn for_changeset(changeset_id: ChangeSetId) -> Self {
+        Self {
+            target: EventListTarget::ChangeSet(changeset_id),
+            limit: None,
+        }
+    }
+
+    pub fn for_session(session_id: SessionId) -> Self {
+        Self {
+            target: EventListTarget::Session(session_id),
+            limit: None,
+        }
+    }
+
+    pub fn for_workspace(workspace_id: WorkspaceId) -> Self {
+        Self {
+            target: EventListTarget::Workspace(workspace_id),
+            limit: None,
+        }
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Result<Self> {
+        if limit == 0 {
+            return Err(WorkVcsError::QueryInvalid(
+                "event list limit must be greater than zero".to_owned(),
+            ));
+        }
+        self.limit = Some(limit);
+        Ok(self)
+    }
+
+    pub fn target(&self) -> EventListTarget {
+        self.target
+    }
+
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventListResult {
+    pub events: Vec<EventSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventSnapshot {
+    pub event_id: EventId,
+    pub workspace_id: Option<WorkspaceId>,
+    pub changeset_id: Option<ChangeSetId>,
+    pub session_id: Option<SessionId>,
+    pub event_kind: String,
+    pub occurred_at_us: i64,
+    pub payload_json: String,
+    pub payload_digest: Digest,
+    pub payload_size_bytes: i64,
+}
+
 struct BranchRow {
     workspace_id: WorkspaceId,
     name: String,
@@ -150,6 +223,97 @@ pub(crate) fn query_history(
     })
 }
 
+pub(crate) fn event(connection: &StoreConnection, event_id: EventId) -> Result<EventSnapshot> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT event_id,
+                    workspace_id,
+                    changeset_id,
+                    session_id,
+                    event_kind,
+                    occurred_at_us,
+                    payload_json
+             FROM event
+             WHERE event_id = ?1",
+            params![&event_id.raw_bytes()[..]],
+            raw_event_row,
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some(row) = row else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "event {event_id} does not exist"
+        )));
+    };
+
+    decode_event_row(row)
+}
+
+pub(crate) fn query_events(
+    connection: &StoreConnection,
+    options: &EventListOptions,
+) -> Result<EventListResult> {
+    let (sql, selector_bytes) = match options.target() {
+        EventListTarget::ChangeSet(changeset_id) => (
+            "SELECT event_id,
+                    workspace_id,
+                    changeset_id,
+                    session_id,
+                    event_kind,
+                    occurred_at_us,
+                    payload_json
+             FROM event
+             WHERE changeset_id = ?1
+             ORDER BY occurred_at_us, event_id
+             LIMIT ?2",
+            changeset_id.raw_bytes(),
+        ),
+        EventListTarget::Session(session_id) => (
+            "SELECT event_id,
+                    workspace_id,
+                    changeset_id,
+                    session_id,
+                    event_kind,
+                    occurred_at_us,
+                    payload_json
+             FROM event
+             WHERE session_id = ?1
+             ORDER BY occurred_at_us, event_id
+             LIMIT ?2",
+            session_id.raw_bytes(),
+        ),
+        EventListTarget::Workspace(workspace_id) => (
+            "SELECT event_id,
+                    workspace_id,
+                    changeset_id,
+                    session_id,
+                    event_kind,
+                    occurred_at_us,
+                    payload_json
+             FROM event
+             WHERE workspace_id = ?1
+             ORDER BY occurred_at_us, event_id
+             LIMIT ?2",
+            workspace_id.raw_bytes(),
+        ),
+    };
+    let limit = match options.limit() {
+        Some(limit) => usize_to_i64("event list limit", limit)?,
+        None => -1,
+    };
+    let mut statement = connection.inner().prepare(sql).map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&selector_bytes[..], limit], raw_event_row)
+        .map_err(storage_error)?;
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(decode_event_row(row.map_err(storage_error)?)?);
+    }
+    Ok(EventListResult { events })
+}
+
 fn load_branch(connection: &StoreConnection, branch_id: BranchId) -> Result<BranchRow> {
     let branch_id_bytes = branch_id.raw_bytes();
     let row = connection
@@ -184,6 +348,45 @@ fn load_branch(connection: &StoreConnection, branch_id: BranchId) -> Result<Bran
         name,
         head_commit_id: decode_commit_id("branch.head_commit_id", head_commit_id)?,
         lifecycle_state,
+    })
+}
+
+struct RawEventRow {
+    event_id: Vec<u8>,
+    workspace_id: Option<Vec<u8>>,
+    changeset_id: Option<Vec<u8>>,
+    session_id: Option<Vec<u8>>,
+    event_kind: String,
+    occurred_at_us: i64,
+    payload_json: String,
+}
+
+fn raw_event_row(row: &Row<'_>) -> rusqlite::Result<RawEventRow> {
+    Ok(RawEventRow {
+        event_id: row.get(0)?,
+        workspace_id: row.get(1)?,
+        changeset_id: row.get(2)?,
+        session_id: row.get(3)?,
+        event_kind: row.get(4)?,
+        occurred_at_us: row.get(5)?,
+        payload_json: row.get(6)?,
+    })
+}
+
+fn decode_event_row(row: RawEventRow) -> Result<EventSnapshot> {
+    validate_stored_text("event.event_kind", &row.event_kind)?;
+    validate_nonnegative("event.occurred_at_us", row.occurred_at_us)?;
+    validate_canonical_json_text("event.payload_json", &row.payload_json)?;
+    Ok(EventSnapshot {
+        event_id: decode_event_id("event.event_id", row.event_id)?,
+        workspace_id: decode_optional_workspace_id("event.workspace_id", row.workspace_id)?,
+        changeset_id: decode_optional_changeset_id("event.changeset_id", row.changeset_id)?,
+        session_id: decode_optional_session_id("event.session_id", row.session_id)?,
+        event_kind: row.event_kind,
+        occurred_at_us: row.occurred_at_us,
+        payload_digest: content_object_digest(row.payload_json.as_bytes()),
+        payload_size_bytes: usize_to_i64("event.payload_json size", row.payload_json.len())?,
+        payload_json: row.payload_json,
     })
 }
 
@@ -363,9 +566,21 @@ fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
 }
 
+fn decode_event_id(column: &str, bytes: Vec<u8>) -> Result<EventId> {
+    let bytes = decode_16(column, bytes)?;
+    EventId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
 fn decode_changeset_id(column: &str, bytes: Vec<u8>) -> Result<ChangeSetId> {
     let bytes = decode_16(column, bytes)?;
     ChangeSetId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_session_id(column: &str, bytes: Vec<u8>) -> Result<SessionId> {
+    let bytes = decode_16(column, bytes)?;
+    SessionId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
 }
 
@@ -386,4 +601,58 @@ fn decode_digest(column: &str, bytes: Vec<u8>) -> Result<Digest> {
         WorkVcsError::QueryInvalid(format!("{column} must be 32 bytes, found {}", bytes.len()))
     })?;
     Ok(Digest::from_bytes(bytes))
+}
+
+fn decode_optional_workspace_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<WorkspaceId>> {
+    bytes
+        .map(|bytes| decode_workspace_id(column, bytes))
+        .transpose()
+}
+
+fn decode_optional_changeset_id(
+    column: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<ChangeSetId>> {
+    bytes
+        .map(|bytes| decode_changeset_id(column, bytes))
+        .transpose()
+}
+
+fn decode_optional_session_id(column: &str, bytes: Option<Vec<u8>>) -> Result<Option<SessionId>> {
+    bytes
+        .map(|bytes| decode_session_id(column, bytes))
+        .transpose()
+}
+
+fn validate_nonnegative(label: &str, value: i64) -> Result<()> {
+    if value < 0 {
+        Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be nonnegative, found {value}"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_canonical_json_text(label: &str, value: &str) -> Result<()> {
+    let parsed = parse_canonical_json(value.as_bytes())
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{label} is invalid: {error}")))?;
+    let encoded = canonical_bytes(&parsed)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{label} is invalid: {error}")))?;
+    if encoded == value.as_bytes() {
+        Ok(())
+    } else {
+        Err(WorkVcsError::QueryInvalid(format!(
+            "{label} is not canonical fixed-point JSON"
+        )))
+    }
+}
+
+fn usize_to_i64(label: &str, value: usize) -> Result<i64> {
+    i64::try_from(value).map_err(|_| {
+        WorkVcsError::QueryInvalid(format!("{label} does not fit in signed 64-bit storage"))
+    })
 }

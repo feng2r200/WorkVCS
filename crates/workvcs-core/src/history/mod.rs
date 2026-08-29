@@ -27,9 +27,9 @@ mod why;
 
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
-    BundleAcceptanceCriterionIdentityRef, BundleBranchHeadRef, BundleCheckpointCandidate,
-    BundleEntityMembershipChangeRef, BundleEntityVersionRef, BundleExportManifest,
-    BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
+    BundleAcceptanceCriterionIdentityRef, BundleBranchHeadRef, BundleChangeSetCausalAnchorRef,
+    BundleCheckpointCandidate, BundleEntityMembershipChangeRef, BundleEntityVersionRef,
+    BundleExportManifest, BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
     BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
     BundleImportAttemptOutcomeSnapshot, BundleImportAttemptResult, BundleImportAttemptSnapshot,
     BundleImportPreflightOptions, BundleImportPreflightResult,

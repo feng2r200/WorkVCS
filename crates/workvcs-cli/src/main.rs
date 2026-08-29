@@ -6731,7 +6731,7 @@ fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> Str
 
 fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
     let mut output = format!(
-        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nacceptance_criterion_identities={}\nverification_requirement_identities={}\nrelation_versions={}\ncontent_objects={}\nsessions={}\nsession_diffs={}\nevidences={}\nevidence_contents={}\nresources={}\nresource_observations={}\nverification_bases={}\nverification_resource_bases={}\nverification_semantic_dependencies={}\nevents={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
+        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nacceptance_criterion_identities={}\nverification_requirement_identities={}\nrelation_versions={}\ncontent_objects={}\nsessions={}\nsession_diffs={}\nevidences={}\nevidence_contents={}\nresources={}\nresource_observations={}\nverification_bases={}\nverification_resource_bases={}\nverification_semantic_dependencies={}\nevents={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\nchangeset_causal_anchors={}\ncheckpoint_candidates={}\n",
         manifest.manifest_profile,
         manifest.manifest_version,
         manifest.store_id,
@@ -6766,8 +6766,29 @@ fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
         manifest.knowledge_exposure_source_statuses.len(),
         manifest.entity_membership_changes.len(),
         manifest.relation_membership_changes.len(),
+        manifest.changeset_causal_anchors.len(),
         manifest.checkpoint_candidates.len()
     );
+    for (index, anchor) in manifest.changeset_causal_anchors.iter().enumerate() {
+        writeln!(
+            output,
+            "changeset_causal_anchor[{index}].changeset_id={}",
+            anchor.changeset_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "changeset_causal_anchor[{index}].anchor_object_id={}",
+            anchor.anchor_object_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "changeset_causal_anchor[{index}].anchor_object_kind={}",
+            anchor.anchor_object_kind
+        )
+        .expect("write to String");
+    }
     for (index, event) in manifest.events.iter().enumerate() {
         writeln!(output, "event[{index}].id={}", event.event_id).expect("write to String");
         writeln!(output, "event[{index}].kind={}", event.event_kind).expect("write to String");

@@ -277,6 +277,7 @@ pub struct BundleExportManifest {
     pub knowledge_exposure_source_statuses: Vec<BundleKnowledgeExposureSourceStatusRef>,
     pub entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
     pub relation_membership_changes: Vec<BundleRelationMembershipChangeRef>,
+    pub changeset_causal_anchors: Vec<BundleChangeSetCausalAnchorRef>,
     pub checkpoint_candidates: Vec<BundleCheckpointCandidate>,
     pub manifest: CanonicalValue,
 }
@@ -785,6 +786,14 @@ pub struct BundleRelationMembershipChangeRef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleChangeSetCausalAnchorRef {
+    pub changeset_id: ChangeSetId,
+    pub ordinal: i64,
+    pub anchor_object_id: String,
+    pub anchor_object_kind: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct BundleCommitRef {
     workspace_id: WorkspaceId,
     commit_id: CommitId,
@@ -830,12 +839,14 @@ struct BundleManifestSummary {
     state_digest: Digest,
     commits: Vec<BundleCommitSummary>,
     exported_branch_heads: Vec<BundleBranchHeadSummary>,
+    changeset_causal_anchors: Vec<BundleChangeSetCausalAnchorRef>,
     same_store_apply_supported: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BundleCommitSummary {
     commit_id: CommitId,
+    changeset_id: ChangeSetId,
     state_digest: Digest,
     parent_commit_ids: Vec<CommitId>,
 }
@@ -908,6 +919,7 @@ struct BundleSameStoreApplyDocument {
     knowledge_exposure_source_statuses: Vec<BundleKnowledgeExposureSourceStatusRef>,
     entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
     relation_membership_changes: Vec<BundleRelationMembershipChangeRef>,
+    changeset_causal_anchors: Vec<BundleChangeSetCausalAnchorRef>,
     checkpoint_candidates: Vec<BundleCheckpointCandidate>,
 }
 
@@ -1015,6 +1027,7 @@ pub(crate) fn export_bundle_manifest(
 
     let entity_membership_changes = entity_membership_change_refs(connection, &commits)?;
     let relation_membership_changes = relation_membership_change_refs(connection, &commits)?;
+    let changeset_causal_anchors = changeset_causal_anchor_refs(connection, &commits)?;
     let entity_versions = entity_version_closure_refs(
         connection,
         replayed.workspace_id,
@@ -1118,6 +1131,7 @@ pub(crate) fn export_bundle_manifest(
         knowledge_exposure_source_statuses: &knowledge_exposure_source_statuses,
         entity_membership_changes: &entity_membership_changes,
         relation_membership_changes: &relation_membership_changes,
+        changeset_causal_anchors: &changeset_causal_anchors,
         checkpoint_candidates: &checkpoint_candidates,
     })?;
     let manifest_bytes = canonical_bytes(&manifest)?;
@@ -1159,6 +1173,7 @@ pub(crate) fn export_bundle_manifest(
         knowledge_exposure_source_statuses,
         entity_membership_changes,
         relation_membership_changes,
+        changeset_causal_anchors,
         checkpoint_candidates,
         manifest,
     })
@@ -3738,6 +3753,40 @@ fn load_relation_membership_change_refs(
     Ok(refs)
 }
 
+fn changeset_causal_anchor_refs(
+    connection: &StoreConnection,
+    commits: &[BundleCommitRef],
+) -> Result<Vec<BundleChangeSetCausalAnchorRef>> {
+    let mut refs = Vec::new();
+    for commit in commits {
+        let anchors = super::changeset_causal_anchors(connection, commit.changeset_id)?;
+        if anchors.workspace_id != commit.workspace_id {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "ChangeSet {} belongs to workspace {}, not bundle commit workspace {}",
+                commit.changeset_id, anchors.workspace_id, commit.workspace_id
+            )));
+        }
+        refs.extend(
+            anchors
+                .anchors
+                .into_iter()
+                .map(|anchor| BundleChangeSetCausalAnchorRef {
+                    changeset_id: commit.changeset_id,
+                    ordinal: anchor.ordinal,
+                    anchor_object_id: anchor.anchor_object_id,
+                    anchor_object_kind: anchor.anchor_object_kind,
+                }),
+        );
+    }
+    refs.sort_by(|left, right| {
+        left.changeset_id
+            .cmp(&right.changeset_id)
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+            .then_with(|| left.anchor_object_id.cmp(&right.anchor_object_id))
+    });
+    Ok(refs)
+}
+
 fn load_entity_membership_change_payload_candidates(
     connection: &StoreConnection,
     commit: &BundleCommitRef,
@@ -4834,6 +4883,7 @@ struct BundleManifestValueInput<'a> {
     knowledge_exposure_source_statuses: &'a [BundleKnowledgeExposureSourceStatusRef],
     entity_membership_changes: &'a [BundleEntityMembershipChangeRef],
     relation_membership_changes: &'a [BundleRelationMembershipChangeRef],
+    changeset_causal_anchors: &'a [BundleChangeSetCausalAnchorRef],
     checkpoint_candidates: &'a [BundleCheckpointCandidate],
 }
 
@@ -5115,6 +5165,16 @@ fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue>
                     .relation_membership_changes
                     .iter()
                     .map(relation_membership_change_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "changeset_causal_anchors".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .changeset_causal_anchors
+                    .iter()
+                    .map(changeset_causal_anchor_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
@@ -5676,6 +5736,25 @@ fn relation_membership_change_ref_value(
         ),
         string_field("field_delta_digest", change.field_delta_digest.to_string()),
         integer_field("field_delta_size_bytes", change.field_delta_size_bytes)?,
+    ])
+}
+
+fn changeset_causal_anchor_ref_value(
+    anchor: &BundleChangeSetCausalAnchorRef,
+) -> Result<CanonicalValue> {
+    parse_object_id_bytes(
+        "bundle manifest changeset causal anchor anchor_object_id",
+        &anchor.anchor_object_id,
+    )?;
+    validate_object_identity_kind(
+        "bundle manifest changeset causal anchor anchor_object_kind",
+        &anchor.anchor_object_kind,
+    )?;
+    CanonicalValue::object(vec![
+        string_field("changeset_id", anchor.changeset_id.to_string()),
+        integer_field("ordinal", anchor.ordinal)?,
+        string_field("anchor_object_id", anchor.anchor_object_id.clone()),
+        string_field("anchor_object_kind", anchor.anchor_object_kind.clone()),
     ])
 }
 
@@ -9466,7 +9545,15 @@ fn parse_bundle_manifest_summary(
         .iter()
         .map(parse_bundle_branch_head_summary)
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let same_store_apply_supported = bundle_manifest_supports_same_store_apply(value)?;
+    let changeset_causal_anchors =
+        optional_array_field_ref(value, "bundle manifest", "changeset_causal_anchors")?
+            .iter()
+            .map(|anchor| {
+                parse_bundle_changeset_causal_anchor_ref(anchor).map_err(|error| error.to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    let same_store_apply_supported =
+        bundle_manifest_supports_same_store_apply(value, &changeset_causal_anchors)?;
     let manifest = BundleManifestSummary {
         source_store_id: parse_store_id_field(store, "bundle manifest store", "store_id")?,
         store_format_version: integer_field_value(
@@ -9494,6 +9581,7 @@ fn parse_bundle_manifest_summary(
         state_digest: parse_digest_field(target, "bundle manifest target", "state_digest")?,
         commits,
         exported_branch_heads,
+        changeset_causal_anchors,
         same_store_apply_supported,
     };
     validate_bundle_manifest_summary_integrity(&manifest)?;
@@ -9502,7 +9590,11 @@ fn parse_bundle_manifest_summary(
 
 fn bundle_manifest_supports_same_store_apply(
     value: &CanonicalValue,
+    changeset_causal_anchors: &[BundleChangeSetCausalAnchorRef],
 ) -> std::result::Result<bool, String> {
+    if !changeset_causal_anchors.is_empty() {
+        return Ok(false);
+    }
     for checkpoint in optional_array_field_ref(value, "bundle manifest", "checkpoint_candidates")? {
         if parse_bundle_checkpoint_candidate_ref(checkpoint).is_err() {
             return Ok(false);
@@ -9924,6 +10016,7 @@ fn validate_bundle_manifest_summary_integrity(
     manifest: &BundleManifestSummary,
 ) -> std::result::Result<(), String> {
     let mut commits_by_id = BTreeMap::new();
+    let mut changeset_ids = BTreeSet::new();
     for commit in &manifest.commits {
         if commits_by_id
             .insert(commit.commit_id, commit.state_digest)
@@ -9932,6 +10025,12 @@ fn validate_bundle_manifest_summary_integrity(
             return Err(format!(
                 "bundle manifest commit {} appears more than once",
                 commit.commit_id
+            ));
+        }
+        if !changeset_ids.insert(commit.changeset_id) {
+            return Err(format!(
+                "bundle manifest ChangeSet {} appears in more than one commit",
+                commit.changeset_id
             ));
         }
     }
@@ -9989,6 +10088,29 @@ fn validate_bundle_manifest_summary_integrity(
             }
         }
     }
+
+    let mut anchors_by_ordinal = BTreeSet::new();
+    let mut anchors_by_object = BTreeSet::new();
+    for anchor in &manifest.changeset_causal_anchors {
+        if !changeset_ids.contains(&anchor.changeset_id) {
+            return Err(format!(
+                "bundle manifest ChangeSet causal anchor points at ChangeSet {} outside commit closure",
+                anchor.changeset_id
+            ));
+        }
+        if !anchors_by_ordinal.insert((anchor.changeset_id, anchor.ordinal)) {
+            return Err(format!(
+                "bundle manifest ChangeSet {} causal anchor ordinal {} appears more than once",
+                anchor.changeset_id, anchor.ordinal
+            ));
+        }
+        if !anchors_by_object.insert((anchor.changeset_id, anchor.anchor_object_id.clone())) {
+            return Err(format!(
+                "bundle manifest ChangeSet {} causal anchor object {} appears more than once",
+                anchor.changeset_id, anchor.anchor_object_id
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -10003,6 +10125,7 @@ fn parse_bundle_commit_summary(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(BundleCommitSummary {
         commit_id: parse_commit_id_field(value, "bundle manifest commit", "commit_id")?,
+        changeset_id: parse_changeset_id_field(value, "bundle manifest commit", "changeset_id")?,
         state_digest: parse_digest_field(value, "bundle manifest commit", "state_digest")?,
         parent_commit_ids: parents,
     })
@@ -10384,6 +10507,12 @@ fn parse_bundle_same_store_apply_document(
             .iter()
             .map(parse_bundle_relation_membership_change_ref)
             .collect::<Result<Vec<_>>>()?;
+    let changeset_causal_anchors =
+        optional_array_field_ref(value, "bundle manifest", "changeset_causal_anchors")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_changeset_causal_anchor_ref)
+            .collect::<Result<Vec<_>>>()?;
     let checkpoint_candidates =
         optional_array_field_ref(value, "bundle manifest", "checkpoint_candidates")
             .map_err(WorkVcsError::QueryInvalid)?
@@ -10420,6 +10549,7 @@ fn parse_bundle_same_store_apply_document(
         knowledge_exposure_source_statuses,
         entity_membership_changes,
         relation_membership_changes,
+        changeset_causal_anchors,
         checkpoint_candidates,
     };
     validate_same_store_apply_identity_coverage(&document)?;
@@ -12401,6 +12531,47 @@ fn parse_bundle_entity_membership_change_ref(
     })
 }
 
+fn parse_bundle_changeset_causal_anchor_ref(
+    value: &CanonicalValue,
+) -> Result<BundleChangeSetCausalAnchorRef> {
+    let ordinal = integer_field_value(value, "bundle manifest changeset causal anchor", "ordinal")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest changeset causal anchor ordinal", ordinal)?;
+    let anchor_object_id = string_field_value(
+        value,
+        "bundle manifest changeset causal anchor",
+        "anchor_object_id",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    parse_object_id_bytes(
+        "bundle manifest changeset causal anchor anchor_object_id",
+        &anchor_object_id,
+    )?;
+    let anchor_object_kind = string_field_value(
+        value,
+        "bundle manifest changeset causal anchor",
+        "anchor_object_kind",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    .to_owned();
+    validate_object_identity_kind(
+        "bundle manifest changeset causal anchor anchor_object_kind",
+        &anchor_object_kind,
+    )?;
+    Ok(BundleChangeSetCausalAnchorRef {
+        changeset_id: parse_changeset_id_field(
+            value,
+            "bundle manifest changeset causal anchor",
+            "changeset_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        ordinal,
+        anchor_object_id,
+        anchor_object_kind,
+    })
+}
+
 fn object_field_ref<'a>(
     value: &'a CanonicalValue,
     label: &str,
@@ -12950,6 +13121,26 @@ fn validate_object_kind_exact(label: &str, actual: &str, expected: &str) -> Resu
         Err(WorkVcsError::QueryInvalid(format!(
             "{label} expected {expected}, found {actual}"
         )))
+    }
+}
+
+fn validate_object_identity_kind(label: &str, value: &str) -> Result<()> {
+    validate_stored_text(label, value)?;
+    match value {
+        "entity"
+        | "relation"
+        | "session"
+        | "session_diff"
+        | "claim"
+        | "merge_attempt"
+        | "evidence"
+        | "resource"
+        | "resource_observation"
+        | "knowledge_space"
+        | "knowledge_exposure" => Ok(()),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} is not a supported ObjectIdentity kind"
+        ))),
     }
 }
 

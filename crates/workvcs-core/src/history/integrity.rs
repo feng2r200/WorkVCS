@@ -1,11 +1,13 @@
 use crate::error::{Result, WorkVcsError, storage_error};
-use crate::identity::{BranchId, CheckpointId, CommitId, EventId};
+use crate::identity::{BranchId, ChangeSetId, CheckpointId, CommitId, EventId};
 use crate::store::StoreConnection;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntegrityReport {
     pub checked_branches: usize,
     pub checked_commits: usize,
+    pub checked_changesets: usize,
+    pub checked_change_operations: usize,
     pub checked_events: usize,
     pub checked_checkpoints: usize,
     pub invalid_checkpoints: usize,
@@ -53,6 +55,28 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
         })?;
     }
 
+    let changeset_ids = load_changeset_ids(connection)?;
+    let mut checked_change_operations = 0usize;
+    for changeset_id in &changeset_ids {
+        let changeset = super::changeset(connection, *changeset_id).map_err(|error| {
+            integrity_error(format!("ChangeSet {changeset_id} is invalid"), error)
+        })?;
+        let operations =
+            super::changeset_operations(connection, *changeset_id).map_err(|error| {
+                integrity_error(
+                    format!("ChangeSet {changeset_id} operations are invalid"),
+                    error,
+                )
+            })?;
+        if operations.workspace_id != changeset.workspace_id {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "ChangeSet {changeset_id} operation list belongs to workspace {}, not {}",
+                operations.workspace_id, changeset.workspace_id
+            )));
+        }
+        checked_change_operations += operations.operations.len();
+    }
+
     let event_ids = load_event_ids(connection)?;
     for event_id in &event_ids {
         super::event(connection, *event_id)
@@ -68,6 +92,8 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
     Ok(IntegrityReport {
         checked_branches: branch_ids.len(),
         checked_commits: commit_ids.len(),
+        checked_changesets: changeset_ids.len(),
+        checked_change_operations,
         checked_events: event_ids.len(),
         checked_checkpoints: checkpoint_statuses.len(),
         invalid_checkpoints,
@@ -141,6 +167,24 @@ fn load_commit_ids(connection: &StoreConnection) -> Result<Vec<CommitId>> {
     Ok(commit_ids)
 }
 
+fn load_changeset_ids(connection: &StoreConnection) -> Result<Vec<ChangeSetId>> {
+    let mut statement = connection
+        .inner()
+        .prepare("SELECT changeset_id FROM changeset ORDER BY created_at_us, changeset_id")
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(storage_error)?;
+    let mut changeset_ids = Vec::new();
+    for row in rows {
+        changeset_ids.push(decode_changeset_id(
+            "changeset.changeset_id",
+            row.map_err(storage_error)?,
+        )?);
+    }
+    Ok(changeset_ids)
+}
+
 fn load_event_ids(connection: &StoreConnection) -> Result<Vec<EventId>> {
     let mut statement = connection
         .inner()
@@ -206,6 +250,13 @@ fn decode_branch_id(column: &str, bytes: Vec<u8>) -> Result<BranchId> {
 fn decode_checkpoint_id(column: &str, bytes: Vec<u8>) -> Result<CheckpointId> {
     let bytes = decode_16(column, bytes)?;
     CheckpointId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::IntegrityInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_changeset_id(column: &str, bytes: Vec<u8>) -> Result<ChangeSetId> {
+    let bytes = decode_16(column, bytes)?;
+    ChangeSetId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::IntegrityInvalid(format!("{column} is not a UUIDv7 value: {error}"))
     })
 }

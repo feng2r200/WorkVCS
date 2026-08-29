@@ -2110,12 +2110,14 @@ fn run(cli: Cli) -> Result<String> {
             let info = engine.store_info()?;
             let integrity = engine.validate_integrity()?;
             Ok(format!(
-                "ok store_id={} schema_version={} canonical_json_profile={} checked_branches={} checked_commits={} checked_events={} checked_checkpoints={} invalid_checkpoints={}\n",
+                "ok store_id={} schema_version={} canonical_json_profile={} checked_branches={} checked_commits={} checked_changesets={} checked_change_operations={} checked_events={} checked_checkpoints={} invalid_checkpoints={}\n",
                 info.store_id,
                 info.manifest.schema_version,
                 info.manifest.canonical_json_profile,
                 integrity.checked_branches,
                 integrity.checked_commits,
+                integrity.checked_changesets,
+                integrity.checked_change_operations,
                 integrity.checked_events,
                 integrity.checked_checkpoints,
                 integrity.invalid_checkpoints
@@ -8207,6 +8209,8 @@ mod tests {
         assert!(doctor.contains("canonical_json_profile=workvcs-jcs-v1"));
         assert!(doctor.contains("checked_branches=0"));
         assert!(doctor.contains("checked_commits=0"));
+        assert!(doctor.contains("checked_changesets=0"));
+        assert!(doctor.contains("checked_change_operations=0"));
         assert!(doctor.contains("checked_events=0"));
         assert!(doctor.contains("checked_checkpoints=0"));
         assert!(doctor.contains("invalid_checkpoints=0"));

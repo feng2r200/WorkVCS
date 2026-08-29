@@ -8,25 +8,26 @@ use workvcs_core::{
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
-    BundleExportOptions, BundleImportAttemptListOptions, BundleImportAttemptListResult,
-    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
-    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
-    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadInput, BundlePayloadValidationOptions, BundlePayloadValidationResult,
-    CanonicalValue, CheckpointCreateOptions, CheckpointCreateResult, CheckpointId,
-    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
-    CheckpointSnapshot, CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode,
-    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
-    ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId,
-    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
-    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
-    ExternalRefId, ExternalVersionId, HistoryEntry, HistoryQueryOptions, ImportId,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
-    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
-    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
+    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
+    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
+    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
+    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
+    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
+    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
+    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
+    CommitId, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EvidenceId,
+    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
+    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
+    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
+    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -723,6 +724,13 @@ enum BundleCommand {
         input_dir: PathBuf,
     },
     PreflightDir {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        input_dir: PathBuf,
+    },
+    ApplyDir {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -2571,6 +2579,18 @@ fn run(cli: Cli) -> Result<String> {
                         payloads,
                     )?)?;
                 Ok(render_bundle_import_preflight(&preflight))
+            }
+            BundleCommand::ApplyDir { store, input_dir } => {
+                let mut engine = Engine::open(store)?;
+                let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
+                let payload_index_bytes = read_bundle_file(&input_dir.join("payload-index.json"))?;
+                let payloads = read_bundle_payload_inputs(&input_dir)?;
+                let result = engine.apply_bundle_import(BundleImportApplyOptions::from_parts(
+                    manifest_bytes,
+                    payload_index_bytes,
+                    payloads,
+                )?)?;
+                Ok(render_bundle_import_apply(&result))
             }
             BundleCommand::ImportDir { store, input_dir } => {
                 let mut engine = Engine::open(store)?;
@@ -6585,6 +6605,38 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
     )
 }
 
+fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
+    format!(
+        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nupdated_branch_heads={}\nproblem={}\n",
+        result.applied,
+        render_optional_display_or_none(result.import_id.as_ref()),
+        result.bundle_digest,
+        result.import_profile,
+        render_optional_display_or_none(result.started_at_us.as_ref()),
+        render_optional_display_or_none(result.completed_at_us.as_ref()),
+        result.outcome,
+        result.preflight.valid,
+        result.preflight.format_compatible,
+        render_optional_display_or_none(result.preflight.source_store_id.as_ref()),
+        render_optional_display_or_none(result.preflight.target_workspace_id.as_ref()),
+        render_optional_display_or_none(result.preflight.target_commit_id.as_ref()),
+        render_optional_display_or_none(result.preflight.target_state_digest.as_ref()),
+        result.preflight.source_store_relation,
+        result.preflight.incoming_commit_present,
+        result.preflight.import_required,
+        result.preflight.can_apply,
+        result.preflight.exported_branch_heads,
+        result.preflight.branch_heads_already_present,
+        result.preflight.branch_heads_missing,
+        result.preflight.branch_heads_fast_forward,
+        result.preflight.branch_heads_diverged,
+        result.imported_commits,
+        result.imported_entity_versions,
+        result.updated_branch_heads,
+        result.preflight.problem.as_deref().unwrap_or("none")
+    )
+}
+
 fn render_bundle_import_attempt_snapshot(snapshot: &BundleImportAttemptSnapshot) -> String {
     let mut output = String::new();
     write_bundle_import_attempt_snapshot_fields(&mut output, None, snapshot);
@@ -10297,6 +10349,139 @@ mod tests {
         .expect("list bundle import attempts by bundle digest");
         assert_eq!(value(&listed_by_bundle, "imports"), "1");
         assert_eq!(value(&listed_by_bundle, "import[0].import_id"), import_id);
+    }
+
+    #[test]
+    fn cli_applies_same_store_bundle_fast_forward() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let source_path = tempdir.path().join("source.sqlite");
+        let old_path = tempdir.path().join("old.sqlite");
+        let source_store = source_path.to_str().expect("source path text");
+        let old_store = old_path.to_str().expect("old path text");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            source_store,
+            "--display-name",
+            "cli-source-store",
+        ])
+        .expect("parse init"))
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            source_store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let first = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            source_store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Old branch head task",
+        ])
+        .expect("parse first task"))
+        .expect("create first task");
+        fs::copy(&source_path, &old_path).expect("copy old store");
+
+        let second = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            source_store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&first, "commit_id"),
+            "--description",
+            "Exported branch head task",
+        ])
+        .expect("parse second task"))
+        .expect("create second task");
+        let second_commit = value(&second, "commit_id");
+
+        let export_dir = tempdir.path().join("same-store-bundle");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export-dir",
+            source_store,
+            "--commit",
+            &second_commit,
+            "--output-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse bundle export-dir"))
+        .expect("export bundle directory");
+
+        let preflight = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "preflight-dir",
+            old_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse bundle preflight-dir"))
+        .expect("preflight bundle directory");
+        assert_eq!(value(&preflight, "action"), "same_store_fast_forward_ready");
+        assert_eq!(value(&preflight, "can_apply"), "true");
+
+        let applied = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "apply-dir",
+            old_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse bundle apply-dir"))
+        .expect("apply bundle directory");
+        assert_eq!(value(&applied, "applied"), "true");
+        assert_ne!(value(&applied, "import_id"), "none");
+        assert_eq!(
+            value(&applied, "outcome"),
+            "same_store_fast_forward_applied"
+        );
+        assert_eq!(value(&applied, "imported_commits"), "1");
+        assert_eq!(value(&applied, "imported_entity_versions"), "1");
+        assert_eq!(value(&applied, "updated_branch_heads"), "1");
+
+        let branch_head =
+            run(
+                Cli::try_parse_from(["workvcs", "branch", "head", old_store, "--branch", &branch])
+                    .expect("parse branch head"),
+            )
+            .expect("branch head");
+        assert_eq!(value(&branch_head, "head_commit_id"), second_commit);
+
+        let shown_import = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-show",
+            old_store,
+            "--import",
+            &value(&applied, "import_id"),
+        ])
+        .expect("parse bundle import-show"))
+        .expect("show bundle import attempt");
+        assert_eq!(
+            value(&shown_import, "outcome"),
+            "same_store_fast_forward_applied"
+        );
     }
 
     #[test]

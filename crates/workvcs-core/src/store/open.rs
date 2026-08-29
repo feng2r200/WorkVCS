@@ -4,14 +4,14 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
-    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
-    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
-    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
-    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
-    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadValidationOptions,
-    BundlePayloadValidationResult, CheckpointCreateOptions, CheckpointCreateResult,
-    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
-    CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
+    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions, BundleImportApplyOptions,
+    BundleImportApplyResult, BundleImportAttemptListOptions, BundleImportAttemptListResult,
+    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
+    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
+    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
     EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
     GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
@@ -305,6 +305,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::record_bundle_import_attempt(&mut self.connection, &current, options)
+    }
+
+    pub(crate) fn apply_bundle_import(
+        &mut self,
+        options: BundleImportApplyOptions,
+    ) -> Result<BundleImportApplyResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::apply_bundle_import(&mut self.connection, &current, options)
     }
 
     pub(crate) fn bundle_import_attempt(

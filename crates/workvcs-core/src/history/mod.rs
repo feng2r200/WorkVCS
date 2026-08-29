@@ -28,10 +28,10 @@ mod why;
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
     BundleBranchHeadRef, BundleCheckpointCandidate, BundleEntityMembershipChangeRef,
-    BundleEntityVersionRef, BundleExportManifest, BundleExportOptions,
-    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
-    BundleImportAttemptOutcomeSnapshot, BundleImportAttemptResult, BundleImportAttemptSnapshot,
-    BundleImportPreflightOptions, BundleImportPreflightResult,
+    BundleEntityVersionRef, BundleExportManifest, BundleExportOptions, BundleImportApplyOptions,
+    BundleImportApplyResult, BundleImportAttemptListOptions, BundleImportAttemptListResult,
+    BundleImportAttemptOptions, BundleImportAttemptOutcomeSnapshot, BundleImportAttemptResult,
+    BundleImportAttemptSnapshot, BundleImportPreflightOptions, BundleImportPreflightResult,
     BundleKnowledgeExposureLocalSourceRef, BundleKnowledgeExposureRef,
     BundleKnowledgeExposureSourceStatusRef, BundleKnowledgeExposureTransitionRef,
     BundleKnowledgeSpaceRef, BundleManifestValidationOptions, BundleManifestValidationResult,
@@ -166,9 +166,9 @@ pub use why::{
 
 pub(crate) use branch::{fork_branch, list_branches};
 pub(crate) use bundle::{
-    bundle_import_attempt, bundle_import_attempts, export_bundle_manifest, export_bundle_payloads,
-    preflight_bundle_import, record_bundle_import_attempt, validate_bundle_manifest,
-    validate_bundle_payloads,
+    apply_bundle_import, bundle_import_attempt, bundle_import_attempts, export_bundle_manifest,
+    export_bundle_payloads, preflight_bundle_import, record_bundle_import_attempt,
+    validate_bundle_manifest, validate_bundle_payloads,
 };
 pub(crate) use checkpoint::{
     checkpoint, checkpoints, create_checkpoint, latest_usable_checkpoint, validate_checkpoint,

@@ -9,7 +9,7 @@ use crate::identity::{
     RelationVersionId, SessionId, StoreId, WorkspaceId,
 };
 use crate::store::{StoreConnection, StoreInfo, StoreManifest, current_epoch_micros};
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
@@ -156,6 +156,46 @@ pub struct BundleImportAttemptOptions {
 }
 
 impl BundleImportAttemptOptions {
+    pub fn from_parts(
+        manifest_bytes: impl Into<Vec<u8>>,
+        payload_index_bytes: impl Into<Vec<u8>>,
+        payloads: Vec<BundlePayloadInput>,
+    ) -> Result<Self> {
+        let manifest_bytes = manifest_bytes.into();
+        if manifest_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle manifest bytes cannot be empty".to_owned(),
+            ));
+        }
+        let payload_index_bytes = payload_index_bytes.into();
+        if payload_index_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle payload index bytes cannot be empty".to_owned(),
+            ));
+        }
+        Ok(Self {
+            manifest_bytes,
+            payload_index_bytes,
+            payloads,
+            origin_session_id: None,
+        })
+    }
+
+    pub fn with_origin_session_id(mut self, origin_session_id: SessionId) -> Self {
+        self.origin_session_id = Some(origin_session_id);
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportApplyOptions {
+    manifest_bytes: Vec<u8>,
+    payload_index_bytes: Vec<u8>,
+    payloads: Vec<BundlePayloadInput>,
+    origin_session_id: Option<SessionId>,
+}
+
+impl BundleImportApplyOptions {
     pub fn from_parts(
         manifest_bytes: impl Into<Vec<u8>>,
         payload_index_bytes: impl Into<Vec<u8>>,
@@ -355,6 +395,21 @@ pub struct BundleImportAttemptResult {
     pub completed_at_us: Option<i64>,
     pub outcome: String,
     pub preflight: BundleImportPreflightResult,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportApplyResult {
+    pub import_id: Option<ImportId>,
+    pub applied: bool,
+    pub bundle_digest: Digest,
+    pub import_profile: String,
+    pub started_at_us: Option<i64>,
+    pub completed_at_us: Option<i64>,
+    pub outcome: String,
+    pub preflight: BundleImportPreflightResult,
+    pub imported_commits: usize,
+    pub imported_entity_versions: usize,
+    pub updated_branch_heads: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -598,6 +653,7 @@ struct BundleManifestSummary {
     state_digest: Digest,
     commits: Vec<BundleCommitSummary>,
     exported_branch_heads: Vec<BundleBranchHeadSummary>,
+    same_store_apply_supported: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -643,6 +699,42 @@ struct BundlePayloadFileRef {
     content_digest: Digest,
     size_bytes: i64,
     media_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundleSameStoreApplyDocument {
+    source_store_id: StoreId,
+    workspace_id: WorkspaceId,
+    commit_id: CommitId,
+    state_digest: Digest,
+    commits: Vec<BundleCommitRef>,
+    exported_branch_heads: Vec<BundleBranchHeadSummary>,
+    entity_versions: Vec<BundleEntityVersionRef>,
+    entity_membership_changes: Vec<BundleEntityMembershipChangeRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundlePayloadLookupEntry {
+    relative_path: String,
+    content_digest: Digest,
+    size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundlePayloadLookup {
+    by_role_owner: BTreeMap<(String, Vec<u8>), BundlePayloadLookupEntry>,
+    bytes_by_path: BTreeMap<String, Vec<u8>>,
+}
+
+struct ImportAttemptOutcomeInsert<'a> {
+    import_id: ImportId,
+    source_store_id: StoreId,
+    bundle_digest: Digest,
+    import_profile: &'a str,
+    origin_session_id: Option<SessionId>,
+    now_us: i64,
+    outcome: &'a str,
+    detail_json: &'a str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -969,6 +1061,7 @@ pub(crate) fn preflight_bundle_import(
     let incoming_commit_present = existing_commit_digest.is_some();
     let same_store_fast_forward_ready = source_store_relation == "same_store"
         && !incoming_commit_present
+        && checked.manifest.same_store_apply_supported
         && branch_preflight.exported_branch_heads > 0
         && branch_preflight.fast_forward > 0
         && branch_preflight.missing == 0
@@ -1099,6 +1192,110 @@ pub(crate) fn record_bundle_import_attempt(
         completed_at_us: Some(now_us),
         outcome: preflight.action.clone(),
         preflight,
+    })
+}
+
+pub(crate) fn apply_bundle_import(
+    connection: &mut StoreConnection,
+    store_info: &StoreInfo,
+    options: BundleImportApplyOptions,
+) -> Result<BundleImportApplyResult> {
+    connection.verify_foreign_keys()?;
+    let preflight_options = BundleImportPreflightOptions::from_parts(
+        options.manifest_bytes.clone(),
+        options.payload_index_bytes.clone(),
+        options.payloads.clone(),
+    )?;
+    let preflight = preflight_bundle_import(connection, store_info, preflight_options)?;
+    let bundle_digest = preflight.payload_index_digest;
+    let import_profile = BUNDLE_IMPORT_PROFILE.to_owned();
+
+    if !preflight.can_apply || preflight.action != "same_store_fast_forward_ready" {
+        return Ok(BundleImportApplyResult {
+            import_id: None,
+            applied: false,
+            bundle_digest,
+            import_profile,
+            started_at_us: None,
+            completed_at_us: None,
+            outcome: preflight.action.clone(),
+            preflight,
+            imported_commits: 0,
+            imported_entity_versions: 0,
+            updated_branch_heads: 0,
+        });
+    }
+
+    let manifest_value =
+        parse_fixed_point_canonical_json("bundle manifest", &options.manifest_bytes)
+            .map_err(WorkVcsError::QueryInvalid)?;
+    let payload_index_value =
+        parse_fixed_point_canonical_json("bundle payload index", &options.payload_index_bytes)
+            .map_err(WorkVcsError::QueryInvalid)?;
+    let document = parse_bundle_same_store_apply_document(&manifest_value)?;
+    let payload_lookup = BundlePayloadLookup::from_parts(&payload_index_value, &options.payloads)?;
+
+    let source_store_id = preflight.source_store_id.ok_or_else(|| {
+        WorkVcsError::QueryInvalid(
+            "applicable bundle preflight must include source_store_id".to_owned(),
+        )
+    })?;
+    if document.source_store_id != source_store_id
+        || Some(document.workspace_id) != preflight.target_workspace_id
+        || Some(document.commit_id) != preflight.target_commit_id
+        || Some(document.state_digest) != preflight.target_state_digest
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "applicable bundle manifest target changed after preflight".to_owned(),
+        ));
+    }
+    let import_id = ImportId::new_v7();
+    let now_us = current_epoch_micros()?;
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+
+    let imported_entity_versions =
+        apply_task_entity_versions(&transaction, &document, &payload_lookup, now_us)?;
+    let imported_commits = apply_task_commit_closure(&transaction, &document, &payload_lookup)?;
+    let updated_branch_heads =
+        apply_same_store_branch_fast_forwards(&transaction, &document, now_us)?;
+
+    let outcome = "same_store_fast_forward_applied".to_owned();
+    let detail_json = bundle_import_apply_detail_json(
+        &preflight,
+        imported_commits,
+        imported_entity_versions,
+        updated_branch_heads,
+    )?;
+    insert_import_attempt_outcome(
+        &transaction,
+        ImportAttemptOutcomeInsert {
+            import_id,
+            source_store_id,
+            bundle_digest,
+            import_profile: &import_profile,
+            origin_session_id: options.origin_session_id,
+            now_us,
+            outcome: &outcome,
+            detail_json: &detail_json,
+        },
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(BundleImportApplyResult {
+        import_id: Some(import_id),
+        applied: true,
+        bundle_digest,
+        import_profile,
+        started_at_us: Some(now_us),
+        completed_at_us: Some(now_us),
+        outcome,
+        preflight,
+        imported_commits,
+        imported_entity_versions,
+        updated_branch_heads,
     })
 }
 
@@ -3611,6 +3808,753 @@ fn bundle_import_attempt_detail_json(preflight: &BundleImportPreflightResult) ->
     })
 }
 
+fn bundle_import_apply_detail_json(
+    preflight: &BundleImportPreflightResult,
+    imported_commits: usize,
+    imported_entity_versions: usize,
+    updated_branch_heads: usize,
+) -> Result<String> {
+    let value = CanonicalValue::object(vec![
+        ("valid".to_owned(), CanonicalValue::Bool(preflight.valid)),
+        (
+            "format_compatible".to_owned(),
+            CanonicalValue::Bool(preflight.format_compatible),
+        ),
+        optional_display_field("source_store_id", preflight.source_store_id),
+        optional_display_field("target_workspace_id", preflight.target_workspace_id),
+        optional_display_field("target_commit_id", preflight.target_commit_id),
+        optional_display_field("target_state_digest", preflight.target_state_digest),
+        string_field(
+            "source_store_relation",
+            preflight.source_store_relation.clone(),
+        ),
+        (
+            "incoming_commit_present".to_owned(),
+            CanonicalValue::Bool(preflight.incoming_commit_present),
+        ),
+        (
+            "import_required".to_owned(),
+            CanonicalValue::Bool(preflight.import_required),
+        ),
+        (
+            "can_apply".to_owned(),
+            CanonicalValue::Bool(preflight.can_apply),
+        ),
+        string_field("action", preflight.action.clone()),
+        integer_field(
+            "imported_commits",
+            usize_to_i64("imported_commits", imported_commits)?,
+        )?,
+        integer_field(
+            "imported_entity_versions",
+            usize_to_i64("imported_entity_versions", imported_entity_versions)?,
+        )?,
+        integer_field(
+            "updated_branch_heads",
+            usize_to_i64("updated_branch_heads", updated_branch_heads)?,
+        )?,
+    ])?;
+    let bytes = canonical_bytes(&value)?;
+    String::from_utf8(bytes).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "bundle import apply detail JSON was not UTF-8: {error}"
+        ))
+    })
+}
+
+fn insert_import_attempt_outcome(
+    transaction: &Transaction<'_>,
+    row: ImportAttemptOutcomeInsert<'_>,
+) -> Result<()> {
+    let import_id_bytes = row.import_id.raw_bytes();
+    let source_store_id_bytes = row.source_store_id.raw_bytes();
+    let bundle_digest_bytes = *row.bundle_digest.as_bytes();
+    let origin_session_id_bytes = row.origin_session_id.map(|id| id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO import_attempt(
+                import_id,
+                source_store_id,
+                bundle_digest,
+                import_profile,
+                origin_session_id,
+                started_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &import_id_bytes[..],
+                &source_store_id_bytes[..],
+                &bundle_digest_bytes[..],
+                row.import_profile,
+                origin_session_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                row.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO import_attempt_outcome(
+                import_id,
+                outcome,
+                completed_at_us,
+                detail_json
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &import_id_bytes[..],
+                row.outcome,
+                row.now_us,
+                row.detail_json
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn apply_task_entity_versions(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+    now_us: i64,
+) -> Result<usize> {
+    let mut imported = 0;
+    for entity_version in &document.entity_versions {
+        if entity_version.entity_kind != "task" {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle entity {} kind {} is outside same-Store task-only apply scope",
+                entity_version.entity_id, entity_version.entity_kind
+            )));
+        }
+        let owner = CanonicalValue::object(vec![
+            string_field("entity_id", entity_version.entity_id.to_string()),
+            string_field(
+                "entity_version_id",
+                entity_version.entity_version_id.to_string(),
+            ),
+        ])?;
+        let state_json = payload_lookup.required_json(
+            "entity_version_state",
+            owner,
+            Some(entity_version.state_json_digest),
+            Some(entity_version.state_json_size_bytes),
+        )?;
+        let state_value =
+            validate_canonical_json_value("bundle entity_version.state_json", &state_json)?;
+        if entity_version_digest(&state_value)? != entity_version.state_digest {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "bundle EntityVersion {} state digest does not match payload",
+                entity_version.entity_version_id
+            )));
+        }
+
+        ensure_task_entity_identity(
+            transaction,
+            document.workspace_id,
+            entity_version.entity_id,
+            &entity_version.entity_kind,
+            entity_created_at_us(document, entity_version.entity_id).unwrap_or(now_us),
+        )?;
+        if ensure_entity_version_row(transaction, entity_version, &state_json)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn apply_task_commit_closure(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<usize> {
+    let mut commits = document.commits.iter().collect::<Vec<_>>();
+    commits.sort_by(|left, right| {
+        left.committed_at_us
+            .cmp(&right.committed_at_us)
+            .then_with(|| left.commit_id.cmp(&right.commit_id))
+    });
+
+    let mut imported = 0;
+    for commit in commits {
+        if local_commit_present(transaction, commit.commit_id, commit.state_digest)? {
+            continue;
+        }
+        if commit.workspace_id != document.workspace_id {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle commit {} workspace does not match target workspace",
+                commit.commit_id
+            )));
+        }
+        let membership_changes = document
+            .entity_membership_changes
+            .iter()
+            .filter(|change| change.changeset_id == commit.changeset_id)
+            .collect::<Vec<_>>();
+        let membership_count = i64::try_from(membership_changes.len()).map_err(|_| {
+            WorkVcsError::QueryInvalid("bundle membership change count does not fit i64".to_owned())
+        })?;
+        if membership_count != commit.change_operation_count {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle commit {} operation count does not match task-only membership changes",
+                commit.commit_id
+            )));
+        }
+
+        let changeset_owner = CanonicalValue::object(vec![
+            string_field("commit_id", commit.commit_id.to_string()),
+            string_field("changeset_id", commit.changeset_id.to_string()),
+        ])?;
+        let changeset_operation_payload_json = payload_lookup.required_json(
+            "changeset_operation_payload",
+            changeset_owner.clone(),
+            Some(commit.operation_payload_digest),
+            None,
+        )?;
+        let rationale_json = payload_lookup.required_json(
+            "changeset_rationale",
+            changeset_owner,
+            Some(commit.rationale_digest),
+            None,
+        )?;
+        insert_changeset_row(
+            transaction,
+            document.workspace_id,
+            commit,
+            &changeset_operation_payload_json,
+            &rationale_json,
+        )?;
+
+        for change in membership_changes {
+            insert_task_change_operation_and_membership(
+                transaction,
+                commit,
+                change,
+                payload_lookup,
+            )?;
+        }
+        insert_workstate_commit_row(transaction, commit)?;
+        for parent in &commit.parents {
+            insert_commit_parent_row(transaction, commit.commit_id, parent)?;
+        }
+        imported += 1;
+    }
+    Ok(imported)
+}
+
+fn apply_same_store_branch_fast_forwards(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+    now_us: i64,
+) -> Result<usize> {
+    let mut updated = 0;
+    for branch in &document.exported_branch_heads {
+        let (local_workspace_id, local_head_commit_id, local_head_state_digest) =
+            load_branch_head_for_apply(transaction, branch.branch_id)?;
+        if local_workspace_id != document.workspace_id
+            || branch.workspace_id != document.workspace_id
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle branch {} workspace does not match target workspace",
+                branch.branch_id
+            )));
+        }
+        if branch.head_commit_id == local_head_commit_id {
+            continue;
+        }
+        if manifest_commit_digest_for_document(document, local_head_commit_id)
+            != Some(local_head_state_digest)
+            || !manifest_commit_is_descendant_for_document(
+                document,
+                branch.head_commit_id,
+                local_head_commit_id,
+            )
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle branch {} is no longer a fast-forward",
+                branch.branch_id
+            )));
+        }
+        let branch_id_bytes = branch.branch_id.raw_bytes();
+        let workspace_id_bytes = branch.workspace_id.raw_bytes();
+        let old_head_bytes = local_head_commit_id.raw_bytes();
+        let new_head_bytes = branch.head_commit_id.raw_bytes();
+        let affected = transaction
+            .execute(
+                "UPDATE branch
+                 SET head_commit_id = ?1
+                 WHERE branch_id = ?2
+                   AND workspace_id = ?3
+                   AND head_commit_id = ?4",
+                params![
+                    &new_head_bytes[..],
+                    &branch_id_bytes[..],
+                    &workspace_id_bytes[..],
+                    &old_head_bytes[..],
+                ],
+            )
+            .map_err(storage_error)?;
+        if affected != 1 {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle branch {} fast-forward compare-and-swap failed",
+                branch.branch_id
+            )));
+        }
+        super::mark_branch_projection_not_materialized(transaction, branch.branch_id, now_us)?;
+        updated += 1;
+    }
+    Ok(updated)
+}
+
+fn ensure_task_entity_identity(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+    entity_id: EntityId,
+    entity_kind: &str,
+    created_at_us: i64,
+) -> Result<()> {
+    let entity_id_bytes = entity_id.raw_bytes();
+    let existing_object_kind = transaction
+        .query_row(
+            "SELECT object_kind
+             FROM object_identity
+             WHERE object_id = ?1",
+            params![&entity_id_bytes[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    match existing_object_kind {
+        Some(object_kind) if object_kind == "entity" => {}
+        Some(object_kind) => {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "object {} exists with kind {}, not entity",
+                entity_id, object_kind
+            )));
+        }
+        None => {
+            transaction
+                .execute(
+                    "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+                     VALUES (?1, 'entity', ?2)",
+                    params![&entity_id_bytes[..], created_at_us],
+                )
+                .map_err(storage_error)?;
+        }
+    }
+
+    let existing_entity = transaction
+        .query_row(
+            "SELECT workspace_id, entity_kind
+             FROM entity
+             WHERE object_id = ?1",
+            params![&entity_id_bytes[..]],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let workspace_id_bytes = workspace_id.raw_bytes();
+    match existing_entity {
+        Some((existing_workspace_id, existing_entity_kind)) => {
+            let existing_workspace_id =
+                decode_workspace_id("entity.workspace_id", existing_workspace_id)?;
+            if existing_workspace_id != workspace_id || existing_entity_kind != entity_kind {
+                return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                    "entity {} exists with different workspace or kind",
+                    entity_id
+                )));
+            }
+        }
+        None => {
+            transaction
+                .execute(
+                    "INSERT INTO entity(object_id, workspace_id, entity_kind)
+                     VALUES (?1, ?2, ?3)",
+                    params![&entity_id_bytes[..], &workspace_id_bytes[..], entity_kind],
+                )
+                .map_err(storage_error)?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_entity_version_row(
+    transaction: &Transaction<'_>,
+    entity_version: &BundleEntityVersionRef,
+    state_json: &str,
+) -> Result<bool> {
+    let entity_version_id_bytes = entity_version.entity_version_id.raw_bytes();
+    let entity_id_bytes = entity_version.entity_id.raw_bytes();
+    let existing = transaction
+        .query_row(
+            "SELECT entity_id, state_schema_version, state_json, state_digest
+             FROM entity_version
+             WHERE entity_version_id = ?1",
+            params![&entity_version_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((existing_entity_id, state_schema_version, existing_state_json, state_digest)) =
+        existing
+    {
+        let existing_entity_id = decode_entity_id("entity_version.entity_id", existing_entity_id)?;
+        let state_digest = decode_digest("entity_version.state_digest", state_digest)?;
+        if existing_entity_id != entity_version.entity_id
+            || state_schema_version != entity_version.state_schema_version
+            || existing_state_json != state_json
+            || state_digest != entity_version.state_digest
+        {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "EntityVersion {} exists with different content",
+                entity_version.entity_version_id
+            )));
+        }
+        return Ok(false);
+    }
+
+    let state_digest_bytes = *entity_version.state_digest.as_bytes();
+    transaction
+        .execute(
+            "INSERT INTO entity_version(
+                entity_version_id,
+                entity_id,
+                state_schema_version,
+                state_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &entity_version_id_bytes[..],
+                &entity_id_bytes[..],
+                entity_version.state_schema_version,
+                state_json,
+                &state_digest_bytes[..],
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
+}
+
+fn local_commit_present(
+    transaction: &Transaction<'_>,
+    commit_id: CommitId,
+    expected_state_digest: Digest,
+) -> Result<bool> {
+    let commit_id_bytes = commit_id.raw_bytes();
+    let existing = transaction
+        .query_row(
+            "SELECT state_digest
+             FROM workstate_commit
+             WHERE commit_id = ?1",
+            params![&commit_id_bytes[..]],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some(existing) = existing else {
+        return Ok(false);
+    };
+    let state_digest = decode_digest("workstate_commit.state_digest", existing)?;
+    if state_digest != expected_state_digest {
+        return Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "local commit {} exists with a different state digest",
+            commit_id
+        )));
+    }
+    Ok(true)
+}
+
+fn insert_changeset_row(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+    commit: &BundleCommitRef,
+    operation_payload_json: &str,
+    rationale_json: &str,
+) -> Result<()> {
+    validate_canonical_json_text(
+        "bundle changeset operation_payload_json",
+        operation_payload_json,
+    )?;
+    validate_canonical_json_text("bundle changeset rationale_json", rationale_json)?;
+    let changeset_id_bytes = commit.changeset_id.raw_bytes();
+    let workspace_id_bytes = workspace_id.raw_bytes();
+    transaction
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                &changeset_id_bytes[..],
+                &workspace_id_bytes[..],
+                commit.operation_type,
+                commit.operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                commit.changeset_created_at_us,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn insert_task_change_operation_and_membership(
+    transaction: &Transaction<'_>,
+    commit: &BundleCommitRef,
+    change: &BundleEntityMembershipChangeRef,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<()> {
+    let operation_owner = CanonicalValue::object(vec![
+        string_field("changeset_id", commit.changeset_id.to_string()),
+        string_field("operation_id", change.operation_id.to_string()),
+        integer_field("ordinal", change.ordinal)?,
+        string_field("subject_family", "entity"),
+        string_field("subject_object_id", change.entity_id.to_string()),
+    ])?;
+    let operation_payload_json =
+        payload_lookup.required_json("change_operation_payload", operation_owner, None, None)?;
+    validate_canonical_json_text(
+        "bundle change_operation.operation_payload_json",
+        &operation_payload_json,
+    )?;
+
+    let operation_id_bytes = change.operation_id.raw_bytes();
+    let changeset_id_bytes = commit.changeset_id.raw_bytes();
+    let entity_id_bytes = change.entity_id.raw_bytes();
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, ?3, 'entity', ?4, ?5)",
+            params![
+                &operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                change.ordinal,
+                &entity_id_bytes[..],
+                operation_payload_json,
+            ],
+        )
+        .map_err(storage_error)?;
+
+    let field_delta_owner = CanonicalValue::object(vec![
+        string_field("changeset_id", commit.changeset_id.to_string()),
+        string_field("operation_id", change.operation_id.to_string()),
+        integer_field("ordinal", change.ordinal)?,
+        string_field("entity_id", change.entity_id.to_string()),
+    ])?;
+    let field_delta_json = payload_lookup.required_json(
+        "entity_membership_field_delta",
+        field_delta_owner,
+        Some(change.field_delta_digest),
+        Some(change.field_delta_size_bytes),
+    )?;
+    validate_canonical_json_text(
+        "bundle entity_membership_change.field_delta_json",
+        &field_delta_json,
+    )?;
+
+    let before_entity_version_id_bytes = change.before_entity_version_id.map(|id| id.raw_bytes());
+    let after_entity_version_id_bytes = change.after_entity_version_id.map(|id| id.raw_bytes());
+    transaction
+        .execute(
+            "INSERT INTO entity_membership_change(
+                operation_id,
+                entity_id,
+                before_entity_version_id,
+                after_entity_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &operation_id_bytes[..],
+                &entity_id_bytes[..],
+                before_entity_version_id_bytes
+                    .as_ref()
+                    .map(|bytes| &bytes[..]),
+                after_entity_version_id_bytes
+                    .as_ref()
+                    .map(|bytes| &bytes[..]),
+                field_delta_json,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn insert_workstate_commit_row(
+    transaction: &Transaction<'_>,
+    commit: &BundleCommitRef,
+) -> Result<()> {
+    let commit_id_bytes = commit.commit_id.raw_bytes();
+    let workspace_id_bytes = commit.workspace_id.raw_bytes();
+    let changeset_id_bytes = commit.changeset_id.raw_bytes();
+    let state_digest_bytes = *commit.state_digest.as_bytes();
+    transaction
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &commit_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                commit.commit_kind,
+                &state_digest_bytes[..],
+                commit.committed_at_us,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn insert_commit_parent_row(
+    transaction: &Transaction<'_>,
+    commit_id: CommitId,
+    parent: &BundleCommitParentRef,
+) -> Result<()> {
+    let commit_id_bytes = commit_id.raw_bytes();
+    let parent_commit_id_bytes = parent.parent_commit_id.raw_bytes();
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                &commit_id_bytes[..],
+                parent.parent_ordinal,
+                parent.parent_role,
+                &parent_commit_id_bytes[..],
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn load_branch_head_for_apply(
+    transaction: &Transaction<'_>,
+    branch_id: BranchId,
+) -> Result<(WorkspaceId, CommitId, Digest)> {
+    let branch_id_bytes = branch_id.raw_bytes();
+    let (workspace_id, head_commit_id, state_digest) = transaction
+        .query_row(
+            "SELECT branch.workspace_id,
+                    branch.head_commit_id,
+                    workstate_commit.state_digest
+             FROM branch
+             JOIN workstate_commit
+               ON workstate_commit.workspace_id = branch.workspace_id
+              AND workstate_commit.commit_id = branch.head_commit_id
+             WHERE branch.branch_id = ?1",
+            params![&branch_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?
+        .ok_or_else(|| WorkVcsError::QueryInvalid(format!("branch {branch_id} does not exist")))?;
+    Ok((
+        decode_workspace_id("branch.workspace_id", workspace_id)?,
+        decode_commit_id("branch.head_commit_id", head_commit_id)?,
+        decode_digest("workstate_commit.state_digest", state_digest)?,
+    ))
+}
+
+fn entity_created_at_us(
+    document: &BundleSameStoreApplyDocument,
+    entity_id: EntityId,
+) -> Option<i64> {
+    document
+        .entity_membership_changes
+        .iter()
+        .filter_map(|change| {
+            (change.entity_id == entity_id && change.before_entity_version_id.is_none())
+                .then(|| {
+                    document.commits.iter().find_map(|commit| {
+                        (commit.changeset_id == change.changeset_id)
+                            .then_some(commit.changeset_created_at_us)
+                    })
+                })
+                .flatten()
+        })
+        .min()
+}
+
+fn manifest_commit_digest_for_document(
+    document: &BundleSameStoreApplyDocument,
+    commit_id: CommitId,
+) -> Option<Digest> {
+    document
+        .commits
+        .iter()
+        .find_map(|commit| (commit.commit_id == commit_id).then_some(commit.state_digest))
+}
+
+fn manifest_commit_is_descendant_for_document(
+    document: &BundleSameStoreApplyDocument,
+    descendant: CommitId,
+    ancestor: CommitId,
+) -> bool {
+    if descendant == ancestor {
+        return true;
+    }
+    let parents_by_commit = document
+        .commits
+        .iter()
+        .map(|commit| (commit.commit_id, commit.parents.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+    let mut stack = vec![descendant];
+    let mut seen = BTreeSet::new();
+    while let Some(commit_id) = stack.pop() {
+        if !seen.insert(commit_id) {
+            continue;
+        }
+        let Some(parents) = parents_by_commit.get(&commit_id) else {
+            continue;
+        };
+        for parent in *parents {
+            if parent.parent_commit_id == ancestor {
+                return true;
+            }
+            stack.push(parent.parent_commit_id);
+        }
+    }
+    false
+}
+
 fn optional_display_field<T: std::fmt::Display>(
     name: &str,
     value: Option<T>,
@@ -3662,6 +4606,7 @@ fn parse_bundle_manifest_summary(
         .iter()
         .map(parse_bundle_branch_head_summary)
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let same_store_apply_supported = bundle_manifest_supports_same_store_apply(value)?;
     let manifest = BundleManifestSummary {
         source_store_id: parse_store_id_field(store, "bundle manifest store", "store_id")?,
         store_format_version: integer_field_value(
@@ -3689,9 +4634,41 @@ fn parse_bundle_manifest_summary(
         state_digest: parse_digest_field(target, "bundle manifest target", "state_digest")?,
         commits,
         exported_branch_heads,
+        same_store_apply_supported,
     };
     validate_bundle_manifest_summary_integrity(&manifest)?;
     Ok(manifest)
+}
+
+fn bundle_manifest_supports_same_store_apply(
+    value: &CanonicalValue,
+) -> std::result::Result<bool, String> {
+    let unsupported_array_fields = [
+        "relation_versions",
+        "knowledge_spaces",
+        "knowledge_exposures",
+        "knowledge_exposure_local_sources",
+        "knowledge_exposure_transitions",
+        "knowledge_exposure_source_statuses",
+        "relation_membership_changes",
+        "checkpoint_candidates",
+    ];
+    for field in unsupported_array_fields {
+        if !array_field_ref(value, "bundle manifest", field)?.is_empty() {
+            return Ok(false);
+        }
+    }
+    for entity_version in array_field_ref(value, "bundle manifest", "entity_versions")? {
+        let entity_kind = string_field_value(
+            entity_version,
+            "bundle manifest entity version",
+            "entity_kind",
+        )?;
+        if entity_kind != "task" {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn validate_bundle_manifest_summary_integrity(
@@ -3899,6 +4876,353 @@ fn parse_bundle_payload_file_ref(
     })
 }
 
+impl BundlePayloadLookup {
+    fn from_parts(payload_index: &CanonicalValue, payloads: &[BundlePayloadInput]) -> Result<Self> {
+        let mut bytes_by_path = BTreeMap::new();
+        for payload in payloads {
+            if bytes_by_path
+                .insert(payload.relative_path.clone(), payload.bytes.clone())
+                .is_some()
+            {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "bundle payload path {} appears more than once",
+                    payload.relative_path
+                )));
+            }
+        }
+
+        let mut by_role_owner = BTreeMap::new();
+        for reference in array_field_ref(payload_index, "bundle payload index", "references")
+            .map_err(WorkVcsError::QueryInvalid)?
+        {
+            let role = string_field_value(reference, "bundle payload reference", "role")
+                .map_err(WorkVcsError::QueryInvalid)?
+                .to_owned();
+            validate_portable_text("bundle payload reference role", &role)
+                .map_err(WorkVcsError::QueryInvalid)?;
+            let relative_path = string_field_value(reference, "bundle payload reference", "path")
+                .map_err(WorkVcsError::QueryInvalid)?
+                .to_owned();
+            let content_digest =
+                parse_digest_field(reference, "bundle payload reference", "content_digest")
+                    .map_err(WorkVcsError::QueryInvalid)?;
+            let size_bytes =
+                integer_field_value(reference, "bundle payload reference", "size_bytes")
+                    .map_err(WorkVcsError::QueryInvalid)?;
+            let owner = object_field_ref(reference, "bundle payload reference", "owner")
+                .map_err(WorkVcsError::QueryInvalid)?;
+            let owner_bytes = canonical_bytes(owner)?;
+            let entry = BundlePayloadLookupEntry {
+                relative_path,
+                content_digest,
+                size_bytes,
+            };
+            if by_role_owner
+                .insert((role.clone(), owner_bytes), entry)
+                .is_some()
+            {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "bundle payload reference role {role} owner appears more than once"
+                )));
+            }
+        }
+        Ok(Self {
+            by_role_owner,
+            bytes_by_path,
+        })
+    }
+
+    fn required_json(
+        &self,
+        role: &str,
+        owner: CanonicalValue,
+        expected_digest: Option<Digest>,
+        expected_size_bytes: Option<i64>,
+    ) -> Result<String> {
+        let owner_bytes = canonical_bytes(&owner)?;
+        let entry = self
+            .by_role_owner
+            .get(&(role.to_owned(), owner_bytes))
+            .ok_or_else(|| {
+                WorkVcsError::QueryInvalid(format!("bundle payload reference {role} is missing"))
+            })?;
+        if let Some(expected_digest) = expected_digest
+            && entry.content_digest != expected_digest
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle payload reference {role} digest does not match manifest"
+            )));
+        }
+        if let Some(expected_size_bytes) = expected_size_bytes
+            && entry.size_bytes != expected_size_bytes
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle payload reference {role} size does not match manifest"
+            )));
+        }
+        let bytes = self
+            .bytes_by_path
+            .get(&entry.relative_path)
+            .ok_or_else(|| {
+                WorkVcsError::QueryInvalid(format!(
+                    "bundle payload {} is missing",
+                    entry.relative_path
+                ))
+            })?;
+        if content_object_digest(bytes) != entry.content_digest {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle payload {} digest does not match reference",
+                entry.relative_path
+            )));
+        }
+        if usize_to_i64("bundle payload size", bytes.len())? != entry.size_bytes {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle payload {} size does not match reference",
+                entry.relative_path
+            )));
+        }
+        String::from_utf8(bytes.clone()).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "bundle payload {} was not UTF-8: {error}",
+                entry.relative_path
+            ))
+        })
+    }
+}
+
+fn parse_bundle_same_store_apply_document(
+    value: &CanonicalValue,
+) -> Result<BundleSameStoreApplyDocument> {
+    let summary = parse_bundle_manifest_summary(value).map_err(WorkVcsError::QueryInvalid)?;
+    if !summary.same_store_apply_supported {
+        return Err(WorkVcsError::QueryInvalid(
+            "bundle manifest is outside same-Store task-only apply scope".to_owned(),
+        ));
+    }
+    let commits = array_field_ref(value, "bundle manifest", "commit_closure")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_commit_ref)
+        .collect::<Result<Vec<_>>>()?;
+    let entity_versions = array_field_ref(value, "bundle manifest", "entity_versions")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_entity_version_ref)
+        .collect::<Result<Vec<_>>>()?;
+    let entity_membership_changes =
+        array_field_ref(value, "bundle manifest", "entity_membership_changes")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_entity_membership_change_ref)
+            .collect::<Result<Vec<_>>>()?;
+
+    Ok(BundleSameStoreApplyDocument {
+        source_store_id: summary.source_store_id,
+        workspace_id: summary.workspace_id,
+        commit_id: summary.commit_id,
+        state_digest: summary.state_digest,
+        commits,
+        exported_branch_heads: summary.exported_branch_heads,
+        entity_versions,
+        entity_membership_changes,
+    })
+}
+
+fn parse_bundle_commit_ref(value: &CanonicalValue) -> Result<BundleCommitRef> {
+    let commit_kind = string_field_value(value, "bundle manifest commit", "commit_kind")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest commit_kind", &commit_kind)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let operation_type = string_field_value(value, "bundle manifest commit", "operation_type")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest operation_type", &operation_type)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let operation_schema_version =
+        integer_field_value(value, "bundle manifest commit", "operation_schema_version")
+            .map_err(WorkVcsError::QueryInvalid)?;
+    validate_positive_i64(
+        "bundle manifest commit operation_schema_version",
+        operation_schema_version,
+    )?;
+    let committed_at_us = integer_field_value(value, "bundle manifest commit", "committed_at_us")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest commit committed_at_us", committed_at_us)?;
+    let changeset_created_at_us =
+        integer_field_value(value, "bundle manifest commit", "changeset_created_at_us")
+            .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest commit changeset_created_at_us",
+        changeset_created_at_us,
+    )?;
+    let change_operation_count =
+        integer_field_value(value, "bundle manifest commit", "change_operation_count")
+            .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest commit change_operation_count",
+        change_operation_count,
+    )?;
+    let parents = array_field_ref(value, "bundle manifest commit", "parents")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .iter()
+        .map(parse_bundle_commit_parent_ref)
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(BundleCommitRef {
+        workspace_id: parse_workspace_id_field(value, "bundle manifest commit", "workspace_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        commit_id: parse_commit_id_field(value, "bundle manifest commit", "commit_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        changeset_id: parse_changeset_id_field(value, "bundle manifest commit", "changeset_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        commit_kind,
+        state_digest: parse_digest_field(value, "bundle manifest commit", "state_digest")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        committed_at_us,
+        operation_type,
+        operation_schema_version,
+        changeset_created_at_us,
+        operation_payload_digest: parse_digest_field(
+            value,
+            "bundle manifest commit",
+            "operation_payload_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        rationale_digest: parse_digest_field(value, "bundle manifest commit", "rationale_digest")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        change_operation_count,
+        parents,
+    })
+}
+
+fn parse_bundle_commit_parent_ref(value: &CanonicalValue) -> Result<BundleCommitParentRef> {
+    let parent_ordinal =
+        integer_field_value(value, "bundle manifest commit parent", "parent_ordinal")
+            .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest commit parent_ordinal", parent_ordinal)?;
+    let parent_role = string_field_value(value, "bundle manifest commit parent", "parent_role")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest commit parent_role", &parent_role)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    Ok(BundleCommitParentRef {
+        parent_ordinal,
+        parent_role,
+        parent_commit_id: parse_commit_id_field(
+            value,
+            "bundle manifest commit parent",
+            "parent_commit_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+    })
+}
+
+fn parse_bundle_entity_version_ref(value: &CanonicalValue) -> Result<BundleEntityVersionRef> {
+    let entity_kind = string_field_value(value, "bundle manifest entity version", "entity_kind")
+        .map_err(WorkVcsError::QueryInvalid)?
+        .to_owned();
+    validate_portable_text("bundle manifest entity_kind", &entity_kind)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let state_schema_version = integer_field_value(
+        value,
+        "bundle manifest entity version",
+        "state_schema_version",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_positive_i64(
+        "bundle manifest entity version state_schema_version",
+        state_schema_version,
+    )?;
+    let state_json_size_bytes = integer_field_value(
+        value,
+        "bundle manifest entity version",
+        "state_json_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest entity version state_json_size_bytes",
+        state_json_size_bytes,
+    )?;
+    Ok(BundleEntityVersionRef {
+        entity_id: parse_entity_id_field(value, "bundle manifest entity version", "entity_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        entity_version_id: parse_entity_version_id_field(
+            value,
+            "bundle manifest entity version",
+            "entity_version_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        entity_kind,
+        state_schema_version,
+        state_digest: parse_digest_field(value, "bundle manifest entity version", "state_digest")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        state_json_digest: parse_digest_field(
+            value,
+            "bundle manifest entity version",
+            "state_json_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        state_json_size_bytes,
+    })
+}
+
+fn parse_bundle_entity_membership_change_ref(
+    value: &CanonicalValue,
+) -> Result<BundleEntityMembershipChangeRef> {
+    let ordinal = integer_field_value(value, "bundle manifest entity membership change", "ordinal")
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest entity membership change ordinal", ordinal)?;
+    let field_delta_size_bytes = integer_field_value(
+        value,
+        "bundle manifest entity membership change",
+        "field_delta_size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest entity membership change field_delta_size_bytes",
+        field_delta_size_bytes,
+    )?;
+    Ok(BundleEntityMembershipChangeRef {
+        changeset_id: parse_changeset_id_field(
+            value,
+            "bundle manifest entity membership change",
+            "changeset_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        operation_id: parse_operation_id_field(
+            value,
+            "bundle manifest entity membership change",
+            "operation_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        ordinal,
+        entity_id: parse_entity_id_field(
+            value,
+            "bundle manifest entity membership change",
+            "entity_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        before_entity_version_id: parse_optional_entity_version_field(
+            value,
+            "bundle manifest entity membership change",
+            "before_entity_version_id",
+        )?,
+        after_entity_version_id: parse_optional_entity_version_field(
+            value,
+            "bundle manifest entity membership change",
+            "after_entity_version_id",
+        )?,
+        field_delta_digest: parse_digest_field(
+            value,
+            "bundle manifest entity membership change",
+            "field_delta_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        field_delta_size_bytes,
+    })
+}
+
 fn object_field_ref<'a>(
     value: &'a CanonicalValue,
     label: &str,
@@ -4013,6 +5337,58 @@ fn parse_commit_id_field(
 ) -> std::result::Result<CommitId, String> {
     CommitId::parse_canonical(string_field_value(value, label, field)?)
         .map_err(|error| error.to_string())
+}
+
+fn parse_changeset_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<ChangeSetId, String> {
+    ChangeSetId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_operation_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<OperationId, String> {
+    OperationId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_entity_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<EntityId, String> {
+    EntityId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_entity_version_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<EntityVersionId, String> {
+    EntityVersionId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_optional_entity_version_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<EntityVersionId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => EntityVersionId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
 }
 
 fn parse_digest_field(

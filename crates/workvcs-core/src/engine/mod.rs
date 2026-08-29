@@ -21,17 +21,17 @@ use crate::history::{
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
-    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
-    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
-    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
-    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
-    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadValidationOptions,
-    BundlePayloadValidationResult, CheckpointCreateOptions, CheckpointCreateResult,
-    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
-    CheckpointSnapshot, CheckpointValidationResult, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, EntityTransitionCommit, EntityTransitionOptions,
-    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
-    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions, BundleImportApplyOptions,
+    BundleImportApplyResult, BundleImportAttemptListOptions, BundleImportAttemptListResult,
+    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
+    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
+    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
+    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
@@ -248,6 +248,13 @@ impl Engine {
         options: BundleImportAttemptOptions,
     ) -> Result<BundleImportAttemptResult> {
         self.store.record_bundle_import_attempt(options)
+    }
+
+    pub fn apply_bundle_import(
+        &mut self,
+        options: BundleImportApplyOptions,
+    ) -> Result<BundleImportApplyResult> {
+        self.store.apply_bundle_import(options)
     }
 
     pub fn bundle_import_attempt(

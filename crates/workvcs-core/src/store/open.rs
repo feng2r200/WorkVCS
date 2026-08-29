@@ -24,10 +24,10 @@ use crate::history::{
 };
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
-    ClaimTaskOptions, ClaimTaskResult, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
-    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult,
+    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -561,5 +561,14 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::runnable_tasks(&self.connection, options)
+    }
+
+    pub(crate) fn context_overview(
+        &self,
+        options: &ContextOverviewOptions,
+    ) -> Result<ContextOverview> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::context_overview(&self.connection, options)
     }
 }

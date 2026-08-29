@@ -61,6 +61,7 @@ pub use runtime::{
     ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
 };
+pub use runtime::{ContextOverview, ContextOverviewOptions};
 pub use runtime::{
     RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
     RunnableTaskProjectionDimension, RunnableTasksOptions, RunnableTasksProjection,

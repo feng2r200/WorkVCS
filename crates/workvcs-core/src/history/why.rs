@@ -1,6 +1,7 @@
 use super::{
-    PrimaryContainmentEndpointKind, StructuralReferenceEndpointKind, branch_head,
-    primary_containment_relations_at, state_at, structural_references_at,
+    PrimaryContainmentEndpointKind, StructuralReferenceEndpointKind, VerificationTarget,
+    branch_head, primary_containment_relations_at, state_at, structural_references_at,
+    verification_relations_at,
 };
 use crate::error::{Result, WorkVcsError};
 use crate::identity::{
@@ -69,6 +70,7 @@ pub struct ResolvedWhyQueryTarget {
 pub enum WhyRelationKind {
     PrimaryContainment,
     StructuralReference,
+    Verifies,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -82,13 +84,16 @@ pub enum WhyEntityKind {
     Goal,
     Plan,
     Task,
+    AcceptanceCriterion,
+    VerificationRequirement,
+    Verification,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WhyDeferredRelationFamily {
     Evolution,
     Epistemic,
-    Verification,
+    VerificationEvidence,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,6 +172,28 @@ pub(crate) fn explain_why(
             });
         }
     }
+    for relation in verification_relations_at(connection, resolved.target.commit_id)? {
+        let target_entity_id = relation.target.entity_id();
+        if relation.source_verification_entity_id == options.subject_entity_id()
+            || target_entity_id == options.subject_entity_id()
+        {
+            relation_edges.push(WhyRelationEdge {
+                relation_kind: WhyRelationKind::Verifies,
+                direction: relation_direction(
+                    options.subject_entity_id(),
+                    relation.source_verification_entity_id,
+                    target_entity_id,
+                ),
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                source_entity_id: relation.source_verification_entity_id,
+                source_kind: WhyEntityKind::Verification,
+                target_entity_id,
+                target_kind: relation.target.into(),
+                state_digest: relation.state_digest,
+            });
+        }
+    }
     relation_edges.sort_by(|left, right| {
         left.relation_kind
             .cmp(&right.relation_kind)
@@ -186,7 +213,7 @@ pub(crate) fn explain_why(
         deferred_relation_families: vec![
             WhyDeferredRelationFamily::Evolution,
             WhyDeferredRelationFamily::Epistemic,
-            WhyDeferredRelationFamily::Verification,
+            WhyDeferredRelationFamily::VerificationEvidence,
         ],
     })
 }
@@ -246,6 +273,15 @@ impl From<StructuralReferenceEndpointKind> for WhyEntityKind {
             StructuralReferenceEndpointKind::Goal => Self::Goal,
             StructuralReferenceEndpointKind::Plan => Self::Plan,
             StructuralReferenceEndpointKind::Task => Self::Task,
+        }
+    }
+}
+
+impl From<VerificationTarget> for WhyEntityKind {
+    fn from(value: VerificationTarget) -> Self {
+        match value {
+            VerificationTarget::AcceptanceCriterion(_) => Self::AcceptanceCriterion,
+            VerificationTarget::VerificationRequirement(_) => Self::VerificationRequirement,
         }
     }
 }

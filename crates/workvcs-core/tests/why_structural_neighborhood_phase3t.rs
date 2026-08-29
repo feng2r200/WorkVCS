@@ -271,7 +271,7 @@ fn assert_deferred_families(why: &WhyQueryResult) {
         vec![
             WhyDeferredRelationFamily::Evolution,
             WhyDeferredRelationFamily::Epistemic,
-            WhyDeferredRelationFamily::Verification,
+            WhyDeferredRelationFamily::VerificationEvidence,
         ]
     );
 }

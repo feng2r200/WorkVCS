@@ -1142,6 +1142,17 @@ pub struct VerificationSnapshot {
     pub state: VerificationState,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VerificationRelationSnapshot {
+    pub(crate) workspace_id: WorkspaceId,
+    pub(crate) commit_id: CommitId,
+    pub(crate) relation_id: RelationId,
+    pub(crate) relation_version_id: RelationVersionId,
+    pub(crate) source_verification_entity_id: EntityId,
+    pub(crate) target: VerificationTarget,
+    pub(crate) state_digest: Digest,
+}
+
 pub(crate) fn create_task(
     connection: &mut StoreConnection,
     options: &TaskCreateOptions,
@@ -1750,6 +1761,119 @@ pub(crate) fn task_scheduling_relations_at(
             .then_with(|| left.relation_id.cmp(&right.relation_id))
     });
     Ok(relations)
+}
+
+pub(crate) fn verification_relations_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<VerificationRelationSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut relations = Vec::new();
+
+    for (relation_id, relation_version_id) in replayed.state.relations() {
+        let Some(relation) = load_verifies_relation_version(
+            connection,
+            replayed.workspace_id,
+            *relation_id,
+            *relation_version_id,
+        )?
+        else {
+            continue;
+        };
+        validate_current_verifies_relation_endpoints(
+            connection,
+            replayed.workspace_id,
+            &replayed.state,
+            &relation,
+        )?;
+        relations.push(VerificationRelationSnapshot {
+            workspace_id: replayed.workspace_id,
+            commit_id,
+            relation_id: relation.relation_id,
+            relation_version_id: relation.relation_version_id,
+            source_verification_entity_id: relation.source_verification_entity_id,
+            target: relation.target,
+            state_digest: relation.state_digest,
+        });
+    }
+
+    relations.sort_by(|left, right| {
+        left.source_verification_entity_id
+            .cmp(&right.source_verification_entity_id)
+            .then_with(|| {
+                verification_target_sort_key(left.target)
+                    .cmp(&verification_target_sort_key(right.target))
+            })
+            .then_with(|| left.relation_id.cmp(&right.relation_id))
+    });
+    Ok(relations)
+}
+
+fn validate_current_verifies_relation_endpoints(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    state: &WorkState,
+    relation: &LoadedVerifiesRelationVersion,
+) -> Result<()> {
+    let source_version_id = current_verifies_endpoint_version_id(
+        state,
+        relation.relation_id,
+        "source verification",
+        relation.source_verification_entity_id,
+    )?;
+    load_verification_version(
+        connection,
+        workspace_id,
+        relation.source_verification_entity_id,
+        source_version_id,
+    )?;
+
+    let target_entity_id = relation.target.entity_id();
+    let target_version_id = current_verifies_endpoint_version_id(
+        state,
+        relation.relation_id,
+        "target",
+        target_entity_id,
+    )?;
+    match relation.target {
+        VerificationTarget::AcceptanceCriterion(acceptance_criterion_entity_id) => {
+            load_acceptance_criterion_version(
+                connection,
+                workspace_id,
+                acceptance_criterion_entity_id,
+                target_version_id,
+            )?;
+        }
+        VerificationTarget::VerificationRequirement(verification_requirement_entity_id) => {
+            load_verification_requirement_version(
+                connection,
+                workspace_id,
+                verification_requirement_entity_id,
+                target_version_id,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn current_verifies_endpoint_version_id(
+    state: &WorkState,
+    relation_id: RelationId,
+    endpoint_role: &str,
+    entity_id: EntityId,
+) -> Result<EntityVersionId> {
+    state
+        .entities()
+        .iter()
+        .find_map(|(current_entity_id, entity_version_id)| {
+            (*current_entity_id == entity_id).then_some(*entity_version_id)
+        })
+        .ok_or_else(|| {
+            WorkVcsError::TaskInvalid(format!(
+                "verifies relation {relation_id} {endpoint_role} entity {entity_id} is not present in WorkState"
+            ))
+        })
 }
 
 pub(crate) fn acceptance_criterion_at(
@@ -3354,6 +3478,13 @@ fn load_current_verifies_relation_for_source(
         count => Err(WorkVcsError::TaskInvalid(format!(
             "verification entity {verification_entity_id} has {count} current defining verifies relations"
         ))),
+    }
+}
+
+fn verification_target_sort_key(target: VerificationTarget) -> (u8, EntityId) {
+    match target {
+        VerificationTarget::AcceptanceCriterion(entity_id) => (0, entity_id),
+        VerificationTarget::VerificationRequirement(entity_id) => (1, entity_id),
     }
 }
 

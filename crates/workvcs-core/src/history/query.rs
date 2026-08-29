@@ -135,6 +135,7 @@ pub struct ChangeSetSnapshot {
     pub origin_session_id: Option<SessionId>,
     pub created_at_us: i64,
     pub change_operation_count: i64,
+    pub causal_anchor_count: i64,
     pub event_count: i64,
     pub commits: Vec<ChangeSetCommitSnapshot>,
 }
@@ -162,6 +163,20 @@ pub struct ChangeOperationSnapshot {
     pub operation_payload_json: String,
     pub operation_payload_digest: Digest,
     pub operation_payload_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangeSetCausalAnchorListResult {
+    pub workspace_id: WorkspaceId,
+    pub changeset_id: ChangeSetId,
+    pub anchors: Vec<ChangeSetCausalAnchorSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangeSetCausalAnchorSnapshot {
+    pub ordinal: i64,
+    pub anchor_object_id: String,
+    pub anchor_object_kind: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -414,6 +429,13 @@ pub(crate) fn changeset(
          WHERE changeset_id = ?1",
         params![&changeset_id.raw_bytes()[..]],
     )?;
+    let causal_anchor_count = count_rows(
+        connection,
+        "SELECT count(*)
+         FROM changeset_causal_anchor
+         WHERE changeset_id = ?1",
+        params![&changeset_id.raw_bytes()[..]],
+    )?;
     let event_count = count_rows(
         connection,
         "SELECT count(*)
@@ -442,6 +464,7 @@ pub(crate) fn changeset(
         )?,
         created_at_us,
         change_operation_count,
+        causal_anchor_count,
         event_count,
         commits: load_changeset_commits(connection, changeset_id)?,
     })
@@ -514,6 +537,65 @@ pub(crate) fn changeset_operations(
         workspace_id: summary.workspace_id,
         changeset_id,
         operations,
+    })
+}
+
+pub(crate) fn changeset_causal_anchors(
+    connection: &StoreConnection,
+    changeset_id: ChangeSetId,
+) -> Result<ChangeSetCausalAnchorListResult> {
+    let summary = changeset(connection, changeset_id)?;
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT changeset_causal_anchor.ordinal,
+                    changeset_causal_anchor.anchor_object_id,
+                    object_identity.object_kind
+             FROM changeset_causal_anchor
+             JOIN object_identity
+               ON object_identity.object_id = changeset_causal_anchor.anchor_object_id
+             WHERE changeset_causal_anchor.changeset_id = ?1
+             ORDER BY changeset_causal_anchor.ordinal,
+                      changeset_causal_anchor.anchor_object_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&changeset_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut anchors = Vec::new();
+    for row in rows {
+        let (ordinal, anchor_object_id, anchor_object_kind) = row.map_err(storage_error)?;
+        validate_nonnegative("changeset_causal_anchor.ordinal", ordinal)?;
+        validate_stored_text("object_identity.object_kind", &anchor_object_kind)?;
+        anchors.push(ChangeSetCausalAnchorSnapshot {
+            ordinal,
+            anchor_object_id: decode_uuidv7_text(
+                "changeset_causal_anchor.anchor_object_id",
+                anchor_object_id,
+            )?,
+            anchor_object_kind,
+        });
+    }
+
+    let actual = usize_to_i64("changeset_causal_anchor result count", anchors.len())?;
+    if actual != summary.causal_anchor_count {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ChangeSet {changeset_id} expected {} causal anchors, found {actual}",
+            summary.causal_anchor_count
+        )));
+    }
+
+    Ok(ChangeSetCausalAnchorListResult {
+        workspace_id: summary.workspace_id,
+        changeset_id,
+        anchors,
     })
 }
 
@@ -1089,6 +1171,17 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
     let bytes = decode_16(column, bytes)?;
     CommitId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column} is invalid: {error}")))
+}
+
+fn decode_uuidv7_text(column: &str, bytes: Vec<u8>) -> Result<String> {
+    let bytes = decode_16(column, bytes)?;
+    let uuid = uuid::Uuid::from_bytes(bytes);
+    if uuid.get_version_num() != 7 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{column} is not a UUIDv7 value"
+        )));
+    }
+    Ok(uuid.hyphenated().to_string())
 }
 
 fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {

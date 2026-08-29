@@ -112,9 +112,10 @@ pub use projection::{
 };
 pub use query::{
     BranchHead, ChangeOperationListResult, ChangeOperationSnapshot, ChangeOperationSubject,
-    ChangeSetCommitSnapshot, ChangeSetSnapshot, CommitParentSnapshot, CommitSnapshot,
-    EventListOptions, EventListResult, EventListTarget, EventSnapshot, HistoryEntry,
-    HistoryQueryOptions, HistoryQueryResult, HistoryStart,
+    ChangeSetCausalAnchorListResult, ChangeSetCausalAnchorSnapshot, ChangeSetCommitSnapshot,
+    ChangeSetSnapshot, CommitParentSnapshot, CommitSnapshot, EventListOptions, EventListResult,
+    EventListTarget, EventSnapshot, HistoryEntry, HistoryQueryOptions, HistoryQueryResult,
+    HistoryStart,
 };
 pub use record::{
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, KnowledgeRelationCreateCommit,
@@ -207,7 +208,8 @@ pub(crate) use projection::{
     branch_projection, mark_branch_projection_not_materialized, refresh_branch_projection,
 };
 pub(crate) use query::{
-    branch_head, changeset, changeset_operations, commit, event, query_events, query_history,
+    branch_head, changeset, changeset_causal_anchors, changeset_operations, commit, event,
+    query_events, query_history,
 };
 pub(crate) use record::{
     create_knowledge_relation, create_record, create_record_knowledge_relation,

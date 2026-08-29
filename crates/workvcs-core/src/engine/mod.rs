@@ -29,17 +29,18 @@ use crate::history::{
     BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
     BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeOperationListResult,
-    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, CommitSnapshot, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, EntityTransitionCommit, EntityTransitionOptions,
-    EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
-    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
-    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
-    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    ChangeSetCausalAnchorListResult, ChangeSetSnapshot, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, CommitSnapshot,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
+    EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
+    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureListOptions,
     KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
     KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
@@ -169,6 +170,13 @@ impl Engine {
         changeset_id: ChangeSetId,
     ) -> Result<ChangeOperationListResult> {
         self.store.changeset_operations(changeset_id)
+    }
+
+    pub fn changeset_causal_anchors(
+        &self,
+        changeset_id: ChangeSetId,
+    ) -> Result<ChangeSetCausalAnchorListResult> {
+        self.store.changeset_causal_anchors(changeset_id)
     }
 
     pub fn commit(&self, commit_id: CommitId) -> Result<CommitSnapshot> {

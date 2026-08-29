@@ -10,13 +10,14 @@ use crate::history::{
     BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
     BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeOperationListResult,
-    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, CommitSnapshot, EntityTransitionCommit, EntityTransitionOptions,
-    EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
-    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    ChangeSetCausalAnchorListResult, ChangeSetSnapshot, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, CommitSnapshot,
+    EntityTransitionCommit, EntityTransitionOptions, EventListOptions, EventListResult,
+    EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -193,6 +194,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::changeset_operations(&self.connection, changeset_id)
+    }
+
+    pub(crate) fn changeset_causal_anchors(
+        &self,
+        changeset_id: ChangeSetId,
+    ) -> Result<ChangeSetCausalAnchorListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::changeset_causal_anchors(&self.connection, changeset_id)
     }
 
     pub(crate) fn commit(&self, commit_id: CommitId) -> Result<CommitSnapshot> {

@@ -616,7 +616,7 @@ pub struct RecordListResult {
     pub records: Vec<RecordSnapshot>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecordRelationType {
     Invalidates,
 }
@@ -625,6 +625,13 @@ impl RecordRelationType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Invalidates => INVALIDATES_RELATION_TYPE,
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            INVALIDATES_RELATION_TYPE => Some(Self::Invalidates),
+            _ => None,
         }
     }
 }
@@ -686,6 +693,75 @@ pub struct RecordRelationCreateCommit {
     pub target_record_entity_id: EntityId,
     pub relation_state_digest: Digest,
     pub work_state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordRelationListOptions {
+    commit_id: CommitId,
+    relation_type: Option<RecordRelationType>,
+    source_record_entity_id: Option<EntityId>,
+    target_record_entity_id: Option<EntityId>,
+}
+
+impl RecordRelationListOptions {
+    pub fn new(commit_id: CommitId) -> Self {
+        Self {
+            commit_id,
+            relation_type: None,
+            source_record_entity_id: None,
+            target_record_entity_id: None,
+        }
+    }
+
+    pub fn with_relation_type(mut self, relation_type: RecordRelationType) -> Self {
+        self.relation_type = Some(relation_type);
+        self
+    }
+
+    pub fn with_source_record(mut self, record_entity_id: EntityId) -> Self {
+        self.source_record_entity_id = Some(record_entity_id);
+        self
+    }
+
+    pub fn with_target_record(mut self, record_entity_id: EntityId) -> Self {
+        self.target_record_entity_id = Some(record_entity_id);
+        self
+    }
+
+    pub fn commit_id(&self) -> CommitId {
+        self.commit_id
+    }
+
+    pub fn relation_type(&self) -> Option<RecordRelationType> {
+        self.relation_type
+    }
+
+    pub fn source_record_entity_id(&self) -> Option<EntityId> {
+        self.source_record_entity_id
+    }
+
+    pub fn target_record_entity_id(&self) -> Option<EntityId> {
+        self.target_record_entity_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordRelationSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: RecordRelationType,
+    pub source_record_entity_id: EntityId,
+    pub target_record_entity_id: EntityId,
+    pub state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordRelationListResult {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub relations: Vec<RecordRelationSnapshot>,
 }
 
 pub(crate) fn create_record(
@@ -980,6 +1056,95 @@ pub(crate) fn record_at(
     })
 }
 
+pub(crate) fn record_relations_at(
+    connection: &StoreConnection,
+    options: &RecordRelationListOptions,
+) -> Result<RecordRelationListResult> {
+    let commit_id = options.commit_id();
+    let replayed = state_at(connection, commit_id)?;
+    let mut relations = Vec::new();
+
+    for (relation_id, relation_version_id) in replayed.state.relations() {
+        let Some(relation) = load_record_relation_version(
+            connection,
+            replayed.workspace_id,
+            *relation_id,
+            *relation_version_id,
+        )?
+        else {
+            continue;
+        };
+        if options
+            .relation_type()
+            .is_some_and(|relation_type| relation.relation_type != relation_type)
+        {
+            continue;
+        }
+        if options
+            .source_record_entity_id()
+            .is_some_and(|source_record_entity_id| {
+                relation.source_record_entity_id != source_record_entity_id
+            })
+        {
+            continue;
+        }
+        if options
+            .target_record_entity_id()
+            .is_some_and(|target_record_entity_id| {
+                relation.target_record_entity_id != target_record_entity_id
+            })
+        {
+            continue;
+        }
+
+        let source = record_snapshot_in_state(
+            connection,
+            replayed.workspace_id,
+            commit_id,
+            &replayed.state,
+            relation.source_record_entity_id,
+        )?;
+        let target = record_snapshot_in_state(
+            connection,
+            replayed.workspace_id,
+            commit_id,
+            &replayed.state,
+            relation.target_record_entity_id,
+        )?;
+        validate_record_relation_endpoints(relation.relation_type, &source, &target)?;
+
+        relations.push(RecordRelationSnapshot {
+            workspace_id: replayed.workspace_id,
+            commit_id,
+            relation_id: relation.relation_id,
+            relation_version_id: relation.relation_version_id,
+            relation_type: relation.relation_type,
+            source_record_entity_id: relation.source_record_entity_id,
+            target_record_entity_id: relation.target_record_entity_id,
+            state_digest: relation.state_digest,
+        });
+    }
+
+    relations.sort_by(|left, right| {
+        left.relation_type
+            .cmp(&right.relation_type)
+            .then_with(|| {
+                left.source_record_entity_id
+                    .cmp(&right.source_record_entity_id)
+            })
+            .then_with(|| {
+                left.target_record_entity_id
+                    .cmp(&right.target_record_entity_id)
+            })
+            .then_with(|| left.relation_id.cmp(&right.relation_id))
+    });
+    Ok(RecordRelationListResult {
+        workspace_id: replayed.workspace_id,
+        commit_id,
+        relations,
+    })
+}
+
 struct RecordRelationCreateRows {
     workspace_id: WorkspaceId,
     expected_head_commit_id: CommitId,
@@ -997,6 +1162,15 @@ struct RecordRelationCreateRows {
     rationale_json: String,
     work_state_digest: Digest,
     now_us: i64,
+}
+
+struct LoadedRecordRelationVersion {
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    relation_type: RecordRelationType,
+    source_record_entity_id: EntityId,
+    target_record_entity_id: EntityId,
+    state_digest: Digest,
 }
 
 struct BranchRow {
@@ -1086,6 +1260,41 @@ fn work_state_after_record_relation_create(
     }
 
     WorkState::new(entities, relations).map_err(record_invalid_from)
+}
+
+fn record_snapshot_in_state(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    commit_id: CommitId,
+    state: &WorkState,
+    record_entity_id: EntityId,
+) -> Result<RecordSnapshot> {
+    let Some(record_entity_version_id) =
+        state
+            .entities()
+            .iter()
+            .find_map(|(entity_id, entity_version_id)| {
+                (*entity_id == record_entity_id).then_some(*entity_version_id)
+            })
+    else {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation endpoint {record_entity_id} is not present at commit {commit_id}"
+        )));
+    };
+    let loaded = load_record_version(
+        connection,
+        workspace_id,
+        record_entity_id,
+        record_entity_version_id,
+    )?;
+    Ok(RecordSnapshot {
+        workspace_id,
+        commit_id,
+        record_entity_id,
+        record_entity_version_id,
+        state_digest: loaded.state_digest,
+        state: loaded.state,
+    })
 }
 
 fn write_record_relation_create(
@@ -1454,6 +1663,130 @@ fn load_record_version(
     })
 }
 
+fn load_record_relation_version(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<Option<LoadedRecordRelationVersion>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    relation.workspace_id,
+                    relation.relation_type,
+                    relation.source_object_id,
+                    relation.target_object_id,
+                    relation.relation_discriminator,
+                    relation_version.state_schema_version,
+                    relation_version.metadata_json,
+                    relation_version.state_digest
+             FROM relation
+             JOIN object_identity
+               ON object_identity.object_id = relation.object_id
+             JOIN relation_version
+               ON relation_version.relation_id = relation.object_id
+             WHERE relation.object_id = ?1
+               AND relation_version.relation_version_id = ?2",
+            params![
+                &relation_id.raw_bytes()[..],
+                &relation_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        object_kind,
+        relation_workspace_id,
+        relation_type,
+        source_object_id,
+        target_object_id,
+        relation_discriminator,
+        state_schema_version,
+        metadata_json,
+        state_digest,
+    )) = row
+    else {
+        return Err(WorkVcsError::RecordNotFound(format!(
+            "record relation {relation_id} version {relation_version_id} does not exist"
+        )));
+    };
+    if object_kind != RELATION_OBJECT_KIND {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} has object kind {object_kind:?}"
+        )));
+    }
+    let relation_workspace_id =
+        decode_workspace_id("relation.workspace_id", relation_workspace_id)?;
+    if relation_workspace_id != workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} belongs to workspace {relation_workspace_id}, not {workspace_id}"
+        )));
+    }
+
+    let Some(relation_type) = RecordRelationType::parse(&relation_type) else {
+        return Ok(None);
+    };
+    if !relation_discriminator.is_empty() {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
+        )));
+    }
+    if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} version {relation_version_id} has state schema version {state_schema_version}"
+        )));
+    }
+
+    let state_digest = decode_digest("relation_version.state_digest", state_digest)?;
+    validate_import_fixed_point(
+        metadata_json.as_bytes(),
+        state_digest,
+        ImportDigestDomain::RelationVersion,
+    )
+    .map_err(|error| {
+        WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} version {relation_version_id} fixed-point validation failed: {error}"
+        ))
+    })?;
+    let metadata_value =
+        parse_canonical_json(metadata_json.as_bytes()).map_err(record_invalid_from)?;
+    if metadata_value != CanonicalValue::object(Vec::new())? {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} version {relation_version_id} state must be canonical empty object"
+        )));
+    }
+    let actual = relation_version_digest(&metadata_value).map_err(record_invalid_from)?;
+    if actual != state_digest {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} version {relation_version_id} digest does not match metadata JSON"
+        )));
+    }
+
+    Ok(Some(LoadedRecordRelationVersion {
+        relation_id,
+        relation_version_id,
+        relation_type,
+        source_record_entity_id: decode_entity_id("relation.source_object_id", source_object_id)?,
+        target_record_entity_id: decode_entity_id("relation.target_object_id", target_object_id)?,
+        state_digest,
+    }))
+}
+
 fn load_entity_kind(connection: &StoreConnection, entity_id: EntityId) -> Result<Option<String>> {
     connection
         .inner()
@@ -1657,6 +1990,15 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
     })?;
     CommitId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::RecordInvalid(format!("{column} is not a valid CommitId: {error}"))
+    })
+}
+
+fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
+    let bytes = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::RecordInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
+    })?;
+    EntityId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::RecordInvalid(format!("{column} is not a valid EntityId: {error}"))
     })
 }
 

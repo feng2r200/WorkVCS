@@ -10,7 +10,8 @@ use workvcs_core::{
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
     Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
     NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions, RecordSnapshot,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationType, RecordSnapshot,
     RecordStatus, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
     ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
     ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
@@ -370,6 +371,22 @@ enum RecordCommand {
 
         #[arg(long)]
         rationale: String,
+    },
+    RelationList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        commit: String,
+
+        #[arg(long = "type")]
+        relation_type: Option<String>,
+
+        #[arg(long)]
+        source_record: Option<String>,
+
+        #[arg(long)]
+        target_record: Option<String>,
     },
     Assumption {
         #[arg(value_name = "STORE")]
@@ -1148,6 +1165,31 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::RelationList {
+                    store,
+                    commit,
+                    relation_type,
+                    source_record,
+                    target_record,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options = RecordRelationListOptions::new(CommitId::parse_canonical(&commit)?);
+            if let Some(relation_type) = relation_type {
+                options = options.with_relation_type(parse_record_relation_type(&relation_type)?);
+            }
+            if let Some(source_record) = source_record {
+                options = options.with_source_record(EntityId::parse_canonical(&source_record)?);
+            }
+            if let Some(target_record) = target_record {
+                options = options.with_target_record(EntityId::parse_canonical(&target_record)?);
+            }
+            Ok(render_record_relation_list(
+                &engine.record_relations_at(options)?,
+            ))
+        }
+        Command::Record {
+            command:
                 RecordCommand::Assumption {
                     store,
                     branch,
@@ -1579,6 +1621,15 @@ fn parse_record_kind(value: &str) -> Result<RecordKind> {
         "risk" => Ok(RecordKind::Risk),
         other => Err(WorkVcsError::RecordInvalid(format!(
             "record kind {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_record_relation_type(value: &str) -> Result<RecordRelationType> {
+    match value {
+        "invalidates" => Ok(RecordRelationType::Invalidates),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "record relation type {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -2032,6 +2083,54 @@ fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> Strin
         relation.relation_state_digest,
         relation.work_state_digest
     )
+}
+
+fn render_record_relation_list(result: &RecordRelationListResult) -> String {
+    let mut output = format!(
+        "workspace_id={}\ncommit_id={}\nrelations={}\n",
+        result.workspace_id,
+        result.commit_id,
+        result.relations.len()
+    );
+    for (index, relation) in result.relations.iter().enumerate() {
+        writeln!(
+            output,
+            "relation.{index}.relation_id={}",
+            relation.relation_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_version_id={}",
+            relation.relation_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_type={}",
+            relation.relation_type
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.source_record_entity_id={}",
+            relation.source_record_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.target_record_entity_id={}",
+            relation.target_record_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_state_digest={}",
+            relation.state_digest
+        )
+        .expect("write to String");
+    }
+    output
 }
 
 fn render_session_start(session: &SessionStartResult) -> String {
@@ -4033,6 +4132,37 @@ mod tests {
         .expect("show relation commit");
         assert!(state.contains("relations=1"));
         assert!(state.contains(&format!("relation={}", value(&relation, "relation_id"))));
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--type",
+            "invalidates",
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-record",
+            &value(&assumption, "record_entity_id"),
+        ])
+        .expect("parse relation list"))
+        .expect("list record relations");
+        assert!(listed.contains("relations=1"));
+        assert_eq!(
+            value(&listed, "relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert!(listed.contains("relation.0.relation_type=invalidates"));
+        assert_eq!(
+            value(&listed, "relation.0.source_record_entity_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(&listed, "relation.0.target_record_entity_id"),
+            value(&assumption, "record_entity_id")
+        );
     }
 
     fn value(output: &str, key: &str) -> String {

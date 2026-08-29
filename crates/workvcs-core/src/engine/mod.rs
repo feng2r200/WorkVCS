@@ -16,11 +16,11 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointSnapshot,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
-    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
-    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
-    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    CheckpointValidationResult, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions,
+    EntityTransitionCommit, EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
+    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -147,6 +147,13 @@ impl Engine {
 
     pub fn checkpoint(&self, checkpoint_id: CheckpointId) -> Result<CheckpointSnapshot> {
         self.store.checkpoint(checkpoint_id)
+    }
+
+    pub fn validate_checkpoint(
+        &mut self,
+        checkpoint_id: CheckpointId,
+    ) -> Result<CheckpointValidationResult> {
+        self.store.validate_checkpoint(checkpoint_id)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

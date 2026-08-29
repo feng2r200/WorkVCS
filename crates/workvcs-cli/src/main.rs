@@ -7,23 +7,23 @@ use workvcs_core::{
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, CanonicalValue,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointSnapshot, ClaimId,
-    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
-    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview,
-    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
-    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
-    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
-    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
-    KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
-    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
-    MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
-    MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
-    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointSnapshot,
+    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
+    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
+    CommitId, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EvidenceId,
+    HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
+    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
+    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, MergeAbortOptions, MergeAbortResult,
+    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
+    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot,
+    MergeResolutionKind, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
+    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
@@ -295,6 +295,13 @@ enum CheckpointCommand {
         commit: String,
     },
     Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        checkpoint: String,
+    },
+    Validate {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -1652,6 +1659,12 @@ fn run(cli: Cli) -> Result<String> {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.checkpoint(CheckpointId::parse_canonical(&checkpoint)?)?;
                 Ok(render_checkpoint_snapshot(&snapshot))
+            }
+            CheckpointCommand::Validate { store, checkpoint } => {
+                let mut engine = Engine::open(store)?;
+                let result =
+                    engine.validate_checkpoint(CheckpointId::parse_canonical(&checkpoint)?)?;
+                Ok(render_checkpoint_validation(&result))
             }
         },
         Command::Why {
@@ -5295,6 +5308,36 @@ fn render_checkpoint_snapshot(snapshot: &CheckpointSnapshot) -> String {
     )
 }
 
+fn render_checkpoint_validation(result: &CheckpointValidationResult) -> String {
+    let mut output = render_checkpoint_snapshot(&result.checkpoint);
+    writeln!(output, "valid={}", result.valid).expect("write to String");
+    writeln!(
+        output,
+        "expected_state_digest={}",
+        result.expected_state_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "expected_content_digest={}",
+        result.expected_content_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "expected_content_size_bytes={}",
+        result.expected_content_size_bytes
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "problem={}",
+        result.problem.as_deref().unwrap_or("none")
+    )
+    .expect("write to String");
+    output
+}
+
 fn render_why(result: &WhyQueryResult) -> String {
     let mut output = String::new();
     match result.target.target {
@@ -5791,6 +5834,24 @@ mod tests {
         assert_eq!(value(&shown, "commit_id"), genesis);
         assert_eq!(
             value(&shown, "content_digest"),
+            value(&created, "content_digest")
+        );
+
+        let validated = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "validate",
+            store,
+            "--checkpoint",
+            &checkpoint,
+        ])
+        .expect("parse checkpoint validate"))
+        .expect("validate checkpoint");
+        assert_eq!(value(&validated, "checkpoint_id"), checkpoint);
+        assert_eq!(value(&validated, "valid"), "true");
+        assert_eq!(value(&validated, "problem"), "none");
+        assert_eq!(
+            value(&validated, "expected_content_digest"),
             value(&created, "content_digest")
         );
     }

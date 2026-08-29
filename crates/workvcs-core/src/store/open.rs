@@ -5,10 +5,11 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointSnapshot,
-    EntityTransitionCommit, EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
-    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    CheckpointValidationResult, EntityTransitionCommit, EntityTransitionOptions,
+    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -185,6 +186,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::checkpoint(&self.connection, checkpoint_id)
+    }
+
+    pub(crate) fn validate_checkpoint(
+        &mut self,
+        checkpoint_id: CheckpointId,
+    ) -> Result<CheckpointValidationResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::validate_checkpoint(&mut self.connection, checkpoint_id)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

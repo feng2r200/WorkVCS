@@ -68,6 +68,21 @@ fn content_object_count(connection: &Connection, digest: Digest) -> i64 {
         .expect("content object count")
 }
 
+fn overwrite_checkpoint_state_digest(
+    connection: &Connection,
+    checkpoint_id: workvcs_core::CheckpointId,
+    state_digest: Digest,
+) {
+    connection
+        .execute(
+            "UPDATE checkpoint
+             SET state_digest = ?2
+             WHERE checkpoint_id = ?1",
+            params![&checkpoint_id.raw_bytes()[..], &state_digest.as_bytes()[..]],
+        )
+        .expect("overwrite checkpoint state digest");
+}
+
 #[test]
 fn checkpoint_records_replay_verified_work_state_digest() {
     let (_tempdir, path) = store_path();
@@ -189,4 +204,93 @@ fn checkpoint_show_loads_saved_metadata() {
         .expect("load checkpoint");
 
     assert_eq!(loaded, created.checkpoint);
+}
+
+#[test]
+fn checkpoint_validation_confirms_rebuildable_digest() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = create_task(
+        &mut engine,
+        workspace.initial_branch_id,
+        workspace.genesis_commit_id,
+        "Validate checkpoint",
+    );
+    let created = engine
+        .create_checkpoint(CheckpointCreateOptions::new(task.commit_id))
+        .expect("create checkpoint");
+
+    let validation = engine
+        .validate_checkpoint(created.checkpoint.checkpoint_id)
+        .expect("validate checkpoint");
+
+    assert!(validation.valid);
+    assert_eq!(validation.problem, None);
+    assert_eq!(validation.checkpoint.usability_state, "usable");
+    assert_eq!(validation.expected_state_digest, task.work_state_digest);
+    assert_eq!(
+        validation.expected_content_digest,
+        created.checkpoint.content_digest
+    );
+    assert_eq!(
+        validation.expected_content_size_bytes,
+        created.checkpoint.content_size_bytes
+    );
+    assert!(validation.checkpoint.last_validated_at_us >= created.checkpoint.last_validated_at_us);
+    let CanonicalValue::Object(status_detail) = &validation.checkpoint.status_detail else {
+        panic!("status detail is an object");
+    };
+    assert!(
+        status_detail
+            .iter()
+            .any(|(key, value)| key == "valid" && value == &CanonicalValue::Bool(true))
+    );
+}
+
+#[test]
+fn checkpoint_validation_marks_state_digest_drift_invalid() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = create_task(
+        &mut engine,
+        workspace.initial_branch_id,
+        workspace.genesis_commit_id,
+        "Drift checkpoint",
+    );
+    let created = engine
+        .create_checkpoint(CheckpointCreateOptions::new(task.commit_id))
+        .expect("create checkpoint");
+    let wrong_state_digest = Digest::raw(b"wrong checkpoint state digest");
+    {
+        let connection = raw_connection(&path);
+        overwrite_checkpoint_state_digest(
+            &connection,
+            created.checkpoint.checkpoint_id,
+            wrong_state_digest,
+        );
+    }
+
+    let validation = engine
+        .validate_checkpoint(created.checkpoint.checkpoint_id)
+        .expect("validate checkpoint");
+
+    assert!(!validation.valid);
+    assert_eq!(validation.checkpoint.usability_state, "invalid");
+    assert_eq!(validation.expected_state_digest, task.work_state_digest);
+    assert_eq!(
+        validation.expected_content_digest,
+        created.checkpoint.content_digest
+    );
+    assert!(
+        validation
+            .problem
+            .as_deref()
+            .expect("problem")
+            .contains("state digest")
+    );
+
+    let loaded = engine
+        .checkpoint(created.checkpoint.checkpoint_id)
+        .expect("load checkpoint");
+    assert_eq!(loaded.usability_state, "invalid");
 }

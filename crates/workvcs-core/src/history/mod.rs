@@ -20,7 +20,9 @@ mod task;
 mod why;
 
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
-pub use checkpoint::{CheckpointCreateOptions, CheckpointCreateResult, CheckpointSnapshot};
+pub use checkpoint::{
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointSnapshot, CheckpointValidationResult,
+};
 pub use containment::{
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
     PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
@@ -110,7 +112,7 @@ pub use why::{
 };
 
 pub(crate) use branch::{fork_branch, list_branches};
-pub(crate) use checkpoint::{checkpoint, create_checkpoint};
+pub(crate) use checkpoint::{checkpoint, create_checkpoint, validate_checkpoint};
 pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
 pub(crate) use diff::diff_work_state;
 pub(crate) use entity::commit_entity_transition;

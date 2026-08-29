@@ -14,6 +14,7 @@ const CHECKPOINT_FORMAT: &str = "workvcs-workstate-checkpoint-v1";
 const CHECKPOINT_FORMAT_VERSION: i64 = 1;
 const CHECKPOINT_MEDIA_TYPE: &str = "application/vnd.workvcs.workstate-checkpoint+json";
 const CONTENT_OBJECT_KIND: &str = "checkpoint content object";
+const USABILITY_STATE_INVALID: &str = "invalid";
 const USABILITY_STATE_USABLE: &str = "usable";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +54,16 @@ pub struct CheckpointSnapshot {
     pub usability_state: String,
     pub last_validated_at_us: i64,
     pub status_detail: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckpointValidationResult {
+    pub checkpoint: CheckpointSnapshot,
+    pub valid: bool,
+    pub expected_state_digest: Digest,
+    pub expected_content_digest: Digest,
+    pub expected_content_size_bytes: i64,
+    pub problem: Option<String>,
 }
 
 pub(crate) fn create_checkpoint(
@@ -162,6 +173,83 @@ pub(crate) fn checkpoint(
     load_checkpoint(connection, checkpoint_id)
 }
 
+pub(crate) fn validate_checkpoint(
+    connection: &mut StoreConnection,
+    checkpoint_id: CheckpointId,
+) -> Result<CheckpointValidationResult> {
+    connection.verify_foreign_keys()?;
+    let current = load_checkpoint(connection, checkpoint_id)?;
+    let replayed = super::state_at(connection, current.commit_id)?;
+    let checkpoint_content_bytes = checkpoint_content_bytes(&replayed)?;
+    let expected_content_digest = content_object_digest(&checkpoint_content_bytes);
+    let expected_content_size_bytes =
+        i64::try_from(checkpoint_content_bytes.len()).map_err(|_| {
+            WorkVcsError::QueryInvalid(
+                "checkpoint content is too large for SQLite size_bytes".to_owned(),
+            )
+        })?;
+    let expected_format_metadata = checkpoint_format_metadata()?;
+    let problem = checkpoint_validation_problem(
+        &current,
+        &replayed,
+        expected_content_digest,
+        expected_content_size_bytes,
+        &expected_format_metadata,
+    );
+    let valid = problem.is_none();
+    let usability_state = if valid {
+        USABILITY_STATE_USABLE
+    } else {
+        USABILITY_STATE_INVALID
+    };
+    let last_validated_at_us = current_epoch_micros()?;
+    let status_detail_json = canonical_object_json(
+        "checkpoint validation detail",
+        &checkpoint_validation_status_detail(
+            valid,
+            problem.as_deref(),
+            replayed.state_digest,
+            expected_content_digest,
+            expected_content_size_bytes,
+        )?,
+    )?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let updated = transaction
+        .execute(
+            "UPDATE checkpoint_status
+             SET usability_state = ?2,
+                 last_validated_at_us = ?3,
+                 detail_json = ?4
+             WHERE checkpoint_id = ?1",
+            params![
+                &checkpoint_id.raw_bytes()[..],
+                usability_state,
+                last_validated_at_us,
+                status_detail_json
+            ],
+        )
+        .map_err(storage_error)?;
+    if updated != 1 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "checkpoint {checkpoint_id} has no checkpoint_status row"
+        )));
+    }
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(CheckpointValidationResult {
+        checkpoint: load_checkpoint(connection, checkpoint_id)?,
+        valid,
+        expected_state_digest: replayed.state_digest,
+        expected_content_digest,
+        expected_content_size_bytes,
+        problem,
+    })
+}
+
 fn checkpoint_content_bytes(replayed: &super::ReplayedState) -> Result<Vec<u8>> {
     canonical_bytes(&CanonicalValue::object(vec![
         string_field("checkpoint_format", CHECKPOINT_FORMAT),
@@ -246,6 +334,82 @@ fn checkpoint_status_detail(
             "relation_count",
             usize_to_i64("relation_count", state.relations().len())?,
         )?,
+    ])
+}
+
+fn checkpoint_validation_problem(
+    snapshot: &CheckpointSnapshot,
+    replayed: &super::ReplayedState,
+    expected_content_digest: Digest,
+    expected_content_size_bytes: i64,
+    expected_format_metadata: &CanonicalValue,
+) -> Option<String> {
+    if snapshot.workspace_id != replayed.workspace_id {
+        return Some(format!(
+            "checkpoint workspace {} does not match replayed workspace {}",
+            snapshot.workspace_id, replayed.workspace_id
+        ));
+    }
+    if snapshot.state_digest != replayed.state_digest {
+        return Some(format!(
+            "checkpoint state digest {} does not match replayed state digest {}",
+            snapshot.state_digest, replayed.state_digest
+        ));
+    }
+    if snapshot.checkpoint_format_version != CHECKPOINT_FORMAT_VERSION {
+        return Some(format!(
+            "checkpoint format version {} is not supported version {}",
+            snapshot.checkpoint_format_version, CHECKPOINT_FORMAT_VERSION
+        ));
+    }
+    if snapshot.content_digest != expected_content_digest {
+        return Some(format!(
+            "checkpoint content digest {} does not match rebuilt content digest {}",
+            snapshot.content_digest, expected_content_digest
+        ));
+    }
+    if snapshot.content_size_bytes != expected_content_size_bytes {
+        return Some(format!(
+            "checkpoint content size {} does not match rebuilt content size {}",
+            snapshot.content_size_bytes, expected_content_size_bytes
+        ));
+    }
+    if snapshot.media_type.as_deref() != Some(CHECKPOINT_MEDIA_TYPE) {
+        return Some(format!(
+            "checkpoint content media type {:?} does not match expected media type {}",
+            snapshot.media_type, CHECKPOINT_MEDIA_TYPE
+        ));
+    }
+    if &snapshot.format_metadata != expected_format_metadata {
+        return Some(
+            "checkpoint content format metadata does not match expected metadata".to_owned(),
+        );
+    }
+    None
+}
+
+fn checkpoint_validation_status_detail(
+    valid: bool,
+    problem: Option<&str>,
+    expected_state_digest: Digest,
+    expected_content_digest: Digest,
+    expected_content_size_bytes: i64,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("validation", "checkpoint_rebuild_validation"),
+        ("valid".to_owned(), CanonicalValue::Bool(valid)),
+        (
+            "problem".to_owned(),
+            problem
+                .map(|message| CanonicalValue::String(message.to_owned()))
+                .unwrap_or(CanonicalValue::Null),
+        ),
+        string_field("expected_state_digest", expected_state_digest.to_string()),
+        string_field(
+            "expected_content_digest",
+            expected_content_digest.to_string(),
+        ),
+        integer_field("expected_content_size_bytes", expected_content_size_bytes)?,
     ])
 }
 

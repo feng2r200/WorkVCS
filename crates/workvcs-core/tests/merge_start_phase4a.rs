@@ -172,7 +172,10 @@ fn start_merge_captures_branch_heads_and_runtime_without_advancing_target() {
         count_rows(&connection, "merge_runtime"),
         before_merge_runtime + 1
     );
-    assert_eq!(count_rows(&connection, "merge_item"), before_merge_items);
+    assert_eq!(
+        count_rows(&connection, "merge_item"),
+        before_merge_items + 1
+    );
     assert_eq!(
         count_rows(&connection, "workstate_commit"),
         before_workstate_commits

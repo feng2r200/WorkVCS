@@ -69,7 +69,7 @@ pub use history::{
 };
 pub use identity::{
     BranchId, ChangeSetId, ClaimId, CommitId, Digest, EntityId, EntityVersionId, EventId,
-    EvidenceId, MergeId, OperationId, RelationId, RelationVersionId, ResourceId,
+    EvidenceId, MergeId, MergeItemId, OperationId, RelationId, RelationVersionId, ResourceId,
     ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
@@ -78,8 +78,9 @@ pub use runtime::{
 };
 pub use runtime::{ContextOverview, ContextOverviewOptions};
 pub use runtime::{
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult,
-    MergeOutcome, MergeOutcomeSnapshot, MergeRuntimeState, MergeStartOptions, MergeStartResult,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeItemClassification,
+    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcome,
+    MergeOutcomeSnapshot, MergeRuntimeState, MergeStartOptions, MergeStartResult,
 };
 pub use runtime::{NextWorkOptions, NextWorkResult};
 pub use runtime::{

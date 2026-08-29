@@ -15,10 +15,10 @@ use workvcs_core::{
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
     KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeId, MergeListOptions,
-    MergeListResult, MergeOutcomeSnapshot, MergeStartOptions, MergeStartResult, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeId, MergeItemSnapshot,
+    MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
+    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
@@ -4264,7 +4264,7 @@ fn render_merge_attempt(merge: &MergeAttemptSnapshot) -> Result<String> {
         .map(|session_id| session_id.to_string())
         .unwrap_or_else(|| "none".to_owned());
     let mut output = format!(
-        "merge_id={}\nworkspace_id={}\ntarget_branch_id={}\nsource_branch_id={}\nmerge_base_commit_id={}\ntarget_head_commit_id={}\nsource_head_commit_id={}\norigin_session_id={}\ncreated_at_us={}\nruntime_state={}\noutcome={}\n",
+        "merge_id={}\nworkspace_id={}\ntarget_branch_id={}\nsource_branch_id={}\nmerge_base_commit_id={}\ntarget_head_commit_id={}\nsource_head_commit_id={}\norigin_session_id={}\ncreated_at_us={}\nruntime_state={}\nitems={}\noutcome={}\n",
         merge.merge_id,
         merge.workspace_id,
         merge.target_branch_id,
@@ -4275,16 +4275,43 @@ fn render_merge_attempt(merge: &MergeAttemptSnapshot) -> Result<String> {
         origin_session_id,
         merge.created_at_us,
         merge.runtime_state.as_str(),
+        merge.items.len(),
         merge
             .outcome
             .as_ref()
             .map(|outcome| outcome.outcome.as_str())
             .unwrap_or("none")
     );
+    for (index, item) in merge.items.iter().enumerate() {
+        render_merge_item(&mut output, &format!("item.{index}"), item)?;
+    }
     if let Some(outcome) = &merge.outcome {
         render_merge_outcome(&mut output, "outcome", outcome)?;
     }
     Ok(output)
+}
+
+fn render_merge_item(output: &mut String, prefix: &str, item: &MergeItemSnapshot) -> Result<()> {
+    let (subject_kind, subject_id) = match item.subject {
+        Some(MergeItemSubject::Entity(entity_id)) => ("entity", entity_id.to_string()),
+        Some(MergeItemSubject::Relation(relation_id)) => ("relation", relation_id.to_string()),
+        None => ("none", "none".to_owned()),
+    };
+    let payload_json = String::from_utf8(canonical_bytes(&item.payload)?).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!("merge item payload was not UTF-8: {error}"))
+    })?;
+    writeln!(output, "{prefix}.merge_item_id={}", item.merge_item_id).expect("write to String");
+    writeln!(output, "{prefix}.ordinal={}", item.ordinal).expect("write to String");
+    writeln!(
+        output,
+        "{prefix}.classification={}",
+        item.classification.as_str()
+    )
+    .expect("write to String");
+    writeln!(output, "{prefix}.subject_kind={subject_kind}").expect("write to String");
+    writeln!(output, "{prefix}.subject_id={subject_id}").expect("write to String");
+    writeln!(output, "{prefix}.payload_json={payload_json}").expect("write to String");
+    Ok(())
 }
 
 fn render_merge_list(result: &MergeListResult) -> Result<String> {
@@ -4351,6 +4378,7 @@ fn render_merge_list(result: &MergeListResult) -> Result<String> {
             merge.runtime_state.as_str()
         )
         .expect("write to String");
+        writeln!(output, "merge.{index}.items={}", merge.items.len()).expect("write to String");
         writeln!(output, "merge.{index}.outcome={outcome}").expect("write to String");
     }
     Ok(output)
@@ -10348,6 +10376,7 @@ mod tests {
         ])
         .expect("parse source task"))
         .expect("create source task");
+        let source_task_id = value(&source_task, "task_entity_id");
         let source_head = value(&source_task, "commit_id");
 
         let merge = run(Cli::try_parse_from([
@@ -10378,6 +10407,10 @@ mod tests {
         assert_eq!(value(&shown, "target_head_commit_id"), target_head);
         assert_eq!(value(&shown, "source_head_commit_id"), source_head);
         assert_eq!(value(&shown, "runtime_state"), "active");
+        assert_eq!(value(&shown, "items"), "1");
+        assert_eq!(value(&shown, "item.0.classification"), "AUTO");
+        assert_eq!(value(&shown, "item.0.subject_kind"), "entity");
+        assert_eq!(value(&shown, "item.0.subject_id"), source_task_id);
         assert_eq!(value(&shown, "outcome"), "none");
 
         let active = run(Cli::try_parse_from([
@@ -10393,6 +10426,7 @@ mod tests {
         assert_eq!(value(&active, "merges"), "1");
         assert_eq!(value(&active, "merge.0.merge_id"), merge_id);
         assert_eq!(value(&active, "merge.0.runtime_state"), "active");
+        assert_eq!(value(&active, "merge.0.items"), "1");
 
         run(Cli::try_parse_from([
             "workvcs",
@@ -10426,6 +10460,7 @@ mod tests {
             )
             .expect("show closed merge");
         assert_eq!(value(&closed, "runtime_state"), "aborted");
+        assert_eq!(value(&closed, "items"), "1");
         assert_eq!(value(&closed, "outcome"), "aborted");
         assert_eq!(value(&closed, "outcome.kind"), "aborted");
         assert_eq!(value(&closed, "outcome.result_commit_id"), "none");
@@ -10450,6 +10485,7 @@ mod tests {
         assert_eq!(value(&all, "merges"), "1");
         assert_eq!(value(&all, "merge.0.merge_id"), merge_id);
         assert_eq!(value(&all, "merge.0.runtime_state"), "aborted");
+        assert_eq!(value(&all, "merge.0.items"), "1");
         assert_eq!(value(&all, "merge.0.outcome"), "aborted");
     }
 

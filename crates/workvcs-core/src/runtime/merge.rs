@@ -1,10 +1,14 @@
 use super::session;
 use crate::canonical::{CanonicalValue, canonical_bytes, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
-use crate::identity::{BranchId, CommitId, EventId, MergeId, SessionId, WorkspaceId};
+use crate::history;
+use crate::identity::{
+    BranchId, CommitId, EntityId, EntityVersionId, EventId, MergeId, MergeItemId, RelationId,
+    RelationVersionId, SessionId, WorkspaceId,
+};
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const ACTIVE_MERGE_RUNTIME_STATE: &str = "active";
@@ -12,6 +16,11 @@ const ABORTED_MERGE_RUNTIME_STATE: &str = "aborted";
 const COMPLETED_MERGE_RUNTIME_STATE: &str = "completed";
 const ABORTED_MERGE_OUTCOME: &str = "aborted";
 const COMPLETED_MERGE_OUTCOME: &str = "completed";
+const AUTO_MERGE_ITEM_CLASSIFICATION: &str = "AUTO";
+const CONFLICT_MERGE_ITEM_CLASSIFICATION: &str = "CONFLICT";
+const REVIEW_MERGE_ITEM_CLASSIFICATION: &str = "REVIEW";
+const ENTITY_MERGE_ITEM_SUBJECT_KIND: &str = "entity";
+const RELATION_MERGE_ITEM_SUBJECT_KIND: &str = "relation";
 const MERGE_ATTEMPT_OBJECT_KIND: &str = "merge_attempt";
 const MERGE_STARTED_EVENT_KIND: &str = "merge.started";
 const MERGE_ABORTED_EVENT_KIND: &str = "merge.aborted";
@@ -61,6 +70,61 @@ impl MergeOutcome {
             ABORTED_MERGE_OUTCOME => Some(Self::Aborted),
             COMPLETED_MERGE_OUTCOME => Some(Self::Completed),
             _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeItemClassification {
+    Auto,
+    Conflict,
+    Review,
+}
+
+impl MergeItemClassification {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => AUTO_MERGE_ITEM_CLASSIFICATION,
+            Self::Conflict => CONFLICT_MERGE_ITEM_CLASSIFICATION,
+            Self::Review => REVIEW_MERGE_ITEM_CLASSIFICATION,
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            AUTO_MERGE_ITEM_CLASSIFICATION => Some(Self::Auto),
+            CONFLICT_MERGE_ITEM_CLASSIFICATION => Some(Self::Conflict),
+            REVIEW_MERGE_ITEM_CLASSIFICATION => Some(Self::Review),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeItemSubject {
+    Entity(EntityId),
+    Relation(RelationId),
+}
+
+impl MergeItemSubject {
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Entity(_) => ENTITY_MERGE_ITEM_SUBJECT_KIND,
+            Self::Relation(_) => RELATION_MERGE_ITEM_SUBJECT_KIND,
+        }
+    }
+
+    pub fn id_string(self) -> String {
+        match self {
+            Self::Entity(entity_id) => entity_id.to_string(),
+            Self::Relation(relation_id) => relation_id.to_string(),
+        }
+    }
+
+    fn object_id_bytes(self) -> [u8; 16] {
+        match self {
+            Self::Entity(entity_id) => entity_id.raw_bytes(),
+            Self::Relation(relation_id) => relation_id.raw_bytes(),
         }
     }
 }
@@ -179,6 +243,15 @@ pub struct MergeOutcomeSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeItemSnapshot {
+    pub merge_item_id: MergeItemId,
+    pub ordinal: i64,
+    pub classification: MergeItemClassification,
+    pub subject: Option<MergeItemSubject>,
+    pub payload: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeAttemptSnapshot {
     pub merge_id: MergeId,
     pub workspace_id: WorkspaceId,
@@ -190,6 +263,7 @@ pub struct MergeAttemptSnapshot {
     pub origin_session_id: Option<SessionId>,
     pub created_at_us: i64,
     pub runtime_state: MergeRuntimeState,
+    pub items: Vec<MergeItemSnapshot>,
     pub outcome: Option<MergeOutcomeSnapshot>,
 }
 
@@ -251,6 +325,31 @@ pub(crate) fn start_merge(
         ));
     }
 
+    let captured_target = history::branch_head(connection, options.target_branch_id())?;
+    let captured_source = history::branch_head(connection, options.source_branch_id())?;
+    if captured_target.workspace_id != captured_source.workspace_id {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge target branch {} belongs to workspace {}, but source branch {} belongs to workspace {}",
+            options.target_branch_id(),
+            captured_target.workspace_id,
+            options.source_branch_id(),
+            captured_source.workspace_id
+        )));
+    }
+    let merge_base_commit_id = find_merge_base(
+        connection.inner(),
+        captured_target.workspace_id,
+        captured_target.head_commit_id,
+        captured_source.head_commit_id,
+    )?;
+    let merge_items = classify_merge_items(
+        connection,
+        captured_target.workspace_id,
+        merge_base_commit_id,
+        captured_target.head_commit_id,
+        captured_source.head_commit_id,
+    )?;
+
     let merge_id = MergeId::new_v7();
     let event_id = EventId::new_v7();
     let created_at_us = current_epoch_micros()?;
@@ -262,51 +361,56 @@ pub(crate) fn start_merge(
         .map_err(storage_error)?;
     let target = load_active_branch(&transaction, options.target_branch_id())?;
     let source = load_active_branch(&transaction, options.source_branch_id())?;
-    if target.workspace_id != source.workspace_id {
-        return Err(WorkVcsError::WorkspaceInvalid(format!(
-            "merge target branch {} belongs to workspace {}, but source branch {} belongs to workspace {}",
+    if target.workspace_id != captured_target.workspace_id
+        || target.head_commit_id != captured_target.head_commit_id
+    {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "merge target branch {} moved from {} to {}",
             options.target_branch_id(),
-            target.workspace_id,
+            captured_target.head_commit_id,
+            target.head_commit_id
+        )));
+    }
+    if source.workspace_id != captured_source.workspace_id
+        || source.head_commit_id != captured_source.head_commit_id
+    {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "merge source branch {} moved from {} to {}",
             options.source_branch_id(),
-            source.workspace_id
+            captured_source.head_commit_id,
+            source.head_commit_id
         )));
     }
     if let Some(origin_session_id) = options.origin_session_id() {
         let session =
             session::load_active_session_runtime_for_update(&transaction, origin_session_id)?;
-        if session.active_workspace_id != target.workspace_id {
+        if session.active_workspace_id != captured_target.workspace_id {
             return Err(WorkVcsError::SessionInvalid(format!(
                 "merge origin session {origin_session_id} belongs to workspace {}, not {}",
-                session.active_workspace_id, target.workspace_id
+                session.active_workspace_id, captured_target.workspace_id
             )));
         }
         session::update_session_activity(&transaction, origin_session_id, created_at_us)?;
     }
     ensure_no_active_merge_for_target(&transaction, options.target_branch_id())?;
 
-    let merge_base_commit_id = find_merge_base(
-        &transaction,
-        target.workspace_id,
-        target.head_commit_id,
-        source.head_commit_id,
-    )?;
     let merge_id_bytes = merge_id.raw_bytes();
-    let workspace_id_bytes = target.workspace_id.raw_bytes();
+    let workspace_id_bytes = captured_target.workspace_id.raw_bytes();
     let target_branch_id_bytes = options.target_branch_id().raw_bytes();
     let source_branch_id_bytes = options.source_branch_id().raw_bytes();
     let merge_base_commit_id_bytes = merge_base_commit_id.raw_bytes();
-    let target_head_commit_id_bytes = target.head_commit_id.raw_bytes();
-    let source_head_commit_id_bytes = source.head_commit_id.raw_bytes();
+    let target_head_commit_id_bytes = captured_target.head_commit_id.raw_bytes();
+    let source_head_commit_id_bytes = captured_source.head_commit_id.raw_bytes();
     let origin_session_id_bytes = options.origin_session_id().map(|id| id.raw_bytes());
     let event_id_bytes = event_id.raw_bytes();
     let event_payload_json = merge_started_payload_json(&MergeStartedPayload {
         merge_id,
-        workspace_id: target.workspace_id,
+        workspace_id: captured_target.workspace_id,
         target_branch_id: options.target_branch_id(),
         source_branch_id: options.source_branch_id(),
         merge_base_commit_id,
-        target_head_commit_id: target.head_commit_id,
-        source_head_commit_id: source.head_commit_id,
+        target_head_commit_id: captured_target.head_commit_id,
+        source_head_commit_id: captured_source.head_commit_id,
         origin_session_id: options.origin_session_id(),
     })?;
 
@@ -355,6 +459,7 @@ pub(crate) fn start_merge(
             params![&merge_id_bytes[..], runtime_json],
         )
         .map_err(storage_error)?;
+    insert_merge_items(&transaction, merge_id, &merge_items)?;
     transaction
         .execute(
             "INSERT INTO event(
@@ -381,12 +486,12 @@ pub(crate) fn start_merge(
 
     Ok(MergeStartResult {
         merge_id,
-        workspace_id: target.workspace_id,
+        workspace_id: captured_target.workspace_id,
         target_branch_id: options.target_branch_id(),
         source_branch_id: options.source_branch_id(),
         merge_base_commit_id,
-        target_head_commit_id: target.head_commit_id,
-        source_head_commit_id: source.head_commit_id,
+        target_head_commit_id: captured_target.head_commit_id,
+        source_head_commit_id: captured_source.head_commit_id,
         origin_session_id: options.origin_session_id(),
         runtime_state: MergeRuntimeState::Active,
         event_id,
@@ -552,6 +657,15 @@ struct MergeAttemptRow {
     source_head_commit_id: CommitId,
     origin_session_id: Option<SessionId>,
     created_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedMergeItem {
+    merge_item_id: MergeItemId,
+    ordinal: i64,
+    classification: MergeItemClassification,
+    subject: MergeItemSubject,
+    payload_json: String,
 }
 
 fn load_active_branch(transaction: &Transaction<'_>, branch_id: BranchId) -> Result<BranchRow> {
@@ -852,6 +966,7 @@ fn load_merge_attempt_snapshot(
         None => None,
     };
     validate_snapshot_state(merge_id, runtime_state, outcome.as_ref())?;
+    let items = load_merge_items(connection, merge_id)?;
     Ok(MergeAttemptSnapshot {
         merge_id,
         workspace_id: decode_workspace_id("merge_attempt.workspace_id", workspace_id)?,
@@ -874,18 +989,327 @@ fn load_merge_attempt_snapshot(
             .transpose()?,
         created_at_us,
         runtime_state,
+        items,
         outcome,
     })
 }
 
-fn find_merge_base(
+fn classify_merge_items(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    merge_base_commit_id: CommitId,
+    target_head_commit_id: CommitId,
+    source_head_commit_id: CommitId,
+) -> Result<Vec<PreparedMergeItem>> {
+    let base = history::state_at(connection, merge_base_commit_id)?;
+    let target = history::state_at(connection, target_head_commit_id)?;
+    let source = history::state_at(connection, source_head_commit_id)?;
+    if base.workspace_id != workspace_id
+        || target.workspace_id != workspace_id
+        || source.workspace_id != workspace_id
+    {
+        return Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge state replay crossed workspace boundary for workspace {workspace_id}"
+        )));
+    }
+
+    let base_entities = entity_map(base.state.entities());
+    let target_entities = entity_map(target.state.entities());
+    let source_entities = entity_map(source.state.entities());
+    let base_relations = relation_map(base.state.relations());
+    let target_relations = relation_map(target.state.relations());
+    let source_relations = relation_map(source.state.relations());
+
+    let mut items = Vec::new();
+    classify_entity_items(
+        &base_entities,
+        &target_entities,
+        &source_entities,
+        &mut items,
+    )?;
+    classify_relation_items(
+        &base_relations,
+        &target_relations,
+        &source_relations,
+        &mut items,
+    )?;
+    Ok(items)
+}
+
+fn classify_entity_items(
+    base: &BTreeMap<EntityId, EntityVersionId>,
+    target: &BTreeMap<EntityId, EntityVersionId>,
+    source: &BTreeMap<EntityId, EntityVersionId>,
+    items: &mut Vec<PreparedMergeItem>,
+) -> Result<()> {
+    let mut entity_ids = BTreeSet::new();
+    entity_ids.extend(base.keys().copied());
+    entity_ids.extend(target.keys().copied());
+    entity_ids.extend(source.keys().copied());
+    for entity_id in entity_ids {
+        let base_version = base.get(&entity_id).copied();
+        let target_version = target.get(&entity_id).copied();
+        let source_version = source.get(&entity_id).copied();
+        let Some(classification) = classify_versions(base_version, target_version, source_version)
+        else {
+            continue;
+        };
+        let payload = CanonicalValue::object(vec![
+            (
+                "base_entity_version_id".to_owned(),
+                optional_entity_version_value(base_version),
+            ),
+            (
+                "entity_id".to_owned(),
+                CanonicalValue::String(entity_id.to_string()),
+            ),
+            (
+                "kind".to_owned(),
+                CanonicalValue::String(ENTITY_MERGE_ITEM_SUBJECT_KIND.to_owned()),
+            ),
+            (
+                "source_entity_version_id".to_owned(),
+                optional_entity_version_value(source_version),
+            ),
+            (
+                "target_entity_version_id".to_owned(),
+                optional_entity_version_value(target_version),
+            ),
+        ])?;
+        items.push(PreparedMergeItem {
+            merge_item_id: MergeItemId::new_v7(),
+            ordinal: items.len() as i64,
+            classification,
+            subject: MergeItemSubject::Entity(entity_id),
+            payload_json: canonical_json_string(&payload)?,
+        });
+    }
+    Ok(())
+}
+
+fn classify_relation_items(
+    base: &BTreeMap<RelationId, RelationVersionId>,
+    target: &BTreeMap<RelationId, RelationVersionId>,
+    source: &BTreeMap<RelationId, RelationVersionId>,
+    items: &mut Vec<PreparedMergeItem>,
+) -> Result<()> {
+    let mut relation_ids = BTreeSet::new();
+    relation_ids.extend(base.keys().copied());
+    relation_ids.extend(target.keys().copied());
+    relation_ids.extend(source.keys().copied());
+    for relation_id in relation_ids {
+        let base_version = base.get(&relation_id).copied();
+        let target_version = target.get(&relation_id).copied();
+        let source_version = source.get(&relation_id).copied();
+        let Some(classification) = classify_versions(base_version, target_version, source_version)
+        else {
+            continue;
+        };
+        let payload = CanonicalValue::object(vec![
+            (
+                "base_relation_version_id".to_owned(),
+                optional_relation_version_value(base_version),
+            ),
+            (
+                "kind".to_owned(),
+                CanonicalValue::String(RELATION_MERGE_ITEM_SUBJECT_KIND.to_owned()),
+            ),
+            (
+                "relation_id".to_owned(),
+                CanonicalValue::String(relation_id.to_string()),
+            ),
+            (
+                "source_relation_version_id".to_owned(),
+                optional_relation_version_value(source_version),
+            ),
+            (
+                "target_relation_version_id".to_owned(),
+                optional_relation_version_value(target_version),
+            ),
+        ])?;
+        items.push(PreparedMergeItem {
+            merge_item_id: MergeItemId::new_v7(),
+            ordinal: items.len() as i64,
+            classification,
+            subject: MergeItemSubject::Relation(relation_id),
+            payload_json: canonical_json_string(&payload)?,
+        });
+    }
+    Ok(())
+}
+
+fn classify_versions<VersionId: Copy + Eq>(
+    base: Option<VersionId>,
+    target: Option<VersionId>,
+    source: Option<VersionId>,
+) -> Option<MergeItemClassification> {
+    if target == source || source == base {
+        None
+    } else if target == base {
+        Some(MergeItemClassification::Auto)
+    } else {
+        Some(MergeItemClassification::Conflict)
+    }
+}
+
+fn entity_map(entries: &[(EntityId, EntityVersionId)]) -> BTreeMap<EntityId, EntityVersionId> {
+    entries.iter().copied().collect()
+}
+
+fn relation_map(
+    entries: &[(RelationId, RelationVersionId)],
+) -> BTreeMap<RelationId, RelationVersionId> {
+    entries.iter().copied().collect()
+}
+
+fn optional_entity_version_value(version: Option<EntityVersionId>) -> CanonicalValue {
+    version
+        .map(|version| CanonicalValue::String(version.to_string()))
+        .unwrap_or(CanonicalValue::Null)
+}
+
+fn optional_relation_version_value(version: Option<RelationVersionId>) -> CanonicalValue {
+    version
+        .map(|version| CanonicalValue::String(version.to_string()))
+        .unwrap_or(CanonicalValue::Null)
+}
+
+fn insert_merge_items(
     transaction: &Transaction<'_>,
+    merge_id: MergeId,
+    items: &[PreparedMergeItem],
+) -> Result<()> {
+    let merge_id_bytes = merge_id.raw_bytes();
+    for item in items {
+        let merge_item_id_bytes = item.merge_item_id.raw_bytes();
+        let subject_object_id_bytes = item.subject.object_id_bytes();
+        transaction
+            .execute(
+                "INSERT INTO merge_item(
+                    merge_item_id,
+                    merge_id,
+                    ordinal,
+                    classification,
+                    subject_object_id,
+                    item_payload_json
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    &merge_item_id_bytes[..],
+                    &merge_id_bytes[..],
+                    item.ordinal,
+                    item.classification.as_str(),
+                    &subject_object_id_bytes[..],
+                    item.payload_json
+                ],
+            )
+            .map_err(storage_error)?;
+    }
+    Ok(())
+}
+
+fn load_merge_items(connection: &Connection, merge_id: MergeId) -> Result<Vec<MergeItemSnapshot>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT merge_item.merge_item_id,
+                    merge_item.ordinal,
+                    merge_item.classification,
+                    merge_item.subject_object_id,
+                    object_identity.object_kind,
+                    merge_item.item_payload_json
+             FROM merge_item
+             LEFT JOIN object_identity
+               ON object_identity.object_id = merge_item.subject_object_id
+             WHERE merge_item.merge_id = ?1
+             ORDER BY merge_item.ordinal",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&merge_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<Vec<u8>>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        let (
+            merge_item_id,
+            ordinal,
+            classification,
+            subject_object_id,
+            object_kind,
+            item_payload_json,
+        ) = row.map_err(storage_error)?;
+        validate_stored_text("merge_item.classification", &classification)?;
+        let classification =
+            MergeItemClassification::from_str(&classification).ok_or_else(|| {
+                WorkVcsError::WorkspaceInvalid(format!(
+                    "merge {merge_id} has unsupported merge_item classification {classification:?}"
+                ))
+            })?;
+        let subject = decode_merge_item_subject(merge_id, subject_object_id, object_kind)?;
+        let payload = parse_canonical_json(item_payload_json.as_bytes()).map_err(|error| {
+            WorkVcsError::WorkspaceInvalid(format!(
+                "merge {merge_id} item_payload_json is not canonical JSON: {error}"
+            ))
+        })?;
+        require_object_value("merge item payload", &payload)?;
+        items.push(MergeItemSnapshot {
+            merge_item_id: decode_merge_item_id("merge_item.merge_item_id", merge_item_id)?,
+            ordinal,
+            classification,
+            subject,
+            payload,
+        });
+    }
+    Ok(items)
+}
+
+fn decode_merge_item_subject(
+    merge_id: MergeId,
+    subject_object_id: Option<Vec<u8>>,
+    object_kind: Option<String>,
+) -> Result<Option<MergeItemSubject>> {
+    match (subject_object_id, object_kind) {
+        (None, None) => Ok(None),
+        (Some(bytes), Some(object_kind)) => {
+            validate_stored_text("object_identity.object_kind", &object_kind)?;
+            match object_kind.as_str() {
+                ENTITY_MERGE_ITEM_SUBJECT_KIND => Ok(Some(MergeItemSubject::Entity(
+                    decode_entity_id("merge_item.subject_object_id", bytes)?,
+                ))),
+                RELATION_MERGE_ITEM_SUBJECT_KIND => Ok(Some(MergeItemSubject::Relation(
+                    decode_relation_id("merge_item.subject_object_id", bytes)?,
+                ))),
+                _ => Err(WorkVcsError::WorkspaceInvalid(format!(
+                    "merge {merge_id} item subject has unsupported object kind {object_kind:?}"
+                ))),
+            }
+        }
+        (Some(_), None) => Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item subject_object_id does not resolve to object_identity"
+        ))),
+        (None, Some(object_kind)) => Err(WorkVcsError::WorkspaceInvalid(format!(
+            "merge {merge_id} item has object kind {object_kind:?} without subject_object_id"
+        ))),
+    }
+}
+
+fn find_merge_base(
+    connection: &Connection,
     workspace_id: WorkspaceId,
     target_head_commit_id: CommitId,
     source_head_commit_id: CommitId,
 ) -> Result<CommitId> {
-    let target_ancestors = ancestor_depths(transaction, workspace_id, target_head_commit_id)?;
-    let source_ancestors = ancestor_depths(transaction, workspace_id, source_head_commit_id)?;
+    let target_ancestors = ancestor_depths(connection, workspace_id, target_head_commit_id)?;
+    let source_ancestors = ancestor_depths(connection, workspace_id, source_head_commit_id)?;
     target_ancestors
         .iter()
         .filter_map(|(commit_id, target_depth)| {
@@ -908,7 +1332,7 @@ fn find_merge_base(
 }
 
 fn ancestor_depths(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     workspace_id: WorkspaceId,
     start_commit_id: CommitId,
 ) -> Result<BTreeMap<CommitId, usize>> {
@@ -918,9 +1342,9 @@ fn ancestor_depths(
         if ancestors.contains_key(&commit_id) {
             continue;
         }
-        ensure_commit_belongs_to_workspace(transaction, workspace_id, commit_id)?;
+        ensure_commit_belongs_to_workspace(connection, workspace_id, commit_id)?;
         ancestors.insert(commit_id, depth);
-        for parent_commit_id in parent_commit_ids(transaction, commit_id)? {
+        for parent_commit_id in parent_commit_ids(connection, commit_id)? {
             queue.push_back((parent_commit_id, depth + 1));
         }
     }
@@ -928,11 +1352,11 @@ fn ancestor_depths(
 }
 
 fn ensure_commit_belongs_to_workspace(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     workspace_id: WorkspaceId,
     commit_id: CommitId,
 ) -> Result<()> {
-    let row = transaction
+    let row = connection
         .query_row(
             "SELECT workspace_id
              FROM workstate_commit
@@ -956,8 +1380,8 @@ fn ensure_commit_belongs_to_workspace(
     Ok(())
 }
 
-fn parent_commit_ids(transaction: &Transaction<'_>, commit_id: CommitId) -> Result<Vec<CommitId>> {
-    let mut statement = transaction
+fn parent_commit_ids(connection: &Connection, commit_id: CommitId) -> Result<Vec<CommitId>> {
+    let mut statement = connection
         .prepare(
             "SELECT parent_commit_id
              FROM commit_parent
@@ -1264,6 +1688,24 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
 fn decode_merge_id(column: &str, bytes: Vec<u8>) -> Result<MergeId> {
     MergeId::from_bytes(decode_uuid_bytes(column, bytes)?).map_err(|error| {
         WorkVcsError::WorkspaceInvalid(format!("{column} is not a valid MergeId: {error}"))
+    })
+}
+
+fn decode_merge_item_id(column: &str, bytes: Vec<u8>) -> Result<MergeItemId> {
+    MergeItemId::from_bytes(decode_uuid_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!("{column} is not a valid MergeItemId: {error}"))
+    })
+}
+
+fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
+    EntityId::from_bytes(decode_uuid_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!("{column} is not a valid EntityId: {error}"))
+    })
+}
+
+fn decode_relation_id(column: &str, bytes: Vec<u8>) -> Result<RelationId> {
+    RelationId::from_bytes(decode_uuid_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::WorkspaceInvalid(format!("{column} is not a valid RelationId: {error}"))
     })
 }
 

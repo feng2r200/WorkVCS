@@ -120,3 +120,4 @@ typed_uuid!(SessionId);
 typed_uuid!(SessionDiffId);
 typed_uuid!(ClaimId);
 typed_uuid!(MergeId);
+typed_uuid!(MergeItemId);

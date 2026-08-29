@@ -11,8 +11,9 @@ pub use claim::{
 };
 pub use context::{ContextOverview, ContextOverviewOptions};
 pub use merge::{
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeListOptions, MergeListResult,
-    MergeOutcome, MergeOutcomeSnapshot, MergeRuntimeState, MergeStartOptions, MergeStartResult,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeItemClassification,
+    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcome,
+    MergeOutcomeSnapshot, MergeRuntimeState, MergeStartOptions, MergeStartResult,
 };
 pub use next::{NextWorkOptions, NextWorkResult};
 pub use runnable::{

@@ -352,13 +352,16 @@ fn focus_kind_at(
     commit_id: CommitId,
     focus_entity_id: EntityId,
 ) -> Result<PrimaryContainmentEndpointKind> {
-    match history::plan_at(connection, commit_id, focus_entity_id) {
-        Ok(_) => Ok(PrimaryContainmentEndpointKind::Plan),
-        Err(plan_error) => match history::task_at(connection, commit_id, focus_entity_id) {
-            Ok(_) => Ok(PrimaryContainmentEndpointKind::Task),
-            Err(task_error) => Err(WorkVcsError::SessionInvalid(format!(
-                "focus entity {focus_entity_id} is not a current Plan or Task at branch head {commit_id}: {plan_error}; {task_error}"
-            ))),
+    match history::goal_at(connection, commit_id, focus_entity_id) {
+        Ok(_) => Ok(PrimaryContainmentEndpointKind::Goal),
+        Err(goal_error) => match history::plan_at(connection, commit_id, focus_entity_id) {
+            Ok(_) => Ok(PrimaryContainmentEndpointKind::Plan),
+            Err(plan_error) => match history::task_at(connection, commit_id, focus_entity_id) {
+                Ok(_) => Ok(PrimaryContainmentEndpointKind::Task),
+                Err(task_error) => Err(WorkVcsError::SessionInvalid(format!(
+                    "focus entity {focus_entity_id} is not a current Goal, Plan, or Task at branch head {commit_id}: {goal_error}; {plan_error}; {task_error}"
+                ))),
+            },
         },
     }
 }

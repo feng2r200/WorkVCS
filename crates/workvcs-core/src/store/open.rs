@@ -15,7 +15,7 @@ use crate::history::{
     VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
-    WorkspaceInfo, WorkspaceInitOptions,
+    WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 use crate::runtime::{
     ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
@@ -96,6 +96,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::query_history(&self.connection, options)
+    }
+
+    pub(crate) fn diff(&self, options: &WorkStateDiffOptions) -> Result<WorkStateDiff> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::diff_work_state(&self.connection, options)
     }
 
     pub(crate) fn validate_integrity(&self) -> Result<IntegrityReport> {

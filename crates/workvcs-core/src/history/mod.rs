@@ -1,4 +1,5 @@
 mod containment;
+mod diff;
 mod entity;
 mod genesis;
 mod goal;
@@ -12,6 +13,10 @@ mod task;
 pub use containment::{
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
     PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
+};
+pub use diff::{
+    EntityVersionDiff, RelationVersionDiff, ResolvedWorkStateDiffTarget, WorkStateDiff,
+    WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
 };
 pub use entity::{EntityTransitionCommit, EntityTransitionOptions};
 pub use genesis::{WorkspaceInfo, WorkspaceInitOptions};
@@ -47,6 +52,7 @@ pub use task::{
 };
 
 pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
+pub(crate) use diff::diff_work_state;
 pub(crate) use entity::commit_entity_transition;
 pub(crate) use genesis::{create_workspace, load_workspace_info};
 pub(crate) use goal::{create_goal, goal_at, transition_goal};

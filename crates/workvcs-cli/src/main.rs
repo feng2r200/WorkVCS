@@ -3775,7 +3775,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nknowledge={}\nrecords={}\nrecord_relations={}\n",
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nknowledge={}\nrecords={}\nrecord_relations={}\nrecord_knowledge_relations={}\n",
         session.session_id,
         session_lifecycle_state(session.lifecycle_state),
         context.branch.workspace_id,
@@ -3796,7 +3796,8 @@ fn render_context_overview(context: &ContextOverview) -> String {
         runnable_ready,
         context.knowledge.knowledge.len(),
         context.records.records.len(),
-        context.record_relations.relations.len()
+        context.record_relations.relations.len(),
+        context.record_knowledge_relations.relations.len()
     );
     for (index, workspace_id) in session.context_workspaces.iter().enumerate() {
         let _ = writeln!(
@@ -3915,6 +3916,43 @@ fn render_context_overview(context: &ContextOverview) -> String {
             relation.state_digest
         );
     }
+    for (index, relation) in context
+        .record_knowledge_relations
+        .relations
+        .iter()
+        .enumerate()
+    {
+        let _ = writeln!(
+            output,
+            "context_record_knowledge_relation.{index}.relation_id={}",
+            relation.relation_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record_knowledge_relation.{index}.relation_version_id={}",
+            relation.relation_version_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record_knowledge_relation.{index}.relation_type={}",
+            relation.relation_type
+        );
+        let _ = writeln!(
+            output,
+            "context_record_knowledge_relation.{index}.source_record_entity_id={}",
+            relation.source_record_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record_knowledge_relation.{index}.target_knowledge_entity_id={}",
+            relation.target_knowledge_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record_knowledge_relation.{index}.relation_state_digest={}",
+            relation.state_digest
+        );
+    }
     output
 }
 
@@ -3940,7 +3978,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_knowledge={}\ncontext_records={}\ncontext_record_relations={}\n",
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_knowledge={}\ncontext_records={}\ncontext_record_relations={}\ncontext_record_knowledge_relations={}\n",
         result.claim_next.session_id,
         result.claim_next.workspace_id,
         result.claim_next.branch_id,
@@ -3953,7 +3991,8 @@ fn render_next_work(result: &NextWorkResult) -> String {
         runnable_ready,
         result.context.knowledge.knowledge.len(),
         result.context.records.records.len(),
-        result.context.record_relations.relations.len()
+        result.context.record_relations.relations.len(),
+        result.context.record_knowledge_relations.relations.len()
     );
     if let Some(claim) = &result.claim_next.selected {
         let _ = writeln!(output, "claim_id={}", claim.claim_id);
@@ -5508,6 +5547,120 @@ mod tests {
                 "context_record_relation.0.target_record_entity_id"
             ),
             value(&decision, "record_entity_id")
+        );
+    }
+
+    #[test]
+    fn cli_context_includes_current_record_knowledge_relation_summary() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Context overview exposes Record-to-Knowledge support",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--statement",
+            "The context output includes Record-to-Knowledge relations",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports-knowledge",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--rationale",
+            "The Finding supports the Knowledge statement",
+        ])
+        .expect("parse link supports knowledge"))
+        .expect("link supports knowledge");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context =
+            run(
+                Cli::try_parse_from(["workvcs", "context", store, "--session", &session_id])
+                    .expect("parse context"),
+            )
+            .expect("context overview");
+        assert!(context.contains("record_relations=0"));
+        assert!(context.contains("record_knowledge_relations=1"));
+        assert_eq!(
+            value(&context, "context_record_knowledge_relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert!(context.contains("context_record_knowledge_relation.0.relation_type=supports"));
+        assert_eq!(
+            value(
+                &context,
+                "context_record_knowledge_relation.0.source_record_entity_id"
+            ),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(
+                &context,
+                "context_record_knowledge_relation.0.target_knowledge_entity_id"
+            ),
+            value(&knowledge, "knowledge_entity_id")
         );
     }
 

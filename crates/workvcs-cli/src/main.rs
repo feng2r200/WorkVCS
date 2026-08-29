@@ -523,6 +523,9 @@ enum RecordCommand {
         status: Option<String>,
 
         #[arg(long)]
+        scope_json: Option<String>,
+
+        #[arg(long)]
         statement_contains: Option<String>,
     },
     LinkInvalidates {
@@ -1827,6 +1830,7 @@ fn run(cli: Cli) -> Result<String> {
                     commit,
                     kind,
                     status,
+                    scope_json,
                     statement_contains,
                 },
         } => {
@@ -1838,6 +1842,9 @@ fn run(cli: Cli) -> Result<String> {
             }
             if let Some(status) = status {
                 options = options.with_status(parse_record_status(&status)?);
+            }
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
             }
             if let Some(statement_contains) = statement_contains {
                 options = options.with_statement_contains(statement_contains)?;
@@ -6433,6 +6440,8 @@ mod tests {
             &head,
             "--statement",
             "Schema validation has no drift",
+            "--scope-json",
+            "{\"local_ref\":\"root\",\"kind\":\"workspace\"}",
         ])
         .expect("parse finding"))
         .expect("create finding");
@@ -6447,6 +6456,8 @@ mod tests {
             &value(&finding, "commit_id"),
             "--statement",
             "Serialized writes are sufficient",
+            "--scope-json",
+            "{\"kind\":\"module\",\"local_ref\":\"core\"}",
         ])
         .expect("parse assumption"))
         .expect("create assumption");
@@ -6486,12 +6497,30 @@ mod tests {
             &value(&assumption, "commit_id"),
             "--kind",
             "assumption",
+            "--scope-json",
+            "{\"local_ref\":\"core\",\"kind\":\"module\"}",
         ])
         .expect("parse filtered record list"))
         .expect("list filtered records");
         assert_eq!(value(&filtered, "records"), "1");
         assert!(filtered.contains("record_kind=assumption"));
         assert!(!filtered.contains("record_kind=finding"));
+
+        let scope_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--scope-json",
+            "{\"kind\":\"workspace\",\"local_ref\":\"root\"}",
+        ])
+        .expect("parse scope-filtered record list"))
+        .expect("list scope-filtered records");
+        assert_eq!(value(&scope_filtered, "records"), "1");
+        assert!(scope_filtered.contains("record_kind=finding"));
+        assert!(!scope_filtered.contains("record_kind=assumption"));
 
         let statement_filtered = run(Cli::try_parse_from([
             "workvcs",

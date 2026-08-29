@@ -2,8 +2,9 @@ use super::entity::{canonical_json_string, entity_transition_payload_json};
 use super::knowledge::{KNOWLEDGE_ENTITY_KIND, KnowledgeSnapshot, KnowledgeStatus, knowledge_at};
 use super::{EntityTransitionOptions, commit_entity_transition, state_at};
 use crate::canonical::{
-    CanonicalValue, ImportDigestDomain, WorkState, entity_version_digest, parse_canonical_json,
-    relation_version_digest, validate_import_fixed_point, work_state_mapping_digest,
+    CanonicalValue, ImportDigestDomain, WorkState, canonical_bytes, entity_version_digest,
+    parse_canonical_json, relation_version_digest, validate_import_fixed_point,
+    work_state_mapping_digest,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
@@ -682,6 +683,7 @@ pub struct RecordListOptions {
     kind: Option<RecordKind>,
     status: Option<RecordStatus>,
     statement_contains: Option<String>,
+    scope_canonical_bytes: Option<Vec<u8>>,
 }
 
 impl RecordListOptions {
@@ -691,6 +693,7 @@ impl RecordListOptions {
             kind: None,
             status: None,
             statement_contains: None,
+            scope_canonical_bytes: None,
         }
     }
 
@@ -715,6 +718,12 @@ impl RecordListOptions {
         Ok(self)
     }
 
+    pub fn with_scope(mut self, scope: CanonicalValue) -> Result<Self> {
+        require_object_value("record scope filter", &scope)?;
+        self.scope_canonical_bytes = Some(canonical_bytes(&scope).map_err(record_invalid_from)?);
+        Ok(self)
+    }
+
     pub fn commit_id(&self) -> CommitId {
         self.commit_id
     }
@@ -729,6 +738,10 @@ impl RecordListOptions {
 
     pub fn statement_contains(&self) -> Option<&str> {
         self.statement_contains.as_deref()
+    }
+
+    fn scope_canonical_bytes(&self) -> Option<&[u8]> {
+        self.scope_canonical_bytes.as_deref()
     }
 }
 
@@ -2571,6 +2584,7 @@ pub(crate) fn records_at(
                     && options
                         .statement_contains()
                         .is_none_or(|fragment| loaded.state.statement.contains(fragment))
+                    && record_scope_matches(options, &loaded.state.scope)?
                 {
                     records.push(RecordSnapshot {
                         workspace_id: replayed.workspace_id,
@@ -5030,6 +5044,14 @@ fn require_object_value(label: &str, value: &CanonicalValue) -> Result<()> {
             "{label} must be a canonical object, found {other:?}"
         ))),
     }
+}
+
+fn record_scope_matches(options: &RecordListOptions, scope: &CanonicalValue) -> Result<bool> {
+    let Some(expected) = options.scope_canonical_bytes() else {
+        return Ok(true);
+    };
+    let actual = canonical_bytes(scope).map_err(record_invalid_from)?;
+    Ok(actual == expected)
 }
 
 fn missing_field(field: &str) -> WorkVcsError {

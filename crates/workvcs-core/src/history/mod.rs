@@ -23,9 +23,10 @@ mod why;
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
     BundleCheckpointCandidate, BundleEntityVersionRef, BundleExportManifest, BundleExportOptions,
-    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
-    BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput, BundlePayloadReference,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, BundleRelationVersionRef,
+    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
+    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
+    BundlePayloadFile, BundlePayloadInput, BundlePayloadReference, BundlePayloadValidationOptions,
+    BundlePayloadValidationResult, BundleRelationVersionRef,
 };
 pub use checkpoint::{
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
@@ -122,8 +123,8 @@ pub use why::{
 
 pub(crate) use branch::{fork_branch, list_branches};
 pub(crate) use bundle::{
-    export_bundle_manifest, export_bundle_payloads, validate_bundle_manifest,
-    validate_bundle_payloads,
+    export_bundle_manifest, export_bundle_payloads, preflight_bundle_import,
+    validate_bundle_manifest, validate_bundle_payloads,
 };
 pub(crate) use checkpoint::{
     checkpoint, checkpoints, create_checkpoint, latest_usable_checkpoint, validate_checkpoint,

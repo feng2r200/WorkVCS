@@ -5,13 +5,13 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
-    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
-    BundlePayloadExportOptions, BundlePayloadValidationOptions, BundlePayloadValidationResult,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, EntityTransitionCommit, EntityTransitionOptions,
-    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
-    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
+    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
+    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
@@ -253,6 +253,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::validate_bundle_payloads(&self.connection, &current, options)
+    }
+
+    pub(crate) fn preflight_bundle_import(
+        &self,
+        options: BundleImportPreflightOptions,
+    ) -> Result<BundleImportPreflightResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::preflight_bundle_import(&self.connection, &current, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

@@ -8,27 +8,28 @@ use workvcs_core::{
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
-    BundleExportOptions, BundleManifestValidationOptions, BundleManifestValidationResult,
-    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
-    CommitId, ContextOverview, ContextOverviewOptions, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityVersionId, EvidenceId,
-    HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
-    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
-    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot, KnowledgeStatus,
-    KnowledgeTransitionCommit, KnowledgeTransitionOptions, MergeAbortOptions, MergeAbortResult,
-    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeId, MergeItemId, MergeItemResolutionSnapshot,
-    MergeItemSnapshot, MergeItemSubject, MergeListOptions, MergeListResult, MergeOutcomeSnapshot,
-    MergeResolutionKind, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions,
-    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    BundleExportOptions, BundleImportPreflightOptions, BundleImportPreflightResult,
+    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
+    BundlePayloadExportOptions, BundlePayloadInput, BundlePayloadValidationOptions,
+    BundlePayloadValidationResult, CanonicalValue, CheckpointCreateOptions, CheckpointCreateResult,
+    CheckpointId, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, ClaimId,
+    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview,
+    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
+    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
+    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
+    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
+    KnowledgeSnapshot, KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
+    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
+    MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
+    MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
+    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
@@ -365,6 +366,13 @@ enum BundleCommand {
 
         #[arg(long)]
         commit: String,
+
+        #[arg(long)]
+        input_dir: PathBuf,
+    },
+    PreflightDir {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
 
         #[arg(long)]
         input_dir: PathBuf,
@@ -1764,6 +1772,19 @@ fn run(cli: Cli) -> Result<String> {
                         payloads,
                     )?)?;
                 Ok(render_bundle_payload_validation(&validation))
+            }
+            BundleCommand::PreflightDir { store, input_dir } => {
+                let engine = Engine::open(store)?;
+                let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
+                let payload_index_bytes = read_bundle_file(&input_dir.join("payload-index.json"))?;
+                let payloads = read_bundle_payload_inputs(&input_dir)?;
+                let preflight =
+                    engine.preflight_bundle_import(BundleImportPreflightOptions::from_parts(
+                        manifest_bytes,
+                        payload_index_bytes,
+                        payloads,
+                    )?)?;
+                Ok(render_bundle_import_preflight(&preflight))
             }
             BundleCommand::ValidateManifest {
                 store,
@@ -5609,6 +5630,40 @@ fn render_bundle_payload_validation(result: &BundlePayloadValidationResult) -> S
     )
 }
 
+fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> String {
+    format!(
+        "valid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\naction={}\nmanifest_digest={}\npayload_index_digest={}\npayload_files={}\npayload_references={}\nproblem={}\n",
+        result.valid,
+        result.format_compatible,
+        result
+            .source_store_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        result
+            .target_workspace_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        result
+            .target_commit_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        result
+            .target_state_digest
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        result.source_store_relation,
+        result.incoming_commit_present,
+        result.import_required,
+        result.can_apply,
+        result.action,
+        result.manifest_digest,
+        result.payload_index_digest,
+        result.payload_files,
+        result.payload_references,
+        result.problem.as_deref().unwrap_or("none")
+    )
+}
+
 fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
     format!(
         "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nactual_manifest_size_bytes={}\nproblem={}\n",
@@ -6363,6 +6418,25 @@ mod tests {
         assert_eq!(value(&validated_dir, "actual_payload_files"), "1");
         assert_eq!(value(&validated_dir, "expected_payload_references"), "2");
         assert_eq!(value(&validated_dir, "problem"), "none");
+
+        let preflight = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "preflight-dir",
+            store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse bundle preflight-dir"))
+        .expect("preflight bundle directory");
+        assert_eq!(value(&preflight, "valid"), "true");
+        assert_eq!(value(&preflight, "format_compatible"), "true");
+        assert_eq!(value(&preflight, "target_commit_id"), genesis);
+        assert_eq!(value(&preflight, "source_store_relation"), "same_store");
+        assert_eq!(value(&preflight, "incoming_commit_present"), "true");
+        assert_eq!(value(&preflight, "import_required"), "false");
+        assert_eq!(value(&preflight, "action"), "already_present");
+        assert_eq!(value(&preflight, "problem"), "none");
     }
 
     #[test]

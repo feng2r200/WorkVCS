@@ -101,6 +101,51 @@ impl BundlePayloadValidationOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportPreflightOptions {
+    manifest_bytes: Vec<u8>,
+    payload_index_bytes: Vec<u8>,
+    payloads: Vec<BundlePayloadInput>,
+}
+
+impl BundleImportPreflightOptions {
+    pub fn from_parts(
+        manifest_bytes: impl Into<Vec<u8>>,
+        payload_index_bytes: impl Into<Vec<u8>>,
+        payloads: Vec<BundlePayloadInput>,
+    ) -> Result<Self> {
+        let manifest_bytes = manifest_bytes.into();
+        if manifest_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle manifest bytes cannot be empty".to_owned(),
+            ));
+        }
+        let payload_index_bytes = payload_index_bytes.into();
+        if payload_index_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle payload index bytes cannot be empty".to_owned(),
+            ));
+        }
+        Ok(Self {
+            manifest_bytes,
+            payload_index_bytes,
+            payloads,
+        })
+    }
+
+    fn manifest_bytes(&self) -> &[u8] {
+        &self.manifest_bytes
+    }
+
+    fn payload_index_bytes(&self) -> &[u8] {
+        &self.payload_index_bytes
+    }
+
+    fn payloads(&self) -> &[BundlePayloadInput] {
+        &self.payloads
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleExportManifest {
     pub manifest_profile: String,
     pub manifest_version: i64,
@@ -226,6 +271,26 @@ pub struct BundlePayloadValidationResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportPreflightResult {
+    pub valid: bool,
+    pub format_compatible: bool,
+    pub source_store_id: Option<StoreId>,
+    pub target_workspace_id: Option<WorkspaceId>,
+    pub target_commit_id: Option<CommitId>,
+    pub target_state_digest: Option<Digest>,
+    pub source_store_relation: String,
+    pub incoming_commit_present: bool,
+    pub import_required: bool,
+    pub can_apply: bool,
+    pub action: String,
+    pub manifest_digest: Digest,
+    pub payload_index_digest: Digest,
+    pub payload_files: usize,
+    pub payload_references: usize,
+    pub problem: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleCheckpointCandidate {
     pub checkpoint_id: CheckpointId,
     pub content_digest: Digest,
@@ -289,6 +354,45 @@ struct BundlePayloadCandidate {
     role: String,
     owner: CanonicalValue,
     bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundleManifestSummary {
+    source_store_id: StoreId,
+    store_format_version: i64,
+    schema_version: i64,
+    object_store_format_version: i64,
+    id_scheme: String,
+    digest_algorithm: String,
+    canonical_json_profile: String,
+    workspace_id: WorkspaceId,
+    commit_id: CommitId,
+    state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundlePayloadIndexSummary {
+    manifest_digest: Digest,
+    manifest_size_bytes: i64,
+    workspace_id: WorkspaceId,
+    commit_id: CommitId,
+    state_digest: Digest,
+    payloads: Vec<BundlePayloadFileRef>,
+    reference_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BundlePayloadFileRef {
+    relative_path: String,
+    content_digest: Digest,
+    size_bytes: i64,
+    media_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CheckedBundleDirectory {
+    manifest: BundleManifestSummary,
+    payload_index: BundlePayloadIndexSummary,
 }
 
 pub(crate) fn export_bundle_manifest(
@@ -465,6 +569,105 @@ pub(crate) fn validate_bundle_payloads(
         actual_payload_files: options.payloads().len(),
         expected_payload_references: expected.payload_references.len(),
         problem,
+    })
+}
+
+pub(crate) fn preflight_bundle_import(
+    connection: &StoreConnection,
+    store_info: &StoreInfo,
+    options: BundleImportPreflightOptions,
+) -> Result<BundleImportPreflightResult> {
+    connection.verify_foreign_keys()?;
+    let manifest_digest = content_object_digest(options.manifest_bytes());
+    let payload_index_digest = content_object_digest(options.payload_index_bytes());
+    let payload_files = options.payloads().len();
+
+    let checked = match validate_bundle_directory_artifact(&options) {
+        Ok(checked) => checked,
+        Err(problem) => {
+            return Ok(BundleImportPreflightResult {
+                valid: false,
+                format_compatible: false,
+                source_store_id: None,
+                target_workspace_id: None,
+                target_commit_id: None,
+                target_state_digest: None,
+                source_store_relation: "unknown".to_owned(),
+                incoming_commit_present: false,
+                import_required: false,
+                can_apply: false,
+                action: "invalid_bundle_directory".to_owned(),
+                manifest_digest,
+                payload_index_digest,
+                payload_files,
+                payload_references: 0,
+                problem: Some(problem),
+            });
+        }
+    };
+
+    let format_compatible = bundle_format_compatible(store_info, &checked.manifest);
+    let existing_commit_digest =
+        load_commit_state_digest_optional(connection, checked.manifest.commit_id)?;
+    if let Some(existing_digest) = existing_commit_digest
+        && existing_digest != checked.manifest.state_digest
+    {
+        return Ok(BundleImportPreflightResult {
+            valid: false,
+            format_compatible,
+            source_store_id: Some(checked.manifest.source_store_id),
+            target_workspace_id: Some(checked.manifest.workspace_id),
+            target_commit_id: Some(checked.manifest.commit_id),
+            target_state_digest: Some(checked.manifest.state_digest),
+            source_store_relation: source_store_relation(
+                store_info.store_id,
+                checked.manifest.source_store_id,
+            ),
+            incoming_commit_present: true,
+            import_required: false,
+            can_apply: false,
+            action: "local_commit_digest_conflict".to_owned(),
+            manifest_digest,
+            payload_index_digest,
+            payload_files,
+            payload_references: checked.payload_index.reference_count,
+            problem: Some(format!(
+                "local commit {} exists with a different state digest",
+                checked.manifest.commit_id
+            )),
+        });
+    }
+
+    let source_store_relation =
+        source_store_relation(store_info.store_id, checked.manifest.source_store_id);
+    let incoming_commit_present = existing_commit_digest.is_some();
+    let (import_required, can_apply, action) = if !format_compatible {
+        (true, false, "incompatible_store_format")
+    } else if source_store_relation == "same_store" && incoming_commit_present {
+        (false, false, "already_present")
+    } else if source_store_relation == "same_store" {
+        (true, false, "same_store_import_not_implemented")
+    } else {
+        (true, false, "external_store_import_not_implemented")
+    };
+
+    Ok(BundleImportPreflightResult {
+        valid: true,
+        format_compatible,
+        source_store_id: Some(checked.manifest.source_store_id),
+        target_workspace_id: Some(checked.manifest.workspace_id),
+        target_commit_id: Some(checked.manifest.commit_id),
+        target_state_digest: Some(checked.manifest.state_digest),
+        source_store_relation,
+        incoming_commit_present,
+        import_required,
+        can_apply,
+        action: action.to_owned(),
+        manifest_digest,
+        payload_index_digest,
+        payload_files,
+        payload_references: checked.payload_index.reference_count,
+        problem: None,
     })
 }
 
@@ -1159,6 +1362,106 @@ fn bundle_payload_validation_problem(
     Ok(None)
 }
 
+fn validate_bundle_directory_artifact(
+    options: &BundleImportPreflightOptions,
+) -> std::result::Result<CheckedBundleDirectory, String> {
+    let manifest_value =
+        parse_fixed_point_canonical_json("bundle manifest", options.manifest_bytes())?;
+    let manifest = parse_bundle_manifest_summary(&manifest_value)?;
+    let payload_index_value =
+        parse_fixed_point_canonical_json("bundle payload index", options.payload_index_bytes())?;
+    let payload_index = parse_bundle_payload_index_summary(&payload_index_value)?;
+
+    let manifest_digest = content_object_digest(options.manifest_bytes());
+    if payload_index.manifest_digest != manifest_digest {
+        return Err(
+            "bundle payload index manifest digest does not match manifest bytes".to_owned(),
+        );
+    }
+    if usize_to_i64("bundle manifest size", options.manifest_bytes().len())
+        .map_err(|error| error.to_string())?
+        != payload_index.manifest_size_bytes
+    {
+        return Err("bundle payload index manifest size does not match manifest bytes".to_owned());
+    }
+    if payload_index.workspace_id != manifest.workspace_id
+        || payload_index.commit_id != manifest.commit_id
+        || payload_index.state_digest != manifest.state_digest
+    {
+        return Err("bundle payload index target does not match manifest target".to_owned());
+    }
+
+    let mut expected_by_path = BTreeMap::new();
+    for payload in &payload_index.payloads {
+        let path_digest = payload_digest_from_relative_path(&payload.relative_path)
+            .map_err(|error| error.to_string())?;
+        if path_digest != payload.content_digest {
+            return Err(format!(
+                "bundle payload path {} does not match declared content digest",
+                payload.relative_path
+            ));
+        }
+        if payload.media_type != BUNDLE_PAYLOAD_MEDIA_TYPE {
+            return Err(format!(
+                "bundle payload path {} has unsupported media type {}",
+                payload.relative_path, payload.media_type
+            ));
+        }
+        if expected_by_path
+            .insert(payload.relative_path.clone(), payload)
+            .is_some()
+        {
+            return Err(format!(
+                "bundle payload index path {} appears more than once",
+                payload.relative_path
+            ));
+        }
+    }
+
+    let mut seen_paths = HashSet::new();
+    for payload in options.payloads() {
+        validate_payload_relative_path(&payload.relative_path)
+            .map_err(|error| error.to_string())?;
+        if !seen_paths.insert(payload.relative_path.clone()) {
+            return Err(format!(
+                "bundle payload path {} appears more than once",
+                payload.relative_path
+            ));
+        }
+        let Some(expected_payload) = expected_by_path.remove(&payload.relative_path) else {
+            return Err(format!(
+                "bundle payload path {} is not listed by payload index",
+                payload.relative_path
+            ));
+        };
+        let actual_digest = content_object_digest(&payload.bytes);
+        if actual_digest != expected_payload.content_digest {
+            return Err(format!(
+                "bundle payload {} digest does not match payload index",
+                payload.relative_path
+            ));
+        }
+        if usize_to_i64("bundle payload size", payload.bytes.len())
+            .map_err(|error| error.to_string())?
+            != expected_payload.size_bytes
+        {
+            return Err(format!(
+                "bundle payload {} size does not match payload index",
+                payload.relative_path
+            ));
+        }
+        parse_fixed_point_canonical_json("bundle payload", &payload.bytes)?;
+    }
+    if let Some(missing_path) = expected_by_path.keys().next() {
+        return Err(format!("bundle payload path {missing_path} is missing"));
+    }
+
+    Ok(CheckedBundleDirectory {
+        manifest,
+        payload_index,
+    })
+}
+
 fn bundle_manifest_validation_problem(
     expected: &BundleExportManifest,
     manifest_bytes: &[u8],
@@ -1542,6 +1845,260 @@ fn payload_reference_value(reference: &BundlePayloadReference) -> Result<Canonic
     ])
 }
 
+fn parse_fixed_point_canonical_json(
+    label: &str,
+    bytes: &[u8],
+) -> std::result::Result<CanonicalValue, String> {
+    let value =
+        parse_canonical_json(bytes).map_err(|error| format!("{label} JSON is invalid: {error}"))?;
+    let reencoded =
+        canonical_bytes(&value).map_err(|error| format!("{label} encoding failed: {error}"))?;
+    if reencoded != bytes {
+        return Err(format!("{label} bytes are not fixed-point canonical JSON"));
+    }
+    Ok(value)
+}
+
+fn parse_bundle_manifest_summary(
+    value: &CanonicalValue,
+) -> std::result::Result<BundleManifestSummary, String> {
+    expect_string_field(
+        value,
+        "bundle manifest",
+        "bundle_manifest_profile",
+        BUNDLE_EXPORT_MANIFEST_PROFILE,
+    )?;
+    expect_integer_field(
+        value,
+        "bundle manifest",
+        "bundle_manifest_version",
+        BUNDLE_EXPORT_MANIFEST_VERSION,
+    )?;
+    let store = object_field_ref(value, "bundle manifest", "store")?;
+    let target = object_field_ref(value, "bundle manifest", "target")?;
+    Ok(BundleManifestSummary {
+        source_store_id: parse_store_id_field(store, "bundle manifest store", "store_id")?,
+        store_format_version: integer_field_value(
+            store,
+            "bundle manifest store",
+            "store_format_version",
+        )?,
+        schema_version: integer_field_value(store, "bundle manifest store", "schema_version")?,
+        object_store_format_version: integer_field_value(
+            store,
+            "bundle manifest store",
+            "object_store_format_version",
+        )?,
+        id_scheme: string_field_value(store, "bundle manifest store", "id_scheme")?.to_owned(),
+        digest_algorithm: string_field_value(store, "bundle manifest store", "digest_algorithm")?
+            .to_owned(),
+        canonical_json_profile: string_field_value(
+            store,
+            "bundle manifest store",
+            "canonical_json_profile",
+        )?
+        .to_owned(),
+        workspace_id: parse_workspace_id_field(target, "bundle manifest target", "workspace_id")?,
+        commit_id: parse_commit_id_field(target, "bundle manifest target", "commit_id")?,
+        state_digest: parse_digest_field(target, "bundle manifest target", "state_digest")?,
+    })
+}
+
+fn parse_bundle_payload_index_summary(
+    value: &CanonicalValue,
+) -> std::result::Result<BundlePayloadIndexSummary, String> {
+    expect_string_field(
+        value,
+        "bundle payload index",
+        "bundle_payload_index_profile",
+        BUNDLE_PAYLOAD_INDEX_PROFILE,
+    )?;
+    expect_integer_field(
+        value,
+        "bundle payload index",
+        "bundle_payload_index_version",
+        BUNDLE_PAYLOAD_INDEX_VERSION,
+    )?;
+    let manifest = object_field_ref(value, "bundle payload index", "manifest")?;
+    let target = object_field_ref(value, "bundle payload index", "target")?;
+    let payloads = array_field_ref(value, "bundle payload index", "payloads")?
+        .iter()
+        .map(parse_bundle_payload_file_ref)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let reference_count = usize::try_from(integer_field_value(
+        value,
+        "bundle payload index",
+        "reference_count",
+    )?)
+    .map_err(|_| "bundle payload index reference_count cannot be negative".to_owned())?;
+    let payload_count = usize::try_from(integer_field_value(
+        value,
+        "bundle payload index",
+        "payload_count",
+    )?)
+    .map_err(|_| "bundle payload index payload_count cannot be negative".to_owned())?;
+    if payload_count != payloads.len() {
+        return Err("bundle payload index payload_count does not match payload array".to_owned());
+    }
+    let reference_array_count = array_field_ref(value, "bundle payload index", "references")?.len();
+    if reference_count != reference_array_count {
+        return Err(
+            "bundle payload index reference_count does not match reference array".to_owned(),
+        );
+    }
+    Ok(BundlePayloadIndexSummary {
+        manifest_digest: parse_digest_field(manifest, "bundle payload index manifest", "digest")?,
+        manifest_size_bytes: integer_field_value(
+            manifest,
+            "bundle payload index manifest",
+            "size_bytes",
+        )?,
+        workspace_id: parse_workspace_id_field(
+            target,
+            "bundle payload index target",
+            "workspace_id",
+        )?,
+        commit_id: parse_commit_id_field(target, "bundle payload index target", "commit_id")?,
+        state_digest: parse_digest_field(target, "bundle payload index target", "state_digest")?,
+        payloads,
+        reference_count,
+    })
+}
+
+fn parse_bundle_payload_file_ref(
+    value: &CanonicalValue,
+) -> std::result::Result<BundlePayloadFileRef, String> {
+    let relative_path = string_field_value(value, "bundle payload file", "path")?.to_owned();
+    validate_payload_relative_path(&relative_path).map_err(|error| error.to_string())?;
+    let size_bytes = integer_field_value(value, "bundle payload file", "size_bytes")?;
+    if size_bytes < 0 {
+        return Err(format!(
+            "bundle payload file {relative_path} size_bytes cannot be negative"
+        ));
+    }
+    Ok(BundlePayloadFileRef {
+        relative_path,
+        content_digest: parse_digest_field(value, "bundle payload file", "content_digest")?,
+        size_bytes,
+        media_type: string_field_value(value, "bundle payload file", "media_type")?.to_owned(),
+    })
+}
+
+fn object_field_ref<'a>(
+    value: &'a CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<&'a CanonicalValue, String> {
+    let fields = match value {
+        CanonicalValue::Object(fields) => fields,
+        _ => return Err(format!("{label} must be an object")),
+    };
+    fields
+        .iter()
+        .find_map(|(candidate, value)| (candidate == field).then_some(value))
+        .ok_or_else(|| format!("{label} missing field {field}"))
+}
+
+fn array_field_ref<'a>(
+    value: &'a CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<&'a [CanonicalValue], String> {
+    match object_field_ref(value, label, field)? {
+        CanonicalValue::Array(values) => Ok(values),
+        _ => Err(format!("{label} field {field} must be an array")),
+    }
+}
+
+fn string_field_value<'a>(
+    value: &'a CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<&'a str, String> {
+    match object_field_ref(value, label, field)? {
+        CanonicalValue::String(value) => Ok(value),
+        _ => Err(format!("{label} field {field} must be a string")),
+    }
+}
+
+fn integer_field_value(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<i64, String> {
+    match object_field_ref(value, label, field)? {
+        CanonicalValue::Integer(value) => Ok(value.get()),
+        _ => Err(format!("{label} field {field} must be an integer")),
+    }
+}
+
+fn expect_string_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+    expected: &str,
+) -> std::result::Result<(), String> {
+    let actual = string_field_value(value, label, field)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} field {field} expected {expected}, found {actual}"
+        ))
+    }
+}
+
+fn expect_integer_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+    expected: i64,
+) -> std::result::Result<(), String> {
+    let actual = integer_field_value(value, label, field)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} field {field} expected {expected}, found {actual}"
+        ))
+    }
+}
+
+fn parse_store_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<StoreId, String> {
+    StoreId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_workspace_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<WorkspaceId, String> {
+    WorkspaceId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_commit_id_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<CommitId, String> {
+    CommitId::parse_canonical(string_field_value(value, label, field)?)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_digest_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<Digest, String> {
+    Digest::from_hex(string_field_value(value, label, field)?).map_err(|error| error.to_string())
+}
+
 fn string_field(name: &str, value: impl Into<String>) -> (String, CanonicalValue) {
     (name.to_owned(), CanonicalValue::String(value.into()))
 }
@@ -1624,6 +2181,10 @@ fn validate_subject_family(label: &str, value: &str) -> Result<()> {
 }
 
 fn validate_payload_relative_path(relative_path: &str) -> Result<()> {
+    payload_digest_from_relative_path(relative_path).map(|_| ())
+}
+
+fn payload_digest_from_relative_path(relative_path: &str) -> Result<Digest> {
     let Some(digest_hex) = relative_path
         .strip_prefix("payloads/")
         .and_then(|value| value.strip_suffix(".json"))
@@ -1634,8 +2195,43 @@ fn validate_payload_relative_path(relative_path: &str) -> Result<()> {
     };
     Digest::from_hex(digest_hex).map_err(|error| {
         WorkVcsError::QueryInvalid(format!("bundle payload path digest is invalid: {error}"))
-    })?;
-    Ok(())
+    })
+}
+
+fn bundle_format_compatible(store_info: &StoreInfo, manifest: &BundleManifestSummary) -> bool {
+    manifest.store_format_version == store_info.manifest.store_format_version
+        && manifest.schema_version == store_info.manifest.schema_version
+        && manifest.object_store_format_version == store_info.manifest.object_store_format_version
+        && manifest.id_scheme == store_info.manifest.id_scheme
+        && manifest.digest_algorithm == store_info.manifest.digest_algorithm
+        && manifest.canonical_json_profile == store_info.manifest.canonical_json_profile
+}
+
+fn source_store_relation(local_store_id: StoreId, source_store_id: StoreId) -> String {
+    if local_store_id == source_store_id {
+        "same_store".to_owned()
+    } else {
+        "external_store".to_owned()
+    }
+}
+
+fn load_commit_state_digest_optional(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Option<Digest>> {
+    connection
+        .inner()
+        .query_row(
+            "SELECT state_digest
+             FROM workstate_commit
+             WHERE commit_id = ?1",
+            params![&commit_id.raw_bytes()[..]],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .map(|bytes| decode_digest("workstate_commit.state_digest", bytes))
+        .transpose()
 }
 
 fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {

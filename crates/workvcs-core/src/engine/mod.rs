@@ -16,15 +16,16 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
-    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
-    BundlePayloadExportOptions, BundlePayloadValidationOptions, BundlePayloadValidationResult,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions,
-    EntityTransitionCommit, EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
-    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
+    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
+    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
+    EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -197,6 +198,13 @@ impl Engine {
         options: BundlePayloadValidationOptions,
     ) -> Result<BundlePayloadValidationResult> {
         self.store.validate_bundle_payloads(options)
+    }
+
+    pub fn preflight_bundle_import(
+        &self,
+        options: BundleImportPreflightOptions,
+    ) -> Result<BundleImportPreflightResult> {
+        self.store.preflight_bundle_import(options)
     }
 
     pub fn why(&self, options: WhyQueryOptions) -> Result<WhyQueryResult> {

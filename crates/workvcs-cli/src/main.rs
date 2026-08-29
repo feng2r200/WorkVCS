@@ -2831,7 +2831,7 @@ fn render_context_overview(context: &ContextOverview) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\n",
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nfocus_path_entries={}\ncontext_workspaces={}\nrunnable_candidates={}\nrunnable_ready={}\nrecords={}\n",
         session.session_id,
         session_lifecycle_state(session.lifecycle_state),
         context.branch.workspace_id,
@@ -2849,7 +2849,8 @@ fn render_context_overview(context: &ContextOverview) -> String {
             .unwrap_or(0),
         session.context_workspaces.len(),
         context.runnable_tasks.candidates.len(),
-        runnable_ready
+        runnable_ready,
+        context.records.records.len()
     );
     for (index, workspace_id) in session.context_workspaces.iter().enumerate() {
         let _ = writeln!(
@@ -2859,6 +2860,39 @@ fn render_context_overview(context: &ContextOverview) -> String {
     }
     for (index, candidate) in context.runnable_tasks.candidates.iter().enumerate() {
         render_runnable_candidate(&mut output, index, candidate);
+    }
+    for (index, record) in context.records.records.iter().enumerate() {
+        let statement_json =
+            serde_json::to_string(&record.state.statement).expect("record statement JSON");
+        let _ = writeln!(
+            output,
+            "context_record.{index}.record_entity_id={}",
+            record.record_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record.{index}.record_entity_version_id={}",
+            record.record_entity_version_id
+        );
+        let _ = writeln!(
+            output,
+            "context_record.{index}.record_state_digest={}",
+            record.state_digest
+        );
+        let _ = writeln!(
+            output,
+            "context_record.{index}.record_kind={}",
+            record.state.kind
+        );
+        let _ = writeln!(
+            output,
+            "context_record.{index}.record_status={}",
+            record.state.status
+        );
+        let _ = writeln!(
+            output,
+            "context_record.{index}.record_statement_json={statement_json}"
+        );
     }
     output
 }
@@ -2880,7 +2914,7 @@ fn render_next_work(result: &NextWorkResult) -> String {
         .filter(|candidate| candidate.runnable)
         .count();
     let mut output = format!(
-        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\n",
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\ncontext_focus_entity_id={}\ncontext_workspaces={}\ncontext_runnable_candidates={}\ncontext_runnable_ready={}\ncontext_records={}\n",
         result.claim_next.session_id,
         result.claim_next.workspace_id,
         result.claim_next.branch_id,
@@ -2890,7 +2924,8 @@ fn render_next_work(result: &NextWorkResult) -> String {
         focus_entity_id,
         result.context.session.context_workspaces.len(),
         result.context.runnable_tasks.candidates.len(),
-        runnable_ready
+        runnable_ready,
+        result.context.records.records.len()
     );
     if let Some(claim) = &result.claim_next.selected {
         let _ = writeln!(output, "claim_id={}", claim.claim_id);
@@ -4059,6 +4094,7 @@ mod tests {
         assert!(context.contains(&format!("branch_id={branch}")));
         assert!(context.contains("context_workspaces=1"));
         assert!(context.contains("runnable_candidates=1"));
+        assert!(context.contains("records=0"));
         assert!(context.contains(&format!("candidate.0.task_entity_id={task_id}")));
 
         let runnable = run(Cli::try_parse_from([
@@ -4131,6 +4167,80 @@ mod tests {
         .expect("parse session end"))
         .expect("end session");
         assert!(ended.contains("lifecycle_state=ended"));
+    }
+
+    #[test]
+    fn cli_context_includes_current_record_summary() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "The context resolver should expose current findings",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context =
+            run(
+                Cli::try_parse_from(["workvcs", "context", store, "--session", &session_id])
+                    .expect("parse context"),
+            )
+            .expect("context overview");
+        assert!(context.contains("records=1"));
+        assert_eq!(
+            value(&context, "context_record.0.record_entity_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert!(context.contains("context_record.0.record_kind=finding"));
+        assert!(context.contains("context_record.0.record_status=active"));
+        assert!(
+            context.contains(
+                "context_record.0.record_statement_json=\"The context resolver should expose current findings\""
+            )
+        );
     }
 
     #[test]

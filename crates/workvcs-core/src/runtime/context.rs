@@ -1,7 +1,7 @@
 use super::runnable::{self, RunnableTasksOptions, RunnableTasksProjection};
 use super::session::{self, SessionLifecycleState, SessionSnapshot};
 use crate::error::{Result, WorkVcsError};
-use crate::history::{self, BranchHead};
+use crate::history::{self, BranchHead, RecordListOptions, RecordListResult};
 use crate::identity::{SessionId, WorkspaceId};
 use crate::store::StoreConnection;
 
@@ -25,6 +25,7 @@ pub struct ContextOverview {
     pub session: SessionSnapshot,
     pub branch: BranchHead,
     pub runnable_tasks: RunnableTasksProjection,
+    pub records: RecordListResult,
 }
 
 pub(crate) fn context_overview(
@@ -63,11 +64,19 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let records = history::records_at(connection, &RecordListOptions::new(branch.head_commit_id))?;
+    if records.workspace_id != active_workspace_id || records.commit_id != branch.head_commit_id {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} record context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
 
     Ok(ContextOverview {
         session,
         branch,
         runnable_tasks,
+        records,
     })
 }
 

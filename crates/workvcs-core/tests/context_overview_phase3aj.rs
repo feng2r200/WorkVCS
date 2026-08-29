@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    ContextOverviewOptions, Engine, ErrorCategory, ErrorCode, SessionEndOptions,
-    SessionFocusOptions, SessionStartOptions, StoreInitOptions, TaskCreateOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    ContextOverviewOptions, Engine, ErrorCategory, ErrorCode, RecordCreateOptions,
+    SessionEndOptions, SessionFocusOptions, SessionStartOptions, StoreInitOptions,
+    TaskCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -83,6 +83,7 @@ fn context_overview_returns_active_anchor_focus_and_runnable_summary() {
         task.task_entity_id
     );
     assert!(context.runnable_tasks.candidates[0].runnable);
+    assert!(context.records.records.is_empty());
 }
 
 #[test]
@@ -118,6 +119,50 @@ fn context_overview_is_read_only() {
         .expect("branch after context");
     assert_eq!(after, before);
     assert_eq!(context.branch.head_commit_id, task.commit_id);
+    assert!(context.records.records.is_empty());
+}
+
+#[test]
+fn context_overview_includes_current_record_summaries() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let finding = engine
+        .create_record(
+            RecordCreateOptions::finding(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "The current context needs explicit findings",
+            )
+            .expect("finding options"),
+        )
+        .expect("create finding");
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let context = engine
+        .context_overview(ContextOverviewOptions::new(session.session_id))
+        .expect("context overview");
+
+    assert_eq!(context.records.workspace_id, workspace.workspace_id);
+    assert_eq!(context.records.commit_id, finding.commit_id);
+    assert_eq!(context.records.records.len(), 1);
+    assert_eq!(
+        context.records.records[0].record_entity_id,
+        finding.record_entity_id
+    );
+    assert_eq!(context.records.records[0].state.kind, finding.state.kind);
+    assert_eq!(
+        context.records.records[0].state.status,
+        finding.state.status
+    );
+    assert_eq!(
+        context.records.records[0].state.statement,
+        finding.state.statement
+    );
 }
 
 #[test]

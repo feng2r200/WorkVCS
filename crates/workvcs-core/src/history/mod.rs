@@ -72,16 +72,17 @@ pub use knowledge::{
 pub use knowledge_exposure::{
     KnowledgeExposureAdoptionCandidate, KnowledgeExposureAdoptionCandidateOptions,
     KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions,
-    KnowledgeExposureListResult, KnowledgeExposureLocalSourceSnapshot,
-    KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
-    KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus,
-    KnowledgeExposureSourceStatusSnapshot, KnowledgeExposureWithdrawOptions,
-    KnowledgeExposureWithdrawResult, KnowledgeSpaceAvailableExposuresOptions,
-    KnowledgeSpaceAvailableExposuresResult, KnowledgeSpaceHistoricalExposuresOptions,
-    KnowledgeSpaceHistoricalExposuresResult, KnowledgeSpaceRefreshSourceStatusesOptions,
-    KnowledgeSpaceRefreshSourceStatusesResult, KnowledgeSpaceSourceStaleExposuresOptions,
-    KnowledgeSpaceSourceStaleExposuresResult,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
+    KnowledgeExposureListOptions, KnowledgeExposureListResult,
+    KnowledgeExposureLocalSourceSnapshot, KnowledgeExposureRefreshSourceStatusOptions,
+    KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
+    KnowledgeExposureSourceStatus, KnowledgeExposureSourceStatusSnapshot,
+    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
+    KnowledgeSpaceAvailableExposuresOptions, KnowledgeSpaceAvailableExposuresResult,
+    KnowledgeSpaceHistoricalExposuresOptions, KnowledgeSpaceHistoricalExposuresResult,
+    KnowledgeSpaceRefreshSourceStatusesOptions, KnowledgeSpaceRefreshSourceStatusesResult,
+    KnowledgeSpaceSourceStaleExposuresOptions, KnowledgeSpaceSourceStaleExposuresResult,
 };
 pub use knowledge_space::{
     KnowledgeSpaceCreateOptions, KnowledgeSpaceCreateResult, KnowledgeSpaceListOptions,
@@ -181,8 +182,9 @@ pub(crate) use knowledge::{
     knowledges_at, transition_knowledge,
 };
 pub(crate) use knowledge_exposure::{
-    create_local_knowledge_exposure, knowledge_exposure, knowledge_exposure_adoption_candidate,
-    knowledge_exposures, knowledge_space_available_exposures, knowledge_space_historical_exposures,
+    create_knowledge_exposure_derived_from_relation, create_local_knowledge_exposure,
+    knowledge_exposure, knowledge_exposure_adoption_candidate, knowledge_exposures,
+    knowledge_space_available_exposures, knowledge_space_historical_exposures,
     knowledge_space_source_stale_exposures, refresh_knowledge_exposure_source_status,
     refresh_knowledge_space_source_statuses, withdraw_knowledge_exposure,
 };

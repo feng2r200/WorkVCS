@@ -25,10 +25,11 @@ use workvcs_core::{
     ExternalRefId, ExternalVersionId, HistoryEntry, HistoryQueryOptions, ImportId,
     KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptionCandidateOptions,
     KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureLifecycleStatus, KnowledgeExposureListOptions,
-    KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
-    KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
-    KnowledgeExposureSourceStatus, KnowledgeExposureWithdrawOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
+    KnowledgeExposureListOptions, KnowledgeExposureListResult,
+    KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
+    KnowledgeExposureSnapshot, KnowledgeExposureSourceStatus, KnowledgeExposureWithdrawOptions,
     KnowledgeExposureWithdrawResult, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
@@ -488,6 +489,26 @@ enum StoreCommand {
 
         #[arg(long)]
         exposure: String,
+    },
+    #[command(name = "knowledge-exposure-derived-from-link")]
+    KnowledgeExposureDerivedFromLink {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        knowledge: String,
+
+        #[arg(long)]
+        exposure: String,
+
+        #[arg(long)]
+        rationale: String,
     },
     #[command(name = "knowledge-exposure-withdraw")]
     KnowledgeExposureWithdraw {
@@ -2294,6 +2315,28 @@ fn run(cli: Cli) -> Result<String> {
                     )?),
                 )?;
                 render_knowledge_exposure_adoption_candidate(&result)
+            }
+            StoreCommand::KnowledgeExposureDerivedFromLink {
+                store,
+                branch,
+                head,
+                knowledge,
+                exposure,
+                rationale,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let result = engine.create_knowledge_exposure_derived_from_relation(
+                    KnowledgeExposureDerivedFromRelationCreateOptions::new(
+                        BranchId::parse_canonical(&branch)?,
+                        CommitId::parse_canonical(&head)?,
+                        EntityId::parse_canonical(&knowledge)?,
+                        ExposureId::parse_canonical(&exposure)?,
+                        rationale,
+                    )?,
+                )?;
+                Ok(render_knowledge_exposure_derived_from_relation_create(
+                    &result,
+                ))
             }
             StoreCommand::KnowledgeExposureWithdraw {
                 store,
@@ -6798,6 +6841,27 @@ fn render_knowledge_exposure_adoption_candidate(
     ))
 }
 
+fn render_knowledge_exposure_derived_from_relation_create(
+    relation: &KnowledgeExposureDerivedFromRelationCreateCommit,
+) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nknowledge_entity_id={}\nexposure_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.knowledge_entity_id,
+        relation.exposure_id,
+        relation.relation_state_digest,
+        relation.work_state_digest
+    )
+}
+
 fn render_knowledge_exposure_snapshot(snapshot: &KnowledgeExposureSnapshot) -> Result<String> {
     let mut output = String::new();
     write_knowledge_exposure_snapshot_fields(&mut output, None, snapshot)?;
@@ -9036,6 +9100,127 @@ mod tests {
         assert!(
             adoption_provenance.contains(&format!("\"source_store_id\":\"{source_store_id}\""))
         );
+    }
+
+    #[test]
+    fn cli_links_knowledge_derived_from_exposure() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "knowledge-exposure-derived-from-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+        let source_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--statement",
+            "Reusable source knowledge",
+        ])
+        .expect("parse source knowledge create"))
+        .expect("create source knowledge");
+        let adopted_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&source_knowledge, "commit_id"),
+            "--statement",
+            "Workspace-local adopted knowledge",
+        ])
+        .expect("parse adopted knowledge create"))
+        .expect("create adopted knowledge");
+        let knowledge_space = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Research",
+        ])
+        .expect("parse knowledge-space-create"))
+        .expect("create knowledge space");
+        let exposure = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-create-local",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&source_knowledge, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&source_knowledge, "knowledge_entity_version_id"),
+        ])
+        .expect("parse exposure create"))
+        .expect("create exposure");
+
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-derived-from-link",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&adopted_knowledge, "commit_id"),
+            "--knowledge",
+            &value(&adopted_knowledge, "knowledge_entity_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--rationale",
+            "adopted from exposed source",
+        ])
+        .expect("parse derived_from link"))
+        .expect("create derived_from link");
+
+        assert_eq!(value(&relation, "workspace_id"), workspace_id);
+        assert_eq!(value(&relation, "branch_id"), branch);
+        assert_eq!(
+            value(&relation, "previous_head_commit_id"),
+            value(&adopted_knowledge, "commit_id")
+        );
+        assert_eq!(value(&relation, "relation_type"), "derived_from");
+        assert_eq!(
+            value(&relation, "knowledge_entity_id"),
+            value(&adopted_knowledge, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(&relation, "exposure_id"),
+            value(&exposure, "exposure_id")
+        );
+        assert!(!value(&relation, "relation_id").is_empty());
+        assert!(!value(&relation, "relation_version_id").is_empty());
+        assert!(!value(&relation, "work_state_digest").is_empty());
     }
 
     #[test]

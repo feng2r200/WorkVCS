@@ -1,20 +1,35 @@
+use super::entity::canonical_json_string;
+use super::record::{
+    KNOWLEDGE_RELATION_CREATE_OPERATION_SCHEMA_VERSION, KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE,
+};
 use super::{
-    KnowledgeState, knowledge_space, knowledge_version_state, knowledge_version_state_digest,
-    state_at,
+    KnowledgeState, KnowledgeStatus, knowledge_at, knowledge_space, knowledge_version_state,
+    knowledge_version_state_digest, state_at,
 };
 use crate::canonical::{
-    CanonicalValue, canonical_bytes, content_object_digest, parse_canonical_json,
+    CanonicalValue, WorkState, canonical_bytes, content_object_digest, parse_canonical_json,
+    relation_version_digest, work_state_mapping_digest,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    CommitId, Digest, EntityId, EntityVersionId, ExposureId, ExposureTransitionId,
-    KnowledgeSpaceId, StoreId, WorkspaceId,
+    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, ExposureId,
+    ExposureTransitionId, KnowledgeSpaceId, OperationId, RelationId, RelationVersionId, StoreId,
+    WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use std::collections::BTreeMap;
 use std::fmt;
 
+const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
+const DERIVED_FROM_RELATION_TYPE: &str = "derived_from";
+const EMPTY_FIELD_DELTA: &str = "{}";
 const KNOWLEDGE_EXPOSURE_OBJECT_KIND: &str = "knowledge_exposure";
+const KNOWLEDGE_EXPOSURE_DERIVED_FROM_EVENT_KIND: &str = "knowledge.relation.created";
+const NORMAL_COMMIT_KIND: &str = "normal";
+const PRIMARY_PARENT_ROLE: &str = "primary";
+const RELATION_OBJECT_KIND: &str = "relation";
+const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KnowledgeExposureLifecycleStatus {
@@ -205,6 +220,40 @@ impl KnowledgeExposureAdoptionCandidateOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureDerivedFromRelationCreateOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    knowledge_entity_id: EntityId,
+    exposure_id: ExposureId,
+    rationale: CanonicalValue,
+}
+
+impl KnowledgeExposureDerivedFromRelationCreateOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        knowledge_entity_id: EntityId,
+        exposure_id: ExposureId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_relation_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            knowledge_entity_id,
+            exposure_id,
+            rationale: relation_rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureCreateResult {
     pub exposure: KnowledgeExposureSnapshot,
 }
@@ -231,6 +280,23 @@ pub struct KnowledgeExposureAdoptionCandidate {
     pub source_knowledge_state_digest: Digest,
     pub source_knowledge_state: KnowledgeState,
     pub adoption_provenance: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureDerivedFromRelationCreateCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: String,
+    pub knowledge_entity_id: EntityId,
+    pub exposure_id: ExposureId,
+    pub relation_state_digest: Digest,
+    pub work_state_digest: Digest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -874,6 +940,133 @@ pub(crate) fn knowledge_exposure_adoption_candidate(
     })
 }
 
+pub(crate) fn create_knowledge_exposure_derived_from_relation(
+    connection: &mut StoreConnection,
+    options: &KnowledgeExposureDerivedFromRelationCreateOptions,
+) -> Result<KnowledgeExposureDerivedFromRelationCreateCommit> {
+    connection.verify_foreign_keys()?;
+    require_non_empty_object(
+        "knowledge exposure derived_from relation rationale",
+        &options.rationale,
+    )?;
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let knowledge = knowledge_at(
+        connection,
+        options.expected_head_commit_id,
+        options.knowledge_entity_id,
+    )?;
+    if knowledge.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::KnowledgeInvalid(format!(
+            "Knowledge {} belongs to workspace {}, not {}",
+            options.knowledge_entity_id, knowledge.workspace_id, parent.workspace_id
+        )));
+    }
+    if knowledge.state.status != KnowledgeStatus::Active {
+        return Err(WorkVcsError::KnowledgeInvalid(format!(
+            "Knowledge {} is {}, not active",
+            options.knowledge_entity_id,
+            knowledge.state.status.as_str()
+        )));
+    }
+    let exposure = knowledge_exposure(connection, options.exposure_id)?;
+    if exposure.lifecycle_status != KnowledgeExposureLifecycleStatus::Active {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} is {}, not active",
+            options.exposure_id,
+            exposure.lifecycle_status.as_str()
+        )));
+    }
+
+    let relation_id = RelationId::new_v7();
+    let relation_version_id = RelationVersionId::new_v7();
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+
+    let relation_state_value = CanonicalValue::object(Vec::new())?;
+    let relation_state_json = canonical_json_string(&relation_state_value)?;
+    let relation_state_digest = relation_version_digest(&relation_state_value)?;
+    let next_work_state =
+        work_state_after_relation_create(&parent.state, relation_id, relation_version_id)?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let relation_payload_value =
+        relation_transition_payload_value(relation_id, None, Some(relation_version_id))?;
+    let relation_payload_json = canonical_json_string(&relation_payload_value)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::KnowledgeInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    ensure_knowledge_exposure_derived_from_relation_absent(
+        &transaction,
+        branch.workspace_id,
+        options.knowledge_entity_id,
+        options.exposure_id,
+    )?;
+    write_knowledge_exposure_derived_from_relation_create(
+        &transaction,
+        &KnowledgeExposureDerivedFromRelationCreateRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            relation_id,
+            relation_version_id,
+            relation_state_json,
+            relation_state_digest,
+            source_knowledge_entity_id: options.knowledge_entity_id,
+            target_exposure_id: options.exposure_id,
+            changeset_id,
+            commit_id,
+            operation_id,
+            relation_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+        now_us,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(KnowledgeExposureDerivedFromRelationCreateCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        operation_id,
+        relation_id,
+        relation_version_id,
+        relation_type: DERIVED_FROM_RELATION_TYPE.to_owned(),
+        knowledge_entity_id: options.knowledge_entity_id,
+        exposure_id: options.exposure_id,
+        relation_state_digest,
+        work_state_digest,
+    })
+}
+
 pub(crate) fn knowledge_exposures(
     connection: &StoreConnection,
     options: KnowledgeExposureListOptions,
@@ -1474,6 +1667,376 @@ fn adoption_provenance_value(
             CanonicalValue::String(exposure.source.workspace_id.to_string()),
         ),
     ])
+}
+
+struct BranchRow {
+    workspace_id: WorkspaceId,
+    head_commit_id: CommitId,
+}
+
+struct KnowledgeExposureDerivedFromRelationCreateRows {
+    workspace_id: WorkspaceId,
+    expected_head_commit_id: CommitId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    relation_state_json: String,
+    relation_state_digest: Digest,
+    source_knowledge_entity_id: EntityId,
+    target_exposure_id: ExposureId,
+    changeset_id: ChangeSetId,
+    commit_id: CommitId,
+    operation_id: OperationId,
+    relation_payload_json: String,
+    rationale_json: String,
+    work_state_digest: Digest,
+    now_us: i64,
+}
+
+fn require_non_empty_object(label: &str, value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(entries) if !entries.is_empty() => Ok(()),
+        CanonicalValue::Object(_) => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must not be empty"
+        ))),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be a canonical object"
+        ))),
+    }
+}
+
+fn validate_relation_rationale(value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(WorkVcsError::KnowledgeInvalid(
+            "knowledge exposure derived_from rationale must not be empty".to_owned(),
+        ));
+    }
+    if value.contains('\0') {
+        return Err(WorkVcsError::KnowledgeInvalid(
+            "knowledge exposure derived_from rationale must not contain NUL".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn relation_rationale_value(reason: &str) -> Result<CanonicalValue> {
+    validate_relation_rationale(reason)?;
+    CanonicalValue::object(vec![(
+        "reason".to_owned(),
+        CanonicalValue::String(reason.to_owned()),
+    )])
+}
+
+fn relation_transition_payload_value(
+    relation_id: RelationId,
+    before_relation_version_id: Option<RelationVersionId>,
+    after_relation_version_id: Option<RelationVersionId>,
+) -> Result<CanonicalValue> {
+    let before_value = before_relation_version_id
+        .map(|version_id| CanonicalValue::String(version_id.to_string()))
+        .unwrap_or(CanonicalValue::Null);
+    let after_value = after_relation_version_id
+        .map(|version_id| CanonicalValue::String(version_id.to_string()))
+        .unwrap_or(CanonicalValue::Null);
+    CanonicalValue::object(vec![
+        ("after_relation_version_id".to_owned(), after_value),
+        ("before_relation_version_id".to_owned(), before_value),
+        (
+            "relation_id".to_owned(),
+            CanonicalValue::String(relation_id.to_string()),
+        ),
+    ])
+}
+
+fn work_state_after_relation_create(
+    parent_state: &WorkState,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<WorkState> {
+    let entities = parent_state.entities().to_vec();
+    let mut relations = parent_state
+        .relations()
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
+    if relations.insert(relation_id, relation_version_id).is_some() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "knowledge exposure derived_from relation {relation_id} was expected to be absent before creation"
+        )));
+    }
+    WorkState::new(entities, relations).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!("derived_from WorkState is invalid: {error}"))
+    })
+}
+
+fn load_active_branch(transaction: &Transaction<'_>, branch_id: BranchId) -> Result<BranchRow> {
+    let row = transaction
+        .query_row(
+            "SELECT workspace_id, head_commit_id
+             FROM branch
+             WHERE branch_id = ?1
+               AND lifecycle_state = ?2",
+            params![&branch_id.raw_bytes()[..], ACTIVE_BRANCH_LIFECYCLE_STATE],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((workspace_id, head_commit_id)) = row else {
+        return Err(WorkVcsError::BranchNotFound(format!(
+            "active branch {branch_id} does not exist"
+        )));
+    };
+    Ok(BranchRow {
+        workspace_id: decode_workspace_id("branch.workspace_id", workspace_id)?,
+        head_commit_id: decode_commit_id("branch.head_commit_id", head_commit_id)?,
+    })
+}
+
+fn ensure_knowledge_exposure_derived_from_relation_absent(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+    knowledge_entity_id: EntityId,
+    exposure_id: ExposureId,
+) -> Result<()> {
+    let existing = transaction
+        .query_row(
+            "SELECT count(*)
+             FROM relation
+             WHERE workspace_id = ?1
+               AND relation_type = ?2
+               AND source_object_id = ?3
+               AND target_object_id = ?4
+               AND relation_discriminator = ''",
+            params![
+                &workspace_id.raw_bytes()[..],
+                DERIVED_FROM_RELATION_TYPE,
+                &knowledge_entity_id.raw_bytes()[..],
+                &exposure_id.raw_bytes()[..],
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?;
+    if existing == 0 {
+        Ok(())
+    } else {
+        Err(WorkVcsError::QueryInvalid(format!(
+            "derived_from relation from Knowledge {knowledge_entity_id} to KnowledgeExposure {exposure_id} already exists in workspace {workspace_id}"
+        )))
+    }
+}
+
+fn write_knowledge_exposure_derived_from_relation_create(
+    transaction: &Transaction<'_>,
+    rows: &KnowledgeExposureDerivedFromRelationCreateRows,
+) -> Result<()> {
+    let workspace_id_bytes = rows.workspace_id.raw_bytes();
+    let relation_id_bytes = rows.relation_id.raw_bytes();
+    let relation_version_id_bytes = rows.relation_version_id.raw_bytes();
+    let relation_state_digest_bytes = rows.relation_state_digest.as_bytes();
+    let source_knowledge_entity_id_bytes = rows.source_knowledge_entity_id.raw_bytes();
+    let target_exposure_id_bytes = rows.target_exposure_id.raw_bytes();
+    let changeset_id_bytes = rows.changeset_id.raw_bytes();
+    let commit_id_bytes = rows.commit_id.raw_bytes();
+    let operation_id_bytes = rows.operation_id.raw_bytes();
+    let parent_commit_id_bytes = rows.expected_head_commit_id.raw_bytes();
+    let work_state_digest_bytes = rows.work_state_digest.as_bytes();
+
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![&relation_id_bytes[..], RELATION_OBJECT_KIND, rows.now_us],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation(
+                object_id,
+                workspace_id,
+                relation_type,
+                source_object_id,
+                target_object_id,
+                relation_discriminator
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, '')",
+            params![
+                &relation_id_bytes[..],
+                &workspace_id_bytes[..],
+                DERIVED_FROM_RELATION_TYPE,
+                &source_knowledge_entity_id_bytes[..],
+                &target_exposure_id_bytes[..],
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_version(
+                relation_version_id,
+                relation_id,
+                state_schema_version,
+                metadata_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &relation_version_id_bytes[..],
+                &relation_id_bytes[..],
+                RELATION_STATE_SCHEMA_VERSION,
+                rows.relation_state_json,
+                &relation_state_digest_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                &changeset_id_bytes[..],
+                &workspace_id_bytes[..],
+                KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE,
+                KNOWLEDGE_RELATION_CREATE_OPERATION_SCHEMA_VERSION,
+                rows.relation_payload_json,
+                rows.rationale_json,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 0, 'relation', ?3, ?4)",
+            params![
+                &operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                &relation_id_bytes[..],
+                rows.relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_membership_change(
+                operation_id,
+                relation_id,
+                before_relation_version_id,
+                after_relation_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4)",
+            params![
+                &operation_id_bytes[..],
+                &relation_id_bytes[..],
+                &relation_version_id_bytes[..],
+                EMPTY_FIELD_DELTA
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &commit_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                NORMAL_COMMIT_KIND,
+                &work_state_digest_bytes[..],
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, ?2, ?3)",
+            params![
+                &commit_id_bytes[..],
+                PRIMARY_PARENT_ROLE,
+                &parent_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+            params![
+                &EventId::new_v7().raw_bytes()[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                KNOWLEDGE_EXPOSURE_DERIVED_FROM_EVENT_KIND,
+                rows.now_us,
+                rows.relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn move_branch_head(
+    transaction: &Transaction<'_>,
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    commit_id: CommitId,
+    updated_at_us: i64,
+) -> Result<()> {
+    let moved = transaction
+        .execute(
+            "UPDATE branch
+             SET head_commit_id = ?1
+             WHERE branch_id = ?2
+               AND head_commit_id = ?3",
+            params![
+                &commit_id.raw_bytes()[..],
+                &branch_id.raw_bytes()[..],
+                &expected_head_commit_id.raw_bytes()[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    if moved == 1 {
+        super::mark_branch_projection_not_materialized(transaction, branch_id, updated_at_us)?;
+        Ok(())
+    } else {
+        Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {branch_id} head changed before commit {commit_id} could be installed"
+        )))
+    }
 }
 
 fn parse_canonical_object_json(label: &str, input: &str) -> Result<CanonicalValue> {

@@ -52,9 +52,11 @@ use crate::history::{
 use crate::history::{
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureListOptions, KnowledgeExposureListResult,
-    KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
-    KnowledgeExposureSnapshot, KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
+    KnowledgeExposureDerivedFromRelationCreateCommit,
+    KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureListOptions,
+    KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
+    KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
+    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
     KnowledgeSpaceAvailableExposuresOptions, KnowledgeSpaceAvailableExposuresResult,
     KnowledgeSpaceHistoricalExposuresOptions, KnowledgeSpaceHistoricalExposuresResult,
     KnowledgeSpaceRefreshSourceStatusesOptions, KnowledgeSpaceRefreshSourceStatusesResult,
@@ -434,6 +436,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::create_local_knowledge_exposure(&mut self.connection, options)
+    }
+
+    pub(crate) fn create_knowledge_exposure_derived_from_relation(
+        &mut self,
+        options: &KnowledgeExposureDerivedFromRelationCreateOptions,
+    ) -> Result<KnowledgeExposureDerivedFromRelationCreateCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_knowledge_exposure_derived_from_relation(&mut self.connection, options)
     }
 
     pub(crate) fn knowledge_exposure(

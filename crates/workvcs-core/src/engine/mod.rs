@@ -35,12 +35,14 @@ use crate::history::{
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeExposureAdoptionCandidateOptions,
     KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureListOptions, KnowledgeExposureListResult,
-    KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
-    KnowledgeExposureSnapshot, KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult,
-    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
-    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureListOptions,
+    KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
+    KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
+    KnowledgeExposureWithdrawOptions, KnowledgeExposureWithdrawResult, KnowledgeListOptions,
+    KnowledgeListResult, KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions,
+    KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
+    KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
     KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
     KnowledgeSpaceAvailableExposuresOptions, KnowledgeSpaceAvailableExposuresResult,
     KnowledgeSpaceHistoricalExposuresOptions, KnowledgeSpaceHistoricalExposuresResult,
@@ -347,6 +349,14 @@ impl Engine {
         options: KnowledgeExposureCreateLocalOptions,
     ) -> Result<KnowledgeExposureCreateResult> {
         self.store.create_local_knowledge_exposure(options)
+    }
+
+    pub fn create_knowledge_exposure_derived_from_relation(
+        &mut self,
+        options: KnowledgeExposureDerivedFromRelationCreateOptions,
+    ) -> Result<KnowledgeExposureDerivedFromRelationCreateCommit> {
+        self.store
+            .create_knowledge_exposure_derived_from_relation(&options)
     }
 
     pub fn knowledge_exposure(&self, exposure_id: ExposureId) -> Result<KnowledgeExposureSnapshot> {

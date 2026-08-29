@@ -365,22 +365,40 @@ enum ResourceCommand {
 
 #[derive(Debug, Subcommand)]
 enum RecordCommand {
+    #[command(group(
+        ArgGroup::new("record-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
     Show {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
         #[arg(long)]
-        commit: String,
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
 
         #[arg(long)]
         record: String,
     },
+    #[command(group(
+        ArgGroup::new("record-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
     List {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
         #[arg(long)]
-        commit: String,
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
 
         #[arg(long)]
         kind: Option<String>,
@@ -530,12 +548,21 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(group(
+        ArgGroup::new("record-relation-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
     RelationList {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
         #[arg(long)]
-        commit: String,
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
 
         #[arg(long = "type")]
         relation_type: Option<String>,
@@ -549,12 +576,21 @@ enum RecordCommand {
         #[arg(long)]
         target_record: Option<String>,
     },
+    #[command(group(
+        ArgGroup::new("record-relation-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
     RelationShow {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
         #[arg(long)]
-        commit: String,
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
 
         #[arg(long)]
         relation: String,
@@ -1384,27 +1420,28 @@ fn run(cli: Cli) -> Result<String> {
             command:
                 RecordCommand::Show {
                     store,
+                    branch,
                     commit,
                     record,
                 },
         } => {
             let engine = Engine::open(store)?;
-            render_record_show(&engine.record_at(
-                CommitId::parse_canonical(&commit)?,
-                EntityId::parse_canonical(&record)?,
-            )?)
+            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
+            render_record_show(&engine.record_at(commit_id, EntityId::parse_canonical(&record)?)?)
         }
         Command::Record {
             command:
                 RecordCommand::List {
                     store,
+                    branch,
                     commit,
                     kind,
                     status,
                 },
         } => {
             let engine = Engine::open(store)?;
-            let mut options = RecordListOptions::new(CommitId::parse_canonical(&commit)?);
+            let mut options =
+                RecordListOptions::new(resolve_record_query_commit(&engine, branch, commit)?);
             if let Some(kind) = kind {
                 options = options.with_kind(parse_record_kind(&kind)?);
             }
@@ -1578,6 +1615,7 @@ fn run(cli: Cli) -> Result<String> {
             command:
                 RecordCommand::RelationList {
                     store,
+                    branch,
                     commit,
                     relation_type,
                     label,
@@ -1586,7 +1624,9 @@ fn run(cli: Cli) -> Result<String> {
                 },
         } => {
             let engine = Engine::open(store)?;
-            let mut options = RecordRelationListOptions::new(CommitId::parse_canonical(&commit)?);
+            let mut options = RecordRelationListOptions::new(resolve_record_query_commit(
+                &engine, branch, commit,
+            )?);
             if let Some(relation_type) = relation_type {
                 options = options.with_relation_type(parse_record_relation_type(&relation_type)?);
             }
@@ -1607,16 +1647,15 @@ fn run(cli: Cli) -> Result<String> {
             command:
                 RecordCommand::RelationShow {
                     store,
+                    branch,
                     commit,
                     relation,
                 },
         } => {
             let engine = Engine::open(store)?;
+            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
             Ok(render_record_relation_snapshot(
-                &engine.record_relation_at(
-                    CommitId::parse_canonical(&commit)?,
-                    RelationId::parse_canonical(&relation)?,
-                )?,
+                &engine.record_relation_at(commit_id, RelationId::parse_canonical(&relation)?)?,
             ))
         }
         Command::Record {
@@ -2131,6 +2170,22 @@ fn parse_decision_record_status(value: &str) -> Result<RecordStatus> {
         other => Err(WorkVcsError::RecordInvalid(format!(
             "decision status {other:?} is not in the CLI transition vocabulary"
         ))),
+    }
+}
+
+fn resolve_record_query_commit(
+    engine: &Engine,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<CommitId> {
+    match (branch, commit) {
+        (Some(branch), None) => Ok(engine
+            .branch_head(BranchId::parse_canonical(&branch)?)
+            .map(|head| head.head_commit_id)?),
+        (None, Some(commit)) => CommitId::parse_canonical(&commit),
+        _ => Err(WorkVcsError::QueryInvalid(
+            "record query target requires exactly one of --branch or --commit".to_owned(),
+        )),
     }
 }
 
@@ -5212,6 +5267,16 @@ mod tests {
         assert!(list.contains("record_status=active"));
         assert!(list.contains("record_status=unverified"));
 
+        let branch_list =
+            run(
+                Cli::try_parse_from(["workvcs", "record", "list", store, "--branch", &branch])
+                    .expect("parse branch record list"),
+            )
+            .expect("list records at branch head");
+        assert_eq!(value(&branch_list, "records"), "2");
+        assert!(branch_list.contains("record_kind=finding"));
+        assert!(branch_list.contains("record_kind=assumption"));
+
         let filtered = run(Cli::try_parse_from([
             "workvcs",
             "record",
@@ -5288,6 +5353,23 @@ mod tests {
         assert!(show.contains("record_scope_json={\"a\":1,\"b\":2}"));
         assert_eq!(
             value(&show, "record_entity_version_id"),
+            value(&record, "record_entity_version_id")
+        );
+
+        let branch_show = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--record",
+            &value(&record, "record_entity_id"),
+        ])
+        .expect("parse branch record show"))
+        .expect("show record at branch head");
+        assert_eq!(
+            value(&branch_show, "record_entity_version_id"),
             value(&record, "record_entity_version_id")
         );
     }
@@ -5885,6 +5967,24 @@ mod tests {
         );
         assert!(listed.contains("relation.0.relation_type=supports"));
 
+        let branch_listed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--branch",
+            &branch,
+            "--type",
+            "supports",
+        ])
+        .expect("parse branch relation list"))
+        .expect("list record relations at branch head");
+        assert!(branch_listed.contains("relations=1"));
+        assert_eq!(
+            value(&branch_listed, "relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+
         let shown = run(Cli::try_parse_from([
             "workvcs",
             "record",
@@ -5909,6 +6009,23 @@ mod tests {
         assert_eq!(
             value(&shown, "target_record_entity_id"),
             value(&decision, "record_entity_id")
+        );
+
+        let branch_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-show",
+            store,
+            "--branch",
+            &branch,
+            "--relation",
+            &value(&relation, "relation_id"),
+        ])
+        .expect("parse branch relation show"))
+        .expect("show record relation at branch head");
+        assert_eq!(
+            value(&branch_shown, "relation_id"),
+            value(&relation, "relation_id")
         );
 
         let why_decision = run(Cli::try_parse_from([

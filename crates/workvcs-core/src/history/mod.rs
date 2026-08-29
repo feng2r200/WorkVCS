@@ -23,10 +23,11 @@ mod why;
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
     BundleCheckpointCandidate, BundleEntityMembershipChangeRef, BundleEntityVersionRef,
-    BundleExportManifest, BundleExportOptions, BundleImportPreflightOptions,
-    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
-    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput,
-    BundlePayloadReference, BundlePayloadValidationOptions, BundlePayloadValidationResult,
+    BundleExportManifest, BundleExportOptions, BundleImportAttemptOptions,
+    BundleImportAttemptResult, BundleImportPreflightOptions, BundleImportPreflightResult,
+    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
+    BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput, BundlePayloadReference,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult,
     BundleRelationMembershipChangeRef, BundleRelationVersionRef,
 };
 pub use checkpoint::{
@@ -125,7 +126,7 @@ pub use why::{
 pub(crate) use branch::{fork_branch, list_branches};
 pub(crate) use bundle::{
     export_bundle_manifest, export_bundle_payloads, preflight_bundle_import,
-    validate_bundle_manifest, validate_bundle_payloads,
+    record_bundle_import_attempt, validate_bundle_manifest, validate_bundle_payloads,
 };
 pub(crate) use checkpoint::{
     checkpoint, checkpoints, create_checkpoint, latest_usable_checkpoint, validate_checkpoint,

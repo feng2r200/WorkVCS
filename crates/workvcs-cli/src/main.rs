@@ -8,17 +8,18 @@ use workvcs_core::{
     ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
     BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
-    BundleExportOptions, BundleImportPreflightOptions, BundleImportPreflightResult,
-    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
-    BundlePayloadExportOptions, BundlePayloadInput, BundlePayloadValidationOptions,
-    BundlePayloadValidationResult, CanonicalValue, CheckpointCreateOptions, CheckpointCreateResult,
-    CheckpointId, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, ClaimId,
-    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
-    ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview,
-    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
-    Engine, EntityId, EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    BundleExportOptions, BundleImportAttemptOptions, BundleImportAttemptResult,
+    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
+    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
+    BundlePayloadInput, BundlePayloadValidationOptions, BundlePayloadValidationResult,
+    CanonicalValue, CheckpointCreateOptions, CheckpointCreateResult, CheckpointId,
+    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
+    CheckpointSnapshot, CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode,
+    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
+    ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
+    EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -371,6 +372,13 @@ enum BundleCommand {
         input_dir: PathBuf,
     },
     PreflightDir {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        input_dir: PathBuf,
+    },
+    ImportDir {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -1785,6 +1793,19 @@ fn run(cli: Cli) -> Result<String> {
                         payloads,
                     )?)?;
                 Ok(render_bundle_import_preflight(&preflight))
+            }
+            BundleCommand::ImportDir { store, input_dir } => {
+                let mut engine = Engine::open(store)?;
+                let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
+                let payload_index_bytes = read_bundle_file(&input_dir.join("payload-index.json"))?;
+                let payloads = read_bundle_payload_inputs(&input_dir)?;
+                let result =
+                    engine.record_bundle_import_attempt(BundleImportAttemptOptions::from_parts(
+                        manifest_bytes,
+                        payload_index_bytes,
+                        payloads,
+                    )?)?;
+                Ok(render_bundle_import_attempt(&result))
             }
             BundleCommand::ValidateManifest {
                 store,
@@ -5666,6 +5687,30 @@ fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> Strin
     )
 }
 
+fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
+    format!(
+        "recorded={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nproblem={}\n",
+        result.recorded,
+        render_optional_display(result.import_id.as_ref()),
+        result.bundle_digest,
+        result.import_profile,
+        render_optional_display(result.started_at_us.as_ref()),
+        render_optional_display(result.completed_at_us.as_ref()),
+        result.outcome,
+        result.preflight.valid,
+        result.preflight.format_compatible,
+        render_optional_display(result.preflight.source_store_id.as_ref()),
+        render_optional_display(result.preflight.target_workspace_id.as_ref()),
+        render_optional_display(result.preflight.target_commit_id.as_ref()),
+        render_optional_display(result.preflight.target_state_digest.as_ref()),
+        result.preflight.source_store_relation,
+        result.preflight.incoming_commit_present,
+        result.preflight.import_required,
+        result.preflight.can_apply,
+        result.preflight.problem.as_deref().unwrap_or("none")
+    )
+}
+
 fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
     format!(
         "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nactual_manifest_size_bytes={}\nproblem={}\n",
@@ -6441,6 +6486,33 @@ mod tests {
         assert_eq!(value(&preflight, "import_required"), "false");
         assert_eq!(value(&preflight, "action"), "already_present");
         assert_eq!(value(&preflight, "problem"), "none");
+
+        let import_attempt = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-dir",
+            store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse bundle import-dir"))
+        .expect("record bundle import attempt");
+        assert_eq!(value(&import_attempt, "recorded"), "true");
+        assert_ne!(value(&import_attempt, "import_id"), "none");
+        assert_eq!(
+            value(&import_attempt, "import_profile"),
+            "workvcs-local-payload-directory-v1"
+        );
+        assert_eq!(value(&import_attempt, "outcome"), "already_present");
+        assert_eq!(value(&import_attempt, "valid"), "true");
+        assert_eq!(
+            value(&import_attempt, "source_store_relation"),
+            "same_store"
+        );
+        assert_eq!(value(&import_attempt, "incoming_commit_present"), "true");
+        assert_eq!(value(&import_attempt, "import_required"), "false");
+        assert_eq!(value(&import_attempt, "can_apply"), "false");
+        assert_eq!(value(&import_attempt, "problem"), "none");
     }
 
     #[test]

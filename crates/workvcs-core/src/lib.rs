@@ -23,10 +23,11 @@ pub use history::{
     BranchForkResult, BranchForkSource, BranchHead, BranchProjectionRefreshOptions,
     BranchProjectionRefreshResult, BranchProjectionSnapshot, BranchProjectionStatus,
     BundleCheckpointCandidate, BundleEntityMembershipChangeRef, BundleEntityVersionRef,
-    BundleExportManifest, BundleExportOptions, BundleImportPreflightOptions,
-    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
-    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput,
-    BundlePayloadReference, BundlePayloadValidationOptions, BundlePayloadValidationResult,
+    BundleExportManifest, BundleExportOptions, BundleImportAttemptOptions,
+    BundleImportAttemptResult, BundleImportPreflightOptions, BundleImportPreflightResult,
+    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
+    BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput, BundlePayloadReference,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult,
     BundleRelationMembershipChangeRef, BundleRelationVersionRef, CheckpointCreateOptions,
     CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
     CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
@@ -80,8 +81,9 @@ pub use history::{
 };
 pub use identity::{
     BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, Digest, EntityId, EntityVersionId,
-    EventId, EvidenceId, MergeId, MergeItemId, OperationId, RelationId, RelationVersionId,
-    ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkspaceId,
+    EventId, EvidenceId, ImportId, MergeId, MergeItemId, OperationId, RelationId,
+    RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId,
+    WorkspaceId,
 };
 pub use runtime::{
     ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,

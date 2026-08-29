@@ -5,11 +5,12 @@ use crate::history::{
     AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
     BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
     BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions,
-    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
-    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
-    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
+    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportPreflightOptions,
+    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
+    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadValidationOptions,
+    BundlePayloadValidationResult, CheckpointCreateOptions, CheckpointCreateResult,
+    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
+    CheckpointSnapshot, CheckpointValidationResult, EntityTransitionCommit,
     EntityTransitionOptions, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot,
     GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
@@ -262,6 +263,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::preflight_bundle_import(&self.connection, &current, options)
+    }
+
+    pub(crate) fn record_bundle_import_attempt(
+        &mut self,
+        options: BundleImportAttemptOptions,
+    ) -> Result<BundleImportAttemptResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_bundle_import_attempt(&mut self.connection, &current, options)
     }
 
     pub(crate) fn why(&self, options: &WhyQueryOptions) -> Result<WhyQueryResult> {

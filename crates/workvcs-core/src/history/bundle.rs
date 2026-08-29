@@ -4,11 +4,11 @@ use crate::canonical::{
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, OperationId,
-    RelationId, RelationVersionId, StoreId, WorkspaceId,
+    ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, ImportId, OperationId,
+    RelationId, RelationVersionId, SessionId, StoreId, WorkspaceId,
 };
-use crate::store::{StoreConnection, StoreInfo, StoreManifest};
-use rusqlite::{OptionalExtension, params};
+use crate::store::{StoreConnection, StoreInfo, StoreManifest, current_epoch_micros};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
@@ -17,6 +17,7 @@ const BUNDLE_EXPORT_MANIFEST_VERSION: i64 = 1;
 const BUNDLE_PAYLOAD_INDEX_PROFILE: &str = "workvcs-local-payload-index-v1";
 const BUNDLE_PAYLOAD_INDEX_VERSION: i64 = 1;
 const BUNDLE_PAYLOAD_MEDIA_TYPE: &str = "application/json";
+const BUNDLE_IMPORT_PROFILE: &str = "workvcs-local-payload-directory-v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BundleExportOptions {
@@ -142,6 +143,46 @@ impl BundleImportPreflightOptions {
 
     fn payloads(&self) -> &[BundlePayloadInput] {
         &self.payloads
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportAttemptOptions {
+    manifest_bytes: Vec<u8>,
+    payload_index_bytes: Vec<u8>,
+    payloads: Vec<BundlePayloadInput>,
+    origin_session_id: Option<SessionId>,
+}
+
+impl BundleImportAttemptOptions {
+    pub fn from_parts(
+        manifest_bytes: impl Into<Vec<u8>>,
+        payload_index_bytes: impl Into<Vec<u8>>,
+        payloads: Vec<BundlePayloadInput>,
+    ) -> Result<Self> {
+        let manifest_bytes = manifest_bytes.into();
+        if manifest_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle manifest bytes cannot be empty".to_owned(),
+            ));
+        }
+        let payload_index_bytes = payload_index_bytes.into();
+        if payload_index_bytes.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(
+                "bundle payload index bytes cannot be empty".to_owned(),
+            ));
+        }
+        Ok(Self {
+            manifest_bytes,
+            payload_index_bytes,
+            payloads,
+            origin_session_id: None,
+        })
+    }
+
+    pub fn with_origin_session_id(mut self, origin_session_id: SessionId) -> Self {
+        self.origin_session_id = Some(origin_session_id);
+        self
     }
 }
 
@@ -290,6 +331,18 @@ pub struct BundleImportPreflightResult {
     pub payload_files: usize,
     pub payload_references: usize,
     pub problem: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleImportAttemptResult {
+    pub import_id: Option<ImportId>,
+    pub recorded: bool,
+    pub bundle_digest: Digest,
+    pub import_profile: String,
+    pub started_at_us: Option<i64>,
+    pub completed_at_us: Option<i64>,
+    pub outcome: String,
+    pub preflight: BundleImportPreflightResult,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -710,6 +763,98 @@ pub(crate) fn preflight_bundle_import(
         payload_files,
         payload_references: checked.payload_index.reference_count,
         problem: None,
+    })
+}
+
+pub(crate) fn record_bundle_import_attempt(
+    connection: &mut StoreConnection,
+    store_info: &StoreInfo,
+    options: BundleImportAttemptOptions,
+) -> Result<BundleImportAttemptResult> {
+    connection.verify_foreign_keys()?;
+    let preflight_options = BundleImportPreflightOptions::from_parts(
+        options.manifest_bytes.clone(),
+        options.payload_index_bytes.clone(),
+        options.payloads.clone(),
+    )?;
+    let preflight = preflight_bundle_import(connection, store_info, preflight_options)?;
+    let bundle_digest = preflight.payload_index_digest;
+    let import_profile = BUNDLE_IMPORT_PROFILE.to_owned();
+
+    if !preflight.valid {
+        return Ok(BundleImportAttemptResult {
+            import_id: None,
+            recorded: false,
+            bundle_digest,
+            import_profile,
+            started_at_us: None,
+            completed_at_us: None,
+            outcome: preflight.action.clone(),
+            preflight,
+        });
+    }
+
+    let source_store_id = preflight.source_store_id.ok_or_else(|| {
+        WorkVcsError::QueryInvalid("valid bundle preflight must include source_store_id".to_owned())
+    })?;
+    let import_id = ImportId::new_v7();
+    let now_us = current_epoch_micros()?;
+    let outcome = preflight.action.clone();
+    let detail_json = bundle_import_attempt_detail_json(&preflight)?;
+
+    let import_id_bytes = import_id.raw_bytes();
+    let source_store_id_bytes = source_store_id.raw_bytes();
+    let bundle_digest_bytes = *bundle_digest.as_bytes();
+    let origin_session_id_bytes = options.origin_session_id.map(|id| id.raw_bytes());
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO import_attempt(
+                import_id,
+                source_store_id,
+                bundle_digest,
+                import_profile,
+                origin_session_id,
+                started_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &import_id_bytes[..],
+                &source_store_id_bytes[..],
+                &bundle_digest_bytes[..],
+                import_profile,
+                origin_session_id_bytes.as_ref().map(|bytes| &bytes[..]),
+                now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO import_attempt_outcome(
+                import_id,
+                outcome,
+                completed_at_us,
+                detail_json
+             )
+             VALUES (?1, ?2, ?3, ?4)",
+            params![&import_id_bytes[..], outcome, now_us, detail_json],
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(BundleImportAttemptResult {
+        import_id: Some(import_id),
+        recorded: true,
+        bundle_digest,
+        import_profile: BUNDLE_IMPORT_PROFILE.to_owned(),
+        started_at_us: Some(now_us),
+        completed_at_us: Some(now_us),
+        outcome: preflight.action.clone(),
+        preflight,
     })
 }
 
@@ -2319,6 +2464,74 @@ fn payload_reference_value(reference: &BundlePayloadReference) -> Result<Canonic
         integer_field("size_bytes", reference.size_bytes)?,
         ("owner".to_owned(), reference.owner.clone()),
     ])
+}
+
+fn bundle_import_attempt_detail_json(preflight: &BundleImportPreflightResult) -> Result<String> {
+    let problem = preflight
+        .problem
+        .clone()
+        .map(CanonicalValue::String)
+        .unwrap_or(CanonicalValue::Null);
+    let value = CanonicalValue::object(vec![
+        ("valid".to_owned(), CanonicalValue::Bool(preflight.valid)),
+        (
+            "format_compatible".to_owned(),
+            CanonicalValue::Bool(preflight.format_compatible),
+        ),
+        optional_display_field("source_store_id", preflight.source_store_id),
+        optional_display_field("target_workspace_id", preflight.target_workspace_id),
+        optional_display_field("target_commit_id", preflight.target_commit_id),
+        optional_display_field("target_state_digest", preflight.target_state_digest),
+        string_field(
+            "source_store_relation",
+            preflight.source_store_relation.clone(),
+        ),
+        (
+            "incoming_commit_present".to_owned(),
+            CanonicalValue::Bool(preflight.incoming_commit_present),
+        ),
+        (
+            "import_required".to_owned(),
+            CanonicalValue::Bool(preflight.import_required),
+        ),
+        (
+            "can_apply".to_owned(),
+            CanonicalValue::Bool(preflight.can_apply),
+        ),
+        string_field("action", preflight.action.clone()),
+        string_field("manifest_digest", preflight.manifest_digest.to_string()),
+        string_field(
+            "payload_index_digest",
+            preflight.payload_index_digest.to_string(),
+        ),
+        integer_field(
+            "payload_files",
+            usize_to_i64("payload_files", preflight.payload_files)?,
+        )?,
+        integer_field(
+            "payload_references",
+            usize_to_i64("payload_references", preflight.payload_references)?,
+        )?,
+        ("problem".to_owned(), problem),
+    ])?;
+    let bytes = canonical_bytes(&value)?;
+    String::from_utf8(bytes).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "bundle import attempt detail JSON was not UTF-8: {error}"
+        ))
+    })
+}
+
+fn optional_display_field<T: std::fmt::Display>(
+    name: &str,
+    value: Option<T>,
+) -> (String, CanonicalValue) {
+    (
+        name.to_owned(),
+        value
+            .map(|value| CanonicalValue::String(value.to_string()))
+            .unwrap_or(CanonicalValue::Null),
+    )
 }
 
 fn parse_fixed_point_canonical_json(

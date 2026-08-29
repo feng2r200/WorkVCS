@@ -24,7 +24,8 @@ use crate::history::{
     RecordCreateCommit, RecordCreateOptions, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
-    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
     RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
     RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
     RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
@@ -361,6 +362,13 @@ impl Engine {
         options: RecordKnowledgeRelationRemoveOptions,
     ) -> Result<RecordKnowledgeRelationRemoveCommit> {
         self.store.remove_record_knowledge_relation(&options)
+    }
+
+    pub fn restore_record_knowledge_relation(
+        &mut self,
+        options: RecordKnowledgeRelationRestoreOptions,
+    ) -> Result<RecordKnowledgeRelationRestoreCommit> {
+        self.store.restore_record_knowledge_relation(&options)
     }
 
     pub fn restore_record_relation(

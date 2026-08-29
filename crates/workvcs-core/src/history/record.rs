@@ -1226,6 +1226,57 @@ pub struct RecordKnowledgeRelationRemoveCommit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordKnowledgeRelationRestoreOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    rationale: CanonicalValue,
+}
+
+impl RecordKnowledgeRelationRestoreOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        relation_id: RelationId,
+        relation_version_id: RelationVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_id,
+            relation_version_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordKnowledgeRelationRestoreCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: RecordRelationType,
+    pub source_record_entity_id: EntityId,
+    pub target_knowledge_entity_id: EntityId,
+    pub relation_state_digest: Digest,
+    pub work_state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordRelationRestoreOptions {
     branch_id: BranchId,
     expected_head_commit_id: CommitId,
@@ -2235,6 +2286,136 @@ pub(crate) fn remove_record_knowledge_relation(
         relation_type: relation.relation_type,
         source_record_entity_id: relation.source_record_entity_id,
         target_knowledge_entity_id: relation.target_knowledge_entity_id,
+        work_state_digest,
+    })
+}
+
+pub(crate) fn restore_record_knowledge_relation(
+    connection: &mut StoreConnection,
+    options: &RecordKnowledgeRelationRestoreOptions,
+) -> Result<RecordKnowledgeRelationRestoreCommit> {
+    connection.verify_foreign_keys()?;
+    require_non_empty_rationale_object(&options.rationale)?;
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    if parent
+        .state
+        .relations()
+        .iter()
+        .any(|(relation_id, _)| *relation_id == options.relation_id)
+    {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {} is already present at commit {}",
+            options.relation_id, options.expected_head_commit_id
+        )));
+    }
+
+    let Some(relation) = load_record_knowledge_relation_version(
+        connection,
+        parent.workspace_id,
+        options.relation_id,
+        options.relation_version_id,
+    )?
+    else {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "relation {} is not a semantic Record-to-Knowledge relation",
+            options.relation_id
+        )));
+    };
+    let source = record_snapshot_in_state(
+        connection,
+        parent.workspace_id,
+        options.expected_head_commit_id,
+        &parent.state,
+        relation.source_record_entity_id,
+    )?;
+    let target = knowledge_at(
+        connection,
+        options.expected_head_commit_id,
+        relation.target_knowledge_entity_id,
+    )?;
+    if target.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation target {} belongs to workspace {}, not {}",
+            relation.target_knowledge_entity_id, target.workspace_id, parent.workspace_id
+        )));
+    }
+    validate_record_knowledge_relation_endpoints_for_projection(relation.relation_type, &source)?;
+
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+    let next_work_state = work_state_after_record_relation_create(
+        &parent.state,
+        options.relation_id,
+        options.relation_version_id,
+    )?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let relation_payload_value = relation_transition_payload_value(
+        options.relation_id,
+        None,
+        Some(options.relation_version_id),
+    )?;
+    let relation_payload_json = canonical_json_string(&relation_payload_value)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    write_record_relation_restore(
+        &transaction,
+        &RecordRelationRestoreRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            relation_id: options.relation_id,
+            relation_version_id: options.relation_version_id,
+            changeset_id,
+            commit_id,
+            operation_id,
+            relation_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(RecordKnowledgeRelationRestoreCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        operation_id,
+        relation_id: options.relation_id,
+        relation_version_id: options.relation_version_id,
+        relation_type: relation.relation_type,
+        source_record_entity_id: relation.source_record_entity_id,
+        target_knowledge_entity_id: relation.target_knowledge_entity_id,
+        relation_state_digest: relation.state_digest,
         work_state_digest,
     })
 }

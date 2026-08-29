@@ -16,6 +16,7 @@ use workvcs_core::{
     RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
+    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
     RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
     RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
     RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
@@ -793,6 +794,25 @@ enum RecordCommand {
         relation: String,
     },
     KnowledgeRelationRemove {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        relation: String,
+
+        #[arg(long)]
+        relation_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    KnowledgeRelationRestore {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -2133,6 +2153,29 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::KnowledgeRelationRestore {
+                    store,
+                    branch,
+                    head,
+                    relation,
+                    relation_version,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let restored = engine.restore_record_knowledge_relation(
+                RecordKnowledgeRelationRestoreOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    RelationId::parse_canonical(&relation)?,
+                    RelationVersionId::parse_canonical(&relation_version)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_restore(&restored))
+        }
+        Command::Record {
+            command:
                 RecordCommand::RelationShow {
                     store,
                     branch,
@@ -3407,6 +3450,27 @@ fn render_record_knowledge_relation_remove(
         relation.relation_type,
         relation.source_record_entity_id,
         relation.target_knowledge_entity_id,
+        relation.work_state_digest
+    )
+}
+
+fn render_record_knowledge_relation_restore(
+    relation: &RecordKnowledgeRelationRestoreCommit,
+) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nsource_record_entity_id={}\ntarget_knowledge_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.source_record_entity_id,
+        relation.target_knowledge_entity_id,
+        relation.relation_state_digest,
         relation.work_state_digest
     )
 }
@@ -8328,6 +8392,140 @@ mod tests {
         .expect("parse record knowledge relation list"))
         .expect("list record knowledge relations");
         assert_eq!(value(&listed, "relations"), "0");
+    }
+
+    #[test]
+    fn cli_restores_record_knowledge_relation() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "CLI can restore a Record-to-Knowledge relation",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--statement",
+            "The relation should be restored after review",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports-knowledge",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--rationale",
+            "The Finding supports the Knowledge statement",
+        ])
+        .expect("parse supports knowledge"))
+        .expect("support knowledge relation");
+        let removed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-remove",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--relation-version",
+            &value(&relation, "relation_version_id"),
+            "--rationale",
+            "Remove relation before restoring",
+        ])
+        .expect("parse record knowledge relation remove"))
+        .expect("remove record knowledge relation");
+
+        let restored = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-restore",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&removed, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--relation-version",
+            &value(&relation, "relation_version_id"),
+            "--rationale",
+            "Restore relation after review",
+        ])
+        .expect("parse record knowledge relation restore"))
+        .expect("restore record knowledge relation");
+        assert_eq!(
+            value(&restored, "relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&restored, "relation_version_id"),
+            value(&relation, "relation_version_id")
+        );
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-list",
+            store,
+            "--commit",
+            &value(&restored, "commit_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+        ])
+        .expect("parse record knowledge relation list"))
+        .expect("list record knowledge relations");
+        assert_eq!(value(&listed, "relations"), "1");
+        assert_eq!(
+            value(&listed, "relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
     }
 
     fn value(output: &str, key: &str) -> String {

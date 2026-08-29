@@ -334,6 +334,24 @@ pub(super) fn release_active_claims_for_session_end(
     Ok(active_claims.len())
 }
 
+pub(super) fn release_active_claims_for_session_branch(
+    transaction: &Transaction<'_>,
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    occurred_at_us: i64,
+) -> Result<usize> {
+    let active_claims = load_active_claims_for_session(transaction, session_id)?;
+    let mut released = 0;
+    for (claim_id, claim) in &active_claims {
+        if claim.workspace_id == workspace_id && claim.branch_id == branch_id {
+            release_claim_runtime_for_row(transaction, *claim_id, claim, occurred_at_us)?;
+            released += 1;
+        }
+    }
+    Ok(released)
+}
+
 fn claim_snapshot_from_connection(
     connection: &Connection,
     claim_id: ClaimId,

@@ -15,6 +15,7 @@ const ENDED_SESSION_LIFECYCLE_STATE: &str = "ended";
 const SESSION_STARTED_EVENT_KIND: &str = "session.started";
 const SESSION_FOCUS_SET_EVENT_KIND: &str = "session.focus_set";
 const SESSION_FOCUS_CLEARED_EVENT_KIND: &str = "session.focus_cleared";
+const SESSION_SWITCHED_EVENT_KIND: &str = "session.switched";
 const SESSION_ENDED_EVENT_KIND: &str = "session.ended";
 const SESSION_DIFF_OBJECT_KIND: &str = "session_diff";
 
@@ -144,6 +145,65 @@ impl SessionEndOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionSwitchOptions {
+    session_id: SessionId,
+    active_workspace_id: WorkspaceId,
+    active_branch_id: BranchId,
+    focus: Option<SessionFocus>,
+}
+
+impl SessionSwitchOptions {
+    pub fn new(
+        session_id: SessionId,
+        active_workspace_id: WorkspaceId,
+        active_branch_id: BranchId,
+    ) -> Self {
+        Self {
+            session_id,
+            active_workspace_id,
+            active_branch_id,
+            focus: None,
+        }
+    }
+
+    pub fn with_focus(mut self, focus_entity_id: EntityId) -> Self {
+        self.focus = Some(SessionFocus {
+            focus_entity_id,
+            path: Vec::new(),
+        });
+        self
+    }
+
+    pub fn with_focus_path(
+        mut self,
+        focus_entity_id: EntityId,
+        path: Vec<SessionFocusPathEntry>,
+    ) -> Self {
+        self.focus = Some(SessionFocus {
+            focus_entity_id,
+            path,
+        });
+        self
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn active_workspace_id(&self) -> WorkspaceId {
+        self.active_workspace_id
+    }
+
+    pub fn active_branch_id(&self) -> BranchId {
+        self.active_branch_id
+    }
+
+    pub fn focus(&self) -> Option<&SessionFocus> {
+        self.focus.as_ref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionStartResult {
     pub session_id: SessionId,
     pub workspace_id: WorkspaceId,
@@ -155,6 +215,18 @@ pub struct SessionStartResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionFocusUpdateResult {
     pub session_id: SessionId,
+    pub occurred_at_us: i64,
+    pub state: SessionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionSwitchResult {
+    pub session_id: SessionId,
+    pub previous_workspace_id: WorkspaceId,
+    pub previous_branch_id: BranchId,
+    pub active_workspace_id: WorkspaceId,
+    pub active_branch_id: BranchId,
+    pub released_claims: usize,
     pub occurred_at_us: i64,
     pub state: SessionSnapshot,
 }
@@ -328,7 +400,6 @@ pub(crate) fn set_session_focus(
     let event_id_bytes = event_id.raw_bytes();
     let session_id_bytes = options.session_id().raw_bytes();
     let workspace_id_bytes = active.active_workspace_id.raw_bytes();
-    let focus_entity_id_bytes = options.focus_entity_id().raw_bytes();
 
     let transaction = connection
         .inner_mut()
@@ -362,56 +433,15 @@ pub(crate) fn set_session_focus(
         )));
     }
 
-    transaction
-        .execute(
-            "DELETE FROM session_focus_path
-             WHERE session_id = ?1",
-            params![&session_id_bytes[..]],
-        )
-        .map_err(storage_error)?;
-    transaction
-        .execute(
-            "DELETE FROM session_focus
-             WHERE session_id = ?1",
-            params![&session_id_bytes[..]],
-        )
-        .map_err(storage_error)?;
-    transaction
-        .execute(
-            "INSERT INTO session_focus(session_id, focus_entity_id)
-             VALUES (?1, ?2)",
-            params![&session_id_bytes[..], &focus_entity_id_bytes[..]],
-        )
-        .map_err(storage_error)?;
-
-    for (index, entry) in options.path().iter().enumerate() {
-        let ordinal = i64::try_from(index).map_err(|_| {
-            WorkVcsError::SessionInvalid("session focus path is too long".to_owned())
-        })?;
-        let path_entity_id_bytes = entry.path_entity_id.raw_bytes();
-        let incoming_relation_id_bytes = entry
-            .incoming_relation_id
-            .map(|relation_id| relation_id.raw_bytes());
-        let incoming_relation_id_param =
-            incoming_relation_id_bytes.as_ref().map(|bytes| &bytes[..]);
-        transaction
-            .execute(
-                "INSERT INTO session_focus_path(
-                    session_id,
-                    ordinal,
-                    path_entity_id,
-                    incoming_relation_id
-                 )
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    &session_id_bytes[..],
-                    ordinal,
-                    &path_entity_id_bytes[..],
-                    incoming_relation_id_param
-                ],
-            )
-            .map_err(storage_error)?;
-    }
+    clear_focus_rows(&transaction, options.session_id())?;
+    insert_focus_rows(
+        &transaction,
+        options.session_id(),
+        &SessionFocus {
+            focus_entity_id: options.focus_entity_id(),
+            path: options.path().to_vec(),
+        },
+    )?;
 
     update_session_activity(&transaction, options.session_id(), now_us)?;
     transaction
@@ -463,20 +493,7 @@ pub(crate) fn clear_session_focus(
         .map_err(storage_error)?;
     let current_runtime = load_active_session_runtime_for_update(&transaction, session_id)?;
     let workspace_id_bytes = current_runtime.active_workspace_id.raw_bytes();
-    transaction
-        .execute(
-            "DELETE FROM session_focus_path
-             WHERE session_id = ?1",
-            params![&session_id_bytes[..]],
-        )
-        .map_err(storage_error)?;
-    transaction
-        .execute(
-            "DELETE FROM session_focus
-             WHERE session_id = ?1",
-            params![&session_id_bytes[..]],
-        )
-        .map_err(storage_error)?;
+    clear_focus_rows(&transaction, session_id)?;
     update_session_activity(&transaction, session_id, now_us)?;
     transaction
         .execute(
@@ -507,6 +524,152 @@ pub(crate) fn clear_session_focus(
         session_id,
         occurred_at_us: now_us,
         state: session_snapshot(connection, session_id)?,
+    })
+}
+
+pub(crate) fn switch_session(
+    connection: &mut StoreConnection,
+    options: &SessionSwitchOptions,
+) -> Result<SessionSwitchResult> {
+    connection.verify_foreign_keys()?;
+    let target_head = history::branch_head(connection, options.active_branch_id())?;
+    if target_head.workspace_id != options.active_workspace_id() {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "target branch {} belongs to workspace {}, not target workspace {}",
+            options.active_branch_id(),
+            target_head.workspace_id,
+            options.active_workspace_id()
+        )));
+    }
+    if target_head.lifecycle_state != ACTIVE_BRANCH_LIFECYCLE_STATE {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "target branch {} has lifecycle state {:?}",
+            options.active_branch_id(),
+            target_head.lifecycle_state
+        )));
+    }
+    if let Some(focus) = options.focus() {
+        let replayed = history::state_at(connection, target_head.head_commit_id)?;
+        validate_focus_selection_against_work_state(&replayed.state, focus)?;
+    }
+
+    let now_us = current_epoch_micros()?;
+    let event_id = EventId::new_v7();
+    let event_id_bytes = event_id.raw_bytes();
+    let session_id_bytes = options.session_id().raw_bytes();
+    let target_workspace_id_bytes = options.active_workspace_id().raw_bytes();
+    let target_branch_id_bytes = options.active_branch_id().raw_bytes();
+    let runtime_json = active_runtime_json()?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let current_runtime =
+        load_active_session_runtime_for_update(&transaction, options.session_id())?;
+    ensure_workspace_exists(&transaction, options.active_workspace_id())?;
+    let current_branch = load_active_branch(&transaction, options.active_branch_id())?;
+    if current_branch.workspace_id != options.active_workspace_id() {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "target branch {} belongs to workspace {}, not target workspace {}",
+            options.active_branch_id(),
+            current_branch.workspace_id,
+            options.active_workspace_id()
+        )));
+    }
+    if current_branch.head_commit_id != target_head.head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} head changed before session {} could switch",
+            options.active_branch_id(),
+            options.session_id()
+        )));
+    }
+
+    let target_changed = current_runtime.active_workspace_id != options.active_workspace_id()
+        || current_runtime.active_branch_id != options.active_branch_id();
+    let released_claims = if target_changed {
+        claim::release_active_claims_for_session_branch(
+            &transaction,
+            options.session_id(),
+            current_runtime.active_workspace_id,
+            current_runtime.active_branch_id,
+            now_us,
+        )?
+    } else {
+        0
+    };
+
+    clear_focus_rows(&transaction, options.session_id())?;
+    if let Some(focus) = options.focus() {
+        insert_focus_rows(&transaction, options.session_id(), focus)?;
+    }
+
+    let updated = transaction
+        .execute(
+            "UPDATE session_runtime
+             SET active_workspace_id = ?1,
+                 active_branch_id = ?2,
+                 last_activity_at_us = ?3,
+                 runtime_json = ?4
+             WHERE session_id = ?5",
+            params![
+                &target_workspace_id_bytes[..],
+                &target_branch_id_bytes[..],
+                now_us,
+                runtime_json,
+                &session_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    if updated != 1 {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} switch update affected {updated} rows",
+            options.session_id()
+        )));
+    }
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO session_context_workspace(session_id, workspace_id)
+             VALUES (?1, ?2)",
+            params![&session_id_bytes[..], &target_workspace_id_bytes[..]],
+        )
+        .map_err(storage_error)?;
+    let event_payload_json =
+        session_switched_payload_json(options, &current_runtime, released_claims)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
+            params![
+                &event_id_bytes[..],
+                &target_workspace_id_bytes[..],
+                &session_id_bytes[..],
+                SESSION_SWITCHED_EVENT_KIND,
+                now_us,
+                event_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(SessionSwitchResult {
+        session_id: options.session_id(),
+        previous_workspace_id: current_runtime.active_workspace_id,
+        previous_branch_id: current_runtime.active_branch_id,
+        active_workspace_id: options.active_workspace_id(),
+        active_branch_id: options.active_branch_id(),
+        released_claims,
+        occurred_at_us: now_us,
+        state: session_snapshot(connection, options.session_id())?,
     })
 }
 
@@ -558,20 +721,7 @@ pub(crate) fn end_session(
             ],
         )
         .map_err(storage_error)?;
-    transaction
-        .execute(
-            "DELETE FROM session_focus_path
-             WHERE session_id = ?1",
-            params![&session_id_bytes[..]],
-        )
-        .map_err(storage_error)?;
-    transaction
-        .execute(
-            "DELETE FROM session_focus
-             WHERE session_id = ?1",
-            params![&session_id_bytes[..]],
-        )
-        .map_err(storage_error)?;
+    clear_focus_rows(&transaction, options.session_id())?;
     transaction
         .execute(
             "DELETE FROM session_context_workspace
@@ -1091,6 +1241,70 @@ fn load_session_focus(
     }))
 }
 
+fn clear_focus_rows(transaction: &Transaction<'_>, session_id: SessionId) -> Result<()> {
+    transaction
+        .execute(
+            "DELETE FROM session_focus_path
+             WHERE session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "DELETE FROM session_focus
+             WHERE session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn insert_focus_rows(
+    transaction: &Transaction<'_>,
+    session_id: SessionId,
+    focus: &SessionFocus,
+) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT INTO session_focus(session_id, focus_entity_id)
+             VALUES (?1, ?2)",
+            params![
+                &session_id.raw_bytes()[..],
+                &focus.focus_entity_id.raw_bytes()[..]
+            ],
+        )
+        .map_err(storage_error)?;
+
+    for (index, entry) in focus.path.iter().enumerate() {
+        let ordinal = i64::try_from(index).map_err(|_| {
+            WorkVcsError::SessionInvalid("session focus path is too long".to_owned())
+        })?;
+        let incoming_relation_id_bytes = entry
+            .incoming_relation_id
+            .map(|relation_id| relation_id.raw_bytes());
+        let incoming_relation_id_param =
+            incoming_relation_id_bytes.as_ref().map(|bytes| &bytes[..]);
+        transaction
+            .execute(
+                "INSERT INTO session_focus_path(
+                    session_id,
+                    ordinal,
+                    path_entity_id,
+                    incoming_relation_id
+                 )
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    &session_id.raw_bytes()[..],
+                    ordinal,
+                    &entry.path_entity_id.raw_bytes()[..],
+                    incoming_relation_id_param
+                ],
+            )
+            .map_err(storage_error)?;
+    }
+    Ok(())
+}
+
 fn active_runtime_json() -> Result<String> {
     canonical_json_string(&CanonicalValue::object(vec![(
         "lifecycle_state".to_owned(),
@@ -1169,6 +1383,47 @@ fn session_focus_cleared_payload_json(session_id: SessionId) -> Result<String> {
     )])?)
 }
 
+fn session_switched_payload_json(
+    options: &SessionSwitchOptions,
+    previous: &ActiveSessionProjection,
+    released_claims: usize,
+) -> Result<String> {
+    let focus_entity_id = options
+        .focus()
+        .map(|focus| CanonicalValue::String(focus.focus_entity_id.to_string()))
+        .unwrap_or(CanonicalValue::Null);
+    let released_claims = i64::try_from(released_claims).map_err(|_| {
+        WorkVcsError::SessionInvalid("released claim count exceeds safe range".to_owned())
+    })?;
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "active_branch_id".to_owned(),
+            CanonicalValue::String(options.active_branch_id().to_string()),
+        ),
+        (
+            "active_workspace_id".to_owned(),
+            CanonicalValue::String(options.active_workspace_id().to_string()),
+        ),
+        ("focus_entity_id".to_owned(), focus_entity_id),
+        (
+            "previous_branch_id".to_owned(),
+            CanonicalValue::String(previous.active_branch_id.to_string()),
+        ),
+        (
+            "previous_workspace_id".to_owned(),
+            CanonicalValue::String(previous.active_workspace_id.to_string()),
+        ),
+        (
+            "released_claims".to_owned(),
+            CanonicalValue::safe_integer(released_claims)?,
+        ),
+        (
+            "session_id".to_owned(),
+            CanonicalValue::String(options.session_id().to_string()),
+        ),
+    ])?)
+}
+
 fn session_ended_payload_json(
     session_id: SessionId,
     session_diff_id: SessionDiffId,
@@ -1211,13 +1466,28 @@ fn validate_focus_against_work_state(
     state: &WorkState,
     options: &SessionFocusOptions,
 ) -> Result<()> {
-    if !work_state_contains_entity(state, options.focus_entity_id()) {
+    validate_focus_parts_against_work_state(state, options.focus_entity_id(), options.path())
+}
+
+fn validate_focus_selection_against_work_state(
+    state: &WorkState,
+    focus: &SessionFocus,
+) -> Result<()> {
+    validate_focus_parts_against_work_state(state, focus.focus_entity_id, &focus.path)
+}
+
+fn validate_focus_parts_against_work_state(
+    state: &WorkState,
+    focus_entity_id: EntityId,
+    path: &[SessionFocusPathEntry],
+) -> Result<()> {
+    if !work_state_contains_entity(state, focus_entity_id) {
         return Err(WorkVcsError::SessionInvalid(format!(
             "focus entity {} is not present at the active branch head",
-            options.focus_entity_id()
+            focus_entity_id
         )));
     }
-    for entry in options.path() {
+    for entry in path {
         if !work_state_contains_entity(state, entry.path_entity_id) {
             return Err(WorkVcsError::SessionInvalid(format!(
                 "focus path entity {} is not present at the active branch head",

@@ -36,7 +36,7 @@ use crate::{
     ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
     SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -360,6 +360,10 @@ impl Engine {
         session_id: SessionId,
     ) -> Result<SessionFocusUpdateResult> {
         self.store.clear_session_focus(session_id)
+    }
+
+    pub fn switch_session(&mut self, options: SessionSwitchOptions) -> Result<SessionSwitchResult> {
+        self.store.switch_session(&options)
     }
 
     pub fn end_session(&mut self, options: SessionEndOptions) -> Result<SessionEndResult> {

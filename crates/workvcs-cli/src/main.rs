@@ -12,13 +12,13 @@ use workvcs_core::{
     ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
     Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, StoreInitOptions,
-    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WorkState, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
-    content_object_digest, parse_canonical_json,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
+    WorkspaceInfo, WorkspaceInitOptions, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -314,6 +314,22 @@ enum SessionCommand {
 
         #[arg(long, default_value = "{}")]
         metadata_json: String,
+    },
+    Switch {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        workspace: String,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        focus: Option<String>,
     },
     End {
         #[arg(value_name = "STORE")]
@@ -856,6 +872,28 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Session {
             command:
+                SessionCommand::Switch {
+                    store,
+                    session,
+                    workspace,
+                    branch,
+                    focus,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = SessionSwitchOptions::new(
+                SessionId::parse_canonical(&session)?,
+                workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
+                BranchId::parse_canonical(&branch)?,
+            );
+            if let Some(focus) = focus {
+                options = options.with_focus(EntityId::parse_canonical(&focus)?);
+            }
+            let switched = engine.switch_session(options)?;
+            Ok(render_session_switch(&switched))
+        }
+        Command::Session {
+            command:
                 SessionCommand::End {
                     store,
                     session,
@@ -1266,6 +1304,27 @@ fn render_session_start(session: &SessionStartResult) -> String {
     )
 }
 
+fn render_session_switch(session: &SessionSwitchResult) -> String {
+    let focus_entity_id = session
+        .state
+        .focus
+        .as_ref()
+        .map(|focus| focus.focus_entity_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    format!(
+        "session_id={}\nprevious_workspace_id={}\nprevious_branch_id={}\nworkspace_id={}\nbranch_id={}\nreleased_claims={}\nfocus_entity_id={}\noccurred_at_us={}\nlifecycle_state={}\n",
+        session.session_id,
+        session.previous_workspace_id,
+        session.previous_branch_id,
+        session.active_workspace_id,
+        session.active_branch_id,
+        session.released_claims,
+        focus_entity_id,
+        session.occurred_at_us,
+        session_lifecycle_state(session.state.lifecycle_state)
+    )
+}
+
 fn render_session_end(session: &SessionEndResult) -> String {
     format!(
         "session_id={}\nsession_diff_id={}\nended_at_us={}\nlifecycle_state={}\n",
@@ -1647,6 +1706,128 @@ mod tests {
         .expect("fork history");
         assert!(fork_history.contains(&format!("start_commit_id={source_head}")));
         assert!(fork_history.contains("entries=1"));
+    }
+
+    #[test]
+    fn cli_runs_session_switch_to_forked_branch_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let source_branch = value(&workspace, "branch_id");
+        let source_head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &source_branch,
+            "--head",
+            &source_head,
+            "--description",
+            "Switch session to fork",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let task_head = value(&task, "commit_id");
+
+        let fork = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "fork",
+            store,
+            "--from-branch",
+            &source_branch,
+            "--name",
+            "runtime",
+        ])
+        .expect("parse fork"))
+        .expect("fork branch");
+        let fork_branch = value(&fork, "branch_id");
+        assert_eq!(value(&fork, "head_commit_id"), task_head);
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &source_branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+        ])
+        .expect("parse claim"))
+        .expect("claim source task");
+        assert!(claim.contains("lifecycle_state=active"));
+
+        let switched = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &session_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--focus",
+            &task_id,
+        ])
+        .expect("parse switch"))
+        .expect("switch session");
+        assert_eq!(value(&switched, "previous_branch_id"), source_branch);
+        assert_eq!(value(&switched, "branch_id"), fork_branch);
+        assert_eq!(value(&switched, "released_claims"), "1");
+        assert_eq!(value(&switched, "focus_entity_id"), task_id);
+        assert!(switched.contains("lifecycle_state=active"));
+
+        let runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse runnable"))
+        .expect("runnable on fork");
+        assert!(runnable.contains("candidates=1"));
+        assert!(runnable.contains(&format!("candidate.0.task_entity_id={task_id}")));
+        assert!(runnable.contains("candidate.0.claim=unclaimed"));
     }
 
     #[test]

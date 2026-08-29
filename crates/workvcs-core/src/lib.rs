@@ -68,6 +68,6 @@ pub use runtime::{
 pub use runtime::{
     SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions, SessionFocusPathEntry,
     SessionFocusUpdateResult, SessionLifecycleState, SessionSnapshot, SessionStartOptions,
-    SessionStartResult,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 pub use store::{StoreInfo, StoreInitOptions, StoreManifest};

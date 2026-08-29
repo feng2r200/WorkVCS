@@ -26,7 +26,7 @@ use crate::runtime::{
     ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
     SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -500,6 +500,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::clear_session_focus(&mut self.connection, session_id)
+    }
+
+    pub(crate) fn switch_session(
+        &mut self,
+        options: &SessionSwitchOptions,
+    ) -> Result<SessionSwitchResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::switch_session(&mut self.connection, options)
     }
 
     pub(crate) fn end_session(&mut self, options: &SessionEndOptions) -> Result<SessionEndResult> {

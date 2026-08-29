@@ -6,6 +6,7 @@ use super::entity::{
 use super::record::{
     RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION, RECORD_DECISION_SUPERSEDE_OPERATION_TYPE,
     RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION, RECORD_RELATION_CREATE_OPERATION_TYPE,
+    RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION, RECORD_RELATION_REMOVE_OPERATION_TYPE,
 };
 use super::reference::STRUCTURAL_REFERENCE_CREATE_OPERATION_TYPE;
 use crate::canonical::{
@@ -445,6 +446,13 @@ fn validate_entity_transition_changeset(
                 )));
             }
         }
+        RECORD_RELATION_REMOVE_OPERATION_TYPE => {
+            if operation_schema_version != RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
         RECORD_DECISION_SUPERSEDE_OPERATION_TYPE => {
             if operation_schema_version != RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
@@ -614,18 +622,11 @@ fn apply_relation_operation(
         &change.field_delta_json,
     )?;
 
-    if change.before_relation_version_id.is_some() {
-        return Err(WorkVcsError::ReplayUnsupported(format!(
-            "relation update for {subject_relation_id} is deferred"
-        )));
-    }
-    let after_relation_version_id = change.after_relation_version_id.ok_or_else(|| {
-        WorkVcsError::ReplayUnsupported(format!(
-            "relation removal for {subject_relation_id} is deferred"
-        ))
-    })?;
-    let expected_payload =
-        relation_transition_payload_json(subject_relation_id, None, after_relation_version_id)?;
+    let expected_payload = relation_transition_payload_json(
+        subject_relation_id,
+        change.before_relation_version_id,
+        change.after_relation_version_id,
+    )?;
     if operation.operation_payload_json != expected_payload {
         return Err(WorkVcsError::ReplayInvalid(format!(
             "ChangeOperation {} payload does not match relation membership change",
@@ -634,20 +635,41 @@ fn apply_relation_operation(
     }
 
     let current = relations.get(&subject_relation_id).copied();
-    if current.is_some() {
-        return Err(WorkVcsError::ReplayInvalid(format!(
-            "relation {subject_relation_id} was expected to be absent before creation, found {current:?}"
-        )));
+    match (
+        change.before_relation_version_id,
+        change.after_relation_version_id,
+    ) {
+        (None, Some(after_relation_version_id)) => {
+            if current.is_some() {
+                return Err(WorkVcsError::ReplayInvalid(format!(
+                    "relation {subject_relation_id} was expected to be absent before creation, found {current:?}"
+                )));
+            }
+            validate_relation_version(
+                connection,
+                workspace_id,
+                subject_relation_id,
+                after_relation_version_id,
+            )?;
+            relations.insert(subject_relation_id, after_relation_version_id);
+            Ok(())
+        }
+        (Some(before_relation_version_id), None) => {
+            if current != Some(before_relation_version_id) {
+                return Err(WorkVcsError::ReplayInvalid(format!(
+                    "relation {subject_relation_id} expected replay version {before_relation_version_id}, found {current:?}"
+                )));
+            }
+            relations.remove(&subject_relation_id);
+            Ok(())
+        }
+        (Some(_), Some(_)) => Err(WorkVcsError::ReplayUnsupported(format!(
+            "relation version update for {subject_relation_id} is deferred"
+        ))),
+        (None, None) => Err(WorkVcsError::ReplayInvalid(format!(
+            "relation {subject_relation_id} membership change has no before or after version"
+        ))),
     }
-
-    validate_relation_version(
-        connection,
-        workspace_id,
-        subject_relation_id,
-        after_relation_version_id,
-    )?;
-    relations.insert(subject_relation_id, after_relation_version_id);
-    Ok(())
 }
 
 struct EntityMembershipChange {
@@ -940,17 +962,18 @@ fn canonical_empty_object_json() -> Result<String> {
 fn relation_transition_payload_json(
     relation_id: RelationId,
     before_relation_version_id: Option<RelationVersionId>,
-    after_relation_version_id: RelationVersionId,
+    after_relation_version_id: Option<RelationVersionId>,
 ) -> Result<String> {
     let before_value = match before_relation_version_id {
         Some(version_id) => CanonicalValue::String(version_id.to_string()),
         None => CanonicalValue::Null,
     };
+    let after_value = match after_relation_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
     canonical_json_string(&CanonicalValue::object(vec![
-        (
-            "after_relation_version_id".to_owned(),
-            CanonicalValue::String(after_relation_version_id.to_string()),
-        ),
+        ("after_relation_version_id".to_owned(), after_value),
         ("before_relation_version_id".to_owned(), before_value),
         (
             "relation_id".to_owned(),

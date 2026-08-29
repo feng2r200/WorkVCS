@@ -19,6 +19,8 @@ pub(crate) const RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION: i64 = 1;
 pub(crate) const RECORD_DECISION_SUPERSEDE_OPERATION_TYPE: &str = "record.decision.supersede";
 pub(crate) const RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
 pub(crate) const RECORD_RELATION_CREATE_OPERATION_TYPE: &str = "record.relation.create";
+pub(crate) const RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION: i64 = 1;
+pub(crate) const RECORD_RELATION_REMOVE_OPERATION_TYPE: &str = "record.relation.remove";
 
 const ENTITY_OBJECT_KIND: &str = "entity";
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
@@ -30,6 +32,7 @@ const NORMAL_COMMIT_KIND: &str = "normal";
 const PRIMARY_PARENT_ROLE: &str = "primary";
 const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
 const RECORD_RELATION_CREATE_EVENT_KIND: &str = "record.relation.created";
+const RECORD_RELATION_REMOVE_EVENT_KIND: &str = "record.relation.removed";
 const RELATED_TO_RELATION_TYPE: &str = "related_to";
 const RELATION_OBJECT_KIND: &str = "relation";
 const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
@@ -991,6 +994,57 @@ pub struct DecisionRecordSupersedeCommit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordRelationRemoveOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    relation_id: RelationId,
+    expected_relation_version_id: RelationVersionId,
+    rationale: CanonicalValue,
+}
+
+impl RecordRelationRemoveOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        relation_id: RelationId,
+        expected_relation_version_id: RelationVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_id,
+            expected_relation_version_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordRelationRemoveCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub relation_id: RelationId,
+    pub previous_relation_version_id: RelationVersionId,
+    pub relation_type: RecordRelationType,
+    pub relation_label: Option<String>,
+    pub source_record_entity_id: EntityId,
+    pub target_record_entity_id: EntityId,
+    pub work_state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordRelationListOptions {
     commit_id: CommitId,
     relation_type: Option<RecordRelationType>,
@@ -1274,11 +1328,11 @@ pub(crate) fn supersede_decision_record(
         prior_record_entity_version_id,
     )?;
     let relation_payload_value =
-        relation_transition_payload_value(relation_id, None, relation_version_id)?;
+        relation_transition_payload_value(relation_id, None, Some(relation_version_id))?;
     let relation_payload_json = canonical_json_string(&relation_payload_value)?;
     let causal_relation_payload_json = match causal_relation_id.zip(causal_relation_version_id) {
         Some((relation_id, relation_version_id)) => Some(canonical_json_string(
-            &relation_transition_payload_value(relation_id, None, relation_version_id)?,
+            &relation_transition_payload_value(relation_id, None, Some(relation_version_id))?,
         )?),
         None => None,
     };
@@ -1447,7 +1501,7 @@ pub(crate) fn create_record_relation(
         work_state_after_record_relation_create(&parent.state, relation_id, relation_version_id)?;
     let work_state_digest = work_state_mapping_digest(&next_work_state);
     let relation_payload_value =
-        relation_transition_payload_value(relation_id, None, relation_version_id)?;
+        relation_transition_payload_value(relation_id, None, Some(relation_version_id))?;
     let relation_payload_json = canonical_json_string(&relation_payload_value)?;
     let rationale_json = canonical_json_string(&options.rationale)?;
 
@@ -1523,6 +1577,120 @@ pub(crate) fn create_record_relation(
         source_record_entity_id: options.source_record_entity_id,
         target_record_entity_id: options.target_record_entity_id,
         relation_state_digest,
+        work_state_digest,
+    })
+}
+
+pub(crate) fn remove_record_relation(
+    connection: &mut StoreConnection,
+    options: &RecordRelationRemoveOptions,
+) -> Result<RecordRelationRemoveCommit> {
+    connection.verify_foreign_keys()?;
+    require_non_empty_rationale_object(&options.rationale)?;
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let current_relation_version_id = parent
+        .state
+        .relations()
+        .iter()
+        .find_map(|(relation_id, relation_version_id)| {
+            (*relation_id == options.relation_id).then_some(*relation_version_id)
+        })
+        .ok_or_else(|| {
+            WorkVcsError::RecordNotFound(format!(
+                "record relation {} is not present at commit {}",
+                options.relation_id, options.expected_head_commit_id
+            ))
+        })?;
+    if current_relation_version_id != options.expected_relation_version_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {} expected version {}, found {} at commit {}",
+            options.relation_id,
+            options.expected_relation_version_id,
+            current_relation_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+
+    let relation = record_relation_at(
+        connection,
+        options.expected_head_commit_id,
+        options.relation_id,
+    )?;
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+    let next_work_state = work_state_after_record_relation_remove(
+        &parent.state,
+        options.relation_id,
+        options.expected_relation_version_id,
+    )?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let relation_payload_value = relation_transition_payload_value(
+        options.relation_id,
+        Some(options.expected_relation_version_id),
+        None,
+    )?;
+    let relation_payload_json = canonical_json_string(&relation_payload_value)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    write_record_relation_remove(
+        &transaction,
+        &RecordRelationRemoveRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            relation_id: options.relation_id,
+            relation_version_id: options.expected_relation_version_id,
+            changeset_id,
+            commit_id,
+            operation_id,
+            relation_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(RecordRelationRemoveCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        operation_id,
+        relation_id: options.relation_id,
+        previous_relation_version_id: options.expected_relation_version_id,
+        relation_type: relation.relation_type,
+        relation_label: relation.relation_label,
+        source_record_entity_id: relation.source_record_entity_id,
+        target_record_entity_id: relation.target_record_entity_id,
         work_state_digest,
     })
 }
@@ -1740,6 +1908,20 @@ struct RecordRelationCreateRows {
     relation_discriminator: String,
     source_record_entity_id: EntityId,
     target_record_entity_id: EntityId,
+    changeset_id: ChangeSetId,
+    commit_id: CommitId,
+    operation_id: OperationId,
+    relation_payload_json: String,
+    rationale_json: String,
+    work_state_digest: Digest,
+    now_us: i64,
+}
+
+struct RecordRelationRemoveRows {
+    workspace_id: WorkspaceId,
+    expected_head_commit_id: CommitId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
     changeset_id: ChangeSetId,
     commit_id: CommitId,
     operation_id: OperationId,
@@ -2063,6 +2245,30 @@ fn work_state_after_record_relation_create(
     WorkState::new(entities, relations).map_err(record_invalid_from)
 }
 
+fn work_state_after_record_relation_remove(
+    parent_state: &WorkState,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<WorkState> {
+    let entities = parent_state.entities().to_vec();
+    let mut relations = parent_state
+        .relations()
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
+    match relations.remove(&relation_id) {
+        Some(current_relation_version_id) if current_relation_version_id == relation_version_id => {
+            WorkState::new(entities, relations).map_err(record_invalid_from)
+        }
+        Some(current_relation_version_id) => Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} expected version {relation_version_id}, found {current_relation_version_id}"
+        ))),
+        None => Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} was expected to be present before removal"
+        ))),
+    }
+}
+
 fn work_state_after_decision_supersede(
     parent_state: &WorkState,
     prior_record_entity_id: EntityId,
@@ -2329,6 +2535,143 @@ fn write_record_relation_create(
                 &workspace_id_bytes[..],
                 &changeset_id_bytes[..],
                 RECORD_RELATION_CREATE_EVENT_KIND,
+                rows.now_us,
+                rows.relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    Ok(())
+}
+
+fn write_record_relation_remove(
+    transaction: &Transaction<'_>,
+    rows: &RecordRelationRemoveRows,
+) -> Result<()> {
+    let workspace_id_bytes = rows.workspace_id.raw_bytes();
+    let relation_id_bytes = rows.relation_id.raw_bytes();
+    let relation_version_id_bytes = rows.relation_version_id.raw_bytes();
+    let changeset_id_bytes = rows.changeset_id.raw_bytes();
+    let commit_id_bytes = rows.commit_id.raw_bytes();
+    let operation_id_bytes = rows.operation_id.raw_bytes();
+    let parent_commit_id_bytes = rows.expected_head_commit_id.raw_bytes();
+    let work_state_digest_bytes = rows.work_state_digest.as_bytes();
+
+    transaction
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                &changeset_id_bytes[..],
+                &workspace_id_bytes[..],
+                RECORD_RELATION_REMOVE_OPERATION_TYPE,
+                RECORD_RELATION_REMOVE_OPERATION_SCHEMA_VERSION,
+                rows.relation_payload_json,
+                rows.rationale_json,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 0, 'relation', ?3, ?4)",
+            params![
+                &operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                &relation_id_bytes[..],
+                rows.relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_membership_change(
+                operation_id,
+                relation_id,
+                before_relation_version_id,
+                after_relation_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, ?3, NULL, ?4)",
+            params![
+                &operation_id_bytes[..],
+                &relation_id_bytes[..],
+                &relation_version_id_bytes[..],
+                EMPTY_FIELD_DELTA
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &commit_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                NORMAL_COMMIT_KIND,
+                &work_state_digest_bytes[..],
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, ?2, ?3)",
+            params![
+                &commit_id_bytes[..],
+                PRIMARY_PARENT_ROLE,
+                &parent_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+            params![
+                &EventId::new_v7().raw_bytes()[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                RECORD_RELATION_REMOVE_EVENT_KIND,
                 rows.now_us,
                 rows.relation_payload_json
             ],
@@ -2790,17 +3133,18 @@ fn move_branch_head(
 fn relation_transition_payload_value(
     relation_id: RelationId,
     before_relation_version_id: Option<RelationVersionId>,
-    after_relation_version_id: RelationVersionId,
+    after_relation_version_id: Option<RelationVersionId>,
 ) -> Result<CanonicalValue> {
     let before_value = match before_relation_version_id {
         Some(version_id) => CanonicalValue::String(version_id.to_string()),
         None => CanonicalValue::Null,
     };
+    let after_value = match after_relation_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
     CanonicalValue::object(vec![
-        (
-            "after_relation_version_id".to_owned(),
-            CanonicalValue::String(after_relation_version_id.to_string()),
-        ),
+        ("after_relation_version_id".to_owned(), after_value),
         ("before_relation_version_id".to_owned(), before_value),
         (
             "relation_id".to_owned(),

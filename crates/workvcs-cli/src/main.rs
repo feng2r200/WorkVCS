@@ -12,22 +12,23 @@ use workvcs_core::{
     EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
     NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
     RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationSnapshot,
-    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions, RelationId, ReplayedState, ResolvedWhyQuerySubject,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkVcsError, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationSnapshot, RecordRelationType, RecordSnapshot,
+    RecordStatus, RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId,
+    ReplayedState, ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult,
+    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
+    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
+    WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, content_object_digest,
+    parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -557,6 +558,25 @@ enum RecordCommand {
 
         #[arg(long)]
         relation: String,
+    },
+    RelationRemove {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        relation: String,
+
+        #[arg(long)]
+        relation_version: String,
+
+        #[arg(long)]
+        rationale: String,
     },
     Assumption {
         #[arg(value_name = "STORE")]
@@ -1582,6 +1602,27 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::RelationRemove {
+                    store,
+                    branch,
+                    head,
+                    relation,
+                    relation_version,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let removed = engine.remove_record_relation(RecordRelationRemoveOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                RelationId::parse_canonical(&relation)?,
+                RelationVersionId::parse_canonical(&relation_version)?,
+                rationale,
+            )?)?;
+            Ok(render_record_relation_remove(&removed))
+        }
+        Command::Record {
+            command:
                 RecordCommand::Assumption {
                     store,
                     branch,
@@ -2549,6 +2590,25 @@ fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> Strin
         relation.source_record_entity_id,
         relation.target_record_entity_id,
         relation.relation_state_digest,
+        relation.work_state_digest
+    )
+}
+
+fn render_record_relation_remove(relation: &RecordRelationRemoveCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nprevious_relation_version_id={}\nrelation_type={}\nrelation_label={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.previous_relation_version_id,
+        relation.relation_type,
+        relation.relation_label.as_deref().unwrap_or(""),
+        relation.source_record_entity_id,
+        relation.target_record_entity_id,
         relation.work_state_digest
     )
 }
@@ -5774,6 +5834,150 @@ mod tests {
         .expect("why decision");
         assert!(why_decision.contains("relation.0.relation_kind=record_related_to"));
         assert!(why_decision.contains("relation.0.relation_label=caused_by"));
+    }
+
+    #[test]
+    fn cli_removes_record_relation_from_current_projection() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let decision = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Use serialized writes",
+        ])
+        .expect("parse decision"))
+        .expect("create decision");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&decision, "commit_id"),
+            "--statement",
+            "The benchmark no longer supports this decision",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-record",
+            &value(&decision, "record_entity_id"),
+            "--rationale",
+            "Finding initially supports the decision",
+        ])
+        .expect("parse link supports"))
+        .expect("link supports");
+
+        let removed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-remove",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--relation-version",
+            &value(&relation, "relation_version_id"),
+            "--rationale",
+            "Finding no longer supports the decision",
+        ])
+        .expect("parse relation remove"))
+        .expect("remove relation");
+        assert!(removed.contains("relation_type=supports"));
+        assert_eq!(
+            value(&removed, "relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&removed, "previous_relation_version_id"),
+            value(&relation, "relation_version_id")
+        );
+
+        let listed_after = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&removed, "commit_id"),
+        ])
+        .expect("parse relation list"))
+        .expect("list after removal");
+        assert!(listed_after.contains("relations=0"));
+
+        let show_after = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-show",
+            store,
+            "--commit",
+            &value(&removed, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+        ])
+        .expect("parse relation show"))
+        .expect_err("removed relation should not be current");
+        assert!(show_after.to_string().contains("is not present"));
+
+        let historical = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-show",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+        ])
+        .expect("parse historical relation show"))
+        .expect("historical relation remains visible");
+        assert!(historical.contains("relation_type=supports"));
+        assert_eq!(
+            value(&historical, "relation_version_id"),
+            value(&relation, "relation_version_id")
+        );
     }
 
     fn value(output: &str, key: &str) -> String {

@@ -21,20 +21,20 @@ use crate::history::{
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
     RecordCreateCommit, RecordCreateOptions, RecordListOptions, RecordListResult,
     RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit,
-    RecordTransitionOptions, ReplayedState, ResourceBindOptions, ResourceBindResult,
-    ResourceCreateOptions, ResourceCreateResult, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationSnapshot, ResourceSnapshot,
-    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions, StructuralReferenceSnapshot,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
-    VerificationRequirementSnapshot, VerificationSnapshot, WhyQueryOptions, WhyQueryResult,
-    WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo, WorkspaceInitOptions,
-    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
+    RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
+    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
+    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
+    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
@@ -308,6 +308,13 @@ impl Engine {
         options: RecordRelationCreateOptions,
     ) -> Result<RecordRelationCreateCommit> {
         self.store.create_record_relation(&options)
+    }
+
+    pub fn remove_record_relation(
+        &mut self,
+        options: RecordRelationRemoveOptions,
+    ) -> Result<RecordRelationRemoveCommit> {
+        self.store.remove_record_relation(&options)
     }
 
     pub fn record_relations_at(

@@ -11,12 +11,13 @@ use crate::history::{
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
     RecordCreateOptions, RecordListOptions, RecordListResult, RecordRelationCreateCommit,
     RecordRelationCreateOptions, RecordRelationListOptions, RecordRelationListResult,
-    RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
-    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
-    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    RecordRelationRemoveCommit, RecordRelationRemoveOptions, RecordRelationSnapshot,
+    RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
+    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
+    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -188,6 +189,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::create_record_relation(&mut self.connection, options)
+    }
+
+    pub(crate) fn remove_record_relation(
+        &mut self,
+        options: &RecordRelationRemoveOptions,
+    ) -> Result<RecordRelationRemoveCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::remove_record_relation(&mut self.connection, options)
     }
 
     pub(crate) fn record_relations_at(

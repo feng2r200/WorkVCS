@@ -27,11 +27,12 @@ mod why;
 
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
-    BundleCheckpointCandidate, BundleEntityMembershipChangeRef, BundleEntityVersionRef,
-    BundleExportManifest, BundleExportOptions, BundleImportAttemptListOptions,
-    BundleImportAttemptListResult, BundleImportAttemptOptions, BundleImportAttemptOutcomeSnapshot,
-    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
-    BundleImportPreflightResult, BundleKnowledgeExposureLocalSourceRef, BundleKnowledgeExposureRef,
+    BundleBranchHeadRef, BundleCheckpointCandidate, BundleEntityMembershipChangeRef,
+    BundleEntityVersionRef, BundleExportManifest, BundleExportOptions,
+    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
+    BundleImportAttemptOutcomeSnapshot, BundleImportAttemptResult, BundleImportAttemptSnapshot,
+    BundleImportPreflightOptions, BundleImportPreflightResult,
+    BundleKnowledgeExposureLocalSourceRef, BundleKnowledgeExposureRef,
     BundleKnowledgeExposureSourceStatusRef, BundleKnowledgeExposureTransitionRef,
     BundleKnowledgeSpaceRef, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput,

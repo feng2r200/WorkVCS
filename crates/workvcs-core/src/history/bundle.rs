@@ -4,9 +4,9 @@ use crate::canonical::{
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, EventId, ExposureId,
-    ExposureTransitionId, ImportId, KnowledgeSpaceId, OperationId, RelationId, RelationVersionId,
-    SessionId, StoreId, WorkspaceId,
+    BranchId, ChangeSetId, CheckpointId, CommitId, Digest, EntityId, EntityVersionId, EventId,
+    ExposureId, ExposureTransitionId, ImportId, KnowledgeSpaceId, OperationId, RelationId,
+    RelationVersionId, SessionId, StoreId, WorkspaceId,
 };
 use crate::store::{StoreConnection, StoreInfo, StoreManifest, current_epoch_micros};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -200,6 +200,7 @@ pub struct BundleExportManifest {
     pub entity_count: usize,
     pub relation_count: usize,
     pub commit_count: usize,
+    pub exported_branch_heads: Vec<BundleBranchHeadRef>,
     pub entity_versions: Vec<BundleEntityVersionRef>,
     pub relation_versions: Vec<BundleRelationVersionRef>,
     pub knowledge_spaces: Vec<BundleKnowledgeSpaceRef>,
@@ -442,6 +443,17 @@ pub struct BundleCheckpointCandidate {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleBranchHeadRef {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub name: String,
+    pub head_commit_id: CommitId,
+    pub head_state_digest: Digest,
+    pub lifecycle_state: String,
+    pub created_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleEntityVersionRef {
     pub entity_id: EntityId,
     pub entity_version_id: EntityVersionId,
@@ -635,6 +647,8 @@ pub(crate) fn export_bundle_manifest(
             .cmp(&right.committed_at_us)
             .then_with(|| left.commit_id.cmp(&right.commit_id))
     });
+    let exported_branch_heads =
+        exported_branch_head_refs(connection, replayed.workspace_id, &commits)?;
 
     let entity_membership_changes = entity_membership_change_refs(connection, &commits)?;
     let relation_membership_changes = relation_membership_change_refs(connection, &commits)?;
@@ -680,6 +694,7 @@ pub(crate) fn export_bundle_manifest(
         store_info,
         replayed: &replayed,
         commits: &commits,
+        exported_branch_heads: &exported_branch_heads,
         entity_versions: &entity_versions,
         relation_versions: &relation_versions,
         knowledge_spaces: &knowledge_spaces,
@@ -707,6 +722,7 @@ pub(crate) fn export_bundle_manifest(
         entity_count: replayed.state.entities().len(),
         relation_count: replayed.state.relations().len(),
         commit_count: commits.len(),
+        exported_branch_heads,
         entity_versions,
         relation_versions,
         knowledge_spaces,
@@ -1228,6 +1244,69 @@ fn load_commit_parent_refs(
         });
     }
     Ok(parents)
+}
+
+fn exported_branch_head_refs(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    commits: &[BundleCommitRef],
+) -> Result<Vec<BundleBranchHeadRef>> {
+    let commit_ids = commits
+        .iter()
+        .map(|commit| commit.commit_id)
+        .collect::<BTreeSet<_>>();
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT branch.branch_id,
+                    branch.name,
+                    branch.head_commit_id,
+                    branch.lifecycle_state,
+                    branch.created_at_us,
+                    workstate_commit.state_digest
+             FROM branch
+             JOIN workstate_commit
+               ON workstate_commit.workspace_id = branch.workspace_id
+              AND workstate_commit.commit_id = branch.head_commit_id
+             WHERE branch.workspace_id = ?1
+             ORDER BY branch.name, branch.branch_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&workspace_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut refs = Vec::new();
+    for row in rows {
+        let (branch_id, name, head_commit_id, lifecycle_state, created_at_us, state_digest) =
+            row.map_err(storage_error)?;
+        let head_commit_id = decode_commit_id("branch.head_commit_id", head_commit_id)?;
+        if !commit_ids.contains(&head_commit_id) {
+            continue;
+        }
+        validate_stored_text("branch.name", &name)?;
+        validate_stored_text("branch.lifecycle_state", &lifecycle_state)?;
+        validate_positive_i64("branch.created_at_us", created_at_us)?;
+        refs.push(BundleBranchHeadRef {
+            workspace_id,
+            branch_id: decode_branch_id("branch.branch_id", branch_id)?,
+            name,
+            head_commit_id,
+            head_state_digest: decode_digest("workstate_commit.state_digest", state_digest)?,
+            lifecycle_state,
+            created_at_us,
+        });
+    }
+    Ok(refs)
 }
 
 fn entity_version_closure_refs(
@@ -2792,6 +2871,7 @@ struct BundleManifestValueInput<'a> {
     store_info: &'a StoreInfo,
     replayed: &'a super::ReplayedState,
     commits: &'a [BundleCommitRef],
+    exported_branch_heads: &'a [BundleBranchHeadRef],
     entity_versions: &'a [BundleEntityVersionRef],
     relation_versions: &'a [BundleRelationVersionRef],
     knowledge_spaces: &'a [BundleKnowledgeSpaceRef],
@@ -2848,6 +2928,16 @@ fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue>
                     .commits
                     .iter()
                     .map(commit_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "exported_branch_heads".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .exported_branch_heads
+                    .iter()
+                    .map(branch_head_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
@@ -3011,6 +3101,18 @@ fn commit_parent_ref_value(parent: &BundleCommitParentRef) -> Result<CanonicalVa
         integer_field("parent_ordinal", parent.parent_ordinal)?,
         string_field("parent_role", parent.parent_role.clone()),
         string_field("parent_commit_id", parent.parent_commit_id.to_string()),
+    ])
+}
+
+fn branch_head_ref_value(branch: &BundleBranchHeadRef) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("workspace_id", branch.workspace_id.to_string()),
+        string_field("branch_id", branch.branch_id.to_string()),
+        string_field("name", branch.name.clone()),
+        string_field("head_commit_id", branch.head_commit_id.to_string()),
+        string_field("head_state_digest", branch.head_state_digest.to_string()),
+        string_field("lifecycle_state", branch.lifecycle_state.clone()),
+        integer_field("created_at_us", branch.created_at_us)?,
     ])
 }
 
@@ -3977,6 +4079,12 @@ fn load_bundle_import_attempt_outcome(
 fn decode_store_id(column: &str, bytes: Vec<u8>) -> Result<StoreId> {
     let bytes = decode_16(column, bytes)?;
     StoreId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
+}
+
+fn decode_branch_id(column: &str, bytes: Vec<u8>) -> Result<BranchId> {
+    let bytes = decode_16(column, bytes)?;
+    BranchId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(format!("{column}: {error}")))
 }
 

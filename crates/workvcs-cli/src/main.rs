@@ -6339,7 +6339,7 @@ fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> Str
 
 fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
     let mut output = format!(
-        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nentities={}\nrelations={}\nentity_versions={}\nrelation_versions={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
+        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nrelation_versions={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\ncheckpoint_candidates={}\n",
         manifest.manifest_profile,
         manifest.manifest_version,
         manifest.store_id,
@@ -6349,6 +6349,7 @@ fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
         manifest.manifest_digest,
         manifest.manifest_size_bytes,
         manifest.commit_count,
+        manifest.exported_branch_heads.len(),
         manifest.entity_count,
         manifest.relation_count,
         manifest.entity_versions.len(),
@@ -10106,6 +10107,7 @@ mod tests {
         assert_eq!(value(&exported, "bundle_manifest_version"), "1");
         assert_eq!(value(&exported, "commit_id"), genesis);
         assert_eq!(value(&exported, "commits"), "1");
+        assert_eq!(value(&exported, "exported_branch_heads"), "1");
         assert_eq!(value(&exported, "entities"), "0");
         assert_eq!(value(&exported, "entity_versions"), "0");
         assert_eq!(value(&exported, "relation_versions"), "0");

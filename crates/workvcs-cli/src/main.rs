@@ -460,6 +460,25 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    LinkDerivedFrom {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        result_record: String,
+
+        #[arg(long)]
+        source_record: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
     LinkRelatedTo {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1434,6 +1453,28 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Record {
             command:
+                RecordCommand::LinkDerivedFrom {
+                    store,
+                    branch,
+                    head,
+                    result_record,
+                    source_record,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_record_relation(RecordRelationCreateOptions::derived_from(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&result_record)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    rationale,
+                )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        Command::Record {
+            command:
                 RecordCommand::LinkRelatedTo {
                     store,
                     branch,
@@ -2016,6 +2057,7 @@ fn parse_record_kind(value: &str) -> Result<RecordKind> {
 fn parse_record_relation_type(value: &str) -> Result<RecordRelationType> {
     match value {
         "contradicts" => Ok(RecordRelationType::Contradicts),
+        "derived_from" => Ok(RecordRelationType::DerivedFrom),
         "invalidates" => Ok(RecordRelationType::Invalidates),
         "related_to" => Ok(RecordRelationType::RelatedTo),
         "supersedes" => Ok(RecordRelationType::Supersedes),
@@ -3017,6 +3059,7 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::Verifies => "verifies",
         WhyRelationKind::EvidencedBy => "evidenced_by",
         WhyRelationKind::RecordContradicts => "record_contradicts",
+        WhyRelationKind::RecordDerivedFrom => "record_derived_from",
         WhyRelationKind::RecordInvalidates => "record_invalidates",
         WhyRelationKind::RecordRelatedTo => "record_related_to",
         WhyRelationKind::RecordSupports => "record_supports",
@@ -4418,6 +4461,115 @@ mod tests {
         .expect("why prior");
         assert!(why_prior.contains("relation.0.relation_kind=record_supersedes"));
         assert!(why_prior.contains("relation.0.direction=incoming"));
+    }
+
+    #[test]
+    fn cli_links_record_derived_from_source_record() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Concurrent write tests fail without serialization",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let decision = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--statement",
+            "Use serialized writes",
+        ])
+        .expect("parse decision"))
+        .expect("create decision");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-derived-from",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&decision, "commit_id"),
+            "--result-record",
+            &value(&decision, "record_entity_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--rationale",
+            "Decision was derived from the finding",
+        ])
+        .expect("parse link derived_from"))
+        .expect("link derived_from");
+
+        assert!(relation.contains("relation_type=derived_from"));
+        assert_eq!(
+            value(&relation, "source_record_entity_id"),
+            value(&decision, "record_entity_id")
+        );
+        assert_eq!(
+            value(&relation, "target_record_entity_id"),
+            value(&finding, "record_entity_id")
+        );
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--type",
+            "derived_from",
+        ])
+        .expect("parse relation list"))
+        .expect("list derived_from");
+        assert!(listed.contains("relations=1"));
+
+        let why_decision = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--entity",
+            &value(&decision, "record_entity_id"),
+        ])
+        .expect("parse why decision"))
+        .expect("why decision");
+        assert!(why_decision.contains("relation.0.relation_kind=record_derived_from"));
+        assert!(why_decision.contains("relation.0.direction=outgoing"));
     }
 
     #[test]

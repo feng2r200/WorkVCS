@@ -23,6 +23,7 @@ pub(crate) const RECORD_RELATION_CREATE_OPERATION_TYPE: &str = "record.relation.
 const ENTITY_OBJECT_KIND: &str = "entity";
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const CONTRADICTS_RELATION_TYPE: &str = "contradicts";
+const DERIVED_FROM_RELATION_TYPE: &str = "derived_from";
 const EMPTY_FIELD_DELTA: &str = "{}";
 const INVALIDATES_RELATION_TYPE: &str = "invalidates";
 const NORMAL_COMMIT_KIND: &str = "normal";
@@ -706,6 +707,7 @@ pub struct RecordListResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecordRelationType {
     Contradicts,
+    DerivedFrom,
     Invalidates,
     RelatedTo,
     Supersedes,
@@ -717,6 +719,7 @@ impl RecordRelationType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Contradicts => CONTRADICTS_RELATION_TYPE,
+            Self::DerivedFrom => DERIVED_FROM_RELATION_TYPE,
             Self::Invalidates => INVALIDATES_RELATION_TYPE,
             Self::RelatedTo => RELATED_TO_RELATION_TYPE,
             Self::Supersedes => SUPERSEDES_RELATION_TYPE,
@@ -728,6 +731,7 @@ impl RecordRelationType {
     fn parse(value: &str) -> Option<Self> {
         match value {
             CONTRADICTS_RELATION_TYPE => Some(Self::Contradicts),
+            DERIVED_FROM_RELATION_TYPE => Some(Self::DerivedFrom),
             INVALIDATES_RELATION_TYPE => Some(Self::Invalidates),
             RELATED_TO_RELATION_TYPE => Some(Self::RelatedTo),
             SUPERSEDES_RELATION_TYPE => Some(Self::Supersedes),
@@ -791,6 +795,26 @@ impl RecordRelationCreateOptions {
             relation_type: RecordRelationType::Invalidates,
             source_record_entity_id,
             target_record_entity_id,
+            relation_label: None,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn derived_from(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        result_record_entity_id: EntityId,
+        source_record_entity_id: EntityId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::DerivedFrom,
+            source_record_entity_id: result_record_entity_id,
+            target_record_entity_id: source_record_entity_id,
             relation_label: None,
             rationale: rationale_value(&rationale)?,
         })
@@ -1730,6 +1754,7 @@ fn validate_record_relation_endpoints_for_create(
             }
             Ok(())
         }
+        RecordRelationType::DerivedFrom => Ok(()),
         RecordRelationType::Invalidates => {
             if source.state.kind != RecordKind::Finding {
                 return Err(WorkVcsError::RecordInvalid(format!(
@@ -1819,6 +1844,7 @@ fn validate_record_relation_endpoints_for_projection(
             }
             Ok(())
         }
+        RecordRelationType::DerivedFrom => Ok(()),
         RecordRelationType::Invalidates => {
             if source.state.kind != RecordKind::Finding {
                 return Err(WorkVcsError::RecordInvalid(format!(

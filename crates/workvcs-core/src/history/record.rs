@@ -1302,6 +1302,56 @@ pub struct RecordRelationSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordKnowledgeRelationListOptions {
+    commit_id: CommitId,
+    relation_type: Option<RecordRelationType>,
+    source_record_entity_id: Option<EntityId>,
+    target_knowledge_entity_id: Option<EntityId>,
+}
+
+impl RecordKnowledgeRelationListOptions {
+    pub fn new(commit_id: CommitId) -> Self {
+        Self {
+            commit_id,
+            relation_type: None,
+            source_record_entity_id: None,
+            target_knowledge_entity_id: None,
+        }
+    }
+
+    pub fn with_relation_type(mut self, relation_type: RecordRelationType) -> Self {
+        self.relation_type = Some(relation_type);
+        self
+    }
+
+    pub fn with_source_record(mut self, record_entity_id: EntityId) -> Self {
+        self.source_record_entity_id = Some(record_entity_id);
+        self
+    }
+
+    pub fn with_target_knowledge(mut self, knowledge_entity_id: EntityId) -> Self {
+        self.target_knowledge_entity_id = Some(knowledge_entity_id);
+        self
+    }
+
+    pub fn commit_id(&self) -> CommitId {
+        self.commit_id
+    }
+
+    pub fn relation_type(&self) -> Option<RecordRelationType> {
+        self.relation_type
+    }
+
+    pub fn source_record_entity_id(&self) -> Option<EntityId> {
+        self.source_record_entity_id
+    }
+
+    pub fn target_knowledge_entity_id(&self) -> Option<EntityId> {
+        self.target_knowledge_entity_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordKnowledgeRelationSnapshot {
     pub workspace_id: WorkspaceId,
     pub commit_id: CommitId,
@@ -1318,6 +1368,13 @@ pub struct RecordRelationListResult {
     pub workspace_id: WorkspaceId,
     pub commit_id: CommitId,
     pub relations: Vec<RecordRelationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordKnowledgeRelationListResult {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub relations: Vec<RecordKnowledgeRelationSnapshot>,
 }
 
 pub(crate) fn create_record(
@@ -2337,8 +2394,9 @@ pub(crate) fn record_relations_at(
 
 pub(crate) fn record_knowledge_relations_at(
     connection: &StoreConnection,
-    commit_id: CommitId,
-) -> Result<Vec<RecordKnowledgeRelationSnapshot>> {
+    options: &RecordKnowledgeRelationListOptions,
+) -> Result<RecordKnowledgeRelationListResult> {
+    let commit_id = options.commit_id();
     let replayed = state_at(connection, commit_id)?;
     let mut relations = Vec::new();
 
@@ -2352,6 +2410,28 @@ pub(crate) fn record_knowledge_relations_at(
         else {
             continue;
         };
+        if options
+            .relation_type()
+            .is_some_and(|relation_type| relation.relation_type != relation_type)
+        {
+            continue;
+        }
+        if options
+            .source_record_entity_id()
+            .is_some_and(|source_record_entity_id| {
+                relation.source_record_entity_id != source_record_entity_id
+            })
+        {
+            continue;
+        }
+        if options
+            .target_knowledge_entity_id()
+            .is_some_and(|target_knowledge_entity_id| {
+                relation.target_knowledge_entity_id != target_knowledge_entity_id
+            })
+        {
+            continue;
+        }
         let source = record_snapshot_in_state(
             connection,
             replayed.workspace_id,
@@ -2396,7 +2476,11 @@ pub(crate) fn record_knowledge_relations_at(
             })
             .then_with(|| left.relation_id.cmp(&right.relation_id))
     });
-    Ok(relations)
+    Ok(RecordKnowledgeRelationListResult {
+        workspace_id: replayed.workspace_id,
+        commit_id,
+        relations,
+    })
 }
 
 pub(crate) fn record_relation_at(

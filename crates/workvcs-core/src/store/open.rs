@@ -12,7 +12,8 @@ use crate::history::{
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
     RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordListOptions, RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
     RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
     RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
     RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
@@ -265,6 +266,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::record_relations_at(&self.connection, options)
+    }
+
+    pub(crate) fn record_knowledge_relations_at(
+        &self,
+        options: &RecordKnowledgeRelationListOptions,
+    ) -> Result<RecordKnowledgeRelationListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_knowledge_relations_at(&self.connection, options)
     }
 
     pub(crate) fn record_relation_at(

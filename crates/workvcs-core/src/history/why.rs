@@ -7,8 +7,8 @@ use super::task::{
     VERIFICATION_REQUIREMENT_ENTITY_KIND,
 };
 use super::{
-    PrimaryContainmentEndpointKind, RecordRelationListOptions, RecordRelationType,
-    StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence,
+    PrimaryContainmentEndpointKind, RecordKnowledgeRelationListOptions, RecordRelationListOptions,
+    RecordRelationType, StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence,
     primary_containment_relations_at, record_knowledge_relations_at, record_relations_at, state_at,
     structural_references_at, verification_evidence_relations_at, verification_relations_at,
 };
@@ -353,7 +353,12 @@ pub(crate) fn explain_why(
             });
         }
     }
-    for relation in record_knowledge_relations_at(connection, resolved.target.commit_id)? {
+    for relation in record_knowledge_relations_at(
+        connection,
+        &RecordKnowledgeRelationListOptions::new(resolved.target.commit_id),
+    )?
+    .relations
+    {
         let source =
             WhyRelationEndpoint::entity(relation.source_record_entity_id, WhyEntityKind::Record);
         let target = WhyRelationEndpoint::entity(

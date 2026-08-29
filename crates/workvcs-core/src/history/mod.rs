@@ -49,12 +49,13 @@ pub use query::{BranchHead, HistoryEntry, HistoryQueryOptions, HistoryQueryResul
 pub use record::{
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, RecordCreateCommit,
     RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
-    RecordKnowledgeRelationCreateOptions, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordRelationType, RecordSnapshot, RecordState, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordState, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions,
 };
 pub use reference::{
     StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,

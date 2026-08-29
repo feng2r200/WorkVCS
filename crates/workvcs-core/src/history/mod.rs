@@ -62,8 +62,8 @@ pub use task::{
     VerificationEvidenceRelationSnapshot, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot,
-    VerificationRequirementState, VerificationResult, VerificationSemanticDependency,
-    VerificationSnapshot, VerificationState, VerificationTarget,
+    VerificationRequirementState, VerificationResourceBasis, VerificationResult,
+    VerificationSemanticDependency, VerificationSnapshot, VerificationState, VerificationTarget,
 };
 pub use why::{
     ResolvedWhyQuerySubject, ResolvedWhyQueryTarget, WhyDeferredRelationFamily, WhyEntityKind,

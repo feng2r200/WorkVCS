@@ -5,6 +5,7 @@ use super::entity::{
 use super::evidence::{EVIDENCE_OBJECT_KIND, require_evidence_exists};
 use super::goal::GOAL_ENTITY_KIND;
 use super::plan::PLAN_ENTITY_KIND;
+use super::resource::{resource, resource_observation};
 use super::{EntityTransitionOptions, commit_entity_transition, state_at};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, entity_version_digest, parse_canonical_json,
@@ -13,7 +14,7 @@ use crate::canonical::{
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, EvidenceId,
-    OperationId, RelationId, RelationVersionId, WorkspaceId,
+    OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId, WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -470,12 +471,102 @@ impl VerificationEvidenceRef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationResourceBasis {
+    pub resource_id: ResourceId,
+    pub adapter_kind: String,
+    pub adapter_schema_version: i64,
+    pub scope_kind: String,
+    pub scope_schema_version: i64,
+    pub scope_payload: CanonicalValue,
+    pub baseline_observation_id: Option<ResourceObservationId>,
+    pub baseline_fingerprint: Digest,
+}
+
+impl VerificationResourceBasis {
+    pub fn new(
+        resource_id: ResourceId,
+        adapter_kind: impl Into<String>,
+        adapter_schema_version: i64,
+        scope_kind: impl Into<String>,
+        scope_schema_version: i64,
+        scope_payload: CanonicalValue,
+        baseline_fingerprint: Digest,
+    ) -> Result<Self> {
+        let scope_payload = normalize_verification_resource_scope_payload(scope_payload)?;
+        let basis = Self {
+            resource_id,
+            adapter_kind: adapter_kind.into(),
+            adapter_schema_version,
+            scope_kind: scope_kind.into(),
+            scope_schema_version,
+            scope_payload,
+            baseline_observation_id: None,
+            baseline_fingerprint,
+        };
+        validate_verification_resource_basis_entry(&basis)?;
+        Ok(basis)
+    }
+
+    pub fn with_baseline_observation_id(
+        mut self,
+        baseline_observation_id: ResourceObservationId,
+    ) -> Result<Self> {
+        self.baseline_observation_id = Some(baseline_observation_id);
+        validate_verification_resource_basis_entry(&self)?;
+        Ok(self)
+    }
+
+    fn to_canonical_value(&self) -> Result<CanonicalValue> {
+        validate_verification_resource_basis_entry(self)?;
+        let baseline_observation_id = self
+            .baseline_observation_id
+            .map(|id| CanonicalValue::String(id.to_string()))
+            .unwrap_or(CanonicalValue::Null);
+        CanonicalValue::object(vec![
+            (
+                "adapter_kind".to_owned(),
+                CanonicalValue::String(self.adapter_kind.clone()),
+            ),
+            (
+                "adapter_schema_version".to_owned(),
+                CanonicalValue::safe_integer(self.adapter_schema_version)
+                    .map_err(task_invalid_from)?,
+            ),
+            (
+                "baseline_fingerprint".to_owned(),
+                CanonicalValue::String(self.baseline_fingerprint.to_hex()),
+            ),
+            (
+                "baseline_observation_id".to_owned(),
+                baseline_observation_id,
+            ),
+            (
+                "resource_id".to_owned(),
+                CanonicalValue::String(self.resource_id.to_string()),
+            ),
+            (
+                "scope_kind".to_owned(),
+                CanonicalValue::String(self.scope_kind.clone()),
+            ),
+            ("scope_payload".to_owned(), self.scope_payload.clone()),
+            (
+                "scope_schema_version".to_owned(),
+                CanonicalValue::safe_integer(self.scope_schema_version)
+                    .map_err(task_invalid_from)?,
+            ),
+        ])
+        .map_err(task_invalid_from)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerificationState {
     pub result: VerificationResult,
     pub method: CanonicalValue,
     pub verified_at_commit_id: CommitId,
     pub semantic_dependencies: Vec<VerificationSemanticDependency>,
     pub evidence: Vec<VerificationEvidenceRef>,
+    pub resource_basis: Vec<VerificationResourceBasis>,
 }
 
 impl VerificationState {
@@ -501,9 +592,28 @@ impl VerificationState {
         semantic_dependencies: Vec<VerificationSemanticDependency>,
         evidence: Vec<VerificationEvidenceRef>,
     ) -> Result<Self> {
+        Self::new_with_evidence_and_resource_basis(
+            result,
+            method,
+            verified_at_commit_id,
+            semantic_dependencies,
+            evidence,
+            Vec::new(),
+        )
+    }
+
+    pub fn new_with_evidence_and_resource_basis(
+        result: VerificationResult,
+        method: CanonicalValue,
+        verified_at_commit_id: CommitId,
+        semantic_dependencies: Vec<VerificationSemanticDependency>,
+        evidence: Vec<VerificationEvidenceRef>,
+        resource_basis: Vec<VerificationResourceBasis>,
+    ) -> Result<Self> {
         validate_verification_method(&method)?;
         validate_verification_semantic_dependencies(&semantic_dependencies)?;
         validate_verification_evidence_refs(&evidence)?;
+        validate_verification_resource_basis(&resource_basis)?;
         let mut evidence = evidence;
         evidence.sort_by_key(|evidence| evidence.evidence_id.raw_bytes());
         Ok(Self {
@@ -512,6 +622,7 @@ impl VerificationState {
             verified_at_commit_id,
             semantic_dependencies,
             evidence,
+            resource_basis,
         })
     }
 
@@ -519,6 +630,7 @@ impl VerificationState {
         validate_verification_method(&self.method)?;
         validate_verification_semantic_dependencies(&self.semantic_dependencies)?;
         validate_verification_evidence_refs(&self.evidence)?;
+        validate_verification_resource_basis(&self.resource_basis)?;
         let mut dependencies = self.semantic_dependencies.clone();
         dependencies.sort_by(|left, right| {
             left.entity_id
@@ -541,10 +653,19 @@ impl VerificationState {
             .copied()
             .map(VerificationEvidenceRef::to_canonical_value)
             .collect::<Result<Vec<_>>>()?;
+        let resource_basis = self
+            .resource_basis
+            .iter()
+            .map(VerificationResourceBasis::to_canonical_value)
+            .collect::<Result<Vec<_>>>()?;
         CanonicalValue::object(vec![
             (
                 "basis".to_owned(),
                 CanonicalValue::object(vec![
+                    (
+                        "resource_basis".to_owned(),
+                        CanonicalValue::Array(resource_basis),
+                    ),
                     (
                         "semantic_dependencies".to_owned(),
                         CanonicalValue::Array(dependencies),
@@ -1127,6 +1248,7 @@ pub struct VerificationCreateOptions {
     result: VerificationResult,
     method: CanonicalValue,
     evidence: Vec<VerificationEvidenceRef>,
+    resource_basis: Vec<VerificationResourceBasis>,
     rationale: CanonicalValue,
 }
 
@@ -1144,6 +1266,7 @@ impl VerificationCreateOptions {
             result,
             method: CanonicalValue::object(Vec::new())?,
             evidence: Vec::new(),
+            resource_basis: Vec::new(),
             rationale: CanonicalValue::object(Vec::new())?,
         })
     }
@@ -1165,6 +1288,15 @@ impl VerificationCreateOptions {
         evidence.sort_by_key(|evidence| evidence.evidence_id.raw_bytes());
         validate_verification_evidence_refs(&evidence)?;
         self.evidence = evidence;
+        Ok(self)
+    }
+
+    pub fn with_resource_basis<I>(mut self, resource_basis: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = VerificationResourceBasis>,
+    {
+        self.resource_basis = resource_basis.into_iter().collect();
+        validate_verification_resource_basis(&self.resource_basis)?;
         Ok(self)
     }
 
@@ -2411,8 +2543,12 @@ pub(crate) fn create_verification(
     connection.verify_foreign_keys()?;
     validate_verification_method(&options.method)?;
     validate_verification_evidence_refs(&options.evidence)?;
+    validate_verification_resource_basis(&options.resource_basis)?;
     for evidence in &options.evidence {
         require_evidence_exists(connection, evidence.evidence_id)?;
+    }
+    for resource_basis in &options.resource_basis {
+        require_verification_resource_basis_references(connection, resource_basis)?;
     }
 
     let parent = state_at(connection, options.expected_head_commit_id)?;
@@ -2432,12 +2568,13 @@ pub(crate) fn create_verification(
     let verifies_relation_operation_id = OperationId::new_v7();
     let now_us = current_epoch_micros()?;
 
-    let verification_state = VerificationState::new_with_evidence(
+    let verification_state = VerificationState::new_with_evidence_and_resource_basis(
         options.result,
         options.method.clone(),
         options.expected_head_commit_id,
         semantic_dependencies,
         options.evidence.clone(),
+        options.resource_basis.clone(),
     )?;
     let verification_state_value = verification_state.to_canonical_value()?;
     let verification_state_json = canonical_json_string(&verification_state_value)?;
@@ -2450,6 +2587,7 @@ pub(crate) fn create_verification(
     let basis_json = canonical_json_string(&verification_basis_value(
         verification_state.verified_at_commit_id,
         &verification_state.semantic_dependencies,
+        &verification_state.resource_basis,
     )?)?;
     let mut evidenced_by_relations = Vec::new();
     let mut evidenced_by_payload_values = Vec::new();
@@ -2538,6 +2676,7 @@ pub(crate) fn create_verification(
             target: options.target,
             basis_json,
             semantic_dependencies: verification_state.semantic_dependencies.clone(),
+            resource_basis: verification_state.resource_basis.clone(),
             changeset_id,
             commit_id,
             verification_operation_id,
@@ -2711,6 +2850,13 @@ struct LoadedVerificationVersion {
     state: VerificationState,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedVerificationBasis {
+    verified_at_commit_id: CommitId,
+    semantic_dependencies: Vec<VerificationSemanticDependency>,
+    resource_basis: Vec<VerificationResourceBasis>,
+}
+
 struct LoadedVerifiesRelationVersion {
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
@@ -2806,6 +2952,7 @@ struct VerificationCreateRows {
     target: VerificationTarget,
     basis_json: String,
     semantic_dependencies: Vec<VerificationSemanticDependency>,
+    resource_basis: Vec<VerificationResourceBasis>,
     changeset_id: ChangeSetId,
     commit_id: CommitId,
     verification_operation_id: OperationId,
@@ -3327,6 +3474,7 @@ fn load_verification_version(
     }
 
     let dependencies = load_verification_semantic_dependencies(connection, verification_entity_id)?;
+    let resource_basis = load_verification_resource_basis(connection, verification_entity_id)?;
     let state = parse_verification_state(value)?;
     let verified_at_commit_id = decode_commit_id(
         "verification_basis.verified_at_commit_id",
@@ -3342,6 +3490,11 @@ fn load_verification_version(
             "verification entity {verification_entity_id} state dependencies do not match verification_semantic_dependency rows"
         )));
     }
+    if state.resource_basis != resource_basis {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} state resource_basis does not match verification_resource_basis rows"
+        )));
+    }
     let basis_value = parse_canonical_json(basis_json.as_bytes()).map_err(task_invalid_from)?;
     let basis_json_actual = canonical_json_string(&basis_value)?;
     if basis_json_actual != basis_json {
@@ -3349,11 +3502,27 @@ fn load_verification_version(
             "verification entity {verification_entity_id} basis_json is not canonical fixed-point JSON"
         )));
     }
+    let parsed_basis = parse_verification_basis(basis_value)?;
+    if parsed_basis.verified_at_commit_id != verified_at_commit_id
+        || parsed_basis.semantic_dependencies != dependencies
+        || parsed_basis.resource_basis != resource_basis
+    {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "verification entity {verification_entity_id} basis_json does not match structured basis rows"
+        )));
+    }
     let expected_basis_json = canonical_json_string(&verification_basis_value(
         verified_at_commit_id,
         &dependencies,
+        &resource_basis,
     )?)?;
-    if basis_json != expected_basis_json {
+    let legacy_expected_basis_json = canonical_json_string(&legacy_verification_basis_value(
+        verified_at_commit_id,
+        &dependencies,
+    )?)?;
+    if basis_json != expected_basis_json
+        && !(resource_basis.is_empty() && basis_json == legacy_expected_basis_json)
+    {
         return Err(WorkVcsError::TaskInvalid(format!(
             "verification entity {verification_entity_id} basis_json does not match dependency rows"
         )));
@@ -3411,6 +3580,90 @@ fn load_verification_semantic_dependencies(
     validate_verification_semantic_dependencies(&dependencies)?;
     require_verification_semantic_dependencies_canonical_order(&dependencies)?;
     Ok(dependencies)
+}
+
+fn load_verification_resource_basis(
+    connection: &StoreConnection,
+    verification_entity_id: EntityId,
+) -> Result<Vec<VerificationResourceBasis>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT ordinal,
+                    resource_id,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_kind,
+                    scope_schema_version,
+                    scope_payload_json,
+                    baseline_observation_id,
+                    baseline_fingerprint
+             FROM verification_resource_basis
+             WHERE verification_entity_id = ?1
+             ORDER BY ordinal",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&verification_entity_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<Vec<u8>>>(7)?,
+                row.get::<_, Vec<u8>>(8)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut resource_basis = Vec::new();
+    for row in rows {
+        let (
+            ordinal,
+            resource_id,
+            adapter_kind,
+            adapter_schema_version,
+            scope_kind,
+            scope_schema_version,
+            scope_payload_json,
+            baseline_observation_id,
+            baseline_fingerprint,
+        ) = row.map_err(storage_error)?;
+        if ordinal != resource_basis.len() as i64 {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification entity {verification_entity_id} resource basis ordinals are not contiguous"
+            )));
+        }
+        let scope_payload = parse_verification_resource_scope_payload_json(&scope_payload_json)?;
+        let mut basis = VerificationResourceBasis::new(
+            decode_resource_id("verification_resource_basis.resource_id", resource_id)?,
+            adapter_kind,
+            adapter_schema_version,
+            scope_kind,
+            scope_schema_version,
+            scope_payload,
+            decode_digest(
+                "verification_resource_basis.baseline_fingerprint",
+                baseline_fingerprint,
+            )?,
+        )?;
+        basis.baseline_observation_id = baseline_observation_id
+            .map(|bytes| {
+                decode_resource_observation_id(
+                    "verification_resource_basis.baseline_observation_id",
+                    bytes,
+                )
+            })
+            .transpose()?;
+        validate_verification_resource_basis_entry(&basis)?;
+        require_verification_resource_basis_references(connection, &basis)?;
+        resource_basis.push(basis);
+    }
+    validate_verification_resource_basis(&resource_basis)?;
+    Ok(resource_basis)
 }
 
 fn load_verifies_relation_version(
@@ -4827,6 +5080,43 @@ fn write_verification_create(
             )
             .map_err(storage_error)?;
     }
+    for (ordinal, resource_basis) in rows.resource_basis.iter().enumerate() {
+        let scope_payload_json = canonical_json_string(&resource_basis.scope_payload)?;
+        let baseline_observation_id_bytes = resource_basis
+            .baseline_observation_id
+            .map(|id| id.raw_bytes());
+        transaction
+            .execute(
+                "INSERT INTO verification_resource_basis(
+                    verification_entity_id,
+                    ordinal,
+                    resource_id,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_kind,
+                    scope_schema_version,
+                    scope_payload_json,
+                    baseline_observation_id,
+                    baseline_fingerprint
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    &verification_entity_id_bytes[..],
+                    ordinal as i64,
+                    &resource_basis.resource_id.raw_bytes()[..],
+                    resource_basis.adapter_kind.as_str(),
+                    resource_basis.adapter_schema_version,
+                    resource_basis.scope_kind.as_str(),
+                    resource_basis.scope_schema_version,
+                    scope_payload_json,
+                    baseline_observation_id_bytes
+                        .as_ref()
+                        .map(|bytes| &bytes[..]),
+                    &resource_basis.baseline_fingerprint.as_bytes()[..],
+                ],
+            )
+            .map_err(storage_error)?;
+    }
     transaction
         .execute(
             "INSERT INTO object_identity(object_id, object_kind, created_at_us)
@@ -5775,19 +6065,20 @@ fn parse_verification_state(value: CanonicalValue) -> Result<VerificationState> 
     let evidence = evidence.ok_or_else(|| {
         WorkVcsError::TaskInvalid("verification state is missing evidence".to_owned())
     })?;
-    let (verified_at_commit_id, semantic_dependencies) = basis.ok_or_else(|| {
+    let basis = basis.ok_or_else(|| {
         WorkVcsError::TaskInvalid("verification state is missing basis".to_owned())
     })?;
-    VerificationState::new_with_evidence(
+    VerificationState::new_with_evidence_and_resource_basis(
         result.ok_or_else(|| {
             WorkVcsError::TaskInvalid("verification state is missing result".to_owned())
         })?,
         method.ok_or_else(|| {
             WorkVcsError::TaskInvalid("verification state is missing method".to_owned())
         })?,
-        verified_at_commit_id,
-        semantic_dependencies,
+        basis.verified_at_commit_id,
+        basis.semantic_dependencies,
         evidence,
+        basis.resource_basis,
     )
 }
 
@@ -5840,25 +6131,27 @@ fn parse_verification_evidence_refs(value: CanonicalValue) -> Result<Vec<Verific
     Ok(evidence)
 }
 
-fn parse_verification_basis(
-    value: CanonicalValue,
-) -> Result<(CommitId, Vec<VerificationSemanticDependency>)> {
+fn parse_verification_basis(value: CanonicalValue) -> Result<ParsedVerificationBasis> {
     let CanonicalValue::Object(entries) = value else {
         return Err(WorkVcsError::TaskInvalid(
             "verification basis must be a canonical object".to_owned(),
         ));
     };
-    if entries.len() != 2 {
+    if !(2..=3).contains(&entries.len()) {
         return Err(WorkVcsError::TaskInvalid(format!(
-            "verification basis must contain exactly 2 fields, found {}",
+            "verification basis must contain 2 or 3 fields, found {}",
             entries.len()
         )));
     }
 
+    let mut resource_basis = None;
     let mut semantic_dependencies = None;
     let mut verified_at_commit_id = None;
     for (key, value) in entries {
         match key.as_str() {
+            "resource_basis" => {
+                resource_basis = Some(parse_verification_resource_basis(value)?);
+            }
             "semantic_dependencies" => {
                 semantic_dependencies = Some(parse_verification_semantic_dependencies(value)?);
             }
@@ -5875,18 +6168,151 @@ fn parse_verification_basis(
         }
     }
 
-    Ok((
-        verified_at_commit_id.ok_or_else(|| {
+    Ok(ParsedVerificationBasis {
+        verified_at_commit_id: verified_at_commit_id.ok_or_else(|| {
             WorkVcsError::TaskInvalid(
                 "verification basis is missing verified_at_commit_id".to_owned(),
             )
         })?,
-        semantic_dependencies.ok_or_else(|| {
+        semantic_dependencies: semantic_dependencies.ok_or_else(|| {
             WorkVcsError::TaskInvalid(
                 "verification basis is missing semantic_dependencies".to_owned(),
             )
         })?,
-    ))
+        resource_basis: resource_basis.unwrap_or_default(),
+    })
+}
+
+fn parse_verification_resource_basis(
+    value: CanonicalValue,
+) -> Result<Vec<VerificationResourceBasis>> {
+    let CanonicalValue::Array(values) = value else {
+        return Err(WorkVcsError::TaskInvalid(
+            "resource_basis must be an array".to_owned(),
+        ));
+    };
+    let mut entries = Vec::with_capacity(values.len());
+    for value in values {
+        let CanonicalValue::Object(fields) = value else {
+            return Err(WorkVcsError::TaskInvalid(
+                "resource_basis entries must be canonical objects".to_owned(),
+            ));
+        };
+        if fields.len() != 8 {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "resource_basis entries must contain exactly 8 fields, found {}",
+                fields.len()
+            )));
+        }
+        let mut adapter_kind = None;
+        let mut adapter_schema_version = None;
+        let mut baseline_fingerprint = None;
+        let mut baseline_observation_id = None;
+        let mut resource_id = None;
+        let mut scope_kind = None;
+        let mut scope_payload = None;
+        let mut scope_schema_version = None;
+        for (key, value) in fields {
+            match key.as_str() {
+                "adapter_kind" => {
+                    let value = require_string("resource_basis[].adapter_kind", value)?;
+                    validate_local_key("resource_basis adapter_kind", &value)?;
+                    adapter_kind = Some(value);
+                }
+                "adapter_schema_version" => {
+                    adapter_schema_version = Some(require_positive_i64(
+                        "resource_basis[].adapter_schema_version",
+                        value,
+                    )?);
+                }
+                "baseline_fingerprint" => {
+                    let value = require_string("resource_basis[].baseline_fingerprint", value)?;
+                    baseline_fingerprint =
+                        Some(Digest::from_hex(&value).map_err(task_invalid_from)?);
+                }
+                "baseline_observation_id" => {
+                    baseline_observation_id = Some(match value {
+                        CanonicalValue::Null => None,
+                        CanonicalValue::String(value) => Some(
+                            ResourceObservationId::parse_canonical(&value)
+                                .map_err(task_invalid_from)?,
+                        ),
+                        _ => {
+                            return Err(WorkVcsError::TaskInvalid(
+                                "resource_basis[].baseline_observation_id must be null or a canonical UUID"
+                                    .to_owned(),
+                            ));
+                        }
+                    });
+                }
+                "resource_id" => {
+                    let value = require_string("resource_basis[].resource_id", value)?;
+                    resource_id =
+                        Some(ResourceId::parse_canonical(&value).map_err(task_invalid_from)?);
+                }
+                "scope_kind" => {
+                    let value = require_string("resource_basis[].scope_kind", value)?;
+                    validate_local_key("resource_basis scope_kind", &value)?;
+                    scope_kind = Some(value);
+                }
+                "scope_payload" => {
+                    require_verification_resource_scope_payload(&value)?;
+                    scope_payload = Some(value);
+                }
+                "scope_schema_version" => {
+                    scope_schema_version = Some(require_positive_i64(
+                        "resource_basis[].scope_schema_version",
+                        value,
+                    )?);
+                }
+                other => {
+                    return Err(WorkVcsError::TaskInvalid(format!(
+                        "resource_basis entry contains unsupported field {other:?}"
+                    )));
+                }
+            }
+        }
+        let mut basis = VerificationResourceBasis::new(
+            resource_id.ok_or_else(|| {
+                WorkVcsError::TaskInvalid("resource_basis entry is missing resource_id".to_owned())
+            })?,
+            adapter_kind.ok_or_else(|| {
+                WorkVcsError::TaskInvalid("resource_basis entry is missing adapter_kind".to_owned())
+            })?,
+            adapter_schema_version.ok_or_else(|| {
+                WorkVcsError::TaskInvalid(
+                    "resource_basis entry is missing adapter_schema_version".to_owned(),
+                )
+            })?,
+            scope_kind.ok_or_else(|| {
+                WorkVcsError::TaskInvalid("resource_basis entry is missing scope_kind".to_owned())
+            })?,
+            scope_schema_version.ok_or_else(|| {
+                WorkVcsError::TaskInvalid(
+                    "resource_basis entry is missing scope_schema_version".to_owned(),
+                )
+            })?,
+            scope_payload.ok_or_else(|| {
+                WorkVcsError::TaskInvalid(
+                    "resource_basis entry is missing scope_payload".to_owned(),
+                )
+            })?,
+            baseline_fingerprint.ok_or_else(|| {
+                WorkVcsError::TaskInvalid(
+                    "resource_basis entry is missing baseline_fingerprint".to_owned(),
+                )
+            })?,
+        )?;
+        basis.baseline_observation_id = baseline_observation_id.ok_or_else(|| {
+            WorkVcsError::TaskInvalid(
+                "resource_basis entry is missing baseline_observation_id".to_owned(),
+            )
+        })?;
+        validate_verification_resource_basis_entry(&basis)?;
+        entries.push(basis);
+    }
+    validate_verification_resource_basis(&entries)?;
+    Ok(entries)
 }
 
 fn parse_verification_semantic_dependencies(
@@ -6265,6 +6691,49 @@ fn relation_transition_payload_value(
 fn verification_basis_value(
     verified_at_commit_id: CommitId,
     semantic_dependencies: &[VerificationSemanticDependency],
+    resource_basis: &[VerificationResourceBasis],
+) -> Result<CanonicalValue> {
+    validate_verification_semantic_dependencies(semantic_dependencies)?;
+    validate_verification_resource_basis(resource_basis)?;
+    let mut semantic_dependencies = semantic_dependencies.to_vec();
+    semantic_dependencies.sort_by(|left, right| {
+        left.entity_id
+            .raw_bytes()
+            .cmp(&right.entity_id.raw_bytes())
+            .then_with(|| {
+                left.entity_version_id
+                    .raw_bytes()
+                    .cmp(&right.entity_version_id.raw_bytes())
+            })
+    });
+    let dependencies = semantic_dependencies
+        .iter()
+        .map(VerificationSemanticDependency::to_canonical_value)
+        .collect::<Result<Vec<_>>>()?;
+    let resource_basis = resource_basis
+        .iter()
+        .map(VerificationResourceBasis::to_canonical_value)
+        .collect::<Result<Vec<_>>>()?;
+    CanonicalValue::object(vec![
+        (
+            "resource_basis".to_owned(),
+            CanonicalValue::Array(resource_basis),
+        ),
+        (
+            "semantic_dependencies".to_owned(),
+            CanonicalValue::Array(dependencies),
+        ),
+        (
+            "verified_at_commit_id".to_owned(),
+            CanonicalValue::String(verified_at_commit_id.to_string()),
+        ),
+    ])
+    .map_err(task_invalid_from)
+}
+
+fn legacy_verification_basis_value(
+    verified_at_commit_id: CommitId,
+    semantic_dependencies: &[VerificationSemanticDependency],
 ) -> Result<CanonicalValue> {
     validate_verification_semantic_dependencies(semantic_dependencies)?;
     let mut semantic_dependencies = semantic_dependencies.to_vec();
@@ -6525,6 +6994,72 @@ fn validate_verification_evidence_refs(evidence: &[VerificationEvidenceRef]) -> 
     Ok(())
 }
 
+fn validate_verification_resource_basis(
+    resource_basis: &[VerificationResourceBasis],
+) -> Result<()> {
+    for entry in resource_basis {
+        validate_verification_resource_basis_entry(entry)?;
+    }
+    Ok(())
+}
+
+fn validate_verification_resource_basis_entry(
+    resource_basis: &VerificationResourceBasis,
+) -> Result<()> {
+    validate_local_key(
+        "verification resource basis adapter_kind",
+        &resource_basis.adapter_kind,
+    )?;
+    validate_positive_i64(
+        "verification resource basis adapter_schema_version",
+        resource_basis.adapter_schema_version,
+    )?;
+    validate_local_key(
+        "verification resource basis scope_kind",
+        &resource_basis.scope_kind,
+    )?;
+    validate_positive_i64(
+        "verification resource basis scope_schema_version",
+        resource_basis.scope_schema_version,
+    )?;
+    require_verification_resource_scope_payload(&resource_basis.scope_payload)?;
+    Ok(())
+}
+
+fn require_verification_resource_basis_references(
+    connection: &StoreConnection,
+    resource_basis: &VerificationResourceBasis,
+) -> Result<()> {
+    resource(connection, resource_basis.resource_id)?;
+    if let Some(observation_id) = resource_basis.baseline_observation_id {
+        let observation = resource_observation(connection, observation_id)?;
+        if observation.resource_id != resource_basis.resource_id {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification resource basis observation {observation_id} belongs to resource {}, not {}",
+                observation.resource_id, resource_basis.resource_id
+            )));
+        }
+        if observation.adapter_kind != resource_basis.adapter_kind {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification resource basis observation {observation_id} adapter kind {:?} does not match basis adapter kind {:?}",
+                observation.adapter_kind, resource_basis.adapter_kind
+            )));
+        }
+        if observation.adapter_schema_version != resource_basis.adapter_schema_version {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification resource basis observation {observation_id} adapter schema version {} does not match basis adapter schema version {}",
+                observation.adapter_schema_version, resource_basis.adapter_schema_version
+            )));
+        }
+        if observation.fingerprint != resource_basis.baseline_fingerprint {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification resource basis observation {observation_id} fingerprint does not match baseline_fingerprint"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn require_verification_semantic_dependencies_canonical_order(
     dependencies: &[VerificationSemanticDependency],
 ) -> Result<()> {
@@ -6539,6 +7074,56 @@ fn require_verification_semantic_dependencies_canonical_order(
         }
     }
     Ok(())
+}
+
+fn validate_positive_i64(label: &str, value: i64) -> Result<()> {
+    if value > 0 {
+        Ok(())
+    } else {
+        Err(WorkVcsError::TaskInvalid(format!(
+            "{label} must be positive"
+        )))
+    }
+}
+
+fn require_positive_i64(label: &str, value: CanonicalValue) -> Result<i64> {
+    let CanonicalValue::Integer(value) = value else {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "{label} must be a JSON safe integer"
+        )));
+    };
+    validate_positive_i64(label, value.get())?;
+    Ok(value.get())
+}
+
+fn require_verification_resource_scope_payload(value: &CanonicalValue) -> Result<()> {
+    match value {
+        CanonicalValue::Object(_) => Ok(()),
+        _ => Err(WorkVcsError::TaskInvalid(
+            "verification resource basis scope_payload must be a canonical JSON object".to_owned(),
+        )),
+    }
+}
+
+fn normalize_verification_resource_scope_payload(value: CanonicalValue) -> Result<CanonicalValue> {
+    require_verification_resource_scope_payload(&value)?;
+    let encoded = canonical_json_string(&value)?;
+    let normalized = parse_canonical_json(encoded.as_bytes()).map_err(task_invalid_from)?;
+    require_verification_resource_scope_payload(&normalized)?;
+    Ok(normalized)
+}
+
+fn parse_verification_resource_scope_payload_json(input: &str) -> Result<CanonicalValue> {
+    let value = parse_canonical_json(input.as_bytes()).map_err(task_invalid_from)?;
+    require_verification_resource_scope_payload(&value)?;
+    let encoded = canonical_json_string(&value)?;
+    if encoded != input {
+        return Err(WorkVcsError::TaskInvalid(
+            "verification_resource_basis.scope_payload_json is not canonical fixed-point JSON"
+                .to_owned(),
+        ));
+    }
+    Ok(value)
 }
 
 fn validate_description(value: &str) -> Result<()> {
@@ -6636,6 +7221,16 @@ fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
 fn decode_evidence_id(column: &str, bytes: Vec<u8>) -> Result<EvidenceId> {
     let bytes = decode_16(column, bytes)?;
     EvidenceId::from_bytes(bytes).map_err(task_invalid_from)
+}
+
+fn decode_resource_id(column: &str, bytes: Vec<u8>) -> Result<ResourceId> {
+    let bytes = decode_16(column, bytes)?;
+    ResourceId::from_bytes(bytes).map_err(task_invalid_from)
+}
+
+fn decode_resource_observation_id(column: &str, bytes: Vec<u8>) -> Result<ResourceObservationId> {
+    let bytes = decode_16(column, bytes)?;
+    ResourceObservationId::from_bytes(bytes).map_err(task_invalid_from)
 }
 
 fn decode_entity_version_id(column: &str, bytes: Vec<u8>) -> Result<EntityVersionId> {

@@ -294,6 +294,10 @@ fn checkpoint_validation_marks_state_digest_drift_invalid() {
         .checkpoint(created.checkpoint.checkpoint_id)
         .expect("load checkpoint");
     assert_eq!(loaded.usability_state, "invalid");
+
+    let integrity = engine.validate_integrity().expect("integrity report");
+    assert_eq!(integrity.checked_checkpoints, 1);
+    assert_eq!(integrity.invalid_checkpoints, 1);
 }
 
 #[test]

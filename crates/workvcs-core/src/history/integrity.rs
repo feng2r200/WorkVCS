@@ -1,11 +1,13 @@
 use crate::error::{Result, WorkVcsError, storage_error};
-use crate::identity::{BranchId, CommitId};
+use crate::identity::{BranchId, CheckpointId, CommitId};
 use crate::store::StoreConnection;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntegrityReport {
     pub checked_branches: usize,
     pub checked_commits: usize,
+    pub checked_checkpoints: usize,
+    pub invalid_checkpoints: usize,
 }
 
 pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<IntegrityReport> {
@@ -49,10 +51,17 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
             integrity_error(format!("Commit {commit_id} cannot be replayed"), error)
         })?;
     }
+    let checkpoint_statuses = load_checkpoint_statuses(connection)?;
+    let invalid_checkpoints = checkpoint_statuses
+        .iter()
+        .filter(|status| status.usability_state == "invalid")
+        .count();
 
     Ok(IntegrityReport {
         checked_branches: branch_ids.len(),
         checked_commits: commit_ids.len(),
+        checked_checkpoints: checkpoint_statuses.len(),
+        invalid_checkpoints,
     })
 }
 
@@ -123,9 +132,53 @@ fn load_commit_ids(connection: &StoreConnection) -> Result<Vec<CommitId>> {
     Ok(commit_ids)
 }
 
+struct CheckpointStatusRow {
+    usability_state: String,
+}
+
+fn load_checkpoint_statuses(connection: &StoreConnection) -> Result<Vec<CheckpointStatusRow>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT checkpoint.checkpoint_id,
+                    checkpoint_status.usability_state
+             FROM checkpoint
+             LEFT JOIN checkpoint_status
+               ON checkpoint_status.checkpoint_id = checkpoint.checkpoint_id
+             ORDER BY checkpoint.created_at_us, checkpoint.checkpoint_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(storage_error)?;
+
+    let mut statuses = Vec::new();
+    for row in rows {
+        let (checkpoint_id, usability_state) = row.map_err(storage_error)?;
+        let checkpoint_id = decode_checkpoint_id("checkpoint.checkpoint_id", checkpoint_id)?;
+        let Some(usability_state) = usability_state else {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "Checkpoint {checkpoint_id} is missing checkpoint_status"
+            )));
+        };
+        validate_stored_text("checkpoint_status.usability_state", &usability_state)?;
+        statuses.push(CheckpointStatusRow { usability_state });
+    }
+    Ok(statuses)
+}
+
 fn decode_branch_id(column: &str, bytes: Vec<u8>) -> Result<BranchId> {
     let bytes = decode_16(column, bytes)?;
     BranchId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::IntegrityInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_checkpoint_id(column: &str, bytes: Vec<u8>) -> Result<CheckpointId> {
+    let bytes = decode_16(column, bytes)?;
+    CheckpointId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::IntegrityInvalid(format!("{column} is not a UUIDv7 value: {error}"))
     })
 }
@@ -135,6 +188,20 @@ fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
     CommitId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::IntegrityInvalid(format!("{column} is not a UUIDv7 value: {error}"))
     })
+}
+
+fn validate_stored_text(label: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "{label} cannot be empty"
+        )));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "{label} cannot contain control characters"
+        )));
+    }
+    Ok(())
 }
 
 fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {

@@ -14,19 +14,20 @@ use workvcs_core::{
     KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions, NextWorkOptions,
     NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
     RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
-    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
-    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
-    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
-    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
+    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
+    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
+    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
+    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
+    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
+    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
@@ -770,6 +771,25 @@ enum RecordCommand {
 
         #[arg(long)]
         target_knowledge: Option<String>,
+    },
+    #[command(group(
+        ArgGroup::new("record-knowledge-relation-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    KnowledgeRelationShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        relation: String,
     },
     #[command(group(
         ArgGroup::new("record-relation-show-target")
@@ -2048,6 +2068,24 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(render_record_knowledge_relation_list(
                 &engine.record_knowledge_relations_at(options)?,
+            ))
+        }
+        Command::Record {
+            command:
+                RecordCommand::KnowledgeRelationShow {
+                    store,
+                    branch,
+                    commit,
+                    relation,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
+            Ok(render_record_knowledge_relation_snapshot(
+                &engine.record_knowledge_relation_at(
+                    commit_id,
+                    RelationId::parse_canonical(&relation)?,
+                )?,
             ))
         }
         Command::Record {
@@ -3471,6 +3509,20 @@ fn render_record_knowledge_relation_list(result: &RecordKnowledgeRelationListRes
         .expect("write to String");
     }
     output
+}
+
+fn render_record_knowledge_relation_snapshot(relation: &RecordKnowledgeRelationSnapshot) -> String {
+    format!(
+        "workspace_id={}\ncommit_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nsource_record_entity_id={}\ntarget_knowledge_entity_id={}\nrelation_state_digest={}\n",
+        relation.workspace_id,
+        relation.commit_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.source_record_entity_id,
+        relation.target_knowledge_entity_id,
+        relation.state_digest
+    )
 }
 
 fn render_record_relation_snapshot(relation: &RecordRelationSnapshot) -> String {
@@ -8001,6 +8053,103 @@ mod tests {
         );
         assert_eq!(
             value(&listed, "relation.0.target_knowledge_entity_id"),
+            value(&knowledge, "knowledge_entity_id")
+        );
+    }
+
+    #[test]
+    fn cli_shows_record_knowledge_relation() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Why output includes Record-to-Knowledge relation details",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--statement",
+            "The relation id can be shown directly",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-validates-knowledge",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--rationale",
+            "The Finding validates the Knowledge relation details",
+        ])
+        .expect("parse validates knowledge"))
+        .expect("validate knowledge relation");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-show",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+        ])
+        .expect("parse record knowledge relation show"))
+        .expect("show record knowledge relation");
+        assert_eq!(
+            value(&shown, "relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(value(&shown, "relation_type"), "validates");
+        assert_eq!(
+            value(&shown, "source_record_entity_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(&shown, "target_knowledge_entity_id"),
             value(&knowledge, "knowledge_entity_id")
         );
     }

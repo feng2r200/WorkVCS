@@ -2499,6 +2499,25 @@ pub(crate) fn record_relation_at(
         })
 }
 
+pub(crate) fn record_knowledge_relation_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    relation_id: RelationId,
+) -> Result<RecordKnowledgeRelationSnapshot> {
+    record_knowledge_relations_at(
+        connection,
+        &RecordKnowledgeRelationListOptions::new(commit_id),
+    )?
+    .relations
+    .into_iter()
+    .find(|relation| relation.relation_id == relation_id)
+    .ok_or_else(|| {
+        WorkVcsError::RecordNotFound(format!(
+            "record knowledge relation {relation_id} is not present at commit {commit_id}"
+        ))
+    })
+}
+
 struct RecordRelationCreateRows {
     workspace_id: WorkspaceId,
     expected_head_commit_id: CommitId,

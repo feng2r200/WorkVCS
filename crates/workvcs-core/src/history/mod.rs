@@ -42,7 +42,8 @@ pub use plan::{
 pub use query::{BranchHead, HistoryEntry, HistoryQueryOptions, HistoryQueryResult, HistoryStart};
 pub use record::{
     RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions, RecordListResult,
-    RecordSnapshot, RecordState, RecordStatus, RecordTransitionCommit, RecordTransitionOptions,
+    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationType, RecordSnapshot,
+    RecordState, RecordStatus, RecordTransitionCommit, RecordTransitionOptions,
 };
 pub use reference::{
     StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
@@ -92,7 +93,9 @@ pub(crate) use goal::{create_goal, goal_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use query::{branch_head, query_history};
-pub(crate) use record::{create_record, record_at, records_at, transition_record};
+pub(crate) use record::{
+    create_record, create_record_relation, record_at, records_at, transition_record,
+};
 pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::state_at;
 pub(crate) use resource::{

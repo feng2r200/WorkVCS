@@ -18,13 +18,13 @@ use crate::history::{
     HistoryQueryOptions, HistoryQueryResult, IntegrityReport, PlanCreateCommit, PlanCreateOptions,
     PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
-    RecordCreateOptions, RecordListOptions, RecordListResult, RecordSnapshot,
-    RecordTransitionCommit, RecordTransitionOptions, ReplayedState, ResourceBindOptions,
-    ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
-    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    RecordCreateOptions, RecordListOptions, RecordListResult, RecordRelationCreateCommit,
+    RecordRelationCreateOptions, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
@@ -291,6 +291,13 @@ impl Engine {
 
     pub fn records_at(&self, options: RecordListOptions) -> Result<RecordListResult> {
         self.store.records_at(&options)
+    }
+
+    pub fn create_record_relation(
+        &mut self,
+        options: RecordRelationCreateOptions,
+    ) -> Result<RecordRelationCreateCommit> {
+        self.store.create_record_relation(&options)
     }
 
     pub fn acceptance_criterion_at(

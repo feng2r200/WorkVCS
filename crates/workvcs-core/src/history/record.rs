@@ -1,20 +1,33 @@
+use super::entity::canonical_json_string;
 use super::{EntityTransitionOptions, commit_entity_transition, state_at};
 use crate::canonical::{
-    CanonicalValue, ImportDigestDomain, entity_version_digest, parse_canonical_json,
-    validate_import_fixed_point,
+    CanonicalValue, ImportDigestDomain, WorkState, entity_version_digest, parse_canonical_json,
+    relation_version_digest, validate_import_fixed_point, work_state_mapping_digest,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
-    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, OperationId, WorkspaceId,
+    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, OperationId,
+    RelationId, RelationVersionId, WorkspaceId,
 };
-use crate::store::StoreConnection;
-use rusqlite::{OptionalExtension, params};
+use crate::store::{StoreConnection, current_epoch_micros};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use std::collections::BTreeMap;
 use std::fmt;
 
 pub(crate) const RECORD_ENTITY_KIND: &str = "record";
+pub(crate) const RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
+pub(crate) const RECORD_RELATION_CREATE_OPERATION_TYPE: &str = "record.relation.create";
 
 const ENTITY_OBJECT_KIND: &str = "entity";
+const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
+const EMPTY_FIELD_DELTA: &str = "{}";
+const INVALIDATES_RELATION_TYPE: &str = "invalidates";
+const NORMAL_COMMIT_KIND: &str = "normal";
+const PRIMARY_PARENT_ROLE: &str = "primary";
 const RECORD_STATE_SCHEMA_VERSION: i64 = 1;
+const RECORD_RELATION_CREATE_EVENT_KIND: &str = "record.relation.created";
+const RELATION_OBJECT_KIND: &str = "relation";
+const RELATION_STATE_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
@@ -603,6 +616,78 @@ pub struct RecordListResult {
     pub records: Vec<RecordSnapshot>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordRelationType {
+    Invalidates,
+}
+
+impl RecordRelationType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Invalidates => INVALIDATES_RELATION_TYPE,
+        }
+    }
+}
+
+impl fmt::Display for RecordRelationType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordRelationCreateOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    relation_type: RecordRelationType,
+    source_record_entity_id: EntityId,
+    target_record_entity_id: EntityId,
+    rationale: CanonicalValue,
+}
+
+impl RecordRelationCreateOptions {
+    pub fn invalidates(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_record_entity_id: EntityId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::Invalidates,
+            source_record_entity_id,
+            target_record_entity_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordRelationCreateCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: RecordRelationType,
+    pub source_record_entity_id: EntityId,
+    pub target_record_entity_id: EntityId,
+    pub relation_state_digest: Digest,
+    pub work_state_digest: Digest,
+}
+
 pub(crate) fn create_record(
     connection: &mut StoreConnection,
     options: &RecordCreateOptions,
@@ -691,6 +776,129 @@ pub(crate) fn transition_record(
     })
 }
 
+pub(crate) fn create_record_relation(
+    connection: &mut StoreConnection,
+    options: &RecordRelationCreateOptions,
+) -> Result<RecordRelationCreateCommit> {
+    connection.verify_foreign_keys()?;
+    require_non_empty_rationale_object(&options.rationale)?;
+    if options.source_record_entity_id == options.target_record_entity_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {} cannot use the same Record {} as both source and target",
+            options.relation_type, options.source_record_entity_id
+        )));
+    }
+
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let source = record_at(
+        connection,
+        options.expected_head_commit_id,
+        options.source_record_entity_id,
+    )?;
+    let target = record_at(
+        connection,
+        options.expected_head_commit_id,
+        options.target_record_entity_id,
+    )?;
+    if source.workspace_id != parent.workspace_id || target.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation endpoints must belong to workspace {}",
+            parent.workspace_id
+        )));
+    }
+    validate_record_relation_endpoints(options.relation_type, &source, &target)?;
+
+    let relation_id = RelationId::new_v7();
+    let relation_version_id = RelationVersionId::new_v7();
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+
+    let relation_state_value = CanonicalValue::object(Vec::new())?;
+    let relation_state_json = canonical_json_string(&relation_state_value)?;
+    let relation_state_digest = relation_version_digest(&relation_state_value)?;
+    let next_work_state =
+        work_state_after_record_relation_create(&parent.state, relation_id, relation_version_id)?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let relation_payload_value =
+        relation_transition_payload_value(relation_id, None, relation_version_id)?;
+    let relation_payload_json = canonical_json_string(&relation_payload_value)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    ensure_record_relation_logical_key_available(
+        &transaction,
+        branch.workspace_id,
+        options.relation_type,
+        options.source_record_entity_id,
+        options.target_record_entity_id,
+    )?;
+    write_record_relation_create(
+        &transaction,
+        &RecordRelationCreateRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            relation_id,
+            relation_version_id,
+            relation_state_json,
+            relation_state_digest,
+            relation_type: options.relation_type,
+            source_record_entity_id: options.source_record_entity_id,
+            target_record_entity_id: options.target_record_entity_id,
+            changeset_id,
+            commit_id,
+            operation_id,
+            relation_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(RecordRelationCreateCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        operation_id,
+        relation_id,
+        relation_version_id,
+        relation_type: options.relation_type,
+        source_record_entity_id: options.source_record_entity_id,
+        target_record_entity_id: options.target_record_entity_id,
+        relation_state_digest,
+        work_state_digest,
+    })
+}
+
 pub(crate) fn records_at(
     connection: &StoreConnection,
     options: &RecordListOptions,
@@ -770,6 +978,375 @@ pub(crate) fn record_at(
         state_digest: loaded.state_digest,
         state: loaded.state,
     })
+}
+
+struct RecordRelationCreateRows {
+    workspace_id: WorkspaceId,
+    expected_head_commit_id: CommitId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    relation_state_json: String,
+    relation_state_digest: Digest,
+    relation_type: RecordRelationType,
+    source_record_entity_id: EntityId,
+    target_record_entity_id: EntityId,
+    changeset_id: ChangeSetId,
+    commit_id: CommitId,
+    operation_id: OperationId,
+    relation_payload_json: String,
+    rationale_json: String,
+    work_state_digest: Digest,
+    now_us: i64,
+}
+
+struct BranchRow {
+    workspace_id: WorkspaceId,
+    head_commit_id: CommitId,
+}
+
+fn validate_record_relation_endpoints(
+    relation_type: RecordRelationType,
+    source: &RecordSnapshot,
+    target: &RecordSnapshot,
+) -> Result<()> {
+    match relation_type {
+        RecordRelationType::Invalidates => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "invalidates source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            if target.state.kind != RecordKind::Assumption {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "invalidates target must be an Assumption Record, found {}",
+                    target.state.kind
+                )));
+            }
+            if target.state.status != RecordStatus::Invalidated {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "invalidates target Assumption must be invalidated, found {}",
+                    target.state.status
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn ensure_record_relation_logical_key_available(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+    relation_type: RecordRelationType,
+    source_record_entity_id: EntityId,
+    target_record_entity_id: EntityId,
+) -> Result<()> {
+    let existing = transaction
+        .query_row(
+            "SELECT count(*)
+             FROM relation
+             WHERE workspace_id = ?1
+               AND relation_type = ?2
+               AND source_object_id = ?3
+               AND target_object_id = ?4
+               AND relation_discriminator = ''",
+            params![
+                &workspace_id.raw_bytes()[..],
+                relation_type.as_str(),
+                &source_record_entity_id.raw_bytes()[..],
+                &target_record_entity_id.raw_bytes()[..],
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?;
+    if existing == 0 {
+        Ok(())
+    } else {
+        Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_type} from {source_record_entity_id} to {target_record_entity_id} already exists in workspace {workspace_id}"
+        )))
+    }
+}
+
+fn work_state_after_record_relation_create(
+    parent_state: &WorkState,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<WorkState> {
+    let entities = parent_state.entities().to_vec();
+    let mut relations = parent_state
+        .relations()
+        .iter()
+        .copied()
+        .collect::<BTreeMap<_, _>>();
+    if relations.insert(relation_id, relation_version_id).is_some() {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record relation {relation_id} was expected to be absent before creation"
+        )));
+    }
+
+    WorkState::new(entities, relations).map_err(record_invalid_from)
+}
+
+fn write_record_relation_create(
+    transaction: &Transaction<'_>,
+    rows: &RecordRelationCreateRows,
+) -> Result<()> {
+    let workspace_id_bytes = rows.workspace_id.raw_bytes();
+    let relation_id_bytes = rows.relation_id.raw_bytes();
+    let relation_version_id_bytes = rows.relation_version_id.raw_bytes();
+    let relation_state_digest_bytes = rows.relation_state_digest.as_bytes();
+    let source_record_entity_id_bytes = rows.source_record_entity_id.raw_bytes();
+    let target_record_entity_id_bytes = rows.target_record_entity_id.raw_bytes();
+    let changeset_id_bytes = rows.changeset_id.raw_bytes();
+    let commit_id_bytes = rows.commit_id.raw_bytes();
+    let operation_id_bytes = rows.operation_id.raw_bytes();
+    let parent_commit_id_bytes = rows.expected_head_commit_id.raw_bytes();
+    let work_state_digest_bytes = rows.work_state_digest.as_bytes();
+
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![&relation_id_bytes[..], RELATION_OBJECT_KIND, rows.now_us],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation(
+                object_id,
+                workspace_id,
+                relation_type,
+                source_object_id,
+                target_object_id,
+                relation_discriminator
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, '')",
+            params![
+                &relation_id_bytes[..],
+                &workspace_id_bytes[..],
+                rows.relation_type.as_str(),
+                &source_record_entity_id_bytes[..],
+                &target_record_entity_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_version(
+                relation_version_id,
+                relation_id,
+                state_schema_version,
+                metadata_json,
+                state_digest
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &relation_version_id_bytes[..],
+                &relation_id_bytes[..],
+                RELATION_STATE_SCHEMA_VERSION,
+                rows.relation_state_json,
+                &relation_state_digest_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO changeset(
+                changeset_id,
+                workspace_id,
+                operation_type,
+                operation_schema_version,
+                operation_payload_json,
+                rationale_json,
+                origin_session_id,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                &changeset_id_bytes[..],
+                &workspace_id_bytes[..],
+                RECORD_RELATION_CREATE_OPERATION_TYPE,
+                RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION,
+                rows.relation_payload_json,
+                rows.rationale_json,
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO change_operation(
+                operation_id,
+                changeset_id,
+                ordinal,
+                subject_family,
+                subject_object_id,
+                operation_payload_json
+             )
+             VALUES (?1, ?2, 0, 'relation', ?3, ?4)",
+            params![
+                &operation_id_bytes[..],
+                &changeset_id_bytes[..],
+                &relation_id_bytes[..],
+                rows.relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO relation_membership_change(
+                operation_id,
+                relation_id,
+                before_relation_version_id,
+                after_relation_version_id,
+                field_delta_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4)",
+            params![
+                &operation_id_bytes[..],
+                &relation_id_bytes[..],
+                &relation_version_id_bytes[..],
+                EMPTY_FIELD_DELTA
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO workstate_commit(
+                commit_id,
+                workspace_id,
+                changeset_id,
+                commit_kind,
+                state_digest,
+                committed_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &commit_id_bytes[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                NORMAL_COMMIT_KIND,
+                &work_state_digest_bytes[..],
+                rows.now_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO commit_parent(
+                commit_id,
+                parent_ordinal,
+                parent_role,
+                parent_commit_id
+             )
+             VALUES (?1, 0, ?2, ?3)",
+            params![
+                &commit_id_bytes[..],
+                PRIMARY_PARENT_ROLE,
+                &parent_commit_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+            params![
+                &EventId::new_v7().raw_bytes()[..],
+                &workspace_id_bytes[..],
+                &changeset_id_bytes[..],
+                RECORD_RELATION_CREATE_EVENT_KIND,
+                rows.now_us,
+                rows.relation_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    Ok(())
+}
+
+fn load_active_branch(transaction: &Transaction<'_>, branch_id: BranchId) -> Result<BranchRow> {
+    let branch_id_bytes = branch_id.raw_bytes();
+    let row = transaction
+        .query_row(
+            "SELECT workspace_id, head_commit_id
+             FROM branch
+             WHERE branch_id = ?1
+               AND lifecycle_state = ?2",
+            params![&branch_id_bytes[..], ACTIVE_BRANCH_LIFECYCLE_STATE],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((workspace_id, head_commit_id)) = row else {
+        return Err(WorkVcsError::BranchNotFound(format!(
+            "active branch {branch_id} does not exist"
+        )));
+    };
+    Ok(BranchRow {
+        workspace_id: decode_workspace_id("branch.workspace_id", workspace_id)?,
+        head_commit_id: decode_commit_id("branch.head_commit_id", head_commit_id)?,
+    })
+}
+
+fn move_branch_head(
+    transaction: &Transaction<'_>,
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    commit_id: CommitId,
+) -> Result<()> {
+    let moved = transaction
+        .execute(
+            "UPDATE branch
+             SET head_commit_id = ?1
+             WHERE branch_id = ?2
+               AND head_commit_id = ?3",
+            params![
+                &commit_id.raw_bytes()[..],
+                &branch_id.raw_bytes()[..],
+                &expected_head_commit_id.raw_bytes()[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    if moved == 1 {
+        Ok(())
+    } else {
+        Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {branch_id} head changed before commit {commit_id} could be installed"
+        )))
+    }
+}
+
+fn relation_transition_payload_value(
+    relation_id: RelationId,
+    before_relation_version_id: Option<RelationVersionId>,
+    after_relation_version_id: RelationVersionId,
+) -> Result<CanonicalValue> {
+    let before_value = match before_relation_version_id {
+        Some(version_id) => CanonicalValue::String(version_id.to_string()),
+        None => CanonicalValue::Null,
+    };
+    CanonicalValue::object(vec![
+        (
+            "after_relation_version_id".to_owned(),
+            CanonicalValue::String(after_relation_version_id.to_string()),
+        ),
+        ("before_relation_version_id".to_owned(), before_value),
+        (
+            "relation_id".to_owned(),
+            CanonicalValue::String(relation_id.to_string()),
+        ),
+    ])
+    .map_err(record_invalid_from)
 }
 
 struct LoadedRecordVersion {
@@ -1071,6 +1648,15 @@ fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
     })?;
     WorkspaceId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::RecordInvalid(format!("{column} is not a valid WorkspaceId: {error}"))
+    })
+}
+
+fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
+    let bytes = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::RecordInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
+    })?;
+    CommitId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::RecordInvalid(format!("{column} is not a valid CommitId: {error}"))
     })
 }
 

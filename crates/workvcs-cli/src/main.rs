@@ -10,19 +10,20 @@ use workvcs_core::{
     ClaimTaskOptions, ClaimTaskResult, CommitId, ContextOverview, ContextOverviewOptions, Digest,
     Engine, EntityId, EntityVersionId, HistoryEntry, HistoryQueryOptions, NextWorkOptions,
     NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
-    RecordListResult, RecordSnapshot, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions, ReplayedState, ResourceCreateOptions, ResourceCreateResult,
-    ResourceId, ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationId, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
-    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreInitOptions,
-    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WorkState, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
-    canonical_bytes, content_object_digest, parse_canonical_json,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions, RecordSnapshot,
+    RecordStatus, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
+    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WorkState, WorkVcsError,
+    WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, content_object_digest,
+    parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -350,6 +351,25 @@ enum RecordCommand {
 
         #[arg(long)]
         kind: Option<String>,
+    },
+    LinkInvalidates {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        source_record: String,
+
+        #[arg(long)]
+        target_record: String,
+
+        #[arg(long)]
+        rationale: String,
     },
     Assumption {
         #[arg(value_name = "STORE")]
@@ -1103,6 +1123,28 @@ fn run(cli: Cli) -> Result<String> {
                 options = options.with_kind(parse_record_kind(&kind)?);
             }
             Ok(render_record_list(&engine.records_at(options)?))
+        }
+        Command::Record {
+            command:
+                RecordCommand::LinkInvalidates {
+                    store,
+                    branch,
+                    head,
+                    source_record,
+                    target_record,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_record_relation(RecordRelationCreateOptions::invalidates(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_record)?,
+                    rationale,
+                )?)?;
+            Ok(render_record_relation_create(&relation))
         }
         Command::Record {
             command:
@@ -1971,6 +2013,25 @@ fn render_record_list(result: &RecordListResult) -> String {
         .expect("write to String");
     }
     output
+}
+
+fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.source_record_entity_id,
+        relation.target_record_entity_id,
+        relation.relation_state_digest,
+        relation.work_state_digest
+    )
 }
 
 fn render_session_start(session: &SessionStartResult) -> String {
@@ -3858,6 +3919,120 @@ mod tests {
         .expect("show handoff");
         assert!(show.contains("record_kind=handoff"));
         assert!(show.contains("record_scope_json={\"focus\":\"task:next\"}"));
+    }
+
+    #[test]
+    fn cli_links_finding_to_invalidated_assumption() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let assumption = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "assumption",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Serialized writes are sufficient",
+        ])
+        .expect("parse assumption"))
+        .expect("create assumption");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&assumption, "commit_id"),
+            "--statement",
+            "Concurrent writer test failed",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let invalidated = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "assumption-status",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--record",
+            &value(&assumption, "record_entity_id"),
+            "--record-version",
+            &value(&assumption, "record_entity_version_id"),
+            "--status",
+            "invalidated",
+            "--rationale",
+            "Concurrent writer test failed",
+        ])
+        .expect("parse assumption status"))
+        .expect("invalidate assumption");
+
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-invalidates",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&invalidated, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-record",
+            &value(&assumption, "record_entity_id"),
+            "--rationale",
+            "Finding invalidates the assumption",
+        ])
+        .expect("parse link invalidates"))
+        .expect("link invalidates");
+        assert!(relation.contains("relation_type=invalidates"));
+        assert_eq!(
+            value(&relation, "source_record_entity_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(&relation, "target_record_entity_id"),
+            value(&assumption, "record_entity_id")
+        );
+
+        let state = run(Cli::try_parse_from([
+            "workvcs",
+            "show-at",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+        ])
+        .expect("parse show-at"))
+        .expect("show relation commit");
+        assert!(state.contains("relations=1"));
+        assert!(state.contains(&format!("relation={}", value(&relation, "relation_id"))));
     }
 
     fn value(output: &str, key: &str) -> String {

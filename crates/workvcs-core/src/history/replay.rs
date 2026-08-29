@@ -3,6 +3,9 @@ use super::entity::{
     ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION, ENTITY_TRANSITION_OPERATION_TYPE,
     canonical_json_string, entity_transition_payload_json,
 };
+use super::record::{
+    RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION, RECORD_RELATION_CREATE_OPERATION_TYPE,
+};
 use super::reference::STRUCTURAL_REFERENCE_CREATE_OPERATION_TYPE;
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, canonical_bytes, entity_version_digest,
@@ -429,6 +432,13 @@ fn validate_entity_transition_changeset(
         TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE => {
             if operation_schema_version != TASK_SCHEDULING_RELATION_CREATE_OPERATION_SCHEMA_VERSION
             {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        RECORD_RELATION_CREATE_OPERATION_TYPE => {
+            if operation_schema_version != RECORD_RELATION_CREATE_OPERATION_SCHEMA_VERSION {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
                     "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
                 )));

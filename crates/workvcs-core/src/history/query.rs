@@ -115,6 +115,33 @@ pub struct CommitParentSnapshot {
     pub parent_commit_id: CommitId,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangeSetSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub changeset_id: ChangeSetId,
+    pub operation_type: String,
+    pub operation_schema_version: i64,
+    pub operation_payload_json: String,
+    pub operation_payload_digest: Digest,
+    pub operation_payload_size_bytes: i64,
+    pub rationale_json: String,
+    pub rationale_digest: Digest,
+    pub rationale_size_bytes: i64,
+    pub origin_session_id: Option<SessionId>,
+    pub created_at_us: i64,
+    pub change_operation_count: i64,
+    pub event_count: i64,
+    pub commits: Vec<ChangeSetCommitSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangeSetCommitSnapshot {
+    pub commit_id: CommitId,
+    pub commit_kind: String,
+    pub state_digest: Digest,
+    pub committed_at_us: i64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventListTarget {
     ChangeSet(ChangeSetId),
@@ -277,6 +304,102 @@ pub(crate) fn commit(connection: &StoreConnection, commit_id: CommitId) -> Resul
         changeset_created_at_us: entry.changeset_created_at_us,
         origin_session_id,
         parents,
+    })
+}
+
+pub(crate) fn changeset(
+    connection: &StoreConnection,
+    changeset_id: ChangeSetId,
+) -> Result<ChangeSetSnapshot> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT workspace_id,
+                    operation_type,
+                    operation_schema_version,
+                    operation_payload_json,
+                    rationale_json,
+                    origin_session_id,
+                    created_at_us
+             FROM changeset
+             WHERE changeset_id = ?1",
+            params![&changeset_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        workspace_id,
+        operation_type,
+        operation_schema_version,
+        operation_payload_json,
+        rationale_json,
+        origin_session_id,
+        created_at_us,
+    )) = row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ChangeSet {changeset_id} does not exist"
+        )));
+    };
+    validate_stored_text("changeset.operation_type", &operation_type)?;
+    if operation_schema_version <= 0 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "ChangeSet {changeset_id} has invalid operation schema version {operation_schema_version}"
+        )));
+    }
+    validate_canonical_json_text("changeset.operation_payload_json", &operation_payload_json)?;
+    validate_canonical_json_text("changeset.rationale_json", &rationale_json)?;
+    validate_nonnegative("changeset.created_at_us", created_at_us)?;
+
+    let change_operation_count = count_rows(
+        connection,
+        "SELECT count(*)
+         FROM change_operation
+         WHERE changeset_id = ?1",
+        params![&changeset_id.raw_bytes()[..]],
+    )?;
+    let event_count = count_rows(
+        connection,
+        "SELECT count(*)
+         FROM event
+         WHERE changeset_id = ?1",
+        params![&changeset_id.raw_bytes()[..]],
+    )?;
+
+    Ok(ChangeSetSnapshot {
+        workspace_id: decode_workspace_id("changeset.workspace_id", workspace_id)?,
+        changeset_id,
+        operation_type,
+        operation_schema_version,
+        operation_payload_digest: content_object_digest(operation_payload_json.as_bytes()),
+        operation_payload_size_bytes: usize_to_i64(
+            "changeset.operation_payload_json size",
+            operation_payload_json.len(),
+        )?,
+        operation_payload_json,
+        rationale_digest: content_object_digest(rationale_json.as_bytes()),
+        rationale_size_bytes: usize_to_i64("changeset.rationale_json size", rationale_json.len())?,
+        rationale_json,
+        origin_session_id: decode_optional_session_id(
+            "changeset.origin_session_id",
+            origin_session_id,
+        )?,
+        created_at_us,
+        change_operation_count,
+        event_count,
+        commits: load_changeset_commits(connection, changeset_id)?,
     })
 }
 
@@ -544,6 +667,45 @@ fn load_changeset_origin_session(
     decode_optional_session_id("changeset.origin_session_id", origin_session_id)
 }
 
+fn load_changeset_commits(
+    connection: &StoreConnection,
+    changeset_id: ChangeSetId,
+) -> Result<Vec<ChangeSetCommitSnapshot>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT commit_id, commit_kind, state_digest, committed_at_us
+             FROM workstate_commit
+             WHERE changeset_id = ?1
+             ORDER BY committed_at_us, commit_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&changeset_id.raw_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(storage_error)?;
+
+    let mut commits = Vec::new();
+    for row in rows {
+        let (commit_id, commit_kind, state_digest, committed_at_us) = row.map_err(storage_error)?;
+        validate_stored_text("workstate_commit.commit_kind", &commit_kind)?;
+        validate_nonnegative("workstate_commit.committed_at_us", committed_at_us)?;
+        commits.push(ChangeSetCommitSnapshot {
+            commit_id: decode_commit_id("workstate_commit.commit_id", commit_id)?,
+            commit_kind,
+            state_digest: decode_digest("workstate_commit.state_digest", state_digest)?,
+            committed_at_us,
+        });
+    }
+    Ok(commits)
+}
+
 fn load_commit_parents(
     connection: &StoreConnection,
     commit_id: CommitId,
@@ -737,6 +899,13 @@ fn require_count<P: Params>(
             "{label} expected count {expected}, found {actual}"
         )))
     }
+}
+
+fn count_rows<P: Params>(connection: &StoreConnection, sql: &str, params: P) -> Result<i64> {
+    connection
+        .inner()
+        .query_row(sql, params, |row| row.get::<_, i64>(0))
+        .map_err(storage_error)
 }
 
 fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {

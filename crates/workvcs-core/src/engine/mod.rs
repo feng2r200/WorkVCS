@@ -1,4 +1,5 @@
 use crate::BranchId;
+use crate::ChangeSetId;
 use crate::CheckpointId;
 use crate::ClaimId;
 use crate::CommitId;
@@ -27,18 +28,18 @@ use crate::history::{
     BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
     BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
-    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, CommitSnapshot,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
-    EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
-    EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
-    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
-    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
-    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
-    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureDerivedFromRelationCreateCommit,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeSetSnapshot,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
+    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
+    CheckpointValidationResult, CommitSnapshot, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, EntityTransitionCommit, EntityTransitionOptions,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
+    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
+    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureListOptions,
     KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
     KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
@@ -157,6 +158,10 @@ impl Engine {
 
     pub fn history(&self, options: HistoryQueryOptions) -> Result<HistoryQueryResult> {
         self.store.history(&options)
+    }
+
+    pub fn changeset(&self, changeset_id: ChangeSetId) -> Result<ChangeSetSnapshot> {
+        self.store.changeset(changeset_id)
     }
 
     pub fn commit(&self, commit_id: CommitId) -> Result<CommitSnapshot> {

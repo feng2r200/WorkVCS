@@ -14,11 +14,11 @@ use workvcs_core::{
     BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
     BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue, ChangeSetId,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
-    CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
+    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointId,
+    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
+    CheckpointSnapshot, CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode,
+    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions,
+    ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
     EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot, EvidenceId,
     ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
@@ -123,6 +123,10 @@ enum Command {
 
         #[arg(long)]
         limit: Option<usize>,
+    },
+    Changeset {
+        #[command(subcommand)]
+        command: ChangeSetCommand,
     },
     Commit {
         #[command(subcommand)]
@@ -654,6 +658,17 @@ enum ProjectionCommand {
 
         #[arg(long)]
         branch: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ChangeSetCommand {
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        changeset: String,
     },
 }
 
@@ -2539,6 +2554,13 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(output)
         }
+        Command::Changeset { command } => match command {
+            ChangeSetCommand::Show { store, changeset } => {
+                let engine = Engine::open(store)?;
+                let snapshot = engine.changeset(ChangeSetId::parse_canonical(&changeset)?)?;
+                Ok(render_changeset_snapshot(&snapshot))
+            }
+        },
         Command::Commit { command } => match command {
             CommitCommand::Show { store, commit } => {
                 let engine = Engine::open(store)?;
@@ -6437,6 +6459,46 @@ fn render_history_entry(output: &mut String, entry: &HistoryEntry) {
     );
 }
 
+fn render_changeset_snapshot(changeset: &ChangeSetSnapshot) -> String {
+    let origin_session_id = changeset
+        .origin_session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let mut output = format!(
+        "workspace_id={}\nchangeset_id={}\noperation_type={}\noperation_schema_version={}\ncreated_at_us={}\norigin_session_id={}\noperation_payload_digest={}\noperation_payload_size_bytes={}\noperation_payload_json={}\nrationale_digest={}\nrationale_size_bytes={}\nrationale_json={}\nchange_operations={}\nevents={}\ncommits={}\n",
+        changeset.workspace_id,
+        changeset.changeset_id,
+        changeset.operation_type,
+        changeset.operation_schema_version,
+        changeset.created_at_us,
+        origin_session_id,
+        changeset.operation_payload_digest,
+        changeset.operation_payload_size_bytes,
+        changeset.operation_payload_json,
+        changeset.rationale_digest,
+        changeset.rationale_size_bytes,
+        changeset.rationale_json,
+        changeset.change_operation_count,
+        changeset.event_count,
+        changeset.commits.len()
+    );
+    for (index, commit) in changeset.commits.iter().enumerate() {
+        let _ = writeln!(output, "commit[{index}].commit_id={}", commit.commit_id);
+        let _ = writeln!(output, "commit[{index}].commit_kind={}", commit.commit_kind);
+        let _ = writeln!(
+            output,
+            "commit[{index}].state_digest={}",
+            commit.state_digest
+        );
+        let _ = writeln!(
+            output,
+            "commit[{index}].committed_at_us={}",
+            commit.committed_at_us
+        );
+    }
+    output
+}
+
 fn render_commit_snapshot(commit: &CommitSnapshot) -> String {
     let origin_session_id = commit
         .origin_session_id
@@ -7994,6 +8056,7 @@ mod tests {
                 "doctor",
                 "store",
                 "history",
+                "changeset",
                 "commit",
                 "event",
                 "show-at",
@@ -8145,6 +8208,30 @@ mod tests {
         assert_eq!(value(&shown_commit, "parent[0].ordinal"), "0");
         assert_eq!(value(&shown_commit, "parent[0].role"), "primary");
         assert_eq!(value(&shown_commit, "parent[0].commit_id"), head);
+
+        let shown_changeset = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "show",
+            store,
+            "--changeset",
+            &changeset_id,
+        ])
+        .expect("parse changeset show"))
+        .expect("show changeset");
+        assert_eq!(value(&shown_changeset, "changeset_id"), changeset_id);
+        assert_eq!(
+            value(&shown_changeset, "operation_type"),
+            "entity.transition"
+        );
+        assert_eq!(value(&shown_changeset, "origin_session_id"), "none");
+        assert_eq!(value(&shown_changeset, "change_operations"), "1");
+        assert_eq!(value(&shown_changeset, "events"), "1");
+        assert_eq!(value(&shown_changeset, "commits"), "1");
+        assert_eq!(value(&shown_changeset, "commit[0].commit_id"), commit_id);
+        assert_eq!(value(&shown_changeset, "commit[0].commit_kind"), "normal");
+        assert_ne!(value(&shown_changeset, "operation_payload_json"), "");
+        assert_ne!(value(&shown_changeset, "rationale_json"), "");
 
         let listed = run(Cli::try_parse_from([
             "workvcs",

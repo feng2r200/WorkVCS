@@ -9,14 +9,14 @@ use crate::history::{
     BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
     BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
     BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CheckpointCreateOptions,
-    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, CommitSnapshot,
-    EntityTransitionCommit, EntityTransitionOptions, EventListOptions, EventListResult,
-    EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceSnapshot, GoalCreateCommit,
-    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
-    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeSetSnapshot,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
+    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
+    CheckpointValidationResult, CommitSnapshot, EntityTransitionCommit, EntityTransitionOptions,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
+    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
     KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
     KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
@@ -77,7 +77,8 @@ use crate::history::{
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
 use crate::identity::{
-    CheckpointId, ExposureId, ExternalRefId, KnowledgeSpaceId, LineageId, MigrationId, RelationId,
+    ChangeSetId, CheckpointId, ExposureId, ExternalRefId, KnowledgeSpaceId, LineageId, MigrationId,
+    RelationId,
 };
 use crate::runtime::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
@@ -177,6 +178,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::query_history(&self.connection, options)
+    }
+
+    pub(crate) fn changeset(&self, changeset_id: ChangeSetId) -> Result<ChangeSetSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::changeset(&self.connection, changeset_id)
     }
 
     pub(crate) fn commit(&self, commit_id: CommitId) -> Result<CommitSnapshot> {

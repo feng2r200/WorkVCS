@@ -1,6 +1,7 @@
 use super::{
-    PrimaryContainmentEndpointKind, StructuralReferenceEndpointKind, VerificationTarget,
-    branch_head, evidence, primary_containment_relations_at, state_at, structural_references_at,
+    PrimaryContainmentEndpointKind, RecordRelationListOptions, RecordRelationType,
+    StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence,
+    primary_containment_relations_at, record_relations_at, state_at, structural_references_at,
     verification_evidence_relations_at, verification_relations_at,
 };
 use crate::error::{Result, WorkVcsError};
@@ -148,6 +149,7 @@ pub enum WhyRelationKind {
     StructuralReference,
     Verifies,
     EvidencedBy,
+    RecordInvalidates,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -164,6 +166,7 @@ pub enum WhyEntityKind {
     AcceptanceCriterion,
     VerificationRequirement,
     Verification,
+    Record,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -294,6 +297,30 @@ pub(crate) fn explain_why(
             });
         }
     }
+    for relation in record_relations_at(
+        connection,
+        &RecordRelationListOptions::new(resolved.target.commit_id),
+    )?
+    .relations
+    {
+        let source =
+            WhyRelationEndpoint::entity(relation.source_record_entity_id, WhyEntityKind::Record);
+        let target =
+            WhyRelationEndpoint::entity(relation.target_record_entity_id, WhyEntityKind::Record);
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
+        {
+            relation_edges.push(WhyRelationEdge {
+                relation_kind: record_relation_kind(relation.relation_type),
+                direction: relation_direction(options.subject(), source, target),
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                source,
+                target,
+                state_digest: relation.state_digest,
+            });
+        }
+    }
     relation_edges.sort_by(|left, right| {
         left.relation_kind
             .cmp(&right.relation_kind)
@@ -398,6 +425,12 @@ fn endpoint_matches_subject(subject: WhyQuerySubject, endpoint: WhyRelationEndpo
             WhyRelationEndpoint::Evidence { evidence_id },
         ) => subject_evidence_id == evidence_id,
         _ => false,
+    }
+}
+
+fn record_relation_kind(relation_type: RecordRelationType) -> WhyRelationKind {
+    match relation_type {
+        RecordRelationType::Invalidates => WhyRelationKind::RecordInvalidates,
     }
 }
 

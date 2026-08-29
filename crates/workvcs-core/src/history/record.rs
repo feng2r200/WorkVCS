@@ -1,4 +1,5 @@
 use super::entity::{canonical_json_string, entity_transition_payload_json};
+use super::knowledge::{KNOWLEDGE_ENTITY_KIND, KnowledgeSnapshot, KnowledgeStatus, knowledge_at};
 use super::{EntityTransitionOptions, commit_entity_transition, state_at};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, entity_version_digest, parse_canonical_json,
@@ -941,6 +942,59 @@ pub struct RecordRelationCreateCommit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordKnowledgeRelationCreateOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    relation_type: RecordRelationType,
+    source_record_entity_id: EntityId,
+    target_knowledge_entity_id: EntityId,
+    rationale: CanonicalValue,
+}
+
+impl RecordKnowledgeRelationCreateOptions {
+    pub fn supports(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_knowledge_entity_id: EntityId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        validate_transition_rationale(&rationale)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            relation_type: RecordRelationType::Supports,
+            source_record_entity_id,
+            target_knowledge_entity_id,
+            rationale: rationale_value(&rationale)?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordKnowledgeRelationCreateCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_id: OperationId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: RecordRelationType,
+    pub source_record_entity_id: EntityId,
+    pub target_knowledge_entity_id: EntityId,
+    pub relation_state_digest: Digest,
+    pub work_state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecisionRecordSupersedeOptions {
     branch_id: BranchId,
     expected_head_commit_id: CommitId,
@@ -1187,6 +1241,18 @@ pub struct RecordRelationSnapshot {
     pub relation_label: Option<String>,
     pub source_record_entity_id: EntityId,
     pub target_record_entity_id: EntityId,
+    pub state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordKnowledgeRelationSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_type: RecordRelationType,
+    pub source_record_entity_id: EntityId,
+    pub target_knowledge_entity_id: EntityId,
     pub state_digest: Digest,
 }
 
@@ -1653,6 +1719,135 @@ pub(crate) fn create_record_relation(
     })
 }
 
+pub(crate) fn create_record_knowledge_relation(
+    connection: &mut StoreConnection,
+    options: &RecordKnowledgeRelationCreateOptions,
+) -> Result<RecordKnowledgeRelationCreateCommit> {
+    connection.verify_foreign_keys()?;
+    require_non_empty_rationale_object(&options.rationale)?;
+    if options.source_record_entity_id == options.target_knowledge_entity_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {} cannot use entity {} as both source and target",
+            options.relation_type, options.source_record_entity_id
+        )));
+    }
+
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let source = record_at(
+        connection,
+        options.expected_head_commit_id,
+        options.source_record_entity_id,
+    )?;
+    let target = knowledge_at(
+        connection,
+        options.expected_head_commit_id,
+        options.target_knowledge_entity_id,
+    )?;
+    if source.workspace_id != parent.workspace_id || target.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation endpoints must belong to workspace {}",
+            parent.workspace_id
+        )));
+    }
+    validate_record_knowledge_relation_endpoints_for_create(
+        options.relation_type,
+        &source,
+        &target,
+    )?;
+
+    let relation_id = RelationId::new_v7();
+    let relation_version_id = RelationVersionId::new_v7();
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+
+    let relation_state_value = CanonicalValue::object(Vec::new())?;
+    let relation_state_json = canonical_json_string(&relation_state_value)?;
+    let relation_state_digest = relation_version_digest(&relation_state_value)?;
+    let next_work_state =
+        work_state_after_record_relation_create(&parent.state, relation_id, relation_version_id)?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let relation_payload_value =
+        relation_transition_payload_value(relation_id, None, Some(relation_version_id))?;
+    let relation_payload_json = canonical_json_string(&relation_payload_value)?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    ensure_record_relation_logical_key_available(
+        &transaction,
+        branch.workspace_id,
+        options.relation_type,
+        options.source_record_entity_id,
+        options.target_knowledge_entity_id,
+        "",
+    )?;
+    write_record_relation_create(
+        &transaction,
+        &RecordRelationCreateRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            relation_id,
+            relation_version_id,
+            relation_state_json,
+            relation_state_digest,
+            relation_type: options.relation_type,
+            relation_discriminator: String::new(),
+            source_record_entity_id: options.source_record_entity_id,
+            target_record_entity_id: options.target_knowledge_entity_id,
+            changeset_id,
+            commit_id,
+            operation_id,
+            relation_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(RecordKnowledgeRelationCreateCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        operation_id,
+        relation_id,
+        relation_version_id,
+        relation_type: options.relation_type,
+        source_record_entity_id: options.source_record_entity_id,
+        target_knowledge_entity_id: options.target_knowledge_entity_id,
+        relation_state_digest,
+        work_state_digest,
+    })
+}
+
 pub(crate) fn remove_record_relation(
     connection: &mut StoreConnection,
     options: &RecordRelationRemoveOptions,
@@ -2083,6 +2278,70 @@ pub(crate) fn record_relations_at(
     })
 }
 
+pub(crate) fn record_knowledge_relations_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<RecordKnowledgeRelationSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut relations = Vec::new();
+
+    for (relation_id, relation_version_id) in replayed.state.relations() {
+        let Some(relation) = load_record_knowledge_relation_version(
+            connection,
+            replayed.workspace_id,
+            *relation_id,
+            *relation_version_id,
+        )?
+        else {
+            continue;
+        };
+        let source = record_snapshot_in_state(
+            connection,
+            replayed.workspace_id,
+            commit_id,
+            &replayed.state,
+            relation.source_record_entity_id,
+        )?;
+        let target = knowledge_at(connection, commit_id, relation.target_knowledge_entity_id)?;
+        if target.workspace_id != replayed.workspace_id {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record knowledge relation target {} belongs to workspace {}, not {}",
+                relation.target_knowledge_entity_id, target.workspace_id, replayed.workspace_id
+            )));
+        }
+        validate_record_knowledge_relation_endpoints_for_projection(
+            relation.relation_type,
+            &source,
+        )?;
+
+        relations.push(RecordKnowledgeRelationSnapshot {
+            workspace_id: replayed.workspace_id,
+            commit_id,
+            relation_id: relation.relation_id,
+            relation_version_id: relation.relation_version_id,
+            relation_type: relation.relation_type,
+            source_record_entity_id: relation.source_record_entity_id,
+            target_knowledge_entity_id: relation.target_knowledge_entity_id,
+            state_digest: relation.state_digest,
+        });
+    }
+
+    relations.sort_by(|left, right| {
+        left.relation_type
+            .cmp(&right.relation_type)
+            .then_with(|| {
+                left.source_record_entity_id
+                    .cmp(&right.source_record_entity_id)
+            })
+            .then_with(|| {
+                left.target_knowledge_entity_id
+                    .cmp(&right.target_knowledge_entity_id)
+            })
+            .then_with(|| left.relation_id.cmp(&right.relation_id))
+    });
+    Ok(relations)
+}
+
 pub(crate) fn record_relation_at(
     connection: &StoreConnection,
     commit_id: CommitId,
@@ -2184,6 +2443,15 @@ struct LoadedRecordRelationVersion {
     relation_label: Option<String>,
     source_record_entity_id: EntityId,
     target_record_entity_id: EntityId,
+    state_digest: Digest,
+}
+
+struct LoadedRecordKnowledgeRelationVersion {
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    relation_type: RecordRelationType,
+    source_record_entity_id: EntityId,
+    target_knowledge_entity_id: EntityId,
     state_digest: Digest,
 }
 
@@ -2316,6 +2584,53 @@ fn validate_record_relation_endpoints_for_create(
             }
             Ok(())
         }
+    }
+}
+
+fn validate_record_knowledge_relation_endpoints_for_create(
+    relation_type: RecordRelationType,
+    source: &RecordSnapshot,
+    target: &KnowledgeSnapshot,
+) -> Result<()> {
+    match relation_type {
+        RecordRelationType::Supports => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "supports source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            if target.state.status != KnowledgeStatus::Active {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "supports target Knowledge must be active, found {}",
+                    target.state.status
+                )));
+            }
+            Ok(())
+        }
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation type {other} is not supported in this slice"
+        ))),
+    }
+}
+
+fn validate_record_knowledge_relation_endpoints_for_projection(
+    relation_type: RecordRelationType,
+    source: &RecordSnapshot,
+) -> Result<()> {
+    match relation_type {
+        RecordRelationType::Supports => {
+            if source.state.kind != RecordKind::Finding {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "supports source must be a Finding Record, found {}",
+                    source.state.kind
+                )));
+            }
+            Ok(())
+        }
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation type {other} is not supported in this slice"
+        ))),
     }
 }
 
@@ -3774,6 +4089,17 @@ fn load_record_relation_version(
             )));
         }
     };
+    let source_record_entity_id = decode_entity_id("relation.source_object_id", source_object_id)?;
+    let target_record_entity_id = decode_entity_id("relation.target_object_id", target_object_id)?;
+    if !matches!(
+        load_entity_kind(connection, source_record_entity_id)?.as_deref(),
+        Some(RECORD_ENTITY_KIND)
+    ) || !matches!(
+        load_entity_kind(connection, target_record_entity_id)?.as_deref(),
+        Some(RECORD_ENTITY_KIND)
+    ) {
+        return Ok(None);
+    }
     if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
         return Err(WorkVcsError::RecordInvalid(format!(
             "record relation {relation_id} version {relation_version_id} has state schema version {state_schema_version}"
@@ -3810,8 +4136,147 @@ fn load_record_relation_version(
         relation_version_id,
         relation_type,
         relation_label,
-        source_record_entity_id: decode_entity_id("relation.source_object_id", source_object_id)?,
-        target_record_entity_id: decode_entity_id("relation.target_object_id", target_object_id)?,
+        source_record_entity_id,
+        target_record_entity_id,
+        state_digest,
+    }))
+}
+
+fn load_record_knowledge_relation_version(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<Option<LoadedRecordKnowledgeRelationVersion>> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT object_identity.object_kind,
+                    relation.workspace_id,
+                    relation.relation_type,
+                    relation.source_object_id,
+                    relation.target_object_id,
+                    relation.relation_discriminator,
+                    relation_version.state_schema_version,
+                    relation_version.metadata_json,
+                    relation_version.state_digest
+             FROM relation
+             JOIN object_identity
+               ON object_identity.object_id = relation.object_id
+             JOIN relation_version
+               ON relation_version.relation_id = relation.object_id
+             WHERE relation.object_id = ?1
+               AND relation_version.relation_version_id = ?2",
+            params![
+                &relation_id.raw_bytes()[..],
+                &relation_version_id.raw_bytes()[..]
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        object_kind,
+        relation_workspace_id,
+        relation_type,
+        source_object_id,
+        target_object_id,
+        relation_discriminator,
+        state_schema_version,
+        metadata_json,
+        state_digest,
+    )) = row
+    else {
+        return Err(WorkVcsError::RecordNotFound(format!(
+            "record knowledge relation {relation_id} version {relation_version_id} does not exist"
+        )));
+    };
+    if object_kind != RELATION_OBJECT_KIND {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {relation_id} has object kind {object_kind:?}"
+        )));
+    }
+    let relation_workspace_id =
+        decode_workspace_id("relation.workspace_id", relation_workspace_id)?;
+    if relation_workspace_id != workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {relation_id} belongs to workspace {relation_workspace_id}, not {workspace_id}"
+        )));
+    }
+
+    let Some(relation_type) = RecordRelationType::parse(&relation_type) else {
+        return Ok(None);
+    };
+    if relation_type != RecordRelationType::Supports {
+        return Ok(None);
+    }
+    if !relation_discriminator.is_empty() {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
+        )));
+    }
+    let source_record_entity_id = decode_entity_id("relation.source_object_id", source_object_id)?;
+    let target_knowledge_entity_id =
+        decode_entity_id("relation.target_object_id", target_object_id)?;
+    if !matches!(
+        load_entity_kind(connection, source_record_entity_id)?.as_deref(),
+        Some(RECORD_ENTITY_KIND)
+    ) || !matches!(
+        load_entity_kind(connection, target_knowledge_entity_id)?.as_deref(),
+        Some(KNOWLEDGE_ENTITY_KIND)
+    ) {
+        return Ok(None);
+    }
+    if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {relation_id} version {relation_version_id} has state schema version {state_schema_version}"
+        )));
+    }
+
+    let state_digest = decode_digest("relation_version.state_digest", state_digest)?;
+    validate_import_fixed_point(
+        metadata_json.as_bytes(),
+        state_digest,
+        ImportDigestDomain::RelationVersion,
+    )
+    .map_err(|error| {
+        WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {relation_id} version {relation_version_id} fixed-point validation failed: {error}"
+        ))
+    })?;
+    let metadata_value =
+        parse_canonical_json(metadata_json.as_bytes()).map_err(record_invalid_from)?;
+    if metadata_value != CanonicalValue::object(Vec::new())? {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {relation_id} version {relation_version_id} state must be canonical empty object"
+        )));
+    }
+    let actual = relation_version_digest(&metadata_value).map_err(record_invalid_from)?;
+    if actual != state_digest {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record knowledge relation {relation_id} version {relation_version_id} digest does not match metadata JSON"
+        )));
+    }
+
+    Ok(Some(LoadedRecordKnowledgeRelationVersion {
+        relation_id,
+        relation_version_id,
+        relation_type,
+        source_record_entity_id,
+        target_knowledge_entity_id,
         state_digest,
     }))
 }

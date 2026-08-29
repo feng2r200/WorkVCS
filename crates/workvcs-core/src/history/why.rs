@@ -9,8 +9,8 @@ use super::task::{
 use super::{
     PrimaryContainmentEndpointKind, RecordRelationListOptions, RecordRelationType,
     StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence,
-    primary_containment_relations_at, record_relations_at, state_at, structural_references_at,
-    verification_evidence_relations_at, verification_relations_at,
+    primary_containment_relations_at, record_knowledge_relations_at, record_relations_at, state_at,
+    structural_references_at, verification_evidence_relations_at, verification_relations_at,
 };
 use crate::error::{Result, WorkVcsError};
 use crate::identity::{
@@ -347,6 +347,28 @@ pub(crate) fn explain_why(
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
                 relation_label: relation.relation_label.clone(),
+                source,
+                target,
+                state_digest: relation.state_digest,
+            });
+        }
+    }
+    for relation in record_knowledge_relations_at(connection, resolved.target.commit_id)? {
+        let source =
+            WhyRelationEndpoint::entity(relation.source_record_entity_id, WhyEntityKind::Record);
+        let target = WhyRelationEndpoint::entity(
+            relation.target_knowledge_entity_id,
+            WhyEntityKind::Knowledge,
+        );
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
+        {
+            relation_edges.push(WhyRelationEdge {
+                relation_kind: record_relation_kind(relation.relation_type),
+                direction: relation_direction(options.subject(), source, target),
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                relation_label: None,
                 source,
                 target,
                 state_digest: relation.state_digest,

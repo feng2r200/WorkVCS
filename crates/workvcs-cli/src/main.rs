@@ -12,7 +12,8 @@ use workvcs_core::{
     EntityVersionId, EvidenceId, HistoryEntry, HistoryQueryOptions, KnowledgeCreateCommit,
     KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult, KnowledgeSnapshot,
     KnowledgeStatus, KnowledgeTransitionCommit, KnowledgeTransitionOptions, NextWorkOptions,
-    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind, RecordListOptions,
+    NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions, RecordListOptions,
     RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
     RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
     RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
@@ -551,6 +552,25 @@ enum RecordCommand {
 
         #[arg(long)]
         target_record: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    LinkSupportsKnowledge {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        source_record: String,
+
+        #[arg(long)]
+        target_knowledge: String,
 
         #[arg(long)]
         rationale: String,
@@ -1696,6 +1716,29 @@ fn run(cli: Cli) -> Result<String> {
                 rationale,
             )?)?;
             Ok(render_record_relation_create(&relation))
+        }
+        Command::Record {
+            command:
+                RecordCommand::LinkSupportsKnowledge {
+                    store,
+                    branch,
+                    head,
+                    source_record,
+                    target_knowledge,
+                    rationale,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation = engine.create_record_knowledge_relation(
+                RecordKnowledgeRelationCreateOptions::supports(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_knowledge)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_create(&relation))
         }
         Command::Record {
             command:
@@ -3028,6 +3071,27 @@ fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> Strin
         relation.relation_label.as_deref().unwrap_or(""),
         relation.source_record_entity_id,
         relation.target_record_entity_id,
+        relation.relation_state_digest,
+        relation.work_state_digest
+    )
+}
+
+fn render_record_knowledge_relation_create(
+    relation: &RecordKnowledgeRelationCreateCommit,
+) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nsource_record_entity_id={}\ntarget_knowledge_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.source_record_entity_id,
+        relation.target_knowledge_entity_id,
         relation.relation_state_digest,
         relation.work_state_digest
     )
@@ -7188,6 +7252,115 @@ mod tests {
             )
             .expect("list historical knowledge");
         assert_eq!(value(&empty, "knowledge"), "0");
+    }
+
+    #[test]
+    fn cli_links_record_support_to_knowledge() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Context summaries expose active Knowledge",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--statement",
+            "The context command prints context_knowledge rows",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports-knowledge",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--rationale",
+            "The observed CLI output supports the reusable statement",
+        ])
+        .expect("parse supports knowledge"))
+        .expect("support knowledge");
+        assert_eq!(value(&relation, "relation_type"), "supports");
+        assert_eq!(
+            value(&relation, "target_knowledge_entity_id"),
+            value(&knowledge, "knowledge_entity_id")
+        );
+
+        let record_only = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--type",
+            "supports",
+        ])
+        .expect("parse record-only relation list"))
+        .expect("list record-only relations");
+        assert_eq!(value(&record_only, "relations"), "0");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--entity",
+            &value(&knowledge, "knowledge_entity_id"),
+        ])
+        .expect("parse why knowledge"))
+        .expect("why knowledge");
+        assert_eq!(value(&why, "subject_entity_kind"), "knowledge");
+        assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(value(&why, "relation.0.relation_kind"), "record_supports");
+        assert_eq!(value(&why, "relation.0.direction"), "incoming");
+        assert_eq!(value(&why, "relation.0.source_entity_kind"), "record");
+        assert_eq!(value(&why, "relation.0.target_entity_kind"), "knowledge");
     }
 
     fn value(output: &str, key: &str) -> String {

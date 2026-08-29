@@ -3654,7 +3654,7 @@ fn parse_bundle_manifest_summary(
         .iter()
         .map(parse_bundle_branch_head_summary)
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(BundleManifestSummary {
+    let manifest = BundleManifestSummary {
         source_store_id: parse_store_id_field(store, "bundle manifest store", "store_id")?,
         store_format_version: integer_field_value(
             store,
@@ -3681,7 +3681,81 @@ fn parse_bundle_manifest_summary(
         state_digest: parse_digest_field(target, "bundle manifest target", "state_digest")?,
         commits,
         exported_branch_heads,
-    })
+    };
+    validate_bundle_manifest_summary_integrity(&manifest)?;
+    Ok(manifest)
+}
+
+fn validate_bundle_manifest_summary_integrity(
+    manifest: &BundleManifestSummary,
+) -> std::result::Result<(), String> {
+    let mut commits_by_id = BTreeMap::new();
+    for commit in &manifest.commits {
+        if commits_by_id
+            .insert(commit.commit_id, commit.state_digest)
+            .is_some()
+        {
+            return Err(format!(
+                "bundle manifest commit {} appears more than once",
+                commit.commit_id
+            ));
+        }
+    }
+    match commits_by_id.get(&manifest.commit_id) {
+        Some(state_digest) if *state_digest == manifest.state_digest => {}
+        Some(_) => {
+            return Err(
+                "bundle manifest target commit state digest does not match commit closure"
+                    .to_owned(),
+            );
+        }
+        None => {
+            return Err("bundle manifest target commit is missing from commit closure".to_owned());
+        }
+    }
+
+    for commit in &manifest.commits {
+        for parent_commit_id in &commit.parent_commit_ids {
+            if !commits_by_id.contains_key(parent_commit_id) {
+                return Err(format!(
+                    "bundle manifest commit {} parent {} is missing from commit closure",
+                    commit.commit_id, parent_commit_id
+                ));
+            }
+        }
+    }
+
+    let mut branch_ids = BTreeSet::new();
+    for branch in &manifest.exported_branch_heads {
+        if !branch_ids.insert(branch.branch_id) {
+            return Err(format!(
+                "bundle manifest branch {} appears more than once",
+                branch.branch_id
+            ));
+        }
+        if branch.workspace_id != manifest.workspace_id {
+            return Err(format!(
+                "bundle manifest branch {} workspace does not match target workspace",
+                branch.branch_id
+            ));
+        }
+        match commits_by_id.get(&branch.head_commit_id) {
+            Some(state_digest) if *state_digest == branch.head_state_digest => {}
+            Some(_) => {
+                return Err(format!(
+                    "bundle manifest branch {} head digest does not match commit closure",
+                    branch.branch_id
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "bundle manifest branch {} head commit is missing from commit closure",
+                    branch.branch_id
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_bundle_commit_summary(

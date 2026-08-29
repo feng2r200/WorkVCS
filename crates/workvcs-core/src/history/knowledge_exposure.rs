@@ -3,7 +3,8 @@ use super::record::{
     KNOWLEDGE_RELATION_CREATE_OPERATION_SCHEMA_VERSION, KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE,
 };
 use super::{
-    KnowledgeState, KnowledgeStatus, knowledge_at, knowledge_space, knowledge_version_state,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeState, KnowledgeStatus,
+    create_knowledge, knowledge_at, knowledge_space, knowledge_version_state,
     knowledge_version_state_digest, state_at,
 };
 use crate::canonical::{
@@ -220,6 +221,35 @@ impl KnowledgeExposureAdoptionCandidateOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureAdoptOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    exposure_id: ExposureId,
+    rationale: CanonicalValue,
+}
+
+impl KnowledgeExposureAdoptOptions {
+    pub fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        exposure_id: ExposureId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            exposure_id,
+            rationale: relation_rationale_value(&rationale.into())?,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureDerivedFromRelationCreateOptions {
     branch_id: BranchId,
     expected_head_commit_id: CommitId,
@@ -271,6 +301,13 @@ pub struct KnowledgeExposureRefreshSourceStatusResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeExposureAdoptionCandidateResult {
     pub candidate: KnowledgeExposureAdoptionCandidate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeExposureAdoptResult {
+    pub candidate: KnowledgeExposureAdoptionCandidate,
+    pub knowledge: KnowledgeCreateCommit,
+    pub relation: KnowledgeExposureDerivedFromRelationCreateCommit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -937,6 +974,62 @@ pub(crate) fn knowledge_exposure_adoption_candidate(
             source_knowledge_state,
             adoption_provenance,
         },
+    })
+}
+
+pub(crate) fn adopt_knowledge_exposure(
+    connection: &mut StoreConnection,
+    source_store_id: StoreId,
+    options: KnowledgeExposureAdoptOptions,
+) -> Result<KnowledgeExposureAdoptResult> {
+    connection.verify_foreign_keys()?;
+    require_non_empty_object("knowledge exposure adoption rationale", &options.rationale)?;
+    let candidate = knowledge_exposure_adoption_candidate(
+        connection,
+        source_store_id,
+        KnowledgeExposureAdoptionCandidateOptions::new(options.exposure_id),
+    )?
+    .candidate;
+    if candidate.exposure.source_status.source_status != KnowledgeExposureSourceStatus::Current {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "KnowledgeExposure {} source status is {}, not current",
+            options.exposure_id,
+            candidate.exposure.source_status.source_status.as_str()
+        )));
+    }
+    if candidate.source_knowledge_state.status != KnowledgeStatus::Active {
+        return Err(WorkVcsError::KnowledgeInvalid(format!(
+            "KnowledgeExposure {} source Knowledge is {}, not active",
+            options.exposure_id,
+            candidate.source_knowledge_state.status.as_str()
+        )));
+    }
+
+    let adopted_provenance = adopted_knowledge_provenance_value(&candidate)?;
+    let knowledge_options = KnowledgeCreateOptions::new(
+        options.branch_id,
+        options.expected_head_commit_id,
+        candidate.source_knowledge_state.statement.clone(),
+    )?
+    .with_scope(candidate.source_knowledge_state.scope.clone())?
+    .with_provenance(adopted_provenance)?
+    .with_rationale(options.rationale.clone());
+    let knowledge = create_knowledge(connection, &knowledge_options)?;
+
+    let relation_options = KnowledgeExposureDerivedFromRelationCreateOptions::new(
+        options.branch_id,
+        knowledge.commit_id,
+        knowledge.knowledge_entity_id,
+        options.exposure_id,
+        "adopted from knowledge exposure",
+    )?
+    .with_rationale(options.rationale);
+    let relation = create_knowledge_exposure_derived_from_relation(connection, &relation_options)?;
+
+    Ok(KnowledgeExposureAdoptResult {
+        candidate,
+        knowledge,
+        relation,
     })
 }
 
@@ -1665,6 +1758,22 @@ fn adoption_provenance_value(
         (
             "source_workspace_id".to_owned(),
             CanonicalValue::String(exposure.source.workspace_id.to_string()),
+        ),
+    ])
+}
+
+fn adopted_knowledge_provenance_value(
+    candidate: &KnowledgeExposureAdoptionCandidate,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        ("adoption".to_owned(), candidate.adoption_provenance.clone()),
+        (
+            "kind".to_owned(),
+            CanonicalValue::String("knowledge_exposure_adoption_v1".to_owned()),
+        ),
+        (
+            "source_provenance".to_owned(),
+            candidate.source_knowledge_state.provenance.clone(),
         ),
     ])
 }

@@ -15,6 +15,7 @@ pub enum ErrorCategory {
     Query,
     Relation,
     Replay,
+    Resource,
     Runtime,
     Store,
     Storage,
@@ -46,6 +47,9 @@ pub enum ErrorCode {
     QueryInvalid,
     QueryUnsupported,
     RelationInvalid,
+    ResourceInvalid,
+    ResourceNotFound,
+    ResourceObservationNotFound,
     ReplayInvalid,
     ReplayUnsupported,
     SessionInvalid,
@@ -126,6 +130,15 @@ pub enum WorkVcsError {
     #[error("relation invalid: {0}")]
     RelationInvalid(String),
 
+    #[error("resource invalid: {0}")]
+    ResourceInvalid(String),
+
+    #[error("resource not found: {0}")]
+    ResourceNotFound(String),
+
+    #[error("resource observation not found: {0}")]
+    ResourceObservationNotFound(String),
+
     #[error("replay invalid: {0}")]
     ReplayInvalid(String),
 
@@ -190,6 +203,9 @@ impl WorkVcsError {
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
             Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
             Self::RelationInvalid(_) => ErrorCode::RelationInvalid,
+            Self::ResourceInvalid(_) => ErrorCode::ResourceInvalid,
+            Self::ResourceNotFound(_) => ErrorCode::ResourceNotFound,
+            Self::ResourceObservationNotFound(_) => ErrorCode::ResourceObservationNotFound,
             Self::ReplayInvalid(_) => ErrorCode::ReplayInvalid,
             Self::ReplayUnsupported(_) => ErrorCode::ReplayUnsupported,
             Self::SessionInvalid(_) => ErrorCode::SessionInvalid,
@@ -221,6 +237,9 @@ impl WorkVcsError {
             Self::PlanInvalid(_) | Self::PlanNotFound(_) => ErrorCategory::Plan,
             Self::QueryInvalid(_) | Self::QueryUnsupported(_) => ErrorCategory::Query,
             Self::RelationInvalid(_) => ErrorCategory::Relation,
+            Self::ResourceInvalid(_)
+            | Self::ResourceNotFound(_)
+            | Self::ResourceObservationNotFound(_) => ErrorCategory::Resource,
             Self::CommitNotFound(_) | Self::ReplayInvalid(_) | Self::ReplayUnsupported(_) => {
                 ErrorCategory::Replay
             }

@@ -27,7 +27,11 @@ pub use history::{
     PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
     RelationVersionDiff, ReplayedState, ResolvedWhyQuerySubject, ResolvedWhyQueryTarget,
-    ResolvedWorkStateDiffTarget, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    ResolvedWorkStateDiffTarget, ResourceBindOptions, ResourceBindResult, ResourceBindingSnapshot,
+    ResourceCreateOptions, ResourceCreateResult, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationDetailInput,
+    ResourceObservationDetailSnapshot, ResourceObservationSnapshot, ResourceSnapshot,
+    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
     StructuralReferenceEndpointKind, StructuralReferenceSnapshot, TaskAcceptanceCriterionRef,
     TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
     TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot,
@@ -42,12 +46,13 @@ pub use history::{
     WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQuerySubject, WhyQueryTarget,
     WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WorkStateDiff,
     WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget, WorkspaceInfo,
-    WorkspaceInitOptions,
+    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WorkspaceResourceAssociationSnapshot,
 };
 pub use identity::{
     BranchId, ChangeSetId, ClaimId, CommitId, Digest, EntityId, EntityVersionId, EventId,
-    EvidenceId, OperationId, RelationId, RelationVersionId, SessionDiffId, SessionId, StoreId,
-    WorkspaceId,
+    EvidenceId, OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId,
+    SessionDiffId, SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
     ClaimLifecycleState, ClaimMode, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,

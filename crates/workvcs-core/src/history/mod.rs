@@ -9,6 +9,7 @@ mod plan;
 mod query;
 mod reference;
 mod replay;
+mod resource;
 mod task;
 mod why;
 
@@ -41,6 +42,13 @@ pub use reference::{
     StructuralReferenceEndpointKind, StructuralReferenceSnapshot,
 };
 pub use replay::ReplayedState;
+pub use resource::{
+    ResourceBindOptions, ResourceBindResult, ResourceBindingSnapshot, ResourceCreateOptions,
+    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationDetailInput, ResourceObservationDetailSnapshot, ResourceObservationSnapshot,
+    ResourceSnapshot, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WorkspaceResourceAssociationSnapshot,
+};
 pub use task::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
@@ -74,6 +82,10 @@ pub(crate) use plan::{create_plan, plan_at, transition_plan};
 pub(crate) use query::{branch_head, query_history};
 pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::state_at;
+pub(crate) use resource::{
+    associate_workspace_resource, bind_resource, create_resource, record_resource_observation,
+    resource, resource_observation,
+};
 pub(crate) use task::{
     acceptance_criterion_at, acceptance_criterion_effective_status, create_acceptance_criterion,
     create_task, create_task_scheduling_relation, create_verification,

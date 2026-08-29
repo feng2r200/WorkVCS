@@ -8,15 +8,17 @@ use crate::history::{
     GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
     PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    ReplayedState, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::runtime::{
     ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
@@ -30,7 +32,8 @@ use crate::store::bootstrap::{
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
 use crate::{
-    BranchId, ClaimId, CommitId, EntityId, EvidenceId, SessionId, WorkspaceId, history, runtime,
+    BranchId, ClaimId, CommitId, EntityId, EvidenceId, ResourceId, ResourceObservationId,
+    SessionId, WorkspaceId, history, runtime,
 };
 use std::path::Path;
 
@@ -132,6 +135,57 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::evidence(&self.connection, evidence_id)
+    }
+
+    pub(crate) fn create_resource(
+        &mut self,
+        options: &ResourceCreateOptions,
+    ) -> Result<ResourceCreateResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::create_resource(&mut self.connection, options)
+    }
+
+    pub(crate) fn resource(&self, resource_id: ResourceId) -> Result<ResourceSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::resource(&self.connection, resource_id)
+    }
+
+    pub(crate) fn bind_resource(
+        &mut self,
+        options: &ResourceBindOptions,
+    ) -> Result<ResourceBindResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::bind_resource(&mut self.connection, options)
+    }
+
+    pub(crate) fn associate_workspace_resource(
+        &mut self,
+        options: &WorkspaceResourceAssociationOptions,
+    ) -> Result<WorkspaceResourceAssociationResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::associate_workspace_resource(&mut self.connection, options)
+    }
+
+    pub(crate) fn record_resource_observation(
+        &mut self,
+        options: &ResourceObservationCreateOptions,
+    ) -> Result<ResourceObservationCreateResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_resource_observation(&mut self.connection, options)
+    }
+
+    pub(crate) fn resource_observation(
+        &self,
+        observation_id: ResourceObservationId,
+    ) -> Result<ResourceObservationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::resource_observation(&self.connection, observation_id)
     }
 
     pub(crate) fn commit_entity_transition(

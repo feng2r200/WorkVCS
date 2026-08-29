@@ -107,6 +107,8 @@ typed_uuid!(WorkspaceId);
 typed_uuid!(EntityId);
 typed_uuid!(EntityVersionId);
 typed_uuid!(EvidenceId);
+typed_uuid!(ResourceId);
+typed_uuid!(ResourceObservationId);
 typed_uuid!(RelationId);
 typed_uuid!(RelationVersionId);
 typed_uuid!(BranchId);

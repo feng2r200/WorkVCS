@@ -3,6 +3,8 @@ use crate::ClaimId;
 use crate::CommitId;
 use crate::EntityId;
 use crate::EvidenceId;
+use crate::ResourceId;
+use crate::ResourceObservationId;
 use crate::SessionId;
 use crate::WorkspaceId;
 use crate::error::Result;
@@ -15,15 +17,17 @@ use crate::history::{
     GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
     PlanCreateCommit, PlanCreateOptions, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    ReplayedState, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
@@ -100,6 +104,42 @@ impl Engine {
 
     pub fn evidence(&self, evidence_id: EvidenceId) -> Result<EvidenceSnapshot> {
         self.store.evidence(evidence_id)
+    }
+
+    pub fn create_resource(
+        &mut self,
+        options: ResourceCreateOptions,
+    ) -> Result<ResourceCreateResult> {
+        self.store.create_resource(&options)
+    }
+
+    pub fn resource(&self, resource_id: ResourceId) -> Result<ResourceSnapshot> {
+        self.store.resource(resource_id)
+    }
+
+    pub fn bind_resource(&mut self, options: ResourceBindOptions) -> Result<ResourceBindResult> {
+        self.store.bind_resource(&options)
+    }
+
+    pub fn associate_workspace_resource(
+        &mut self,
+        options: WorkspaceResourceAssociationOptions,
+    ) -> Result<WorkspaceResourceAssociationResult> {
+        self.store.associate_workspace_resource(&options)
+    }
+
+    pub fn record_resource_observation(
+        &mut self,
+        options: ResourceObservationCreateOptions,
+    ) -> Result<ResourceObservationCreateResult> {
+        self.store.record_resource_observation(&options)
+    }
+
+    pub fn resource_observation(
+        &self,
+        observation_id: ResourceObservationId,
+    ) -> Result<ResourceObservationSnapshot> {
+        self.store.resource_observation(observation_id)
     }
 
     pub fn commit_entity_transition(

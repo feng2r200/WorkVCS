@@ -383,6 +383,9 @@ enum RecordCommand {
 
         #[arg(long)]
         kind: Option<String>,
+
+        #[arg(long)]
+        status: Option<String>,
     },
     LinkInvalidates {
         #[arg(value_name = "STORE")]
@@ -1358,12 +1361,16 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     commit,
                     kind,
+                    status,
                 },
         } => {
             let engine = Engine::open(store)?;
             let mut options = RecordListOptions::new(CommitId::parse_canonical(&commit)?);
             if let Some(kind) = kind {
                 options = options.with_kind(parse_record_kind(&kind)?);
+            }
+            if let Some(status) = status {
+                options = options.with_status(parse_record_status(&status)?);
             }
             Ok(render_record_list(&engine.records_at(options)?))
         }
@@ -2057,6 +2064,24 @@ fn parse_record_kind(value: &str) -> Result<RecordKind> {
         "risk" => Ok(RecordKind::Risk),
         other => Err(WorkVcsError::RecordInvalid(format!(
             "record kind {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_record_status(value: &str) -> Result<RecordStatus> {
+    match value {
+        "active" => Ok(RecordStatus::Active),
+        "failed" => Ok(RecordStatus::Failed),
+        "inconclusive" => Ok(RecordStatus::Inconclusive),
+        "invalidated" => Ok(RecordStatus::Invalidated),
+        "running" => Ok(RecordStatus::Running),
+        "succeeded" => Ok(RecordStatus::Succeeded),
+        "superseded" => Ok(RecordStatus::Superseded),
+        "unverified" => Ok(RecordStatus::Unverified),
+        "validated" => Ok(RecordStatus::Validated),
+        "withdrawn" => Ok(RecordStatus::Withdrawn),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "record status {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -4474,6 +4499,44 @@ mod tests {
         .expect("parse prior show"))
         .expect("show prior");
         assert!(shown.contains("record_status=superseded"));
+
+        let superseded_records = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--status",
+            "superseded",
+        ])
+        .expect("parse superseded record list"))
+        .expect("list superseded records");
+        assert!(superseded_records.contains("records=1"));
+        assert_eq!(
+            value(&superseded_records, "record.0.record_entity_id"),
+            value(&prior, "record_entity_id")
+        );
+
+        let active_decisions = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--kind",
+            "decision",
+            "--status",
+            "active",
+        ])
+        .expect("parse active decision list"))
+        .expect("list active decisions");
+        assert!(active_decisions.contains("records=1"));
+        assert_eq!(
+            value(&active_decisions, "record.0.record_entity_id"),
+            value(&replacement, "record_entity_id")
+        );
 
         let listed = run(Cli::try_parse_from([
             "workvcs",

@@ -673,6 +673,7 @@ pub struct RecordSnapshot {
 pub struct RecordListOptions {
     commit_id: CommitId,
     kind: Option<RecordKind>,
+    status: Option<RecordStatus>,
 }
 
 impl RecordListOptions {
@@ -680,11 +681,17 @@ impl RecordListOptions {
         Self {
             commit_id,
             kind: None,
+            status: None,
         }
     }
 
     pub fn with_kind(mut self, kind: RecordKind) -> Self {
         self.kind = Some(kind);
+        self
+    }
+
+    pub fn with_status(mut self, status: RecordStatus) -> Self {
+        self.status = Some(status);
         self
     }
 
@@ -694,6 +701,10 @@ impl RecordListOptions {
 
     pub fn kind(&self) -> Option<RecordKind> {
         self.kind
+    }
+
+    pub fn status(&self) -> Option<RecordStatus> {
+        self.status
     }
 }
 
@@ -1533,7 +1544,11 @@ pub(crate) fn records_at(
                     *entity_id,
                     *entity_version_id,
                 )?;
-                if options.kind().is_none_or(|kind| loaded.state.kind == kind) {
+                if options.kind().is_none_or(|kind| loaded.state.kind == kind)
+                    && options
+                        .status()
+                        .is_none_or(|status| loaded.state.status == status)
+                {
                     records.push(RecordSnapshot {
                         workspace_id: replayed.workspace_id,
                         commit_id,

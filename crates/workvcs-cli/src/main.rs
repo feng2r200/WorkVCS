@@ -337,6 +337,9 @@ enum Command {
 
         #[arg(long)]
         relation_limit: Option<usize>,
+
+        #[arg(long)]
+        expected_relation_edges: Option<usize>,
     },
     Workspace {
         #[command(subcommand)]
@@ -5555,6 +5558,7 @@ fn run(cli: Cli) -> Result<String> {
             source_entity_kind,
             target_entity_kind,
             relation_limit,
+            expected_relation_edges,
         } => {
             if matches!(relation_limit, Some(0)) {
                 return Err(WorkVcsError::QueryInvalid(
@@ -5668,7 +5672,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(relation_limit) = relation_limit {
                 result.relation_edges.truncate(relation_limit);
             }
-            Ok(render_why(&result))
+            let mut output = render_why(&result);
+            if let Some(expected_relation_edges) = expected_relation_edges {
+                let actual_relation_edges = result.relation_edges.len();
+                if actual_relation_edges != expected_relation_edges {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "why relation edges {actual_relation_edges} does not match expected {expected_relation_edges}"
+                    )));
+                }
+                output.push_str("relation_edges_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Workspace {
             command:
@@ -20805,11 +20819,14 @@ mod tests {
             &value(&adoption, "final_head_commit_id"),
             "--entity",
             &value(&adoption, "adopted_knowledge_entity_id"),
+            "--expected-relation-edges",
+            "1",
         ])
         .expect("parse why"))
         .expect("why adopted knowledge");
 
         assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(value(&why, "relation_edges_match_expected"), "true");
         assert_eq!(
             value(&why, "relation.0.relation_kind"),
             "knowledge_exposure_derived_from"
@@ -20826,6 +20843,20 @@ mod tests {
             value(&why, "relation.0.target_exposure_id"),
             value(&exposure, "exposure_id")
         );
+
+        let mismatched_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--entity",
+            &value(&adoption, "adopted_knowledge_entity_id"),
+            "--expected-relation-edges",
+            "0",
+        ])
+        .expect("parse mismatched why"));
+        assert!(mismatched_why.is_err());
 
         let why_by_relation_kind = run(Cli::try_parse_from([
             "workvcs",

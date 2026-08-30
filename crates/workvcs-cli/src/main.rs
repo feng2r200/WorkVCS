@@ -1391,6 +1391,12 @@ enum BundleCommand {
 
         #[arg(long)]
         require_valid: bool,
+
+        #[arg(long)]
+        expected_payload_files: Option<usize>,
+
+        #[arg(long)]
+        expected_payload_references: Option<usize>,
     },
     PreflightDir {
         #[arg(value_name = "STORE")]
@@ -5349,6 +5355,8 @@ fn run(cli: Cli) -> Result<String> {
                 commit,
                 input_dir,
                 require_valid,
+                expected_payload_files,
+                expected_payload_references,
             } => {
                 let engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
@@ -5370,6 +5378,24 @@ fn run(cli: Cli) -> Result<String> {
                         )));
                     }
                     output.push_str("valid_required=true\n");
+                }
+                if let Some(expected_payload_files) = expected_payload_files {
+                    let actual_payload_files = validation.actual_payload_files;
+                    if actual_payload_files != expected_payload_files {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle validate-dir payload files {actual_payload_files} does not match expected {expected_payload_files}"
+                        )));
+                    }
+                    output.push_str("payload_files_match_expected=true\n");
+                }
+                if let Some(expected_payload_references) = expected_payload_references {
+                    let actual_payload_references = validation.expected_payload_references;
+                    if actual_payload_references != expected_payload_references {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle validate-dir payload references {actual_payload_references} does not match expected {expected_payload_references}"
+                        )));
+                    }
+                    output.push_str("payload_references_match_expected=true\n");
                 }
                 Ok(output)
             }
@@ -22275,6 +22301,10 @@ mod tests {
             &genesis,
             "--input-dir",
             export_dir.to_str().expect("export dir path"),
+            "--expected-payload-files",
+            "3",
+            "--expected-payload-references",
+            "5",
         ])
         .expect("parse bundle validate-dir"))
         .expect("validate bundle directory");
@@ -22283,7 +22313,31 @@ mod tests {
         assert_eq!(value(&validated_dir, "expected_payload_files"), "3");
         assert_eq!(value(&validated_dir, "actual_payload_files"), "3");
         assert_eq!(value(&validated_dir, "expected_payload_references"), "5");
+        assert_eq!(
+            value(&validated_dir, "payload_files_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&validated_dir, "payload_references_match_expected"),
+            "true"
+        );
         assert_eq!(value(&validated_dir, "problem"), "none");
+
+        let mismatched_validated_dir = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-dir",
+            store,
+            "--commit",
+            &genesis,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--expected-payload-references",
+            "0",
+        ])
+        .expect("parse mismatched bundle validate-dir"));
+        assert!(mismatched_validated_dir.is_err());
+
         let required_validated_dir = run(Cli::try_parse_from([
             "workvcs",
             "bundle",

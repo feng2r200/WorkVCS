@@ -3845,6 +3845,11 @@ fn run(cli: Cli) -> Result<String> {
             commit,
             limit,
         } => {
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "history limit must be greater than zero".to_owned(),
+                ));
+            }
             let engine = Engine::open(store)?;
             let mut options = match (branch, commit) {
                 (Some(branch_id), None) => {
@@ -13390,6 +13395,26 @@ mod tests {
             &commit,
         ]);
         assert!(both.is_err());
+    }
+
+    #[test]
+    fn history_rejects_zero_limit_before_store_open() {
+        let branch = BranchId::new_v7().to_string();
+        let result = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            "missing.sqlite",
+            "--branch",
+            &branch,
+            "--limit",
+            "0",
+        ])
+        .expect("parse history"));
+        assert!(matches!(
+            result,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "history limit must be greater than zero"
+        ));
     }
 
     #[test]

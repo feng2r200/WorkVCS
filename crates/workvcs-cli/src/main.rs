@@ -31,7 +31,7 @@ use workvcs_core::{
     ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
     ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, GoalCreateCommit,
     GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry,
-    HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    HistoryQueryOptions, ImportId, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
     KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
@@ -397,6 +397,10 @@ enum IdCommand {
 #[derive(Debug, Subcommand)]
 enum StoreCommand {
     Info {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+    },
+    Integrity {
         #[arg(value_name = "STORE")]
         store: PathBuf,
     },
@@ -3067,6 +3071,10 @@ fn run(cli: Cli) -> Result<String> {
             StoreCommand::Info { store } => {
                 let engine = Engine::open(store)?;
                 render_store_info(&engine.store_info()?)
+            }
+            StoreCommand::Integrity { store } => {
+                let engine = Engine::open(store)?;
+                Ok(render_integrity_report(&engine.validate_integrity()?))
             }
             StoreCommand::Record {
                 store,
@@ -6595,6 +6603,20 @@ fn render_store_info(info: &StoreInfo) -> Result<String> {
         info.manifest.canonical_json_profile,
         info.manifest.canonical_manifest_json()?
     ))
+}
+
+fn render_integrity_report(report: &IntegrityReport) -> String {
+    format!(
+        "checked_branches={}\nchecked_commits={}\nchecked_changesets={}\nchecked_change_operations={}\nchecked_changeset_causal_anchors={}\nchecked_events={}\nchecked_checkpoints={}\ninvalid_checkpoints={}\n",
+        report.checked_branches,
+        report.checked_commits,
+        report.checked_changesets,
+        report.checked_change_operations,
+        report.checked_changeset_causal_anchors,
+        report.checked_events,
+        report.checked_checkpoints,
+        report.invalid_checkpoints
+    )
 }
 
 fn render_work_state_mapping_digest(
@@ -12160,6 +12182,60 @@ mod tests {
         assert_eq!(value(&info, "digest_algorithm"), "blake3-256");
         assert_eq!(value(&info, "canonical_json_profile"), "workvcs-jcs-v1");
         parse_canonical_json(value(&info, "manifest_json").as_bytes()).expect("manifest JSON");
+    }
+
+    #[test]
+    fn store_integrity_cli_reports_validation_counts() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "integrity-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+
+        let empty = run(
+            Cli::try_parse_from(["workvcs", "store", "integrity", store])
+                .expect("parse empty integrity"),
+        )
+        .expect("empty store integrity");
+        assert_eq!(value(&empty, "checked_branches"), "0");
+        assert_eq!(value(&empty, "checked_commits"), "0");
+        assert_eq!(value(&empty, "checked_changesets"), "0");
+        assert_eq!(value(&empty, "invalid_checkpoints"), "0");
+
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "integrity workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+
+        let report = run(
+            Cli::try_parse_from(["workvcs", "store", "integrity", store]).expect("parse integrity"),
+        )
+        .expect("store integrity");
+        assert_eq!(value(&report, "checked_branches"), "1");
+        assert_eq!(value(&report, "checked_commits"), "1");
+        assert_eq!(value(&report, "checked_changesets"), "1");
+        assert_eq!(value(&report, "checked_change_operations"), "0");
+        assert_eq!(value(&report, "checked_changeset_causal_anchors"), "0");
+        assert_eq!(value(&report, "checked_events"), "1");
+        assert_eq!(value(&report, "checked_checkpoints"), "0");
+        assert_eq!(value(&report, "invalid_checkpoints"), "0");
+        assert!(
+            !value(&workspace, "genesis_commit_id").is_empty(),
+            "workspace creation should produce a replayable genesis commit"
+        );
     }
 
     #[test]

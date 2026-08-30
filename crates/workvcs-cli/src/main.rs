@@ -353,22 +353,40 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum CanonicalCommand {
+    #[command(group(
+        ArgGroup::new("canonical-encode-source")
+            .required(true)
+            .multiple(false)
+            .args(["json", "json_file"])
+    ))]
     Encode {
         #[arg(long)]
-        json: String,
+        json: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        json_file: Option<PathBuf>,
     },
+    #[command(group(
+        ArgGroup::new("canonical-digest-source")
+            .required(true)
+            .multiple(false)
+            .args(["json", "json_file"])
+    ))]
     Digest {
         #[arg(long)]
         domain: String,
 
         #[arg(long)]
-        json: String,
+        json: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        json_file: Option<PathBuf>,
     },
     #[command(group(
         ArgGroup::new("canonical-content-source")
             .required(true)
             .multiple(false)
-            .args(["content", "content_hex"])
+            .args(["content", "content_hex", "content_file"])
     ))]
     ContentDigest {
         #[arg(long)]
@@ -376,6 +394,9 @@ enum CanonicalCommand {
 
         #[arg(long)]
         content_hex: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        content_file: Option<PathBuf>,
     },
     WorkStateDigest {
         #[arg(long, value_name = "ENTITY_ID=ENTITY_VERSION_ID")]
@@ -3063,12 +3084,23 @@ fn run(cli: Cli) -> Result<String> {
             ))
         }
         Command::Canonical { command } => match command {
-            CanonicalCommand::Encode { json } => render_canonical_encode(&json),
-            CanonicalCommand::Digest { domain, json } => render_canonical_digest(&domain, &json),
+            CanonicalCommand::Encode { json, json_file } => {
+                let bytes = canonical_json_input_bytes("canonical encode JSON", json, json_file)?;
+                render_canonical_encode(&bytes)
+            }
+            CanonicalCommand::Digest {
+                domain,
+                json,
+                json_file,
+            } => {
+                let bytes = canonical_json_input_bytes("canonical digest JSON", json, json_file)?;
+                render_canonical_digest(&domain, &bytes)
+            }
             CanonicalCommand::ContentDigest {
                 content,
                 content_hex,
-            } => render_content_digest(content, content_hex),
+                content_file,
+            } => render_content_digest(content, content_hex, content_file),
             CanonicalCommand::WorkStateDigest { entity, relation } => {
                 render_work_state_mapping_digest(entity, relation)
             }
@@ -6525,8 +6557,22 @@ fn parse_cli_object(label: &str, json: &str) -> Result<CanonicalValue> {
     }
 }
 
-fn render_canonical_encode(json: &str) -> Result<String> {
-    let value = parse_canonical_json(json.as_bytes())?;
+fn canonical_json_input_bytes(
+    label: &str,
+    json: Option<String>,
+    json_file: Option<PathBuf>,
+) -> Result<Vec<u8>> {
+    match (json, json_file) {
+        (Some(json), None) => Ok(json.into_bytes()),
+        (None, Some(path)) => read_cli_file(label, &path),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} requires exactly one of --json or --json-file"
+        ))),
+    }
+}
+
+fn render_canonical_encode(json: &[u8]) -> Result<String> {
+    let value = parse_canonical_json(json)?;
     let canonical_json = canonical_cli_json("canonical JSON", &value)?;
     Ok(format!(
         "canonical_json={canonical_json}\nsize_bytes={}\n",
@@ -6534,8 +6580,8 @@ fn render_canonical_encode(json: &str) -> Result<String> {
     ))
 }
 
-fn render_canonical_digest(domain: &str, json: &str) -> Result<String> {
-    let value = parse_canonical_json(json.as_bytes())?;
+fn render_canonical_digest(domain: &str, json: &[u8]) -> Result<String> {
+    let value = parse_canonical_json(json)?;
     let canonical_json = canonical_cli_json("canonical JSON", &value)?;
     let digest = match domain {
         "entity-version" => entity_version_digest(&value)?,
@@ -6552,15 +6598,21 @@ fn render_canonical_digest(domain: &str, json: &str) -> Result<String> {
     ))
 }
 
-fn render_content_digest(content: Option<String>, content_hex: Option<String>) -> Result<String> {
-    let bytes = match (content, content_hex) {
-        (Some(content), None) => content.into_bytes(),
-        (None, Some(content_hex)) => hex::decode(&content_hex).map_err(|error| {
+fn render_content_digest(
+    content: Option<String>,
+    content_hex: Option<String>,
+    content_file: Option<PathBuf>,
+) -> Result<String> {
+    let bytes = match (content, content_hex, content_file) {
+        (Some(content), None, None) => content.into_bytes(),
+        (None, Some(content_hex), None) => hex::decode(&content_hex).map_err(|error| {
             WorkVcsError::DigestInvalid(format!("content hex decode failed: {error}"))
         })?,
+        (None, None, Some(path)) => read_cli_file("canonical content", &path)?,
         _ => {
             return Err(WorkVcsError::DigestInvalid(
-                "content digest requires exactly one of --content or --content-hex".to_owned(),
+                "content digest requires exactly one of --content, --content-hex, or --content-file"
+                    .to_owned(),
             ));
         }
     };
@@ -6569,6 +6621,15 @@ fn render_content_digest(content: Option<String>, content_hex: Option<String>) -
         content_object_digest(&bytes),
         bytes.len()
     ))
+}
+
+fn read_cli_file(label: &str, path: &Path) -> Result<Vec<u8>> {
+    fs::read(path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "failed to read {label} file {}: {error}",
+            path.display()
+        ))
+    })
 }
 
 fn render_new_id(kind: &str) -> Result<String> {
@@ -12566,6 +12627,14 @@ mod tests {
 
     #[test]
     fn canonical_cli_encodes_and_digests_confirmed_profiles() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let json_file = tempdir.path().join("semantic.json");
+        fs::write(&json_file, br#"{"b":2,"a":1}"#).expect("write JSON input");
+        let content_file = tempdir.path().join("content.bin");
+        fs::write(&content_file, [0x00, 0xff]).expect("write content input");
+        let json_file_path = json_file.to_str().expect("JSON path text");
+        let content_file_path = content_file.to_str().expect("content path text");
+
         let encoded = run(Cli::try_parse_from([
             "workvcs",
             "canonical",
@@ -12577,6 +12646,20 @@ mod tests {
         .expect("canonical encode");
         assert_eq!(value(&encoded, "canonical_json"), r#"{"a":1,"b":2}"#);
         assert_eq!(value(&encoded, "size_bytes"), "13");
+
+        let encoded_from_file = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "encode",
+            "--json-file",
+            json_file_path,
+        ])
+        .expect("parse canonical encode file"))
+        .expect("canonical encode file");
+        assert_eq!(
+            value(&encoded_from_file, "canonical_json"),
+            value(&encoded, "canonical_json")
+        );
 
         let entity_digest = run(Cli::try_parse_from([
             "workvcs",
@@ -12600,10 +12683,25 @@ mod tests {
         ])
         .expect("parse relation digest"))
         .expect("relation digest");
+        let file_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "digest",
+            "--domain",
+            "entity-version",
+            "--json-file",
+            json_file_path,
+        ])
+        .expect("parse file digest"))
+        .expect("file digest");
         assert_eq!(value(&entity_digest, "domain"), "entity-version");
         assert_eq!(
             value(&entity_digest, "canonical_json"),
             value(&relation_digest, "canonical_json")
+        );
+        assert_eq!(
+            value(&file_digest, "digest"),
+            value(&entity_digest, "digest")
         );
         assert_ne!(
             value(&entity_digest, "digest"),
@@ -12643,6 +12741,43 @@ mod tests {
         .expect("parse hex content digest"))
         .expect("hex content digest");
         assert_eq!(value(&hex_digest, "size_bytes"), "2");
+
+        let file_content_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "content-digest",
+            "--content-file",
+            content_file_path,
+        ])
+        .expect("parse file content digest"))
+        .expect("file content digest");
+        assert_eq!(
+            value(&file_content_digest, "content_digest"),
+            value(&hex_digest, "content_digest")
+        );
+        assert_eq!(value(&file_content_digest, "size_bytes"), "2");
+
+        let both_json_sources = Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "encode",
+            "--json",
+            "{}",
+            "--json-file",
+            json_file_path,
+        ]);
+        assert!(both_json_sources.is_err());
+
+        let both_content_sources = Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "content-digest",
+            "--content",
+            "x",
+            "--content-file",
+            content_file_path,
+        ]);
+        assert!(both_content_sources.is_err());
 
         let float =
             run(

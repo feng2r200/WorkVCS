@@ -3230,6 +3230,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         applicability: Option<String>,
+
+        #[arg(long)]
+        reason_code: Option<String>,
     },
 }
 
@@ -5618,6 +5621,7 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     verification,
                     applicability,
+                    reason_code,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5631,9 +5635,13 @@ fn run(cli: Cli) -> Result<String> {
                 options =
                     options.with_applicability(parse_verification_applicability(&applicability)?);
             }
-            Ok(render_verification_applicability_cache_list(
-                &engine.verification_applicability_caches(options)?,
-            ))
+            let mut result = engine.verification_applicability_caches(options)?;
+            if let Some(reason_code) = reason_code {
+                result
+                    .caches
+                    .retain(|cache| cache.reason_code == reason_code);
+            }
+            Ok(render_verification_applicability_cache_list(&result))
         }
         Command::Record {
             command:
@@ -21335,6 +21343,38 @@ mod tests {
             ),
             verification_id
         );
+
+        let cache_list_by_reason = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--reason-code",
+            "all_basis_applicable",
+        ])
+        .expect("parse reason-filtered cache list"))
+        .expect("list reason-filtered caches");
+        assert_eq!(value(&cache_list_by_reason, "caches"), "1");
+        assert_eq!(
+            value(&cache_list_by_reason, "cache.0.verification_entity_id"),
+            verification_id
+        );
+
+        let missing_reason_cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--reason-code",
+            "resource_stale",
+        ])
+        .expect("parse missing reason cache list"))
+        .expect("list missing reason caches");
+        assert_eq!(value(&missing_reason_cache_list, "caches"), "0");
 
         let missing_cache_list = run(Cli::try_parse_from([
             "workvcs",

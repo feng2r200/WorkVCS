@@ -1007,6 +1007,9 @@ enum BranchCommand {
 
         #[arg(long)]
         branch: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("branch-fork-source")
@@ -4873,11 +4876,27 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_branch_list(&branches))
         }
         Command::Branch {
-            command: BranchCommand::Head { store, branch },
+            command:
+                BranchCommand::Head {
+                    store,
+                    branch,
+                    expected_state_digest,
+                },
         } => {
             let engine = Engine::open(store)?;
             let head = engine.branch_head(BranchId::parse_canonical(&branch)?)?;
-            Ok(render_branch_head(&head))
+            let mut output = render_branch_head(&head);
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if head.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "branch head state digest {} does not match expected {}",
+                        head.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Branch {
             command:
@@ -19665,6 +19684,37 @@ mod tests {
         assert_eq!(value(&source, "head_changeset_id"), source_changeset);
         assert_eq!(value(&source, "head_commit_kind"), "normal");
         assert_eq!(value(&source, "head_operation_type"), "entity.transition");
+
+        let expected_source = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            store,
+            "--branch",
+            &source_branch,
+            "--expected-state-digest",
+            &value(&source, "state_digest"),
+        ])
+        .expect("parse expected source head"))
+        .expect("expected source head");
+        assert_eq!(
+            value(&expected_source, "state_digest"),
+            value(&source, "state_digest")
+        );
+        assert_eq!(value(&expected_source, "matches_expected"), "true");
+
+        let mismatched_source = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            store,
+            "--branch",
+            &source_branch,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched source head"));
+        assert!(mismatched_source.is_err());
 
         let fork = run(Cli::try_parse_from([
             "workvcs",

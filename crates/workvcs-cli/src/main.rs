@@ -304,6 +304,18 @@ enum Command {
 
         #[arg(long)]
         direction: Option<String>,
+
+        #[arg(long)]
+        source: Option<String>,
+
+        #[arg(long)]
+        target: Option<String>,
+
+        #[arg(long)]
+        source_kind: Option<String>,
+
+        #[arg(long)]
+        target_kind: Option<String>,
     },
     Workspace {
         #[command(subcommand)]
@@ -4597,6 +4609,10 @@ fn run(cli: Cli) -> Result<String> {
             exposure,
             relation_kind,
             direction,
+            source,
+            target: target_endpoint,
+            source_kind,
+            target_kind,
         } => {
             let engine = Engine::open(store)?;
             let target = match (branch, commit) {
@@ -4641,6 +4657,26 @@ fn run(cli: Cli) -> Result<String> {
                 result
                     .relation_edges
                     .retain(|edge| why_relation_direction(edge.direction) == direction);
+            }
+            if let Some(source) = source {
+                result
+                    .relation_edges
+                    .retain(|edge| why_endpoint_id(edge.source) == source);
+            }
+            if let Some(target_endpoint) = target_endpoint {
+                result
+                    .relation_edges
+                    .retain(|edge| why_endpoint_id(edge.target) == target_endpoint);
+            }
+            if let Some(source_kind) = source_kind {
+                result
+                    .relation_edges
+                    .retain(|edge| why_endpoint_kind(edge.source) == source_kind);
+            }
+            if let Some(target_kind) = target_kind {
+                result
+                    .relation_edges
+                    .retain(|edge| why_endpoint_kind(edge.target) == target_kind);
             }
             Ok(render_why(&result))
         }
@@ -13528,6 +13564,22 @@ fn why_relation_direction(direction: WhyRelationDirection) -> &'static str {
     }
 }
 
+fn why_endpoint_id(endpoint: WhyRelationEndpoint) -> String {
+    match endpoint {
+        WhyRelationEndpoint::Entity { entity_id, .. } => entity_id.to_string(),
+        WhyRelationEndpoint::Evidence { evidence_id } => evidence_id.to_string(),
+        WhyRelationEndpoint::KnowledgeExposure { exposure_id } => exposure_id.to_string(),
+    }
+}
+
+fn why_endpoint_kind(endpoint: WhyRelationEndpoint) -> &'static str {
+    match endpoint {
+        WhyRelationEndpoint::Entity { .. } => "entity",
+        WhyRelationEndpoint::Evidence { .. } => "evidence",
+        WhyRelationEndpoint::KnowledgeExposure { .. } => "knowledge_exposure",
+    }
+}
+
 fn why_entity_kind(kind: WhyEntityKind) -> &'static str {
     match kind {
         WhyEntityKind::Goal => "goal",
@@ -17803,6 +17855,83 @@ mod tests {
         .expect("parse why by combined filters"))
         .expect("why by combined filters");
         assert_eq!(value(&why_by_combined_filters, "relation_edges"), "1");
+
+        let why_by_source = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--source",
+            &value(&adoption, "adopted_knowledge_entity_id"),
+        ])
+        .expect("parse why by source"))
+        .expect("why by source");
+        assert_eq!(value(&why_by_source, "relation_edges"), "1");
+
+        let why_by_target = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--target",
+            &value(&exposure, "exposure_id"),
+        ])
+        .expect("parse why by target"))
+        .expect("why by target");
+        assert_eq!(value(&why_by_target, "relation_edges"), "1");
+
+        let why_by_endpoint_kinds = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--source-kind",
+            "entity",
+            "--target-kind",
+            "knowledge_exposure",
+        ])
+        .expect("parse why by endpoint kinds"))
+        .expect("why by endpoint kinds");
+        assert_eq!(value(&why_by_endpoint_kinds, "relation_edges"), "1");
+
+        let why_by_missing_source = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--source",
+            &EntityId::new_v7().to_string(),
+        ])
+        .expect("parse why by missing source"))
+        .expect("why by missing source");
+        assert_eq!(value(&why_by_missing_source, "relation_edges"), "0");
+
+        let why_by_missing_target_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--target-kind",
+            "evidence",
+        ])
+        .expect("parse why by missing target kind"))
+        .expect("why by missing target kind");
+        assert_eq!(value(&why_by_missing_target_kind, "relation_edges"), "0");
 
         let why_by_missing_relation_kind = run(Cli::try_parse_from([
             "workvcs",

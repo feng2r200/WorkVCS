@@ -2523,6 +2523,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         observation: String,
+
+        #[arg(long)]
+        expected_detail_content_digest: Option<String>,
     },
     ObservationList {
         #[arg(value_name = "STORE")]
@@ -6542,13 +6545,33 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_resource_observation_create(&observation))
         }
         Command::Resource {
-            command: ResourceCommand::ObservationShow { store, observation },
+            command:
+                ResourceCommand::ObservationShow {
+                    store,
+                    observation,
+                    expected_detail_content_digest,
+                },
         } => {
             let engine = Engine::open(store)?;
-            render_resource_observation_snapshot(
-                &engine
-                    .resource_observation(ResourceObservationId::parse_canonical(&observation)?)?,
-            )
+            let snapshot = engine
+                .resource_observation(ResourceObservationId::parse_canonical(&observation)?)?;
+            let mut output = render_resource_observation_snapshot(&snapshot)?;
+            if let Some(expected_detail_content_digest) = expected_detail_content_digest {
+                let expected_detail_content_digest =
+                    Digest::from_hex(&expected_detail_content_digest)?;
+                if snapshot
+                    .detail_content
+                    .as_ref()
+                    .is_none_or(|detail| detail.content_digest != expected_detail_content_digest)
+                {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "resource observation detail content digest does not match expected {}",
+                        expected_detail_content_digest
+                    )));
+                }
+                output.push_str("detail_content_matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Resource {
             command:
@@ -25312,6 +25335,43 @@ mod tests {
             r#"{"encoding":"utf-8"}"#
         );
         assert_eq!(value(&shown_observation, "source_session_id"), session_id);
+
+        let expected_shown_observation = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-show",
+            store,
+            "--observation",
+            &observation_id,
+            "--expected-detail-content-digest",
+            &value(&shown_observation, "detail.content_digest"),
+        ])
+        .expect("parse expected observation show"))
+        .expect("show expected observation");
+        assert_eq!(
+            value(&expected_shown_observation, "detail.content_digest"),
+            value(&shown_observation, "detail.content_digest")
+        );
+        assert_eq!(
+            value(
+                &expected_shown_observation,
+                "detail_content_matches_expected"
+            ),
+            "true"
+        );
+
+        let mismatched_shown_observation = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-show",
+            store,
+            "--observation",
+            &observation_id,
+            "--expected-detail-content-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched observation show"));
+        assert!(mismatched_shown_observation.is_err());
 
         let duplicate_fingerprint_source = Cli::try_parse_from([
             "workvcs",

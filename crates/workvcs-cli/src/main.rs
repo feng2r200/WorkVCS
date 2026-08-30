@@ -873,6 +873,9 @@ enum WorkspaceCommand {
     List {
         #[arg(value_name = "STORE")]
         store: PathBuf,
+
+        #[arg(long)]
+        display_name: Option<String>,
     },
 }
 
@@ -4168,12 +4171,20 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_workspace_info(&workspace))
         }
         Command::Workspace {
-            command: WorkspaceCommand::List { store },
+            command:
+                WorkspaceCommand::List {
+                    store,
+                    display_name,
+                },
         } => {
             let engine = Engine::open(store)?;
-            Ok(render_workspace_list(
-                &engine.workspaces(WorkspaceListOptions::all())?,
-            ))
+            let mut result = engine.workspaces(WorkspaceListOptions::all())?;
+            if let Some(display_name) = display_name {
+                result
+                    .workspaces
+                    .retain(|workspace| workspace.display_name == display_name);
+            }
+            Ok(render_workspace_list(&result))
         }
         Command::Branch {
             command: BranchCommand::List { store, workspace },
@@ -13563,6 +13574,62 @@ mod tests {
             value(&created, "branch_id")
         );
         assert_eq!(value(&listed, "workspace.0.branch_name"), "trunk");
+
+        let beta = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace beta",
+        ])
+        .expect("parse beta workspace create"))
+        .expect("create beta workspace");
+        let beta_workspace_id = value(&beta, "workspace_id");
+
+        let alpha_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "list",
+            store,
+            "--display-name",
+            "workspace alpha",
+        ])
+        .expect("parse alpha workspace list"))
+        .expect("list alpha workspace");
+        assert_eq!(value(&alpha_filtered, "workspaces"), "1");
+        assert_eq!(
+            value(&alpha_filtered, "workspace.0.workspace_id"),
+            workspace_id
+        );
+
+        let beta_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "list",
+            store,
+            "--display-name",
+            "workspace beta",
+        ])
+        .expect("parse beta workspace list"))
+        .expect("list beta workspace");
+        assert_eq!(value(&beta_filtered, "workspaces"), "1");
+        assert_eq!(
+            value(&beta_filtered, "workspace.0.workspace_id"),
+            beta_workspace_id
+        );
+
+        let missing_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "list",
+            store,
+            "--display-name",
+            "workspace missing",
+        ])
+        .expect("parse missing workspace list"))
+        .expect("list missing workspace");
+        assert_eq!(value(&missing_filtered, "workspaces"), "0");
     }
 
     #[test]

@@ -91,7 +91,8 @@ use workvcs_core::{
     VerificationRequirementSnapshot, VerificationResourceBasis, VerificationResult,
     VerificationSnapshot, VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind,
     WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
-    WhyRelationKind, WorkState, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
+    WhyRelationKind, WorkState, WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions,
+    WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
     WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
     WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
@@ -165,6 +166,34 @@ enum Command {
 
         #[arg(long)]
         commit: String,
+    },
+    #[command(group(
+        ArgGroup::new("diff-from")
+            .required(true)
+            .multiple(false)
+            .args(["from_branch", "from_commit"])
+    ))]
+    #[command(group(
+        ArgGroup::new("diff-to")
+            .required(true)
+            .multiple(false)
+            .args(["to_branch", "to_commit"])
+    ))]
+    Diff {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        from_branch: Option<String>,
+
+        #[arg(long)]
+        from_commit: Option<String>,
+
+        #[arg(long)]
+        to_branch: Option<String>,
+
+        #[arg(long)]
+        to_commit: Option<String>,
     },
     Restore {
         #[arg(value_name = "STORE")]
@@ -3429,6 +3458,20 @@ fn run(cli: Cli) -> Result<String> {
             let engine = Engine::open(store)?;
             let state = engine.show_at(CommitId::parse_canonical(&commit)?)?;
             Ok(render_replayed_state(&state))
+        }
+        Command::Diff {
+            store,
+            from_branch,
+            from_commit,
+            to_branch,
+            to_commit,
+        } => {
+            let engine = Engine::open(store)?;
+            let from = work_state_diff_target_from_cli("from", from_branch, from_commit)?;
+            let to = work_state_diff_target_from_cli("to", to_branch, to_commit)?;
+            Ok(render_work_state_diff(
+                &engine.diff(WorkStateDiffOptions::new(from, to))?,
+            ))
         }
         Command::Restore {
             store,
@@ -11570,6 +11613,95 @@ fn render_work_state(output: &mut String, state: &WorkState) {
     }
 }
 
+fn work_state_diff_target_from_cli(
+    label: &str,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<WorkStateDiffTarget> {
+    match (branch, commit) {
+        (Some(branch), None) => Ok(WorkStateDiffTarget::branch_head(BranchId::parse_canonical(
+            &branch,
+        )?)),
+        (None, Some(commit)) => Ok(WorkStateDiffTarget::commit(CommitId::parse_canonical(
+            &commit,
+        )?)),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} target requires exactly one branch or commit selector"
+        ))),
+    }
+}
+
+fn render_work_state_diff(diff: &WorkStateDiff) -> String {
+    let mut output = String::new();
+    render_work_state_diff_target(&mut output, "from", &diff.from);
+    render_work_state_diff_target(&mut output, "to", &diff.to);
+    let _ = writeln!(output, "entity_changes={}", diff.entity_changes.len());
+    for (index, change) in diff.entity_changes.iter().enumerate() {
+        let prefix = format!("entity[{index}]");
+        let _ = writeln!(output, "{prefix}.entity_id={}", change.entity_id);
+        let _ = writeln!(
+            output,
+            "{prefix}.change_kind={}",
+            render_work_state_diff_change_kind(change.change_kind)
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.before_entity_version_id={}",
+            render_optional_display_or_none(change.before_entity_version_id.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.after_entity_version_id={}",
+            render_optional_display_or_none(change.after_entity_version_id.as_ref())
+        );
+    }
+    let _ = writeln!(output, "relation_changes={}", diff.relation_changes.len());
+    for (index, change) in diff.relation_changes.iter().enumerate() {
+        let prefix = format!("relation[{index}]");
+        let _ = writeln!(output, "{prefix}.relation_id={}", change.relation_id);
+        let _ = writeln!(
+            output,
+            "{prefix}.change_kind={}",
+            render_work_state_diff_change_kind(change.change_kind)
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.before_relation_version_id={}",
+            render_optional_display_or_none(change.before_relation_version_id.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.after_relation_version_id={}",
+            render_optional_display_or_none(change.after_relation_version_id.as_ref())
+        );
+    }
+    output
+}
+
+fn render_work_state_diff_target(
+    output: &mut String,
+    prefix: &str,
+    target: &workvcs_core::ResolvedWorkStateDiffTarget,
+) {
+    let (target_kind, target_id) = match target.target {
+        WorkStateDiffTarget::BranchHead(branch_id) => ("branch-head", branch_id.to_string()),
+        WorkStateDiffTarget::Commit(commit_id) => ("commit", commit_id.to_string()),
+    };
+    let _ = writeln!(output, "{prefix}_target={target_kind}");
+    let _ = writeln!(output, "{prefix}_target_id={target_id}");
+    let _ = writeln!(output, "{prefix}_workspace_id={}", target.workspace_id);
+    let _ = writeln!(output, "{prefix}_commit_id={}", target.commit_id);
+    let _ = writeln!(output, "{prefix}_state_digest={}", target.state_digest);
+}
+
+fn render_work_state_diff_change_kind(kind: WorkStateDiffChangeKind) -> &'static str {
+    match kind {
+        WorkStateDiffChangeKind::Added => "added",
+        WorkStateDiffChangeKind::Removed => "removed",
+        WorkStateDiffChangeKind::Updated => "updated",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11594,6 +11726,7 @@ mod tests {
                 "commit",
                 "event",
                 "show-at",
+                "diff",
                 "restore",
                 "why",
                 "workspace",
@@ -11638,6 +11771,111 @@ mod tests {
             &commit,
         ]);
         assert!(both.is_err());
+    }
+
+    #[test]
+    fn diff_requires_one_selector_per_side() {
+        let missing_from = Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            "store.sqlite",
+            "--to-commit",
+            &CommitId::new_v7().to_string(),
+        ]);
+        assert!(missing_from.is_err());
+
+        let both_from = Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            "store.sqlite",
+            "--from-branch",
+            &BranchId::new_v7().to_string(),
+            "--from-commit",
+            &CommitId::new_v7().to_string(),
+            "--to-commit",
+            &CommitId::new_v7().to_string(),
+        ]);
+        assert!(both_from.is_err());
+
+        let both_to = Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            "store.sqlite",
+            "--from-commit",
+            &CommitId::new_v7().to_string(),
+            "--to-branch",
+            &BranchId::new_v7().to_string(),
+            "--to-commit",
+            &CommitId::new_v7().to_string(),
+        ]);
+        assert!(both_to.is_err());
+    }
+
+    #[test]
+    fn cli_diffs_work_state_between_commit_and_branch_head() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "diff-store"])
+                .expect("parse init"),
+        )
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Diff target task",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+
+        let diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+        ])
+        .expect("parse diff"))
+        .expect("diff work state");
+        assert_eq!(value(&diff, "from_target"), "commit");
+        assert_eq!(value(&diff, "from_commit_id"), genesis);
+        assert_eq!(value(&diff, "to_target"), "branch-head");
+        assert_eq!(value(&diff, "to_target_id"), branch);
+        assert_eq!(value(&diff, "to_commit_id"), value(&task, "commit_id"));
+        assert_eq!(value(&diff, "entity_changes"), "1");
+        assert_eq!(value(&diff, "relation_changes"), "0");
+        assert_eq!(
+            value(&diff, "entity[0].entity_id"),
+            value(&task, "task_entity_id")
+        );
+        assert_eq!(value(&diff, "entity[0].change_kind"), "added");
+        assert_eq!(value(&diff, "entity[0].before_entity_version_id"), "none");
+        assert_eq!(
+            value(&diff, "entity[0].after_entity_version_id"),
+            value(&task, "task_entity_version_id")
+        );
     }
 
     #[test]

@@ -1648,6 +1648,9 @@ enum TaskCommand {
 
         #[arg(long)]
         target_task: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("task-containment-list-target")
@@ -5068,6 +5071,7 @@ fn run(cli: Cli) -> Result<String> {
                     relation_type,
                     source_task,
                     target_task,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5084,6 +5088,14 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(target_task) = target_task {
                 let target_task_id = EntityId::parse_canonical(&target_task)?;
                 relations.retain(|relation| relation.target_task_entity_id == target_task_id);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "task scheduling-list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                relations.truncate(limit);
             }
             Ok(render_task_scheduling_relation_list(commit_id, &relations))
         }
@@ -20135,6 +20147,37 @@ mod tests {
             value(&scheduling_list, "relation.0.target_task_entity_id"),
             first_task
         );
+
+        let limited_scheduling_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited scheduling list"))
+        .expect("list limited scheduling relations");
+        assert_eq!(value(&limited_scheduling_list, "relations"), "1");
+        assert_eq!(
+            value(&limited_scheduling_list, "relation.0.relation_type"),
+            "depends_on"
+        );
+
+        let zero_limit_scheduling_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit scheduling list"));
+        assert!(zero_limit_scheduling_list.is_err());
 
         let depends_on_list = run(Cli::try_parse_from([
             "workvcs",

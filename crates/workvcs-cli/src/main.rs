@@ -1338,6 +1338,9 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         statement_contains: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Invalidate {
         #[arg(value_name = "STORE")]
@@ -4475,6 +4478,7 @@ fn run(cli: Cli) -> Result<String> {
                     status,
                     scope_json,
                     statement_contains,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -4489,7 +4493,16 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(statement_contains) = statement_contains {
                 options = options.with_statement_contains(statement_contains)?;
             }
-            Ok(render_knowledge_list(&engine.knowledges_at(options)?)?)
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "knowledge list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.knowledges_at(options)?;
+            if let Some(limit) = limit {
+                result.knowledge.truncate(limit);
+            }
+            Ok(render_knowledge_list(&result)?)
         }
         Command::Knowledge {
             command:
@@ -25846,6 +25859,34 @@ mod tests {
             value(&listed, "knowledge.0.knowledge_entity_id"),
             value(&knowledge, "knowledge_entity_id")
         );
+
+        let limited_list = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited knowledge list"))
+        .expect("list limited knowledge");
+        assert_eq!(value(&limited_list, "knowledge"), "1");
+        assert_ne!(value(&limited_list, "knowledge.0.knowledge_entity_id"), "");
+
+        let zero_limit_list = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit knowledge list"));
+        assert!(zero_limit_list.is_err());
 
         let invalidated = run(Cli::try_parse_from([
             "workvcs",

@@ -57,8 +57,8 @@ use workvcs_core::{
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
     MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
-    NextWorkOptions, NextWorkResult, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
-    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
+    NextWorkOptions, NextWorkResult, OperationId, PlanCreateCommit, PlanCreateOptions,
+    PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
     RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
@@ -75,7 +75,7 @@ use workvcs_core::{
     ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
     ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
     ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
-    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection, SessionDiffId,
     SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
     SessionLifecycleState, SessionListOptions, SessionListResult, SessionSnapshot,
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
@@ -95,7 +95,7 @@ use workvcs_core::{
     WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
     WhyRelationKind, WorkState, WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions,
     WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
-    WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
     WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
     content_object_digest, entity_version_digest, parse_canonical_json, relation_version_digest,
@@ -126,6 +126,10 @@ enum Command {
     Canonical {
         #[command(subcommand)]
         command: CanonicalCommand,
+    },
+    Id {
+        #[command(subcommand)]
+        command: IdCommand,
     },
     Store {
         #[command(subcommand)]
@@ -379,6 +383,14 @@ enum CanonicalCommand {
 
         #[arg(long, value_name = "RELATION_ID=RELATION_VERSION_ID")]
         relation: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum IdCommand {
+    New {
+        #[arg(long)]
+        kind: String,
     },
 }
 
@@ -3043,6 +3055,9 @@ fn run(cli: Cli) -> Result<String> {
             CanonicalCommand::WorkStateDigest { entity, relation } => {
                 render_work_state_mapping_digest(entity, relation)
             }
+        },
+        Command::Id { command } => match command {
+            IdCommand::New { kind } => render_new_id(&kind),
         },
         Command::Store { command } => match command {
             StoreCommand::Record {
@@ -6516,6 +6531,46 @@ fn render_content_digest(content: Option<String>, content_hex: Option<String>) -
         content_object_digest(&bytes),
         bytes.len()
     ))
+}
+
+fn render_new_id(kind: &str) -> Result<String> {
+    let id = match kind {
+        "store" => StoreId::new_v7().to_string(),
+        "workspace" => WorkspaceId::new_v7().to_string(),
+        "entity" => EntityId::new_v7().to_string(),
+        "entity-version" => EntityVersionId::new_v7().to_string(),
+        "exposure" => ExposureId::new_v7().to_string(),
+        "exposure-transition" => ExposureTransitionId::new_v7().to_string(),
+        "external-object" => ExternalObjectId::new_v7().to_string(),
+        "external-ref" => ExternalRefId::new_v7().to_string(),
+        "external-version" => ExternalVersionId::new_v7().to_string(),
+        "evidence" => EvidenceId::new_v7().to_string(),
+        "resource" => ResourceId::new_v7().to_string(),
+        "resource-observation" => ResourceObservationId::new_v7().to_string(),
+        "knowledge-space" => KnowledgeSpaceId::new_v7().to_string(),
+        "relation" => RelationId::new_v7().to_string(),
+        "relation-version" => RelationVersionId::new_v7().to_string(),
+        "branch" => BranchId::new_v7().to_string(),
+        "commit" => CommitId::new_v7().to_string(),
+        "changeset" => ChangeSetId::new_v7().to_string(),
+        "checkpoint" => CheckpointId::new_v7().to_string(),
+        "import" => ImportId::new_v7().to_string(),
+        "lineage" => LineageId::new_v7().to_string(),
+        "migration" => MigrationId::new_v7().to_string(),
+        "operation" => OperationId::new_v7().to_string(),
+        "event" => EventId::new_v7().to_string(),
+        "session" => SessionId::new_v7().to_string(),
+        "session-diff" => SessionDiffId::new_v7().to_string(),
+        "claim" => ClaimId::new_v7().to_string(),
+        "merge" => MergeId::new_v7().to_string(),
+        "merge-item" => MergeItemId::new_v7().to_string(),
+        other => {
+            return Err(WorkVcsError::IdentityInvalid(format!(
+                "id kind {other:?} is not supported"
+            )));
+        }
+    };
+    Ok(format!("kind={kind}\nid={id}\n"))
 }
 
 fn render_work_state_mapping_digest(
@@ -11976,6 +12031,7 @@ mod tests {
                 "init",
                 "doctor",
                 "canonical",
+                "id",
                 "store",
                 "history",
                 "changeset",
@@ -12029,6 +12085,33 @@ mod tests {
             &commit,
         ]);
         assert!(both.is_err());
+    }
+
+    #[test]
+    fn id_cli_generates_typed_uuidv7_values() {
+        let entity = run(
+            Cli::try_parse_from(["workvcs", "id", "new", "--kind", "entity"])
+                .expect("parse entity id"),
+        )
+        .expect("generate entity id");
+        assert_eq!(value(&entity, "kind"), "entity");
+        EntityId::parse_canonical(&value(&entity, "id")).expect("entity UUIDv7");
+
+        let relation_version =
+            run(
+                Cli::try_parse_from(["workvcs", "id", "new", "--kind", "relation-version"])
+                    .expect("parse relation version id"),
+            )
+            .expect("generate relation version id");
+        assert_eq!(value(&relation_version, "kind"), "relation-version");
+        RelationVersionId::parse_canonical(&value(&relation_version, "id"))
+            .expect("relation version UUIDv7");
+
+        let unsupported = run(
+            Cli::try_parse_from(["workvcs", "id", "new", "--kind", "unknown"])
+                .expect("parse unsupported id kind"),
+        );
+        assert!(unsupported.is_err());
     }
 
     #[test]

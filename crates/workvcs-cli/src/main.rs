@@ -2211,6 +2211,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         workspace: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Bind {
         #[arg(value_name = "STORE")]
@@ -5415,6 +5418,7 @@ fn run(cli: Cli) -> Result<String> {
                     kind,
                     bound,
                     workspace,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5436,6 +5440,14 @@ fn run(cli: Cli) -> Result<String> {
                         .iter()
                         .any(|association| association.workspace_id == workspace_id)
                 });
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "resource list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                result.resources.truncate(limit);
             }
             Ok(render_resource_list(&result))
         }
@@ -21359,6 +21371,22 @@ mod tests {
         ];
         assert!(listed_ids.contains(&resource_id));
         assert!(listed_ids.contains(&second_resource_id));
+
+        let limited_resources =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "list", store, "--limit", "1"])
+                    .expect("parse limited resource list"),
+            )
+            .expect("list limited resources");
+        assert_eq!(value(&limited_resources, "resources"), "1");
+        assert_ne!(value(&limited_resources, "resource.0.resource_id"), "");
+
+        let zero_limit_resources =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "list", store, "--limit", "0"])
+                    .expect("parse zero-limit resource list"),
+            );
+        assert!(zero_limit_resources.is_err());
 
         let bound_resources =
             run(

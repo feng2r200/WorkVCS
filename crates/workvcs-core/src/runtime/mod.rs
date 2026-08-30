@@ -6,8 +6,9 @@ mod runnable;
 mod session;
 
 pub use claim::{
-    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
-    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
+    ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions,
+    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
+    ClaimTaskResult,
 };
 pub use context::{ContextOverview, ContextOverviewOptions};
 pub use merge::{
@@ -29,7 +30,9 @@ pub use session::{
     SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 
-pub(crate) use claim::{claim_next_task, claim_snapshot, claim_task, release_claim};
+pub(crate) use claim::{
+    active_claims_for_session, claim_next_task, claim_snapshot, claim_task, release_claim,
+};
 pub(crate) use context::context_overview;
 pub(crate) use merge::{
     abort_merge, continue_merge, freeze_merge_resolutions, merge_attempt, merge_attempts,

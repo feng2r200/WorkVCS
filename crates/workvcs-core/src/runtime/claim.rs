@@ -123,6 +123,21 @@ impl ClaimNextOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimListOptions {
+    session_id: SessionId,
+}
+
+impl ClaimListOptions {
+    pub fn for_session(session_id: SessionId) -> Self {
+        Self { session_id }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimTaskResult {
     pub claim_id: ClaimId,
     pub session_id: SessionId,
@@ -150,6 +165,12 @@ pub struct ClaimNextResult {
     pub head_commit_id: CommitId,
     pub inspected_candidates: usize,
     pub selected: Option<ClaimTaskResult>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimListResult {
+    pub session_id: SessionId,
+    pub claims: Vec<ClaimSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -583,6 +604,31 @@ pub(crate) fn claim_snapshot(
     let snapshot = claim_snapshot_from_connection(&transaction, claim_id)?;
     transaction.commit().map_err(storage_error)?;
     Ok(snapshot)
+}
+
+pub(crate) fn active_claims_for_session(
+    connection: &StoreConnection,
+    options: &ClaimListOptions,
+) -> Result<ClaimListResult> {
+    connection.verify_foreign_keys()?;
+    session::session_snapshot(connection, options.session_id())?;
+    let transaction = connection
+        .inner()
+        .unchecked_transaction()
+        .map_err(storage_error)?;
+    let claim_ids = load_active_claims_for_session(&transaction, options.session_id())?
+        .into_iter()
+        .map(|(claim_id, _)| claim_id)
+        .collect::<Vec<_>>();
+    let mut claims = Vec::with_capacity(claim_ids.len());
+    for claim_id in claim_ids {
+        claims.push(claim_snapshot_from_connection(&transaction, claim_id)?);
+    }
+    transaction.commit().map_err(storage_error)?;
+    Ok(ClaimListResult {
+        session_id: options.session_id(),
+        claims,
+    })
 }
 
 pub(super) fn release_active_claims_for_session_end(

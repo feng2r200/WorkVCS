@@ -17,12 +17,12 @@ use workvcs_core::{
     ChangeOperationListResult, ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot,
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimMode, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimTaskOptions, ClaimTaskResult,
-    CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot, EvidenceId,
-    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
+    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimListOptions, ClaimListResult,
+    ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
+    ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview,
+    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
+    Engine, EntityId, EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot,
+    EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
     ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
     ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
     HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
@@ -1959,6 +1959,20 @@ enum SessionCommand {
 
 #[derive(Debug, Subcommand)]
 enum ClaimCommand {
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        claim: String,
+    },
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+    },
     Next {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4242,6 +4256,22 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_session_end(&ended))
         }
         Command::Claim {
+            command: ClaimCommand::Show { store, claim },
+        } => {
+            let engine = Engine::open(store)?;
+            let snapshot = engine.claim_snapshot(ClaimId::parse_canonical(&claim)?);
+            Ok(render_claim_show(&snapshot?))
+        }
+        Command::Claim {
+            command: ClaimCommand::List { store, session },
+        } => {
+            let engine = Engine::open(store)?;
+            let claims = engine.active_claims_for_session(ClaimListOptions::for_session(
+                SessionId::parse_canonical(&session)?,
+            ))?;
+            Ok(render_claim_list(&claims))
+        }
+        Command::Claim {
             command:
                 ClaimCommand::Next {
                     store,
@@ -6021,6 +6051,56 @@ fn render_claim_task(claim: &ClaimTaskResult) -> String {
         claim.claimed_at_us,
         claim_lifecycle_state(claim.state.lifecycle_state)
     )
+}
+
+fn render_claim_show(claim: &ClaimSnapshot) -> String {
+    format!(
+        "claim_id={}\nsession_id={}\nworkspace_id={}\nbranch_id={}\ntask_entity_id={}\nmode={}\ncreated_at_us={}\nlast_activity_at_us={}\nlifecycle_state={}\n",
+        claim.claim_id,
+        claim.session_id,
+        claim.workspace_id,
+        claim.branch_id,
+        claim.task_entity_id,
+        claim_mode(claim.mode),
+        claim.created_at_us,
+        render_optional_display(claim.last_activity_at_us.as_ref()),
+        claim_lifecycle_state(claim.lifecycle_state)
+    )
+}
+
+fn render_claim_list(result: &ClaimListResult) -> String {
+    let mut output = format!(
+        "session_id={}\nclaims={}\n",
+        result.session_id,
+        result.claims.len()
+    );
+    for (index, claim) in result.claims.iter().enumerate() {
+        let _ = writeln!(output, "claim.{index}.claim_id={}", claim.claim_id);
+        let _ = writeln!(output, "claim.{index}.workspace_id={}", claim.workspace_id);
+        let _ = writeln!(output, "claim.{index}.branch_id={}", claim.branch_id);
+        let _ = writeln!(
+            output,
+            "claim.{index}.task_entity_id={}",
+            claim.task_entity_id
+        );
+        let _ = writeln!(output, "claim.{index}.mode={}", claim_mode(claim.mode));
+        let _ = writeln!(
+            output,
+            "claim.{index}.created_at_us={}",
+            claim.created_at_us
+        );
+        let _ = writeln!(
+            output,
+            "claim.{index}.last_activity_at_us={}",
+            render_optional_display(claim.last_activity_at_us.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "claim.{index}.lifecycle_state={}",
+            claim_lifecycle_state(claim.lifecycle_state)
+        );
+    }
+    output
 }
 
 fn render_claim_next(result: &ClaimNextResult) -> String {
@@ -12019,6 +12099,124 @@ mod tests {
         .expect("parse session end"))
         .expect("end session");
         assert!(ended.contains("lifecycle_state=ended"));
+    }
+
+    #[test]
+    fn cli_shows_and_lists_session_active_claims() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Observable claim task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+        ])
+        .expect("parse claim"))
+        .expect("claim task");
+        let claim_id = value(&claim, "claim_id");
+
+        let shown =
+            run(
+                Cli::try_parse_from(["workvcs", "claim", "show", store, "--claim", &claim_id])
+                    .expect("parse claim show"),
+            )
+            .expect("claim show");
+        assert_eq!(value(&shown, "claim_id"), claim_id);
+        assert_eq!(value(&shown, "session_id"), session_id);
+        assert_eq!(value(&shown, "task_entity_id"), task_id);
+        assert_eq!(value(&shown, "mode"), "exclusive");
+        assert_eq!(value(&shown, "lifecycle_state"), "active");
+
+        let listed =
+            run(
+                Cli::try_parse_from(["workvcs", "claim", "list", store, "--session", &session_id])
+                    .expect("parse claim list"),
+            )
+            .expect("claim list");
+        assert_eq!(value(&listed, "claims"), "1");
+        assert_eq!(value(&listed, "claim.0.claim_id"), claim_id);
+        assert_eq!(value(&listed, "claim.0.task_entity_id"), task_id);
+        assert_eq!(value(&listed, "claim.0.lifecycle_state"), "active");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "release",
+            store,
+            "--session",
+            &session_id,
+            "--claim",
+            &claim_id,
+        ])
+        .expect("parse release"))
+        .expect("release claim");
+        let empty =
+            run(
+                Cli::try_parse_from(["workvcs", "claim", "list", store, "--session", &session_id])
+                    .expect("parse empty claim list"),
+            )
+            .expect("empty claim list");
+        assert_eq!(value(&empty, "claims"), "0");
+        let released =
+            run(
+                Cli::try_parse_from(["workvcs", "claim", "show", store, "--claim", &claim_id])
+                    .expect("parse released claim show"),
+            )
+            .expect("released claim show");
+        assert_eq!(value(&released, "lifecycle_state"), "released");
     }
 
     #[test]

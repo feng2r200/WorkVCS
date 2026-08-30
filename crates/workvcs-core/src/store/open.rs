@@ -82,14 +82,15 @@ use crate::identity::{
     RelationId,
 };
 use crate::runtime::{
-    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
-    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
-    MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeListOptions, MergeListResult,
-    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
-    NextWorkResult, RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions,
-    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    ClaimListOptions, ClaimListResult, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ContextOverview,
+    ContextOverviewOptions, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
+    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
+    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -1279,6 +1280,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::claim_snapshot(&self.connection, claim_id)
+    }
+
+    pub(crate) fn active_claims_for_session(
+        &self,
+        options: &ClaimListOptions,
+    ) -> Result<ClaimListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::active_claims_for_session(&self.connection, options)
     }
 
     pub(crate) fn release_claim(

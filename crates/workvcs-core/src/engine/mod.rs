@@ -97,14 +97,15 @@ use crate::history::{
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
-    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
-    ClaimTaskOptions, ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
-    MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeListOptions, MergeListResult,
-    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
-    NextWorkResult, RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions,
-    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    ClaimListOptions, ClaimListResult, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ContextOverview,
+    ContextOverviewOptions, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
+    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
+    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -954,6 +955,10 @@ impl Engine {
 
     pub fn claim_snapshot(&self, claim_id: ClaimId) -> Result<ClaimSnapshot> {
         self.store.claim_snapshot(claim_id)
+    }
+
+    pub fn active_claims_for_session(&self, options: ClaimListOptions) -> Result<ClaimListResult> {
+        self.store.active_claims_for_session(&options)
     }
 
     pub fn release_claim(&mut self, options: ClaimReleaseOptions) -> Result<ClaimReleaseResult> {

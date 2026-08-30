@@ -2,10 +2,10 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    CanonicalValue, ClaimId, ClaimLifecycleState, ClaimMode, ClaimReleaseOptions, ClaimTaskOptions,
-    Engine, EntityId, ErrorCategory, ErrorCode, SessionEndOptions, SessionStartOptions,
-    StoreInitOptions, TaskCreateOptions, TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions,
-    canonical_bytes,
+    CanonicalValue, ClaimId, ClaimLifecycleState, ClaimListOptions, ClaimMode, ClaimReleaseOptions,
+    ClaimTaskOptions, Engine, EntityId, ErrorCategory, ErrorCode, SessionEndOptions,
+    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSnapshot, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -364,6 +364,46 @@ fn claim_task_persists_exclusive_runtime_without_task_or_workstate_mutation() {
         .claim_snapshot(claimed.claim_id)
         .expect("claim snapshot");
     assert_eq!(snapshot, claimed.state);
+}
+
+#[test]
+fn active_claims_for_session_lists_only_current_claim_runtime() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (task_snapshot, session_id) =
+        create_task_and_session(&mut engine, &workspace, "List active claim target");
+
+    let empty = engine
+        .active_claims_for_session(ClaimListOptions::for_session(session_id))
+        .expect("initial active claims");
+    assert_eq!(empty.session_id, session_id);
+    assert!(empty.claims.is_empty());
+
+    let claimed = engine
+        .claim_task(ClaimTaskOptions::new(
+            session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("claim task");
+    let active = engine
+        .active_claims_for_session(ClaimListOptions::for_session(session_id))
+        .expect("active claims");
+    assert_eq!(active.session_id, session_id);
+    assert_eq!(active.claims, vec![claimed.state.clone()]);
+
+    let released = engine
+        .release_claim(ClaimReleaseOptions::new(session_id, claimed.claim_id))
+        .expect("release claim");
+    let after_release = engine
+        .active_claims_for_session(ClaimListOptions::for_session(session_id))
+        .expect("active claims after release");
+    assert!(after_release.claims.is_empty());
+    assert_eq!(
+        engine
+            .claim_snapshot(claimed.claim_id)
+            .expect("released claim snapshot"),
+        released.state
+    );
 }
 
 #[test]

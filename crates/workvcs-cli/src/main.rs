@@ -1532,6 +1532,9 @@ enum TaskCommand {
 
         #[arg(long)]
         status: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Transition {
         #[arg(value_name = "STORE")]
@@ -4856,6 +4859,7 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     status,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -4864,6 +4868,14 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(status) = status {
                 let status = parse_task_list_status(&status)?;
                 tasks.retain(|task| task.state.status == status);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "task list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                tasks.truncate(limit);
             }
             render_task_list(commit_id, &tasks)
         }
@@ -18295,6 +18307,24 @@ mod tests {
             value(&blocked_tasks_at_branch, "task.0.task_entity_id"),
             task_id
         );
+
+        let limited_blocked_tasks_at_branch = run(Cli::try_parse_from([
+            "workvcs", "task", "list", store, "--branch", &branch, "--status", "blocked",
+            "--limit", "1",
+        ])
+        .expect("parse limited blocked task list at branch"))
+        .expect("list limited blocked tasks at branch");
+        assert_eq!(value(&limited_blocked_tasks_at_branch, "tasks"), "1");
+        assert_eq!(
+            value(&limited_blocked_tasks_at_branch, "task.0.task_entity_id"),
+            task_id
+        );
+
+        let zero_limit_tasks_at_branch = run(Cli::try_parse_from([
+            "workvcs", "task", "list", store, "--branch", &branch, "--limit", "0",
+        ])
+        .expect("parse zero-limit task list at branch"));
+        assert!(zero_limit_tasks_at_branch.is_err());
 
         let pending_tasks_at_branch = run(Cli::try_parse_from([
             "workvcs", "task", "list", store, "--branch", &branch, "--status", "pending",

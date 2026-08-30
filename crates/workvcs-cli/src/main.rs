@@ -154,6 +154,18 @@ enum Command {
         commit: Option<String>,
 
         #[arg(long)]
+        changeset: Option<String>,
+
+        #[arg(long)]
+        commit_kind: Option<String>,
+
+        #[arg(long)]
+        operation: Option<String>,
+
+        #[arg(long)]
+        state_digest: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
     Changeset {
@@ -3958,6 +3970,10 @@ fn run(cli: Cli) -> Result<String> {
             store,
             branch,
             commit,
+            changeset,
+            commit_kind,
+            operation,
+            state_digest,
             limit,
         } => {
             if matches!(limit, Some(0)) {
@@ -3979,10 +3995,40 @@ fn run(cli: Cli) -> Result<String> {
                     ));
                 }
             };
-            if let Some(limit) = limit {
+            if changeset.is_none()
+                && commit_kind.is_none()
+                && operation.is_none()
+                && state_digest.is_none()
+                && let Some(limit) = limit
+            {
                 options = options.with_limit(limit)?;
             }
-            let history = engine.history(options)?;
+            let mut history = engine.history(options)?;
+            if let Some(changeset) = changeset {
+                let changeset_id = ChangeSetId::parse_canonical(&changeset)?;
+                history
+                    .entries
+                    .retain(|entry| entry.changeset_id == changeset_id);
+            }
+            if let Some(commit_kind) = commit_kind {
+                history
+                    .entries
+                    .retain(|entry| entry.commit_kind == commit_kind);
+            }
+            if let Some(operation) = operation {
+                history
+                    .entries
+                    .retain(|entry| entry.operation_type == operation);
+            }
+            if let Some(state_digest) = state_digest {
+                let state_digest = Digest::from_hex(&state_digest)?;
+                history
+                    .entries
+                    .retain(|entry| entry.state_digest == state_digest);
+            }
+            if let Some(limit) = limit {
+                history.entries.truncate(limit);
+            }
             let mut output = format!(
                 "start_commit_id={}\nentries={}\n",
                 history.start_commit_id,
@@ -15603,6 +15649,123 @@ mod tests {
         assert!(history.contains(&format!("changeset={changeset_id}")));
         assert!(history.contains("committed_at_us="));
         assert!(history.contains("changeset_created_at_us="));
+
+        let commit_state_digest = value(&shown_commit, "state_digest");
+        let history_by_changeset = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--changeset",
+            &changeset_id,
+        ])
+        .expect("parse history by changeset"))
+        .expect("history by changeset");
+        assert_eq!(value(&history_by_changeset, "entries"), "1");
+        assert!(history_by_changeset.contains(&format!("changeset={changeset_id}")));
+
+        let history_by_commit_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--commit-kind",
+            "normal",
+        ])
+        .expect("parse history by commit kind"))
+        .expect("history by commit kind");
+        assert_eq!(value(&history_by_commit_kind, "entries"), "1");
+        assert!(history_by_commit_kind.contains("kind=normal"));
+
+        let history_by_operation = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--operation",
+            "entity.transition",
+        ])
+        .expect("parse history by operation"))
+        .expect("history by operation");
+        assert_eq!(value(&history_by_operation, "entries"), "1");
+        assert!(history_by_operation.contains("operation=entity.transition"));
+
+        let history_by_state_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--state-digest",
+            &commit_state_digest,
+        ])
+        .expect("parse history by state digest"))
+        .expect("history by state digest");
+        assert_eq!(value(&history_by_state_digest, "entries"), "1");
+        assert!(history_by_state_digest.contains(&format!("state_digest={commit_state_digest}")));
+
+        let history_by_combined_filters = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--changeset",
+            &changeset_id,
+            "--commit-kind",
+            "normal",
+            "--operation",
+            "entity.transition",
+            "--state-digest",
+            &commit_state_digest,
+            "--limit",
+            "1",
+        ])
+        .expect("parse history by combined filters"))
+        .expect("history by combined filters");
+        assert_eq!(value(&history_by_combined_filters, "entries"), "1");
+
+        let history_by_missing_changeset = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--changeset",
+            &ChangeSetId::new_v7().to_string(),
+        ])
+        .expect("parse history by missing changeset"))
+        .expect("history by missing changeset");
+        assert_eq!(value(&history_by_missing_changeset, "entries"), "0");
+
+        let history_by_missing_operation = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--operation",
+            "workspace.created",
+        ])
+        .expect("parse history by missing operation"))
+        .expect("history by missing operation");
+        assert_eq!(value(&history_by_missing_operation, "entries"), "0");
+
+        let history_by_missing_state_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse history by missing state digest"))
+        .expect("history by missing state digest");
+        assert_eq!(value(&history_by_missing_state_digest, "entries"), "0");
 
         let shown =
             run(

@@ -1535,6 +1535,12 @@ enum BundleCommand {
 
         #[arg(long)]
         require_valid: bool,
+
+        #[arg(long)]
+        expected_actual_manifest_digest: Option<String>,
+
+        #[arg(long)]
+        expected_manifest_size_bytes: Option<i64>,
     },
 }
 
@@ -5812,6 +5818,8 @@ fn run(cli: Cli) -> Result<String> {
                 commit,
                 manifest_file,
                 require_valid,
+                expected_actual_manifest_digest,
+                expected_manifest_size_bytes,
             } => {
                 let engine = Engine::open(store)?;
                 let manifest_bytes = fs::read(&manifest_file).map_err(|error| {
@@ -5835,6 +5843,31 @@ fn run(cli: Cli) -> Result<String> {
                         )));
                     }
                     output.push_str("valid_required=true\n");
+                }
+                if let Some(expected_actual_manifest_digest) = expected_actual_manifest_digest {
+                    let expected_actual_manifest_digest =
+                        Digest::from_hex(&expected_actual_manifest_digest)?;
+                    if validation.actual_manifest_digest != expected_actual_manifest_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "bundle manifest actual digest {} does not match expected {}",
+                            validation.actual_manifest_digest, expected_actual_manifest_digest
+                        )));
+                    }
+                    output.push_str("actual_manifest_matches_expected=true\n");
+                }
+                if let Some(expected_manifest_size_bytes) = expected_manifest_size_bytes {
+                    if expected_manifest_size_bytes < 0 {
+                        return Err(WorkVcsError::QueryInvalid(
+                            "bundle manifest expected size must not be negative".to_owned(),
+                        ));
+                    }
+                    let actual_manifest_size_bytes = validation.actual_manifest_size_bytes;
+                    if actual_manifest_size_bytes != expected_manifest_size_bytes {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle manifest size {actual_manifest_size_bytes} does not match expected {expected_manifest_size_bytes}"
+                        )));
+                    }
+                    output.push_str("manifest_size_matches_expected=true\n");
                 }
                 Ok(output)
             }
@@ -22449,6 +22482,8 @@ mod tests {
         assert_eq!(value(&validation, "commit_id"), genesis);
         assert_eq!(value(&validation, "valid"), "true");
         assert_eq!(value(&validation, "problem"), "none");
+        let actual_manifest_digest = value(&validation, "actual_manifest_digest");
+        let actual_manifest_size_bytes = value(&validation, "actual_manifest_size_bytes");
         let required_validation = run(Cli::try_parse_from([
             "workvcs",
             "bundle",
@@ -22459,11 +22494,51 @@ mod tests {
             "--manifest-file",
             manifest_file.to_str().expect("manifest file path"),
             "--require-valid",
+            "--expected-actual-manifest-digest",
+            &actual_manifest_digest,
+            "--expected-manifest-size-bytes",
+            &actual_manifest_size_bytes,
         ])
         .expect("parse required bundle validate-manifest"))
         .expect("require valid bundle manifest");
         assert_eq!(value(&required_validation, "valid"), "true");
         assert_eq!(value(&required_validation, "valid_required"), "true");
+        assert_eq!(
+            value(&required_validation, "actual_manifest_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&required_validation, "manifest_size_matches_expected"),
+            "true"
+        );
+        let mismatched_manifest_digest_validation = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-manifest",
+            store,
+            "--commit",
+            &genesis,
+            "--manifest-file",
+            manifest_file.to_str().expect("manifest file path"),
+            "--expected-actual-manifest-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched bundle validate-manifest digest"));
+        assert!(mismatched_manifest_digest_validation.is_err());
+        let mismatched_manifest_size_validation = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-manifest",
+            store,
+            "--commit",
+            &genesis,
+            "--manifest-file",
+            manifest_file.to_str().expect("manifest file path"),
+            "--expected-manifest-size-bytes",
+            "0",
+        ])
+        .expect("parse mismatched bundle validate-manifest size"));
+        assert!(mismatched_manifest_size_validation.is_err());
         let invalid_manifest_file = tempdir.path().join("invalid-bundle-manifest.json");
         fs::write(&invalid_manifest_file, b"{}").expect("write invalid manifest file");
         let invalid_validation = run(Cli::try_parse_from([

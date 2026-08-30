@@ -137,12 +137,14 @@ pub struct EvidenceSnapshot {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EvidenceListOptions {
     evidence_kind: Option<String>,
+    source_session_id: Option<SessionId>,
 }
 
 impl EvidenceListOptions {
     pub fn all() -> Self {
         Self {
             evidence_kind: None,
+            source_session_id: None,
         }
     }
 
@@ -151,11 +153,21 @@ impl EvidenceListOptions {
         validate_stored_text("evidence kind", &evidence_kind)?;
         Ok(Self {
             evidence_kind: Some(evidence_kind),
+            source_session_id: None,
         })
+    }
+
+    pub fn with_source_session_id(mut self, source_session_id: SessionId) -> Self {
+        self.source_session_id = Some(source_session_id);
+        self
     }
 
     pub fn evidence_kind(&self) -> Option<&str> {
         self.evidence_kind.as_deref()
+    }
+
+    pub fn source_session_id(&self) -> Option<SessionId> {
+        self.source_session_id
     }
 }
 
@@ -284,7 +296,13 @@ pub(crate) fn evidences(
     let evidence_ids = list_evidence_ids(connection, options)?;
     let mut evidences = Vec::with_capacity(evidence_ids.len());
     for evidence_id in evidence_ids {
-        evidences.push(evidence(connection, evidence_id)?);
+        let evidence = evidence(connection, evidence_id)?;
+        if options
+            .source_session_id()
+            .is_none_or(|source_session_id| evidence.source_session_id == Some(source_session_id))
+        {
+            evidences.push(evidence);
+        }
     }
     Ok(EvidenceListResult { evidences })
 }

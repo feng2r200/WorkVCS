@@ -2038,6 +2038,9 @@ enum EvidenceCommand {
 
         #[arg(long)]
         kind: Option<String>,
+
+        #[arg(long)]
+        source_session: Option<String>,
     },
 }
 
@@ -4908,13 +4911,22 @@ fn run(cli: Cli) -> Result<String> {
             render_evidence_snapshot(&engine.evidence(EvidenceId::parse_canonical(&evidence)?)?)
         }
         Command::Evidence {
-            command: EvidenceCommand::List { store, kind },
+            command:
+                EvidenceCommand::List {
+                    store,
+                    kind,
+                    source_session,
+                },
         } => {
             let engine = Engine::open(store)?;
-            let options = match kind {
+            let mut options = match kind {
                 Some(kind) => EvidenceListOptions::for_kind(kind)?,
                 None => EvidenceListOptions::all(),
             };
+            if let Some(source_session) = source_session {
+                options =
+                    options.with_source_session_id(SessionId::parse_canonical(&source_session)?);
+            }
             render_evidence_list(&engine.evidences(options)?)
         }
         Command::Resource {
@@ -17348,6 +17360,33 @@ mod tests {
                 .expect("parse init"),
         )
         .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "evidence-workspace",
+        ])
+        .expect("parse workspace create"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch_id = value(&workspace, "branch_id");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch_id,
+            "--metadata-json",
+            r#"{"purpose":"evidence capture"}"#,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
 
         let evidence = run(Cli::try_parse_from([
             "workvcs",
@@ -17358,6 +17397,8 @@ mod tests {
             "terminal-log",
             "--metadata-json",
             r#"{"summary":"captured output"}"#,
+            "--source-session",
+            &session_id,
             "--content-role",
             "stdout",
             "--content-file",
@@ -17371,6 +17412,7 @@ mod tests {
         .expect("create evidence");
         let evidence_id = value(&evidence, "evidence_id");
         assert_eq!(value(&evidence, "evidence_kind"), "terminal-log");
+        assert_eq!(value(&evidence, "source_session_id"), session_id);
         assert_eq!(value(&evidence, "contents"), "1");
         assert_eq!(value(&evidence, "content.0.role"), "stdout");
         assert_eq!(value(&evidence, "content.0.size_bytes"), "14");
@@ -17391,6 +17433,7 @@ mod tests {
         .expect("parse evidence show"))
         .expect("show evidence");
         assert_eq!(value(&shown, "evidence_id"), evidence_id);
+        assert_eq!(value(&shown, "source_session_id"), session_id);
         assert_eq!(
             value(&shown, "content.0.content_digest"),
             value(&evidence, "content.0.content_digest")
@@ -17458,6 +17501,58 @@ mod tests {
         assert_eq!(value(&filtered, "evidence.0.evidence_id"), evidence_id);
         assert_eq!(value(&filtered, "evidence.0.evidence_kind"), "terminal-log");
         assert_eq!(value(&filtered, "evidence.0.contents"), "1");
+
+        let source_session_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--source-session",
+            &session_id,
+        ])
+        .expect("parse source-session evidence list"))
+        .expect("list source-session evidence");
+        assert_eq!(value(&source_session_filtered, "evidences"), "1");
+        assert_eq!(
+            value(&source_session_filtered, "evidence.0.evidence_id"),
+            evidence_id
+        );
+        assert_eq!(
+            value(&source_session_filtered, "evidence.0.source_session_id"),
+            session_id
+        );
+
+        let combined_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--kind",
+            "terminal-log",
+            "--source-session",
+            &session_id,
+        ])
+        .expect("parse combined evidence list"))
+        .expect("list combined evidence");
+        assert_eq!(value(&combined_filtered, "evidences"), "1");
+        assert_eq!(
+            value(&combined_filtered, "evidence.0.evidence_id"),
+            evidence_id
+        );
+
+        let missing_source_session = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--kind",
+            "manual-review",
+            "--source-session",
+            &session_id,
+        ])
+        .expect("parse missing source-session evidence list"))
+        .expect("list missing source-session evidence");
+        assert_eq!(value(&missing_source_session, "evidences"), "0");
     }
 
     #[test]

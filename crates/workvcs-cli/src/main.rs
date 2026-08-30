@@ -3852,6 +3852,11 @@ fn run(cli: Cli) -> Result<String> {
                 lifecycle_status,
                 source_status,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store knowledge-exposure-list limit must be greater than zero".to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = KnowledgeExposureListOptions::new();
                 if let Some(limit) = limit {
@@ -4295,6 +4300,11 @@ fn run(cli: Cli) -> Result<String> {
                 source_store,
                 bundle_digest,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "bundle import-list limit must be greater than zero".to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = BundleImportAttemptListOptions::new();
                 if let Some(limit) = limit {
@@ -13565,6 +13575,42 @@ mod tests {
 
         for (args, expected_message) in commands {
             let result = run(Cli::try_parse_from(args).expect("parse store query"));
+            assert!(matches!(
+                result,
+                Err(WorkVcsError::QueryInvalid(message)) if message == expected_message
+            ));
+        }
+    }
+
+    #[test]
+    fn remaining_query_tools_reject_zero_limit_before_store_open() {
+        let commands = vec![
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "knowledge-exposure-list".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store knowledge-exposure-list limit must be greater than zero",
+            ),
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "bundle".to_owned(),
+                    "import-list".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "bundle import-list limit must be greater than zero",
+            ),
+        ];
+
+        for (args, expected_message) in commands {
+            let result = run(Cli::try_parse_from(args).expect("parse query tool"));
             assert!(matches!(
                 result,
                 Err(WorkVcsError::QueryInvalid(message)) if message == expected_message

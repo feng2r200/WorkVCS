@@ -2913,6 +2913,9 @@ enum RecordCommand {
 
         #[arg(long)]
         relation: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     KnowledgeRelationRemove {
         #[arg(value_name = "STORE")]
@@ -7390,16 +7393,25 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     relation,
+                    expected_state_digest,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
-            Ok(render_record_knowledge_relation_snapshot(
-                &engine.record_knowledge_relation_at(
-                    commit_id,
-                    RelationId::parse_canonical(&relation)?,
-                )?,
-            ))
+            let snapshot = engine
+                .record_knowledge_relation_at(commit_id, RelationId::parse_canonical(&relation)?)?;
+            let mut output = render_record_knowledge_relation_snapshot(&snapshot);
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "record knowledge relation state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Record {
             command:
@@ -31399,6 +31411,41 @@ mod tests {
             value(&shown, "target_knowledge_entity_id"),
             value(&knowledge, "knowledge_entity_id")
         );
+
+        let expected_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-show",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--expected-state-digest",
+            &value(&shown, "relation_state_digest"),
+        ])
+        .expect("parse expected record knowledge relation show"))
+        .expect("show expected record knowledge relation");
+        assert_eq!(
+            value(&expected_shown, "relation_state_digest"),
+            value(&shown, "relation_state_digest")
+        );
+        assert_eq!(value(&expected_shown, "matches_expected"), "true");
+
+        let mismatched_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-show",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched record knowledge relation show"));
+        assert!(mismatched_shown.is_err());
     }
 
     #[test]

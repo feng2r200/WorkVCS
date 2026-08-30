@@ -488,10 +488,7 @@ pub(crate) fn explain_why(
         target: resolved.target,
         subject,
         relation_edges,
-        deferred_relation_families: vec![
-            WhyDeferredRelationFamily::Evolution,
-            WhyDeferredRelationFamily::Epistemic,
-        ],
+        deferred_relation_families: Vec::new(),
     })
 }
 

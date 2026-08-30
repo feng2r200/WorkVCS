@@ -6,8 +6,8 @@ use workvcs_core::{
     AcceptanceCriterionCreateOptions, BranchId, CanonicalValue, CommitId, Engine, EntityId,
     ErrorCategory, ErrorCode, EvidenceContentInput, EvidenceCreateOptions, EvidenceId,
     StoreInitOptions, TaskCreateOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationResult, VerificationTarget, WhyDeferredRelationFamily, WhyQueryOptions,
-    WhyQueryTarget, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions, content_object_digest,
+    VerificationResult, VerificationTarget, WhyQueryOptions, WhyQueryTarget, WhyRelationKind,
+    WorkspaceInfo, WorkspaceInitOptions, content_object_digest,
 };
 
 struct CriterionFixture {
@@ -362,13 +362,7 @@ fn verification_creation_records_evidenced_by_closure_atomically() {
             .count(),
         1
     );
-    assert_eq!(
-        why.deferred_relation_families,
-        vec![
-            WhyDeferredRelationFamily::Evolution,
-            WhyDeferredRelationFamily::Epistemic,
-        ]
-    );
+    assert!(why.deferred_relation_families.is_empty());
 }
 
 #[test]

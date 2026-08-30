@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    Engine, KnowledgeCreateOptions, ResolvedWhyQuerySubject, StoreInitOptions,
-    WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryTarget, WorkspaceInfo,
-    WorkspaceInitOptions,
+    Engine, KnowledgeCreateOptions, ResolvedWhyQuerySubject, StoreInitOptions, WhyEntityKind,
+    WhyQueryOptions, WhyQueryTarget, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -56,11 +55,5 @@ fn why_resolves_knowledge_subject_kind_without_relation_expansion() {
         }
     );
     assert!(why.relation_edges.is_empty());
-    assert_eq!(
-        why.deferred_relation_families,
-        vec![
-            WhyDeferredRelationFamily::Evolution,
-            WhyDeferredRelationFamily::Epistemic,
-        ]
-    );
+    assert!(why.deferred_relation_families.is_empty());
 }

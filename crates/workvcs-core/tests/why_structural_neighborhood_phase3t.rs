@@ -6,9 +6,9 @@ use workvcs_core::{
     BranchId, CommitId, Engine, EntityId, ErrorCategory, ErrorCode, EventId, GoalCreateOptions,
     GoalSnapshot, PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, StoreInitOptions, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, TaskCreateOptions, TaskSnapshot, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    StructuralReferenceCreateOptions, TaskCreateOptions, TaskSnapshot, WhyEntityKind,
+    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge,
+    WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,13 +271,7 @@ fn assert_edges_are_sorted(edges: &[WhyRelationEdge]) {
 }
 
 fn assert_deferred_families(why: &WhyQueryResult) {
-    assert_eq!(
-        why.deferred_relation_families,
-        vec![
-            WhyDeferredRelationFamily::Evolution,
-            WhyDeferredRelationFamily::Epistemic,
-        ]
-    );
+    assert!(why.deferred_relation_families.is_empty());
 }
 
 #[test]

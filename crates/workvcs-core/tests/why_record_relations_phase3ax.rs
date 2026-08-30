@@ -4,9 +4,9 @@ use tempfile::TempDir;
 use workvcs_core::{
     CommitId, Engine, EntityId, RecordCreateCommit, RecordCreateOptions,
     RecordRelationCreateCommit, RecordRelationCreateOptions, RecordTransitionCommit,
-    RecordTransitionOptions, ResolvedWhyQuerySubject, StoreInitOptions, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    RecordTransitionOptions, ResolvedWhyQuerySubject, StoreInitOptions, WhyEntityKind,
+    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
+    WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -115,13 +115,7 @@ fn record_endpoint(record_entity_id: EntityId) -> WhyRelationEndpoint {
 }
 
 fn assert_deferred_families(why: &WhyQueryResult) {
-    assert_eq!(
-        why.deferred_relation_families,
-        vec![
-            WhyDeferredRelationFamily::Evolution,
-            WhyDeferredRelationFamily::Epistemic,
-        ]
-    );
+    assert!(why.deferred_relation_families.is_empty());
 }
 
 #[test]

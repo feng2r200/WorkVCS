@@ -99,7 +99,7 @@ use crate::store::connection::StoreConnection;
 use crate::store::schema;
 use crate::{
     BranchId, ClaimId, CommitId, EntityId, EventId, EvidenceId, ImportId, ResourceId,
-    ResourceObservationId, SessionId, WorkspaceId, history, runtime,
+    ResourceObservationId, SessionId, WorkVcsError, WorkspaceId, history, runtime,
 };
 use std::path::Path;
 
@@ -941,6 +941,25 @@ impl Store {
     ) -> Result<TaskTransitionCommit> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
+        if options.next_status().is_terminal()
+            && let Some(actor_session_id) = options.actor_session_id()
+        {
+            let guard = runtime::task_claim_guard(
+                &self.connection,
+                &ClaimGuardOptions::terminal_task_mutation(
+                    actor_session_id,
+                    options.task_entity_id(),
+                ),
+            )?;
+            if !guard.allowed {
+                return Err(WorkVcsError::ClaimInvalid(format!(
+                    "terminal task transition for task {} by session {} is blocked by claim guard reason {}",
+                    options.task_entity_id(),
+                    actor_session_id,
+                    guard.reason.as_str()
+                )));
+            }
+        }
         history::transition_task(&mut self.connection, options)
     }
 

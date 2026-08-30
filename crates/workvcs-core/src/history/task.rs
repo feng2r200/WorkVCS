@@ -16,7 +16,8 @@ use crate::canonical::{
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, EvidenceId,
-    OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId, WorkspaceId,
+    OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionId,
+    WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -93,6 +94,13 @@ impl TaskStatus {
 
     fn is_non_terminal(self) -> bool {
         matches!(self, Self::Pending | Self::InProgress | Self::Blocked)
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Done | Self::Failed | Self::Cancelled | Self::Superseded
+        )
     }
 
     fn allows_rationale_reentry(self) -> bool {
@@ -997,6 +1005,7 @@ pub struct TaskTransitionOptions {
     next_status: TaskStatus,
     outcome_update: TaskOutcomeUpdate,
     rationale: CanonicalValue,
+    actor_session_id: Option<SessionId>,
 }
 
 impl TaskTransitionOptions {
@@ -1021,6 +1030,7 @@ impl TaskTransitionOptions {
             next_status,
             outcome_update: TaskOutcomeUpdate::Preserve,
             rationale: CanonicalValue::object(Vec::new())?,
+            actor_session_id: None,
         })
     }
 
@@ -1039,6 +1049,23 @@ impl TaskTransitionOptions {
     pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
         self.rationale = rationale;
         self
+    }
+
+    pub fn with_actor_session(mut self, actor_session_id: SessionId) -> Self {
+        self.actor_session_id = Some(actor_session_id);
+        self
+    }
+
+    pub fn actor_session_id(&self) -> Option<SessionId> {
+        self.actor_session_id
+    }
+
+    pub fn task_entity_id(&self) -> EntityId {
+        self.task_entity_id
+    }
+
+    pub fn next_status(&self) -> TaskStatus {
+        self.next_status
     }
 }
 

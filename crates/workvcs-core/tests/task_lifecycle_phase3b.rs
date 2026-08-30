@@ -2,9 +2,10 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    BranchId, CanonicalValue, CommitId, Digest, Engine, EntityTransitionOptions, EntityVersionId,
-    ErrorCategory, ErrorCode, StoreInitOptions, TaskCreateOptions, TaskState, TaskStatus,
-    TaskTransitionOptions, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    BranchId, CanonicalValue, ClaimTaskOptions, CommitId, Digest, Engine, EntityTransitionOptions,
+    EntityVersionId, ErrorCategory, ErrorCode, SessionStartOptions, StoreInitOptions,
+    TaskCreateOptions, TaskState, TaskStatus, TaskTransitionOptions, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,6 +239,103 @@ fn task_transition_updates_status_and_outcome_with_historical_snapshots() {
         .task_at(completed.commit_id, created.task_entity_id)
         .expect("reopened completed snapshot");
     assert_eq!(reopened_snapshot, completed_snapshot);
+}
+
+#[test]
+fn actor_session_claim_guard_protects_terminal_task_transition() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("start first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("start second session");
+
+    let owned_task = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Owned terminal transition",
+            )
+            .expect("owned task options"),
+        )
+        .expect("create owned task");
+    engine
+        .claim_task(ClaimTaskOptions::new(
+            first_session.session_id,
+            owned_task.task_entity_id,
+        ))
+        .expect("claim owned task");
+    let failed = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                owned_task.commit_id,
+                owned_task.task_entity_id,
+                owned_task.task_entity_version_id,
+                TaskStatus::Failed,
+            )
+            .expect("failed options")
+            .with_actor_session(first_session.session_id)
+            .with_rationale(rationale("owner terminal action")),
+        )
+        .expect("owner terminal transition");
+    assert_eq!(failed.state.status, TaskStatus::Failed);
+
+    let blocked_task = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                failed.commit_id,
+                "Blocked terminal transition",
+            )
+            .expect("blocked task options"),
+        )
+        .expect("create blocked task");
+    engine
+        .claim_task(ClaimTaskOptions::new(
+            first_session.session_id,
+            blocked_task.task_entity_id,
+        ))
+        .expect("claim blocked task");
+    let connection = raw_connection(&path);
+    let before_blocked = history_counts(&connection);
+    let before_head = branch_head(&connection, workspace.initial_branch_id);
+
+    let blocked = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                blocked_task.commit_id,
+                blocked_task.task_entity_id,
+                blocked_task.task_entity_version_id,
+                TaskStatus::Cancelled,
+            )
+            .expect("cancel options")
+            .with_actor_session(second_session.session_id)
+            .with_rationale(rationale("other terminal action")),
+        )
+        .expect_err("other session terminal transition rejected");
+    assert_eq!(blocked.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(blocked.category(), ErrorCategory::Runtime);
+    assert!(
+        blocked
+            .to_string()
+            .contains("exclusive_claim_owned_by_other_session")
+    );
+    assert_eq!(history_counts(&connection), before_blocked);
+    assert_eq!(
+        branch_head(&connection, workspace.initial_branch_id),
+        before_head
+    );
 }
 
 #[test]

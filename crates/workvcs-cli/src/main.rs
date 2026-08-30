@@ -1194,6 +1194,9 @@ enum TaskCommand {
 
         #[arg(long)]
         outcome: Option<String>,
+
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 
@@ -3225,6 +3228,7 @@ fn run(cli: Cli) -> Result<String> {
                     task_version,
                     status,
                     outcome,
+                    session,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -3237,6 +3241,9 @@ fn run(cli: Cli) -> Result<String> {
             )?;
             if let Some(outcome) = outcome {
                 options = options.with_outcome(outcome)?;
+            }
+            if let Some(session) = session {
+                options = options.with_actor_session(SessionId::parse_canonical(&session)?);
             }
             let transition = engine.transition_task(options)?;
             Ok(render_task_transition(&transition))
@@ -12237,6 +12244,7 @@ mod tests {
         .expect("parse task"))
         .expect("create task");
         let task_id = value(&task, "task_entity_id");
+        let task_head = value(&task, "commit_id");
         let session = run(Cli::try_parse_from([
             "workvcs",
             "session",
@@ -12303,6 +12311,27 @@ mod tests {
         assert_eq!(value(&guard, "reason"), "owned_exclusive_claim");
         assert_eq!(value(&guard, "active_claims"), "1");
         assert_eq!(value(&guard, "active_claim.0.claim_id"), claim_id);
+        let failed = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "transition",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &task_head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--status",
+            "failed",
+            "--session",
+            &session_id,
+        ])
+        .expect("parse guarded terminal transition"))
+        .expect("guarded terminal transition");
+        assert_eq!(value(&failed, "status"), "failed");
 
         run(Cli::try_parse_from([
             "workvcs",

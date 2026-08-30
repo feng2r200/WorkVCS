@@ -55,6 +55,19 @@ pub enum ClaimGuardReason {
 }
 
 impl ClaimGuardReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unclaimed => "unclaimed",
+            Self::OwnedExclusiveClaim => "owned_exclusive_claim",
+            Self::UniqueSharedClaimant => "unique_shared_claimant",
+            Self::ExclusiveClaimOwnedByOtherSession => "exclusive_claim_owned_by_other_session",
+            Self::SharedClaimSetDoesNotIncludeSession => {
+                "shared_claim_set_does_not_include_session"
+            }
+            Self::NonUniqueSharedClaimSet => "non_unique_shared_claim_set",
+        }
+    }
+
     fn allows_protected_task_action(self) -> bool {
         matches!(
             self,

@@ -3453,6 +3453,11 @@ fn run(cli: Cli) -> Result<String> {
                 derivation_kind,
                 source_bundle_digest,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store lineage-list limit must be greater than zero".to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = StoreLineageListOptions::new();
                 if let Some(limit) = limit {
@@ -3507,6 +3512,11 @@ fn run(cli: Cli) -> Result<String> {
                 tool_version,
                 outcome,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store migration-list limit must be greater than zero".to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = StoreMigrationListOptions::new();
                 if let Some(limit) = limit {
@@ -3586,6 +3596,11 @@ fn run(cli: Cli) -> Result<String> {
                 object_kind,
                 scope,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store external-ref-list limit must be greater than zero".to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = ExternalObjectRefListOptions::new();
                 if let Some(limit) = limit {
@@ -3621,6 +3636,11 @@ fn run(cli: Cli) -> Result<String> {
                 Ok(render_knowledge_space_snapshot(&snapshot))
             }
             StoreCommand::KnowledgeSpaceList { store, limit, name } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store knowledge-space-list limit must be greater than zero".to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = KnowledgeSpaceListOptions::new();
                 if let Some(limit) = limit {
@@ -3637,6 +3657,12 @@ fn run(cli: Cli) -> Result<String> {
                 knowledge_space,
                 limit,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store knowledge-space-available-exposures limit must be greater than zero"
+                            .to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = KnowledgeSpaceAvailableExposuresOptions::new(
                     KnowledgeSpaceId::parse_canonical(&knowledge_space)?,
@@ -3653,6 +3679,12 @@ fn run(cli: Cli) -> Result<String> {
                 knowledge_space,
                 limit,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store knowledge-space-source-stale-exposures limit must be greater than zero"
+                            .to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = KnowledgeSpaceSourceStaleExposuresOptions::new(
                     KnowledgeSpaceId::parse_canonical(&knowledge_space)?,
@@ -3669,6 +3701,12 @@ fn run(cli: Cli) -> Result<String> {
                 knowledge_space,
                 limit,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store knowledge-space-historical-exposures limit must be greater than zero"
+                            .to_owned(),
+                    ));
+                }
                 let engine = Engine::open(store)?;
                 let mut options = KnowledgeSpaceHistoricalExposuresOptions::new(
                     KnowledgeSpaceId::parse_canonical(&knowledge_space)?,
@@ -3685,6 +3723,12 @@ fn run(cli: Cli) -> Result<String> {
                 knowledge_space,
                 limit,
             } => {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "store knowledge-space-refresh-source-statuses limit must be greater than zero"
+                            .to_owned(),
+                    ));
+                }
                 let mut engine = Engine::open(store)?;
                 let mut options = KnowledgeSpaceRefreshSourceStatusesOptions::new(
                     KnowledgeSpaceId::parse_canonical(&knowledge_space)?,
@@ -13415,6 +13459,117 @@ mod tests {
             Err(WorkVcsError::QueryInvalid(message))
                 if message == "history limit must be greater than zero"
         ));
+    }
+
+    #[test]
+    fn store_queries_reject_zero_limit_before_store_open() {
+        let knowledge_space = KnowledgeSpaceId::new_v7().to_string();
+        let commands = vec![
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "lineage-list".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store lineage-list limit must be greater than zero",
+            ),
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "migration-list".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store migration-list limit must be greater than zero",
+            ),
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "external-ref-list".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store external-ref-list limit must be greater than zero",
+            ),
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "knowledge-space-list".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store knowledge-space-list limit must be greater than zero",
+            ),
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "knowledge-space-available-exposures".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--knowledge-space".to_owned(),
+                    knowledge_space.clone(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store knowledge-space-available-exposures limit must be greater than zero",
+            ),
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "knowledge-space-source-stale-exposures".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--knowledge-space".to_owned(),
+                    knowledge_space.clone(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store knowledge-space-source-stale-exposures limit must be greater than zero",
+            ),
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "knowledge-space-historical-exposures".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--knowledge-space".to_owned(),
+                    knowledge_space.clone(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store knowledge-space-historical-exposures limit must be greater than zero",
+            ),
+            (
+                vec![
+                    "workvcs".to_owned(),
+                    "store".to_owned(),
+                    "knowledge-space-refresh-source-statuses".to_owned(),
+                    "missing.sqlite".to_owned(),
+                    "--knowledge-space".to_owned(),
+                    knowledge_space,
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+                "store knowledge-space-refresh-source-statuses limit must be greater than zero",
+            ),
+        ];
+
+        for (args, expected_message) in commands {
+            let result = run(Cli::try_parse_from(args).expect("parse store query"));
+            assert!(matches!(
+                result,
+                Err(WorkVcsError::QueryInvalid(message)) if message == expected_message
+            ));
+        }
     }
 
     #[test]

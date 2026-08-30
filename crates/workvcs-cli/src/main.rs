@@ -903,6 +903,9 @@ enum WorkspaceCommand {
 
         #[arg(long)]
         display_name: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -4306,6 +4309,7 @@ fn run(cli: Cli) -> Result<String> {
                 WorkspaceCommand::List {
                     store,
                     display_name,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -4314,6 +4318,14 @@ fn run(cli: Cli) -> Result<String> {
                 result
                     .workspaces
                     .retain(|workspace| workspace.display_name == display_name);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "workspace list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                result.workspaces.truncate(limit);
             }
             Ok(render_workspace_list(&result))
         }
@@ -14192,6 +14204,22 @@ mod tests {
             value(&beta_filtered, "workspace.0.workspace_id"),
             beta_workspace_id
         );
+
+        let limited =
+            run(
+                Cli::try_parse_from(["workvcs", "workspace", "list", store, "--limit", "1"])
+                    .expect("parse limited workspace list"),
+            )
+            .expect("list limited workspaces");
+        assert_eq!(value(&limited, "workspaces"), "1");
+        assert_ne!(value(&limited, "workspace.0.workspace_id"), "");
+
+        let zero_limit =
+            run(
+                Cli::try_parse_from(["workvcs", "workspace", "list", store, "--limit", "0"])
+                    .expect("parse zero-limit workspace list"),
+            );
+        assert!(zero_limit.is_err());
 
         let missing_filtered = run(Cli::try_parse_from([
             "workvcs",

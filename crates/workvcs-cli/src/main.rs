@@ -2164,6 +2164,9 @@ enum AcceptanceCriterionCommand {
 
         #[arg(long)]
         criterion: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("acceptance-criterion-list-target")
@@ -6052,14 +6055,25 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     criterion,
+                    expected_state_digest,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            render_acceptance_criterion_snapshot(
-                &engine
-                    .acceptance_criterion_at(commit_id, EntityId::parse_canonical(&criterion)?)?,
-            )
+            let snapshot = engine
+                .acceptance_criterion_at(commit_id, EntityId::parse_canonical(&criterion)?)?;
+            let mut output = render_acceptance_criterion_snapshot(&snapshot)?;
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "acceptance criterion state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Ac {
             command:
@@ -21655,6 +21669,47 @@ mod tests {
             value(&criterion_at_create, "verification_requirements"),
             "0"
         );
+
+        let expected_criterion_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "show",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &criterion_id,
+            "--expected-state-digest",
+            &value(&criterion_at_create, "acceptance_criterion_state_digest"),
+        ])
+        .expect("parse expected ac show at commit"))
+        .expect("show expected ac at commit");
+        assert_eq!(
+            value(
+                &expected_criterion_at_create,
+                "acceptance_criterion_state_digest"
+            ),
+            value(&criterion_at_create, "acceptance_criterion_state_digest")
+        );
+        assert_eq!(
+            value(&expected_criterion_at_create, "matches_expected"),
+            "true"
+        );
+
+        let mismatched_criterion_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "show",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &criterion_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched ac show at commit"));
+        assert!(mismatched_criterion_at_create.is_err());
 
         let requirement = run(Cli::try_parse_from([
             "workvcs",

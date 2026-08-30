@@ -887,6 +887,12 @@ enum BranchCommand {
 
         #[arg(long)]
         workspace: String,
+
+        #[arg(long)]
+        name: Option<String>,
+
+        #[arg(long)]
+        lifecycle_state: Option<String>,
     },
     Head {
         #[arg(value_name = "STORE")]
@@ -4187,11 +4193,23 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_workspace_list(&result))
         }
         Command::Branch {
-            command: BranchCommand::List { store, workspace },
+            command:
+                BranchCommand::List {
+                    store,
+                    workspace,
+                    name,
+                    lifecycle_state,
+                },
         } => {
             let engine = Engine::open(store)?;
-            let branches =
+            let mut branches =
                 engine.list_branches(workvcs_core::WorkspaceId::parse_canonical(&workspace)?)?;
+            if let Some(name) = name {
+                branches.retain(|branch| branch.name == name);
+            }
+            if let Some(lifecycle_state) = lifecycle_state {
+                branches.retain(|branch| branch.lifecycle_state == lifecycle_state);
+            }
             Ok(render_branch_list(&branches))
         }
         Command::Branch {
@@ -16740,6 +16758,66 @@ mod tests {
             value(&branches, "branch.0.head_changeset_id"),
             source_changeset
         );
+
+        let branches_by_name = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--name",
+            "experiment",
+        ])
+        .expect("parse branch list by name"))
+        .expect("list branches by name");
+        assert!(branches_by_name.contains("branches=1"));
+        assert_eq!(value(&branches_by_name, "branch.0.branch_id"), fork_branch);
+
+        let active_branches = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--lifecycle-state",
+            "active",
+        ])
+        .expect("parse branch list by lifecycle state"))
+        .expect("list branches by lifecycle state");
+        assert!(active_branches.contains("branches=2"));
+
+        let active_experiment = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--name",
+            "experiment",
+            "--lifecycle-state",
+            "active",
+        ])
+        .expect("parse branch list by name and lifecycle state"))
+        .expect("list branches by name and lifecycle state");
+        assert!(active_experiment.contains("branches=1"));
+        assert_eq!(value(&active_experiment, "branch.0.branch_id"), fork_branch);
+
+        let missing_branch_name = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--name",
+            "missing",
+        ])
+        .expect("parse branch list by missing name"))
+        .expect("list branches by missing name");
+        assert!(missing_branch_name.contains("branches=0"));
 
         let later_source = run(Cli::try_parse_from([
             "workvcs",

@@ -3233,6 +3233,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         reason_code: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -5622,6 +5625,7 @@ fn run(cli: Cli) -> Result<String> {
                     verification,
                     applicability,
                     reason_code,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5640,6 +5644,14 @@ fn run(cli: Cli) -> Result<String> {
                 result
                     .caches
                     .retain(|cache| cache.reason_code == reason_code);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::TaskInvalid(
+                    "verification cache-list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                result.caches.truncate(limit);
             }
             Ok(render_verification_applicability_cache_list(&result))
         }
@@ -21361,6 +21373,37 @@ mod tests {
             value(&cache_list_by_reason, "cache.0.verification_entity_id"),
             verification_id
         );
+
+        let limited_cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited cache list"))
+        .expect("list limited caches");
+        assert_eq!(value(&limited_cache_list, "caches"), "1");
+        assert_eq!(
+            value(&limited_cache_list, "cache.0.verification_entity_id"),
+            verification_id
+        );
+
+        let zero_limit_cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit cache list"));
+        assert!(zero_limit_cache_list.is_err());
 
         let missing_reason_cache_list = run(Cli::try_parse_from([
             "workvcs",

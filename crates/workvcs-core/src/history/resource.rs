@@ -266,6 +266,27 @@ pub struct WorkspaceResourceAssociationResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceResourceAssociationListOptions {
+    workspace_id: WorkspaceId,
+}
+
+impl WorkspaceResourceAssociationListOptions {
+    pub fn for_workspace(workspace_id: WorkspaceId) -> Self {
+        Self { workspace_id }
+    }
+
+    pub fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceResourceAssociationListResult {
+    pub workspace_id: WorkspaceId,
+    pub associations: Vec<WorkspaceResourceAssociationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourceObservationCreateResult {
     pub observation_id: ResourceObservationId,
     pub resource_id: ResourceId,
@@ -602,6 +623,21 @@ pub(crate) fn associate_workspace_resource(
         workspace_id: options.workspace_id(),
         resource_id: options.resource_id(),
         state,
+    })
+}
+
+pub(crate) fn workspace_resource_associations(
+    connection: &StoreConnection,
+    options: &WorkspaceResourceAssociationListOptions,
+) -> Result<WorkspaceResourceAssociationListResult> {
+    connection.verify_foreign_keys()?;
+    ensure_workspace_exists_read(connection, options.workspace_id())?;
+
+    let associations =
+        load_workspace_resource_associations_for_workspace(connection, options.workspace_id())?;
+    Ok(WorkspaceResourceAssociationListResult {
+        workspace_id: options.workspace_id(),
+        associations,
     })
 }
 
@@ -1148,6 +1184,47 @@ fn workspace_resource_association(
     })
 }
 
+fn load_workspace_resource_associations_for_workspace(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+) -> Result<Vec<WorkspaceResourceAssociationSnapshot>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT workspace_resource.resource_id,
+                    workspace_resource.association_metadata_json
+             FROM workspace_resource
+             JOIN resource
+               ON resource.resource_id = workspace_resource.resource_id
+             JOIN object_identity
+               ON object_identity.object_id = resource.resource_id
+             WHERE workspace_resource.workspace_id = ?1
+               AND object_identity.object_kind = ?2
+             ORDER BY resource.created_at_us, workspace_resource.resource_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(
+            params![&workspace_id.raw_bytes()[..], RESOURCE_OBJECT_KIND],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .map_err(storage_error)?;
+
+    let mut associations = Vec::new();
+    for row in rows {
+        let (resource_id, association_metadata_json) = row.map_err(storage_error)?;
+        associations.push(WorkspaceResourceAssociationSnapshot {
+            workspace_id,
+            resource_id: decode_resource_id("workspace_resource.resource_id", resource_id)?,
+            association_metadata: parse_canonical_object_json(
+                "workspace_resource.association_metadata_json",
+                &association_metadata_json,
+            )?,
+        });
+    }
+    Ok(associations)
+}
+
 fn ensure_resource_exists(transaction: &Transaction<'_>, resource_id: ResourceId) -> Result<()> {
     let object_kind = transaction
         .query_row(
@@ -1176,6 +1253,26 @@ fn ensure_resource_exists(transaction: &Transaction<'_>, resource_id: ResourceId
 
 fn ensure_workspace_exists(transaction: &Transaction<'_>, workspace_id: WorkspaceId) -> Result<()> {
     let exists = transaction
+        .query_row(
+            "SELECT 1
+             FROM workspace
+             WHERE workspace_id = ?1",
+            params![&workspace_id.raw_bytes()[..]],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    exists.ok_or_else(|| {
+        WorkVcsError::WorkspaceNotFound(format!("workspace {workspace_id} does not exist"))
+    })
+}
+
+fn ensure_workspace_exists_read(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+) -> Result<()> {
+    let exists = connection
+        .inner()
         .query_row(
             "SELECT 1
              FROM workspace

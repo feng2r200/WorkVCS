@@ -5,7 +5,8 @@ use workvcs_core::{
     CanonicalValue, Engine, ErrorCategory, ErrorCode, ResourceBindOptions, ResourceCreateOptions,
     ResourceId, ResourceObservationCreateOptions, ResourceObservationDetailInput, SessionId,
     SessionStartOptions, StoreInitOptions, WorkspaceId, WorkspaceInitOptions,
-    WorkspaceResourceAssociationOptions, content_object_digest,
+    WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationOptions,
+    content_object_digest,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -130,6 +131,16 @@ fn resource_create_bind_and_workspace_association_are_store_level_state() {
     let snapshot = engine.resource(resource.resource_id).expect("resource");
     assert_eq!(snapshot.binding.as_ref(), Some(&binding.state));
     assert_eq!(snapshot.workspace_associations, vec![association.state]);
+    let workspace_associations = engine
+        .workspace_resource_associations(WorkspaceResourceAssociationListOptions::for_workspace(
+            workspace.workspace_id,
+        ))
+        .expect("workspace associations");
+    assert_eq!(workspace_associations.workspace_id, workspace.workspace_id);
+    assert_eq!(
+        workspace_associations.associations,
+        snapshot.workspace_associations
+    );
     assert_eq!(count_rows(&connection, "resource_binding"), 1);
     assert_eq!(count_rows(&connection, "workspace_resource"), 1);
     assert_eq!(
@@ -155,6 +166,15 @@ fn resource_create_bind_and_workspace_association_are_store_level_state() {
     let snapshot = engine.resource(resource.resource_id).expect("resource");
     assert_eq!(snapshot.binding.as_ref(), Some(&rebound.state));
     assert_eq!(snapshot.workspace_associations, vec![reassociated.state]);
+    let workspace_associations = engine
+        .workspace_resource_associations(WorkspaceResourceAssociationListOptions::for_workspace(
+            workspace.workspace_id,
+        ))
+        .expect("workspace associations after update");
+    assert_eq!(
+        workspace_associations.associations,
+        snapshot.workspace_associations
+    );
     assert_eq!(count_rows(&connection, "resource_binding"), 1);
     assert_eq!(count_rows(&connection, "workspace_resource"), 1);
     assert_eq!(

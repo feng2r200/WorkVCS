@@ -110,6 +110,7 @@ pub use history::{
     WhyRelationKind, WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions,
     WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkspaceInfo,
     WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
     WorkspaceResourceAssociationSnapshot,
 };

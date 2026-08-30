@@ -78,7 +78,9 @@ use crate::history::{
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
     WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions,
-    WorkspaceListResult, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WorkspaceListResult, WorkspaceResourceAssociationListOptions,
+    WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
+    WorkspaceResourceAssociationResult,
 };
 use crate::history::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
@@ -584,6 +586,13 @@ impl Engine {
         options: WorkspaceResourceAssociationOptions,
     ) -> Result<WorkspaceResourceAssociationResult> {
         self.store.associate_workspace_resource(&options)
+    }
+
+    pub fn workspace_resource_associations(
+        &self,
+        options: WorkspaceResourceAssociationListOptions,
+    ) -> Result<WorkspaceResourceAssociationListResult> {
+        self.store.workspace_resource_associations(&options)
     }
 
     pub fn record_resource_observation(

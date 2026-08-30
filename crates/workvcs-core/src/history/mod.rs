@@ -144,8 +144,9 @@ pub use resource::{
     ResourceObservationCreateOptions, ResourceObservationCreateResult,
     ResourceObservationDetailInput, ResourceObservationDetailSnapshot,
     ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
-    ResourceSnapshot, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
-    WorkspaceResourceAssociationSnapshot,
+    ResourceSnapshot, WorkspaceResourceAssociationListOptions,
+    WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
+    WorkspaceResourceAssociationResult, WorkspaceResourceAssociationSnapshot,
 };
 pub use restore::{WorkStateRestoreCommit, WorkStateRestoreOptions};
 pub use task::{
@@ -226,6 +227,7 @@ pub(crate) use replay::state_at;
 pub(crate) use resource::{
     associate_workspace_resource, bind_resource, create_resource, record_resource_observation,
     resource, resource_observation, resource_observations, resources,
+    workspace_resource_associations,
 };
 pub(crate) use restore::restore_work_state;
 pub(crate) use task::{

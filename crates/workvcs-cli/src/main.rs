@@ -93,6 +93,7 @@ use workvcs_core::{
     WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
     WhyRelationKind, WorkState, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
     WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
     content_object_digest, parse_canonical_json,
 };
@@ -1868,6 +1869,13 @@ enum ResourceCommand {
 
         #[arg(long, default_value = "{}")]
         metadata_json: String,
+    },
+    WorkspaceAssociationList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        workspace: String,
     },
     #[command(group(
         ArgGroup::new("resource-observation-fingerprint")
@@ -4578,6 +4586,17 @@ fn run(cli: Cli) -> Result<String> {
                 &metadata_json,
             )?)?;
             render_workspace_resource_association(&engine.associate_workspace_resource(options)?)
+        }
+        Command::Resource {
+            command: ResourceCommand::WorkspaceAssociationList { store, workspace },
+        } => {
+            let engine = Engine::open(store)?;
+            let options = WorkspaceResourceAssociationListOptions::for_workspace(
+                workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
+            );
+            render_workspace_resource_association_list(
+                &engine.workspace_resource_associations(options)?,
+            )
         }
         Command::Resource {
             command:
@@ -7986,6 +8005,40 @@ fn render_workspace_resource_association(
             &result.state.association_metadata
         )?
     ))
+}
+
+fn render_workspace_resource_association_list(
+    result: &WorkspaceResourceAssociationListResult,
+) -> Result<String> {
+    let mut output = format!(
+        "workspace_id={}\nworkspace_associations={}\n",
+        result.workspace_id,
+        result.associations.len()
+    );
+    for (index, association) in result.associations.iter().enumerate() {
+        writeln!(
+            output,
+            "workspace_association.{index}.workspace_id={}",
+            association.workspace_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "workspace_association.{index}.resource_id={}",
+            association.resource_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "workspace_association.{index}.metadata_json={}",
+            canonical_cli_json(
+                "workspace resource association metadata",
+                &association.association_metadata
+            )?
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_resource_observation_create(observation: &ResourceObservationCreateResult) -> String {
@@ -17111,6 +17164,36 @@ mod tests {
         assert_eq!(
             value(
                 &resource_after_association,
+                "workspace_association.0.metadata_json"
+            ),
+            r#"{"role":"primary"}"#
+        );
+
+        let workspace_associations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "workspace-association-list",
+            store,
+            "--workspace",
+            &workspace_id,
+        ])
+        .expect("parse workspace association list"))
+        .expect("list workspace associations");
+        assert_eq!(value(&workspace_associations, "workspace_id"), workspace_id);
+        assert_eq!(
+            value(&workspace_associations, "workspace_associations"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &workspace_associations,
+                "workspace_association.0.resource_id"
+            ),
+            resource_id
+        );
+        assert_eq!(
+            value(
+                &workspace_associations,
                 "workspace_association.0.metadata_json"
             ),
             r#"{"role":"primary"}"#

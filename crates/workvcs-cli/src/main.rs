@@ -875,6 +875,9 @@ enum ReferenceCommand {
 
         #[arg(long)]
         target_kind: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -4055,6 +4058,7 @@ fn run(cli: Cli) -> Result<String> {
                 target,
                 referrer_kind,
                 target_kind,
+                limit,
             } => {
                 let engine = Engine::open(&store)?;
                 let commit_id = resolve_reference_query_commit(&engine, branch, commit)?;
@@ -4075,6 +4079,14 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(target_kind) = target_kind {
                     let target_kind = parse_goal_plan_task_endpoint_kind(&target_kind)?;
                     references.retain(|reference| reference.target_kind.as_str() == target_kind);
+                }
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "reference list limit must be greater than zero".to_owned(),
+                    ));
+                }
+                if let Some(limit) = limit {
+                    references.truncate(limit);
                 }
                 Ok(render_structural_reference_list(&references))
             }
@@ -14020,6 +14032,65 @@ mod tests {
         .expect("parse reference list by missing kind"))
         .expect("list references by missing kind");
         assert_eq!(value(&listed_by_missing_kind, "structural_references"), "0");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&reference, "commit_id"),
+            "--description",
+            "Reference task",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--referrer",
+            &value(&plan, "plan_entity_id"),
+            "--target",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse second reference create"))
+        .expect("create second reference");
+
+        let limited = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited reference list"))
+        .expect("list limited references");
+        assert_eq!(value(&limited, "structural_references"), "1");
+
+        let zero_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit reference list"));
+        assert!(zero_limit.is_err());
     }
 
     #[test]

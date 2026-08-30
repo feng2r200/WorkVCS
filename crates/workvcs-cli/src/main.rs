@@ -26,11 +26,12 @@ use workvcs_core::{
     EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
     ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
     ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    GoalCreateCommit, GoalCreateOptions, HistoryEntry, HistoryQueryOptions, ImportId,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
-    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
-    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    GoalCreateCommit, GoalCreateOptions, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry,
+    HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -52,37 +53,37 @@ use workvcs_core::{
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
     MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
-    NextWorkOptions, NextWorkResult, PlanCreateCommit, PlanCreateOptions,
-    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
-    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
-    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
-    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
-    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
-    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
-    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
-    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
-    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreId, StoreInitOptions, StoreLineageListOptions,
-    StoreLineageListResult, StoreLineageRecordOptions, StoreLineageRecordResult,
-    StoreLineageSnapshot, StoreMigrationAttemptSnapshot, StoreMigrationListOptions,
-    StoreMigrationListResult, StoreMigrationRecordOptions, StoreMigrationRecordResult,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
-    content_object_digest, parse_canonical_json,
+    NextWorkOptions, NextWorkResult, PlanCreateCommit, PlanCreateOptions, PlanTransitionCommit,
+    PlanTransitionOptions, PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
+    PrimaryContainmentSnapshot, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
+    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
+    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
+    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
+    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
+    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
+    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
+    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
+    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
+    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
+    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
+    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
+    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -1315,6 +1316,63 @@ enum GoalCommand {
         #[arg(long)]
         description: String,
     },
+    Achieve {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        goal: String,
+
+        #[arg(long)]
+        goal_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    Abandon {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        goal: String,
+
+        #[arg(long)]
+        goal_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    Reopen {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        goal: String,
+
+        #[arg(long)]
+        goal_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1337,6 +1395,63 @@ enum PlanCommand {
 
         #[arg(long = "constraint")]
         constraints: Vec<String>,
+    },
+    Complete {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        plan: String,
+
+        #[arg(long)]
+        plan_version: String,
+
+        #[arg(long)]
+        completion_rationale: Option<String>,
+    },
+    Abandon {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        plan: String,
+
+        #[arg(long)]
+        plan_version: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
+    Reopen {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        plan: String,
+
+        #[arg(long)]
+        plan_version: String,
+
+        #[arg(long)]
+        rationale: String,
     },
 }
 
@@ -3336,47 +3451,156 @@ fn run(cli: Cli) -> Result<String> {
                 )?)?;
             Ok(render_knowledge_relation_restore(&restored))
         }
-        Command::Goal {
-            command:
-                GoalCommand::Create {
-                    store,
-                    branch,
-                    head,
-                    description,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let goal = engine.create_goal(GoalCreateOptions::new(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
+        Command::Goal { command } => match command {
+            GoalCommand::Create {
+                store,
+                branch,
+                head,
                 description,
-            )?)?;
-            Ok(render_goal_create(&goal))
-        }
-        Command::Plan {
-            command:
-                PlanCommand::Create {
-                    store,
-                    branch,
-                    head,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let goal = engine.create_goal(GoalCreateOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
                     description,
-                    strategy,
-                    constraints,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = PlanCreateOptions::new(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
+                )?)?;
+                Ok(render_goal_create(&goal))
+            }
+            GoalCommand::Achieve {
+                store,
+                branch,
+                head,
+                goal,
+                goal_version,
+                rationale,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let transition = engine.transition_goal(GoalTransitionOptions::achieve(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&goal)?,
+                    EntityVersionId::parse_canonical(&goal_version)?,
+                    rationale,
+                )?)?;
+                Ok(render_goal_transition(&transition))
+            }
+            GoalCommand::Abandon {
+                store,
+                branch,
+                head,
+                goal,
+                goal_version,
+                rationale,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let transition = engine.transition_goal(GoalTransitionOptions::abandon(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&goal)?,
+                    EntityVersionId::parse_canonical(&goal_version)?,
+                    rationale,
+                )?)?;
+                Ok(render_goal_transition(&transition))
+            }
+            GoalCommand::Reopen {
+                store,
+                branch,
+                head,
+                goal,
+                goal_version,
+                rationale,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let transition = engine.transition_goal(GoalTransitionOptions::reopen(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&goal)?,
+                    EntityVersionId::parse_canonical(&goal_version)?,
+                    rationale,
+                )?)?;
+                Ok(render_goal_transition(&transition))
+            }
+        },
+        Command::Plan { command } => match command {
+            PlanCommand::Create {
+                store,
+                branch,
+                head,
                 description,
                 strategy,
-            )?;
-            if !constraints.is_empty() {
-                options = options.with_constraints(constraints)?;
+                constraints,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let mut options = PlanCreateOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    description,
+                    strategy,
+                )?;
+                if !constraints.is_empty() {
+                    options = options.with_constraints(constraints)?;
+                }
+                let plan = engine.create_plan(options)?;
+                Ok(render_plan_create(&plan))
             }
-            let plan = engine.create_plan(options)?;
-            Ok(render_plan_create(&plan))
-        }
+            PlanCommand::Complete {
+                store,
+                branch,
+                head,
+                plan,
+                plan_version,
+                completion_rationale,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let mut options = PlanTransitionOptions::complete(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&plan)?,
+                    EntityVersionId::parse_canonical(&plan_version)?,
+                )?;
+                if let Some(completion_rationale) = completion_rationale {
+                    options = options.with_completion_rationale(completion_rationale)?;
+                }
+                let transition = engine.transition_plan(options)?;
+                Ok(render_plan_transition(&transition))
+            }
+            PlanCommand::Abandon {
+                store,
+                branch,
+                head,
+                plan,
+                plan_version,
+                rationale,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let transition = engine.transition_plan(PlanTransitionOptions::abandon(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&plan)?,
+                    EntityVersionId::parse_canonical(&plan_version)?,
+                    rationale,
+                )?)?;
+                Ok(render_plan_transition(&transition))
+            }
+            PlanCommand::Reopen {
+                store,
+                branch,
+                head,
+                plan,
+                plan_version,
+                rationale,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let transition = engine.transition_plan(PlanTransitionOptions::reopen(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&plan)?,
+                    EntityVersionId::parse_canonical(&plan_version)?,
+                    rationale,
+                )?)?;
+                Ok(render_plan_transition(&transition))
+            }
+        },
         Command::Task {
             command:
                 TaskCommand::Create {
@@ -5543,6 +5767,25 @@ fn render_goal_create(goal: &GoalCreateCommit) -> String {
     )
 }
 
+fn render_goal_transition(goal: &GoalTransitionCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\ngoal_entity_id={}\nprevious_goal_entity_version_id={}\ngoal_entity_version_id={}\ngoal_state_digest={}\nwork_state_digest={}\nprevious_status={}\nstatus={}\n",
+        goal.workspace_id,
+        goal.branch_id,
+        goal.previous_head_commit_id,
+        goal.commit_id,
+        goal.changeset_id,
+        goal.operation_id,
+        goal.goal_entity_id,
+        goal.previous_goal_entity_version_id,
+        goal.goal_entity_version_id,
+        goal.goal_state_digest,
+        goal.work_state_digest,
+        goal.previous_state.status,
+        goal.state.status
+    )
+}
+
 fn render_plan_create(plan: &PlanCreateCommit) -> String {
     format!(
         "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nplan_entity_id={}\nplan_entity_version_id={}\nplan_state_digest={}\nwork_state_digest={}\nstatus={}\nconstraints={}\n",
@@ -5558,6 +5801,27 @@ fn render_plan_create(plan: &PlanCreateCommit) -> String {
         plan.work_state_digest,
         plan.state.status,
         plan.state.constraints.len()
+    )
+}
+
+fn render_plan_transition(plan: &PlanTransitionCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nplan_entity_id={}\nprevious_plan_entity_version_id={}\nplan_entity_version_id={}\nplan_state_digest={}\nwork_state_digest={}\nprevious_status={}\nstatus={}\nconstraints={}\ncompletion_rationale={}\n",
+        plan.workspace_id,
+        plan.branch_id,
+        plan.previous_head_commit_id,
+        plan.commit_id,
+        plan.changeset_id,
+        plan.operation_id,
+        plan.plan_entity_id,
+        plan.previous_plan_entity_version_id,
+        plan.plan_entity_version_id,
+        plan.plan_state_digest,
+        plan.work_state_digest,
+        plan.previous_state.status,
+        plan.state.status,
+        plan.state.constraints.len(),
+        plan.state.completion_rationale.as_deref().unwrap_or("")
     )
 }
 
@@ -12684,6 +12948,190 @@ mod tests {
         assert_eq!(value(&containment, "relations"), "2");
         assert!(containment.contains("relation.0.parent_kind=goal"));
         assert!(containment.contains("relation.1.parent_kind=plan"));
+    }
+
+    #[test]
+    fn cli_transitions_goal_and_plan_lifecycles() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Deliver the lifecycle CLI",
+        ])
+        .expect("parse goal create"))
+        .expect("create goal");
+        assert_eq!(value(&goal, "status"), "active");
+        let goal_id = value(&goal, "goal_entity_id");
+        let active_goal_version = value(&goal, "goal_entity_version_id");
+
+        let achieved_goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "achieve",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal, "commit_id"),
+            "--goal",
+            &goal_id,
+            "--goal-version",
+            &active_goal_version,
+            "--rationale",
+            "accepted by CLI workflow",
+        ])
+        .expect("parse goal achieve"))
+        .expect("achieve goal");
+        assert_eq!(value(&achieved_goal, "previous_status"), "active");
+        assert_eq!(value(&achieved_goal, "status"), "achieved");
+        assert_ne!(
+            value(&achieved_goal, "goal_entity_version_id"),
+            active_goal_version
+        );
+
+        let reopened_goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "reopen",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&achieved_goal, "commit_id"),
+            "--goal",
+            &goal_id,
+            "--goal-version",
+            &value(&achieved_goal, "goal_entity_version_id"),
+            "--rationale",
+            "new CLI work discovered",
+        ])
+        .expect("parse goal reopen"))
+        .expect("reopen goal");
+        assert_eq!(value(&reopened_goal, "previous_status"), "achieved");
+        assert_eq!(value(&reopened_goal, "status"), "active");
+
+        let plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&reopened_goal, "commit_id"),
+            "--description",
+            "Exercise plan lifecycle CLI",
+            "--strategy",
+            "Use thin wrappers",
+            "--constraint",
+            "no semantic expansion",
+        ])
+        .expect("parse plan create"))
+        .expect("create plan");
+        assert_eq!(value(&plan, "status"), "active");
+        let plan_id = value(&plan, "plan_entity_id");
+        let active_plan_version = value(&plan, "plan_entity_version_id");
+
+        let completed_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "complete",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&plan, "commit_id"),
+            "--plan",
+            &plan_id,
+            "--plan-version",
+            &active_plan_version,
+            "--completion-rationale",
+            "done through CLI",
+        ])
+        .expect("parse plan complete"))
+        .expect("complete plan");
+        assert_eq!(value(&completed_plan, "previous_status"), "active");
+        assert_eq!(value(&completed_plan, "status"), "completed");
+        assert_eq!(value(&completed_plan, "constraints"), "1");
+        assert_eq!(
+            value(&completed_plan, "completion_rationale"),
+            "done through CLI"
+        );
+        assert_ne!(
+            value(&completed_plan, "plan_entity_version_id"),
+            active_plan_version
+        );
+
+        let reopened_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "reopen",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&completed_plan, "commit_id"),
+            "--plan",
+            &plan_id,
+            "--plan-version",
+            &value(&completed_plan, "plan_entity_version_id"),
+            "--rationale",
+            "follow-up work needed",
+        ])
+        .expect("parse plan reopen"))
+        .expect("reopen plan");
+        assert_eq!(value(&reopened_plan, "previous_status"), "completed");
+        assert_eq!(value(&reopened_plan, "status"), "active");
+        assert_eq!(value(&reopened_plan, "completion_rationale"), "");
+
+        let abandoned_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "abandon",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&reopened_plan, "commit_id"),
+            "--plan",
+            &plan_id,
+            "--plan-version",
+            &value(&reopened_plan, "plan_entity_version_id"),
+            "--rationale",
+            "superseded outside this CLI workflow",
+        ])
+        .expect("parse plan abandon"))
+        .expect("abandon plan");
+        assert_eq!(value(&abandoned_plan, "previous_status"), "active");
+        assert_eq!(value(&abandoned_plan, "status"), "abandoned");
     }
 
     #[test]

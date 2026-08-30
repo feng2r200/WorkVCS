@@ -857,6 +857,10 @@ impl Engine {
             .verification_at(commit_id, verification_entity_id)
     }
 
+    pub fn verifications_at(&self, commit_id: CommitId) -> Result<Vec<VerificationSnapshot>> {
+        self.store.verifications_at(commit_id)
+    }
+
     pub fn verification_applicability_cache(
         &self,
         branch_id: BranchId,

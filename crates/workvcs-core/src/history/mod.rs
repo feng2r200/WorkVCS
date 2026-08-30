@@ -234,6 +234,6 @@ pub(crate) use task::{
     revise_acceptance_criterion, revise_verification_requirement, task_at,
     task_scheduling_relations_at, tasks_at, transition_task, verification_applicability_cache,
     verification_at, verification_evidence_relations_at, verification_relations_at,
-    verification_requirement_at, verification_requirements_at,
+    verification_requirement_at, verification_requirements_at, verifications_at,
 };
 pub(crate) use why::explain_why;

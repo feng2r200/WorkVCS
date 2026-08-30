@@ -81,10 +81,11 @@ use workvcs_core::{
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationRequirementSnapshot, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
-    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
-    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
+    VerificationSnapshot, VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind,
+    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
+    WhyRelationKind, WorkState, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
+    WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, content_object_digest,
+    parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -2521,6 +2522,41 @@ enum VerificationCommand {
         #[arg(long)]
         baseline_observation: Option<String>,
     },
+    #[command(group(
+        ArgGroup::new("verification-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        verification: String,
+    },
+    #[command(group(
+        ArgGroup::new("verification-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+    },
     CacheRecord {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4217,6 +4253,33 @@ fn run(cli: Cli) -> Result<String> {
             }
             let verification = engine.create_verification(options)?;
             Ok(render_verification_create(&verification))
+        }
+        Command::Verification {
+            command:
+                VerificationCommand::Show {
+                    store,
+                    branch,
+                    commit,
+                    verification,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            render_verification_snapshot(
+                &engine.verification_at(commit_id, EntityId::parse_canonical(&verification)?)?,
+            )
+        }
+        Command::Verification {
+            command:
+                VerificationCommand::List {
+                    store,
+                    branch,
+                    commit,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            render_verification_list(commit_id, &engine.verifications_at(commit_id)?)
         }
         Command::Verification {
             command:
@@ -6811,6 +6874,224 @@ fn render_verification_create(verification: &VerificationCreateCommit) -> String
         verification.work_state_digest,
         verification.state.result
     )
+}
+
+fn verification_target_kind(target: VerificationTarget) -> &'static str {
+    match target {
+        VerificationTarget::AcceptanceCriterion(_) => "acceptance_criterion",
+        VerificationTarget::VerificationRequirement(_) => "verification_requirement",
+    }
+}
+
+fn render_verification_snapshot(verification: &VerificationSnapshot) -> Result<String> {
+    let method_json = canonical_cli_json("verification method", &verification.state.method)?;
+    let mut output = format!(
+        "workspace_id={}\ncommit_id={}\nverification_entity_id={}\nverification_entity_version_id={}\nverification_state_digest={}\nverifies_relation_id={}\nverifies_relation_version_id={}\nverifies_relation_state_digest={}\ntarget_kind={}\ntarget_entity_id={}\nresult={}\nverified_at_commit_id={}\nmethod_json={}\nsemantic_dependencies={}\nevidence={}\nevidenced_by_relations={}\nresource_basis={}\n",
+        verification.workspace_id,
+        verification.commit_id,
+        verification.verification_entity_id,
+        verification.verification_entity_version_id,
+        verification.state_digest,
+        verification.verifies_relation_id,
+        verification.verifies_relation_version_id,
+        verification.verifies_relation_state_digest,
+        verification_target_kind(verification.target),
+        verification.target.entity_id(),
+        verification.state.result,
+        verification.state.verified_at_commit_id,
+        method_json,
+        verification.state.semantic_dependencies.len(),
+        verification.state.evidence.len(),
+        verification.evidenced_by_relations.len(),
+        verification.state.resource_basis.len()
+    );
+    for (index, dependency) in verification.state.semantic_dependencies.iter().enumerate() {
+        writeln!(
+            output,
+            "semantic_dependency.{index}.entity_id={}",
+            dependency.entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "semantic_dependency.{index}.entity_version_id={}",
+            dependency.entity_version_id
+        )
+        .expect("write to String");
+    }
+    for (index, evidence) in verification.state.evidence.iter().enumerate() {
+        writeln!(
+            output,
+            "evidence.{index}.evidence_id={}",
+            evidence.evidence_id
+        )
+        .expect("write to String");
+    }
+    for (index, relation) in verification.evidenced_by_relations.iter().enumerate() {
+        writeln!(
+            output,
+            "evidenced_by_relation.{index}.evidence_id={}",
+            relation.evidence_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidenced_by_relation.{index}.relation_id={}",
+            relation.relation_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidenced_by_relation.{index}.relation_version_id={}",
+            relation.relation_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidenced_by_relation.{index}.relation_state_digest={}",
+            relation.state_digest
+        )
+        .expect("write to String");
+    }
+    for (index, basis) in verification.state.resource_basis.iter().enumerate() {
+        writeln!(
+            output,
+            "resource_basis.{index}.resource_id={}",
+            basis.resource_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_basis.{index}.adapter_kind={}",
+            basis.adapter_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_basis.{index}.adapter_schema_version={}",
+            basis.adapter_schema_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_basis.{index}.scope_kind={}",
+            basis.scope_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_basis.{index}.scope_schema_version={}",
+            basis.scope_schema_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_basis.{index}.scope_payload_json={}",
+            canonical_cli_json(
+                "verification resource basis scope payload",
+                &basis.scope_payload
+            )?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_basis.{index}.baseline_observation_id={}",
+            render_optional_display_or_none(basis.baseline_observation_id.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_basis.{index}.baseline_fingerprint={}",
+            basis.baseline_fingerprint
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
+fn render_verification_list(
+    commit_id: CommitId,
+    verifications: &[VerificationSnapshot],
+) -> Result<String> {
+    let mut output = format!(
+        "commit_id={commit_id}\nverifications={}\n",
+        verifications.len()
+    );
+    for (index, verification) in verifications.iter().enumerate() {
+        writeln!(
+            output,
+            "verification.{index}.workspace_id={}",
+            verification.workspace_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.verification_entity_id={}",
+            verification.verification_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.verification_entity_version_id={}",
+            verification.verification_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.verification_state_digest={}",
+            verification.state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.target_kind={}",
+            verification_target_kind(verification.target)
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.target_entity_id={}",
+            verification.target.entity_id()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.result={}",
+            verification.state.result
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.verified_at_commit_id={}",
+            verification.state.verified_at_commit_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.method_json={}",
+            canonical_cli_json("verification method", &verification.state.method)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.semantic_dependencies={}",
+            verification.state.semantic_dependencies.len()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.evidence={}",
+            verification.state.evidence.len()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification.{index}.resource_basis={}",
+            verification.state.resource_basis.len()
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_resource_create(resource: &ResourceCreateResult) -> String {
@@ -13826,6 +14107,191 @@ mod tests {
         assert_eq!(
             value(&criteria_at_branch, "criterion.0.statement_json"),
             "\"The AC list is visible.\""
+        );
+    }
+
+    #[test]
+    fn cli_shows_and_lists_verifications() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Show and list verification snapshots",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "The verification snapshot is visible.",
+        ])
+        .expect("parse ac create"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+
+        let empty_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+        ])
+        .expect("parse empty verification list"))
+        .expect("list empty verifications");
+        assert_eq!(value(&empty_verifications, "verifications"), "0");
+
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--acceptance-criterion",
+            &criterion_id,
+        ])
+        .expect("parse verification record"))
+        .expect("record verification");
+        let verification_id = value(&verification, "verification_entity_id");
+
+        let verification_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse verification show at branch"))
+        .expect("show verification at branch");
+        assert_eq!(
+            value(&verification_at_branch, "commit_id"),
+            value(&verification, "commit_id")
+        );
+        assert_eq!(
+            value(&verification_at_branch, "verification_entity_version_id"),
+            value(&verification, "verification_entity_version_id")
+        );
+        assert_eq!(
+            value(&verification_at_branch, "target_kind"),
+            "acceptance_criterion"
+        );
+        assert_eq!(
+            value(&verification_at_branch, "target_entity_id"),
+            criterion_id
+        );
+        assert_eq!(value(&verification_at_branch, "result"), "passed");
+        assert_eq!(
+            value(&verification_at_branch, "verified_at_commit_id"),
+            value(&criterion, "commit_id")
+        );
+        assert_eq!(
+            value(&verification_at_branch, "method_json"),
+            r#"{"kind":"manual","name":"manual-review"}"#
+        );
+        assert_eq!(value(&verification_at_branch, "semantic_dependencies"), "1");
+        assert_eq!(
+            value(&verification_at_branch, "semantic_dependency.0.entity_id"),
+            criterion_id
+        );
+        assert_eq!(
+            value(
+                &verification_at_branch,
+                "semantic_dependency.0.entity_version_id"
+            ),
+            value(&criterion, "acceptance_criterion_entity_version_id")
+        );
+        assert_eq!(value(&verification_at_branch, "evidence"), "0");
+        assert_eq!(value(&verification_at_branch, "resource_basis"), "0");
+
+        let verifications_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse verification list at branch"))
+        .expect("list verification at branch");
+        assert_eq!(
+            value(&verifications_at_branch, "commit_id"),
+            value(&verification, "commit_id")
+        );
+        assert_eq!(value(&verifications_at_branch, "verifications"), "1");
+        assert_eq!(
+            value(
+                &verifications_at_branch,
+                "verification.0.verification_entity_id"
+            ),
+            verification_id
+        );
+        assert_eq!(
+            value(&verifications_at_branch, "verification.0.target_kind"),
+            "acceptance_criterion"
+        );
+        assert_eq!(
+            value(&verifications_at_branch, "verification.0.target_entity_id"),
+            criterion_id
+        );
+        assert_eq!(
+            value(&verifications_at_branch, "verification.0.result"),
+            "passed"
+        );
+        assert_eq!(
+            value(&verifications_at_branch, "verification.0.method_json"),
+            r#"{"kind":"manual","name":"manual-review"}"#
         );
     }
 

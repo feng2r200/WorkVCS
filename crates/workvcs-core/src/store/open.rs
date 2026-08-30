@@ -1337,6 +1337,15 @@ impl Store {
         history::verification_at(&self.connection, commit_id, verification_entity_id)
     }
 
+    pub(crate) fn verifications_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<VerificationSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::verifications_at(&self.connection, commit_id)
+    }
+
     pub(crate) fn verification_applicability_cache(
         &self,
         branch_id: BranchId,

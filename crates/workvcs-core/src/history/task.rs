@@ -3173,6 +3173,71 @@ pub(crate) fn verification_at(
     })
 }
 
+pub(crate) fn verifications_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<VerificationSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut verifications = Vec::new();
+
+    for (entity_id, entity_version_id) in replayed.state.entities() {
+        match load_entity_kind_for_public_boundary(connection, *entity_id)? {
+            Some(entity_kind) if entity_kind == VERIFICATION_ENTITY_KIND => {
+                let loaded = load_verification_version(
+                    connection,
+                    replayed.workspace_id,
+                    *entity_id,
+                    *entity_version_id,
+                )?;
+                let defining_relation = load_current_verifies_relation_for_source(
+                    connection,
+                    replayed.workspace_id,
+                    &replayed.state,
+                    *entity_id,
+                )?;
+                let evidenced_by_relations = load_current_evidenced_by_relations_for_source(
+                    connection,
+                    replayed.workspace_id,
+                    &replayed.state,
+                    *entity_id,
+                )?;
+                require_verification_evidence_closure(
+                    *entity_id,
+                    &loaded.state.evidence,
+                    &evidenced_by_relations,
+                )?;
+                verifications.push(VerificationSnapshot {
+                    workspace_id: replayed.workspace_id,
+                    commit_id,
+                    verification_entity_id: *entity_id,
+                    verification_entity_version_id: *entity_version_id,
+                    state_digest: loaded.state_digest,
+                    verifies_relation_id: defining_relation.relation_id,
+                    verifies_relation_version_id: defining_relation.relation_version_id,
+                    verifies_relation_state_digest: defining_relation.state_digest,
+                    evidenced_by_relations,
+                    target: defining_relation.target,
+                    state: loaded.state,
+                });
+            }
+            Some(_) => {}
+            None => {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "WorkState at commit {commit_id} references missing entity {entity_id}"
+                )));
+            }
+        }
+    }
+
+    verifications.sort_by_key(|verification| {
+        (
+            verification_target_sort_key(verification.target),
+            verification.verification_entity_id,
+        )
+    });
+    Ok(verifications)
+}
+
 pub(crate) fn record_verification_applicability(
     connection: &mut StoreConnection,
     options: &VerificationApplicabilityRecordOptions,

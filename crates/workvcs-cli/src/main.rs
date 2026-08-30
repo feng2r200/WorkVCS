@@ -79,12 +79,12 @@ use workvcs_core::{
     SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
     SessionLifecycleState, SessionListOptions, SessionListResult, SessionSnapshot,
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
-    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    StoreInfo, StoreInitOptions, StoreLineageListOptions, StoreLineageListResult,
+    StoreLineageRecordOptions, StoreLineageRecordResult, StoreLineageSnapshot,
+    StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
+    StoreMigrationRecordOptions, StoreMigrationRecordResult, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
@@ -396,6 +396,10 @@ enum IdCommand {
 
 #[derive(Debug, Subcommand)]
 enum StoreCommand {
+    Info {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+    },
     #[command(name = "lineage-record")]
     Record {
         #[arg(value_name = "STORE")]
@@ -3060,6 +3064,10 @@ fn run(cli: Cli) -> Result<String> {
             IdCommand::New { kind } => render_new_id(&kind),
         },
         Command::Store { command } => match command {
+            StoreCommand::Info { store } => {
+                let engine = Engine::open(store)?;
+                render_store_info(&engine.store_info()?)
+            }
             StoreCommand::Record {
                 store,
                 source_store,
@@ -6571,6 +6579,22 @@ fn render_new_id(kind: &str) -> Result<String> {
         }
     };
     Ok(format!("kind={kind}\nid={id}\n"))
+}
+
+fn render_store_info(info: &StoreInfo) -> Result<String> {
+    Ok(format!(
+        "store_id={}\ndisplay_name={}\ncreated_at_us={}\nstore_format_version={}\nschema_version={}\nobject_store_format_version={}\nid_scheme={}\ndigest_algorithm={}\ncanonical_json_profile={}\nmanifest_json={}\n",
+        info.store_id,
+        info.display_name,
+        info.created_at_us,
+        info.manifest.store_format_version,
+        info.manifest.schema_version,
+        info.manifest.object_store_format_version,
+        info.manifest.id_scheme,
+        info.manifest.digest_algorithm,
+        info.manifest.canonical_json_profile,
+        info.manifest.canonical_manifest_json()?
+    ))
 }
 
 fn render_work_state_mapping_digest(
@@ -12112,6 +12136,30 @@ mod tests {
                 .expect("parse unsupported id kind"),
         );
         assert!(unsupported.is_err());
+    }
+
+    #[test]
+    fn store_info_cli_shows_manifest_baseline() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "info-store"])
+                .expect("parse init"),
+        )
+        .expect("init store");
+
+        let info = run(
+            Cli::try_parse_from(["workvcs", "store", "info", store]).expect("parse store info")
+        )
+        .expect("store info");
+        StoreId::parse_canonical(&value(&info, "store_id")).expect("store UUIDv7");
+        assert_eq!(value(&info, "display_name"), "info-store");
+        assert_eq!(value(&info, "schema_version"), "1");
+        assert_eq!(value(&info, "id_scheme"), "uuidv7-blob16");
+        assert_eq!(value(&info, "digest_algorithm"), "blake3-256");
+        assert_eq!(value(&info, "canonical_json_profile"), "workvcs-jcs-v1");
+        parse_canonical_json(value(&info, "manifest_json").as_bytes()).expect("manifest JSON");
     }
 
     #[test]

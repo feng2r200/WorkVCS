@@ -2177,6 +2177,12 @@ enum ResourceCommand {
 
         #[arg(long)]
         adapter_kind: Option<String>,
+
+        #[arg(long)]
+        adapter_schema_version: Option<i64>,
+
+        #[arg(long)]
+        source_session: Option<String>,
     },
 }
 
@@ -5068,6 +5074,8 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     resource,
                     adapter_kind,
+                    adapter_schema_version,
+                    source_session,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5079,6 +5087,13 @@ fn run(cli: Cli) -> Result<String> {
             };
             if let Some(adapter_kind) = adapter_kind {
                 options = options.with_adapter_kind(adapter_kind)?;
+            }
+            if let Some(adapter_schema_version) = adapter_schema_version {
+                options = options.with_adapter_schema_version(adapter_schema_version)?;
+            }
+            if let Some(source_session) = source_session {
+                options =
+                    options.with_source_session_id(SessionId::parse_canonical(&source_session)?);
             }
             render_resource_observation_list(&engine.resource_observations(options)?)
         }
@@ -19150,6 +19165,64 @@ mod tests {
             observation_id
         );
 
+        let schema_version_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--adapter-schema-version",
+            "1",
+        ])
+        .expect("parse schema-version-filtered observation list"))
+        .expect("list schema-version-filtered observations");
+        assert_eq!(value(&schema_version_observations, "observations"), "1");
+        assert_eq!(
+            value(&schema_version_observations, "observation.0.observation_id"),
+            observation_id
+        );
+
+        let session_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--source-session",
+            &session_id,
+        ])
+        .expect("parse source-session-filtered observation list"))
+        .expect("list source-session-filtered observations");
+        assert_eq!(value(&session_observations, "observations"), "1");
+        assert_eq!(
+            value(&session_observations, "observation.0.observation_id"),
+            observation_id
+        );
+        assert_eq!(
+            value(&session_observations, "observation.0.source_session_id"),
+            session_id
+        );
+
+        let combined_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--source-session",
+            &session_id,
+        ])
+        .expect("parse combined observation list"))
+        .expect("list combined observations");
+        assert_eq!(value(&combined_observations, "observations"), "1");
+        assert_eq!(
+            value(&combined_observations, "observation.0.observation_id"),
+            observation_id
+        );
+
         let missing_observations = run(Cli::try_parse_from([
             "workvcs",
             "resource",
@@ -19161,6 +19234,18 @@ mod tests {
         .expect("parse missing observation list"))
         .expect("list missing observations");
         assert_eq!(value(&missing_observations, "observations"), "0");
+
+        let missing_schema_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--adapter-schema-version",
+            "2",
+        ])
+        .expect("parse missing schema-version observation list"))
+        .expect("list missing schema-version observations");
+        assert_eq!(value(&missing_schema_observations, "observations"), "0");
 
         let verification = run(Cli::try_parse_from([
             "workvcs",

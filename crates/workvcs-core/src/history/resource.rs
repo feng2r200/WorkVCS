@@ -366,6 +366,8 @@ pub struct ResourceObservationSnapshot {
 pub struct ResourceObservationListOptions {
     resource_id: Option<ResourceId>,
     adapter_kind: Option<String>,
+    adapter_schema_version: Option<i64>,
+    source_session_id: Option<SessionId>,
 }
 
 impl ResourceObservationListOptions {
@@ -373,6 +375,8 @@ impl ResourceObservationListOptions {
         Self {
             resource_id: None,
             adapter_kind: None,
+            adapter_schema_version: None,
+            source_session_id: None,
         }
     }
 
@@ -380,6 +384,8 @@ impl ResourceObservationListOptions {
         Self {
             resource_id: Some(resource_id),
             adapter_kind: None,
+            adapter_schema_version: None,
+            source_session_id: None,
         }
     }
 
@@ -390,12 +396,34 @@ impl ResourceObservationListOptions {
         Ok(self)
     }
 
+    pub fn with_adapter_schema_version(mut self, adapter_schema_version: i64) -> Result<Self> {
+        validate_positive_version(
+            "resource observation adapter schema version",
+            adapter_schema_version,
+        )?;
+        self.adapter_schema_version = Some(adapter_schema_version);
+        Ok(self)
+    }
+
+    pub fn with_source_session_id(mut self, source_session_id: SessionId) -> Self {
+        self.source_session_id = Some(source_session_id);
+        self
+    }
+
     pub fn resource_id(&self) -> Option<ResourceId> {
         self.resource_id
     }
 
     pub fn adapter_kind(&self) -> Option<&str> {
         self.adapter_kind.as_deref()
+    }
+
+    pub fn adapter_schema_version(&self) -> Option<i64> {
+        self.adapter_schema_version
+    }
+
+    pub fn source_session_id(&self) -> Option<SessionId> {
+        self.source_session_id
     }
 }
 
@@ -868,11 +896,26 @@ pub(crate) fn resource_observations(
     if let Some(adapter_kind) = options.adapter_kind() {
         validate_stored_text("resource observation adapter kind", adapter_kind)?;
     }
+    if let Some(adapter_schema_version) = options.adapter_schema_version() {
+        validate_positive_version(
+            "resource observation adapter schema version",
+            adapter_schema_version,
+        )?;
+    }
 
     let observation_ids = list_resource_observation_ids(connection, options)?;
     let mut observations = Vec::with_capacity(observation_ids.len());
     for observation_id in observation_ids {
-        observations.push(resource_observation(connection, observation_id)?);
+        let observation = resource_observation(connection, observation_id)?;
+        let include_adapter_schema_version = options
+            .adapter_schema_version()
+            .is_none_or(|version| observation.adapter_schema_version == version);
+        let include_source_session = options.source_session_id().is_none_or(|source_session_id| {
+            observation.source_session_id == Some(source_session_id)
+        });
+        if include_adapter_schema_version && include_source_session {
+            observations.push(observation);
+        }
     }
     Ok(ResourceObservationListResult { observations })
 }

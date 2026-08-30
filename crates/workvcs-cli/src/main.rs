@@ -2616,6 +2616,9 @@ enum RecordCommand {
 
         #[arg(long)]
         record: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("record-list-target")
@@ -7191,11 +7194,24 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     record,
+                    expected_state_digest,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
-            render_record_show(&engine.record_at(commit_id, EntityId::parse_canonical(&record)?)?)
+            let snapshot = engine.record_at(commit_id, EntityId::parse_canonical(&record)?)?;
+            let mut output = render_record_show(&snapshot)?;
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "record state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Record {
             command:
@@ -29387,6 +29403,41 @@ mod tests {
             value(&show, "record_entity_version_id"),
             value(&record, "record_entity_version_id")
         );
+
+        let expected_show = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--commit",
+            &value(&record, "commit_id"),
+            "--record",
+            &value(&record, "record_entity_id"),
+            "--expected-state-digest",
+            &value(&show, "record_state_digest"),
+        ])
+        .expect("parse expected record show"))
+        .expect("show expected record");
+        assert_eq!(
+            value(&expected_show, "record_state_digest"),
+            value(&show, "record_state_digest")
+        );
+        assert_eq!(value(&expected_show, "matches_expected"), "true");
+
+        let mismatched_show = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "show",
+            store,
+            "--commit",
+            &value(&record, "commit_id"),
+            "--record",
+            &value(&record, "record_entity_id"),
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched record show"));
+        assert!(mismatched_show.is_err());
 
         let branch_show = run(Cli::try_parse_from([
             "workvcs",

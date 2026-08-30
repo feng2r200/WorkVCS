@@ -2673,6 +2673,9 @@ enum RecordCommand {
 
         #[arg(long)]
         target_knowledge: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("record-knowledge-relation-show-target")
@@ -6242,6 +6245,7 @@ fn run(cli: Cli) -> Result<String> {
                     relation_type,
                     source_record,
                     target_knowledge,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6259,9 +6263,16 @@ fn run(cli: Cli) -> Result<String> {
                 options =
                     options.with_target_knowledge(EntityId::parse_canonical(&target_knowledge)?);
             }
-            Ok(render_record_knowledge_relation_list(
-                &engine.record_knowledge_relations_at(options)?,
-            ))
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "record knowledge-relation-list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.record_knowledge_relations_at(options)?;
+            if let Some(limit) = limit {
+                result.relations.truncate(limit);
+            }
+            Ok(render_record_knowledge_relation_list(&result))
         }
         Command::Record {
             command:
@@ -27004,6 +27015,37 @@ mod tests {
             value(&listed, "relation.0.target_knowledge_entity_id"),
             value(&knowledge, "knowledge_entity_id")
         );
+
+        let limited = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited record knowledge relation list"))
+        .expect("list limited record knowledge relations");
+        assert_eq!(value(&limited, "relations"), "1");
+        assert_eq!(
+            value(&limited, "relation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+
+        let zero_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit record knowledge relation list"));
+        assert!(zero_limit.is_err());
     }
 
     #[test]

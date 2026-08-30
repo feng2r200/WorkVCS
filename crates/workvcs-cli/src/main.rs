@@ -168,12 +168,21 @@ enum Command {
         #[command(subcommand)]
         command: EventCommand,
     },
+    #[command(group(
+        ArgGroup::new("show-at-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
     ShowAt {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
         #[arg(long)]
-        commit: String,
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
     },
     #[command(group(
         ArgGroup::new("diff-from")
@@ -3864,9 +3873,14 @@ fn run(cli: Cli) -> Result<String> {
                 Ok(render_event_list(&result))
             }
         },
-        Command::ShowAt { store, commit } => {
+        Command::ShowAt {
+            store,
+            branch,
+            commit,
+        } => {
             let engine = Engine::open(store)?;
-            let state = engine.show_at(CommitId::parse_canonical(&commit)?)?;
+            let commit_id = resolve_show_at_commit(&engine, branch, commit)?;
+            let state = engine.show_at(commit_id)?;
             Ok(render_replayed_state(&state))
         }
         Command::Diff {
@@ -12795,6 +12809,22 @@ fn work_state_diff_target_from_cli(
     }
 }
 
+fn resolve_show_at_commit(
+    engine: &Engine,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<CommitId> {
+    match (branch, commit) {
+        (Some(branch), None) => Ok(engine
+            .branch_head(BranchId::parse_canonical(&branch)?)
+            .map(|head| head.head_commit_id)?),
+        (None, Some(commit)) => CommitId::parse_canonical(&commit),
+        _ => Err(WorkVcsError::QueryInvalid(
+            "show-at target requires exactly one of --branch or --commit".to_owned(),
+        )),
+    }
+}
+
 fn filter_work_state_diff_target_kind(diff: &mut WorkStateDiff, value: &str) -> Result<()> {
     match value {
         "entity" => diff.relation_changes.clear(),
@@ -13047,6 +13077,25 @@ mod tests {
     }
 
     #[test]
+    fn show_at_requires_one_target_selector() {
+        let missing = Cli::try_parse_from(["workvcs", "show-at", "store.sqlite"]);
+        assert!(missing.is_err());
+
+        let branch = BranchId::new_v7().to_string();
+        let commit = CommitId::new_v7().to_string();
+        let both = Cli::try_parse_from([
+            "workvcs",
+            "show-at",
+            "store.sqlite",
+            "--branch",
+            &branch,
+            "--commit",
+            &commit,
+        ]);
+        assert!(both.is_err());
+    }
+
+    #[test]
     fn id_cli_generates_typed_uuidv7_values() {
         let entity = run(
             Cli::try_parse_from(["workvcs", "id", "new", "--kind", "entity"])
@@ -13269,6 +13318,16 @@ mod tests {
             value(&diff, "entity[0].after_entity_version_id"),
             value(&task, "task_entity_version_id")
         );
+
+        let branch_state =
+            run(
+                Cli::try_parse_from(["workvcs", "show-at", store, "--branch", &branch])
+                    .expect("parse branch show-at"),
+            )
+            .expect("show branch state");
+        assert_eq!(value(&branch_state, "commit_id"), value(&task, "commit_id"));
+        assert_eq!(value(&branch_state, "entities"), "1");
+        assert_eq!(value(&branch_state, "relations"), "0");
 
         let entity_diff = run(Cli::try_parse_from([
             "workvcs",

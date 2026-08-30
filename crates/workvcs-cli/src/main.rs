@@ -2256,6 +2256,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         resource: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("resource-observation-fingerprint")
@@ -5521,6 +5524,7 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     workspace,
                     resource,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5533,6 +5537,15 @@ fn run(cli: Cli) -> Result<String> {
                 result
                     .associations
                     .retain(|association| association.resource_id == resource_id);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "resource workspace-association-list limit must be greater than zero"
+                        .to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                result.associations.truncate(limit);
             }
             render_workspace_resource_association_list(&result)
         }
@@ -21395,6 +21408,58 @@ mod tests {
             value(&second_association, "resource_id"),
             second_resource_id
         );
+
+        let all_workspace_associations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "workspace-association-list",
+            store,
+            "--workspace",
+            &workspace_id,
+        ])
+        .expect("parse all workspace association list"))
+        .expect("list all workspace associations");
+        assert_eq!(
+            value(&all_workspace_associations, "workspace_associations"),
+            "2"
+        );
+
+        let limited_workspace_associations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "workspace-association-list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited workspace association list"))
+        .expect("list limited workspace associations");
+        assert_eq!(
+            value(&limited_workspace_associations, "workspace_associations"),
+            "1"
+        );
+        assert_ne!(
+            value(
+                &limited_workspace_associations,
+                "workspace_association.0.resource_id"
+            ),
+            ""
+        );
+
+        let zero_limit_workspace_associations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "workspace-association-list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit workspace association list"));
+        assert!(zero_limit_workspace_associations.is_err());
 
         let filtered_workspace_associations = run(Cli::try_parse_from([
             "workvcs",

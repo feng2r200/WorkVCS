@@ -3286,6 +3286,9 @@ enum SessionCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_sessions: Option<usize>,
     },
     FocusSet {
         #[arg(value_name = "STORE")]
@@ -8219,6 +8222,7 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     focus,
                     limit,
+                    expected_sessions,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -8252,7 +8256,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.sessions.truncate(limit);
             }
-            render_session_list(&result)
+            let mut output = render_session_list(&result)?;
+            if let Some(expected_sessions) = expected_sessions {
+                let actual_sessions = result.sessions.len();
+                if actual_sessions != expected_sessions {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "sessions {actual_sessions} does not match expected {expected_sessions}"
+                    )));
+                }
+                output.push_str("sessions_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Session {
             command:
@@ -21899,6 +21913,30 @@ mod tests {
         assert_eq!(value(&sessions, "session.0.active_branch_id"), fork_branch);
         assert_eq!(value(&sessions, "session.0.focus_entity_id"), task_id);
 
+        let expected_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--expected-sessions",
+            "1",
+        ])
+        .expect("parse expected session list"))
+        .expect("expected session list");
+        assert_eq!(value(&expected_sessions, "sessions"), "1");
+        assert_eq!(value(&expected_sessions, "sessions_match_expected"), "true");
+
+        let mismatched_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--expected-sessions",
+            "0",
+        ])
+        .expect("parse mismatched session list"));
+        assert!(mismatched_sessions.is_err());
+
         let limited_sessions =
             run(
                 Cli::try_parse_from(["workvcs", "session", "list", store, "--limit", "1"])
@@ -22017,6 +22055,24 @@ mod tests {
             )
             .expect("list ended sessions");
         assert_eq!(value(&ended_sessions, "sessions"), "0");
+
+        let expected_ended_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--lifecycle",
+            "ended",
+            "--expected-sessions",
+            "0",
+        ])
+        .expect("parse expected ended session list"))
+        .expect("expected ended session list");
+        assert_eq!(value(&expected_ended_sessions, "sessions"), "0");
+        assert_eq!(
+            value(&expected_ended_sessions, "sessions_match_expected"),
+            "true"
+        );
 
         let cleared_focus = run(Cli::try_parse_from([
             "workvcs",

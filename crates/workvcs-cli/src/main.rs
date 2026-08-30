@@ -3297,6 +3297,12 @@ enum VerificationCommand {
         resource: Option<String>,
 
         #[arg(long)]
+        baseline_observation: Option<String>,
+
+        #[arg(long)]
+        baseline_fingerprint: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
     CacheRecord {
@@ -5962,6 +5968,8 @@ fn run(cli: Cli) -> Result<String> {
                     result,
                     evidence,
                     resource,
+                    baseline_observation,
+                    baseline_fingerprint,
                     limit,
                 },
         } => {
@@ -5992,14 +6000,39 @@ fn run(cli: Cli) -> Result<String> {
                         .any(|evidence| evidence.evidence_id == evidence_id)
                 });
             }
-            if let Some(resource) = resource {
-                let resource_id = ResourceId::parse_canonical(&resource)?;
+            let resource_id = resource
+                .map(|resource| ResourceId::parse_canonical(&resource))
+                .transpose()?;
+            let baseline_observation_id = baseline_observation
+                .map(|observation| ResourceObservationId::parse_canonical(&observation))
+                .transpose()?;
+            let baseline_fingerprint = baseline_fingerprint
+                .map(|fingerprint| Digest::from_hex(&fingerprint))
+                .transpose()?;
+            if resource_id.is_some()
+                || baseline_observation_id.is_some()
+                || baseline_fingerprint.is_some()
+            {
                 verifications.retain(|verification| {
-                    verification
-                        .state
-                        .resource_basis
-                        .iter()
-                        .any(|basis| basis.resource_id == resource_id)
+                    verification.state.resource_basis.iter().any(|basis| {
+                        let resource_matches = match resource_id {
+                            Some(resource_id) => basis.resource_id == resource_id,
+                            None => true,
+                        };
+                        let baseline_observation_matches = match baseline_observation_id {
+                            Some(observation_id) => {
+                                basis.baseline_observation_id == Some(observation_id)
+                            }
+                            None => true,
+                        };
+                        let baseline_fingerprint_matches = match baseline_fingerprint {
+                            Some(fingerprint) => basis.baseline_fingerprint == fingerprint,
+                            None => true,
+                        };
+                        resource_matches
+                            && baseline_observation_matches
+                            && baseline_fingerprint_matches
+                    })
                 });
             }
             if matches!(limit, Some(0)) {
@@ -22953,6 +22986,109 @@ mod tests {
         .expect("parse missing resource verification list"))
         .expect("list missing resource verifications");
         assert_eq!(value(&missing_resource_verifications, "verifications"), "0");
+
+        let baseline_observation_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--baseline-observation",
+            &observation_id,
+        ])
+        .expect("parse baseline-observation verification list"))
+        .expect("list baseline-observation verifications");
+        assert_eq!(
+            value(&baseline_observation_verifications, "verifications"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &baseline_observation_verifications,
+                "verification.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
+        let baseline_fingerprint_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--baseline-fingerprint",
+            &fingerprint,
+        ])
+        .expect("parse baseline-fingerprint verification list"))
+        .expect("list baseline-fingerprint verifications");
+        assert_eq!(
+            value(&baseline_fingerprint_verifications, "verifications"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &baseline_fingerprint_verifications,
+                "verification.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
+        let combined_resource_basis_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--resource",
+            &resource_id,
+            "--baseline-observation",
+            &observation_id,
+            "--baseline-fingerprint",
+            &fingerprint,
+        ])
+        .expect("parse combined resource-basis verification list"))
+        .expect("list combined resource-basis verifications");
+        assert_eq!(
+            value(&combined_resource_basis_verifications, "verifications"),
+            "1"
+        );
+
+        let missing_baseline_observation_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--baseline-observation",
+            &ResourceObservationId::new_v7().to_string(),
+        ])
+        .expect("parse missing baseline-observation verification list"))
+        .expect("list missing baseline-observation verifications");
+        assert_eq!(
+            value(&missing_baseline_observation_verifications, "verifications"),
+            "0"
+        );
+
+        let missing_baseline_fingerprint_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--baseline-fingerprint",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse missing baseline-fingerprint verification list"))
+        .expect("list missing baseline-fingerprint verifications");
+        assert_eq!(
+            value(&missing_baseline_fingerprint_verifications, "verifications"),
+            "0"
+        );
 
         let missing_cache = run(Cli::try_parse_from([
             "workvcs",

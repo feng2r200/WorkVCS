@@ -228,6 +228,9 @@ enum Command {
 
         #[arg(long)]
         relation: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Entity {
         #[command(subcommand)]
@@ -3968,6 +3971,7 @@ fn run(cli: Cli) -> Result<String> {
             change_kind,
             entity,
             relation,
+            limit,
         } => {
             let engine = Engine::open(store)?;
             let from = work_state_diff_target_from_cli("from", from_branch, from_commit)?;
@@ -3994,6 +3998,16 @@ fn run(cli: Cli) -> Result<String> {
                 diff.relation_changes
                     .retain(|change| change.relation_id == relation_id);
                 diff.entity_changes.clear();
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "diff limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                let relation_limit = limit.saturating_sub(diff.entity_changes.len());
+                diff.entity_changes.truncate(limit);
+                diff.relation_changes.truncate(relation_limit);
             }
             Ok(render_work_state_diff(&diff))
         }
@@ -13620,6 +13634,40 @@ mod tests {
             value(&diff, "entity[0].after_entity_version_id"),
             value(&task, "task_entity_version_id")
         );
+
+        let limited_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited diff"))
+        .expect("diff limited work state");
+        assert_eq!(value(&limited_diff, "entity_changes"), "1");
+        assert_eq!(value(&limited_diff, "relation_changes"), "0");
+        assert_eq!(
+            value(&limited_diff, "entity[0].entity_id"),
+            value(&task, "task_entity_id")
+        );
+
+        let zero_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit diff"));
+        assert!(zero_limit.is_err());
 
         let branch_state =
             run(

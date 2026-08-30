@@ -2202,6 +2202,9 @@ enum EvidenceCommand {
         source_session: Option<String>,
 
         #[arg(long)]
+        content_digest: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
 }
@@ -5550,6 +5553,7 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     kind,
                     source_session,
+                    content_digest,
                     limit,
                 },
         } => {
@@ -5568,6 +5572,15 @@ fn run(cli: Cli) -> Result<String> {
                 ));
             }
             let mut result = engine.evidences(options)?;
+            if let Some(content_digest) = content_digest {
+                let content_digest = Digest::from_hex(&content_digest)?;
+                result.evidences.retain(|evidence| {
+                    evidence
+                        .contents
+                        .iter()
+                        .any(|content| content.content_digest == content_digest)
+                });
+            }
             if let Some(limit) = limit {
                 result.evidences.truncate(limit);
             }
@@ -20024,6 +20037,35 @@ mod tests {
         assert_eq!(value(&filtered, "evidence.0.evidence_id"), evidence_id);
         assert_eq!(value(&filtered, "evidence.0.evidence_kind"), "terminal-log");
         assert_eq!(value(&filtered, "evidence.0.contents"), "1");
+
+        let content_digest = value(&evidence, "content.0.content_digest");
+        let content_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--content-digest",
+            &content_digest,
+        ])
+        .expect("parse content-digest evidence list"))
+        .expect("list content-digest evidence");
+        assert_eq!(value(&content_filtered, "evidences"), "1");
+        assert_eq!(
+            value(&content_filtered, "evidence.0.evidence_id"),
+            evidence_id
+        );
+
+        let missing_content_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--content-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse missing content-digest evidence list"))
+        .expect("list missing content-digest evidence");
+        assert_eq!(value(&missing_content_filtered, "evidences"), "0");
 
         let source_session_filtered = run(Cli::try_parse_from([
             "workvcs",

@@ -1047,6 +1047,9 @@ enum EventCommand {
         kind: Option<String>,
 
         #[arg(long)]
+        payload_digest: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
 }
@@ -4004,6 +4007,7 @@ fn run(cli: Cli) -> Result<String> {
                 session,
                 workspace,
                 kind,
+                payload_digest,
                 limit,
             } => {
                 let engine = Engine::open(store)?;
@@ -4030,6 +4034,7 @@ fn run(cli: Cli) -> Result<String> {
                     ));
                 }
                 if kind.is_none()
+                    && payload_digest.is_none()
                     && let Some(limit) = limit
                 {
                     options = options.with_limit(limit)?;
@@ -4037,9 +4042,15 @@ fn run(cli: Cli) -> Result<String> {
                 let mut result = engine.events(options)?;
                 if let Some(kind) = kind {
                     result.events.retain(|event| event.event_kind == kind);
-                    if let Some(limit) = limit {
-                        result.events.truncate(limit);
-                    }
+                }
+                if let Some(payload_digest) = payload_digest {
+                    let payload_digest = Digest::from_hex(&payload_digest)?;
+                    result
+                        .events
+                        .retain(|event| event.payload_digest == payload_digest);
+                }
+                if let Some(limit) = limit {
+                    result.events.truncate(limit);
                 }
                 Ok(render_event_list(&result))
             }
@@ -15223,6 +15234,7 @@ mod tests {
         assert_eq!(value(&listed, "event[0].event_kind"), "entity.transitioned");
         assert_ne!(value(&listed, "event[0].payload_json"), "");
         let event_id = value(&listed, "event[0].event_id");
+        let payload_digest = value(&listed, "event[0].payload_digest");
 
         let listed_by_kind = run(Cli::try_parse_from([
             "workvcs",
@@ -15239,6 +15251,24 @@ mod tests {
         assert_eq!(value(&listed_by_kind, "events"), "1");
         assert_eq!(value(&listed_by_kind, "event[0].event_id"), event_id);
 
+        let listed_by_payload_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--payload-digest",
+            &payload_digest,
+        ])
+        .expect("parse event list by payload digest"))
+        .expect("list events by payload digest");
+        assert_eq!(value(&listed_by_payload_digest, "events"), "1");
+        assert_eq!(
+            value(&listed_by_payload_digest, "event[0].event_id"),
+            event_id
+        );
+
         let listed_by_missing_kind = run(Cli::try_parse_from([
             "workvcs",
             "event",
@@ -15252,6 +15282,20 @@ mod tests {
         .expect("parse event list by missing kind"))
         .expect("list events by missing kind");
         assert_eq!(value(&listed_by_missing_kind, "events"), "0");
+
+        let listed_by_missing_payload_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--payload-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse event list by missing payload digest"))
+        .expect("list events by missing payload digest");
+        assert_eq!(value(&listed_by_missing_payload_digest, "events"), "0");
 
         let listed_by_kind_with_limit = run(Cli::try_parse_from([
             "workvcs",
@@ -15268,6 +15312,27 @@ mod tests {
         .expect("parse event list by kind and limit"))
         .expect("list events by kind and limit");
         assert_eq!(value(&listed_by_kind_with_limit, "events"), "1");
+
+        let listed_by_kind_and_payload_digest_with_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--kind",
+            "entity.transitioned",
+            "--payload-digest",
+            &payload_digest,
+            "--limit",
+            "1",
+        ])
+        .expect("parse event list by kind, payload digest, and limit"))
+        .expect("list events by kind, payload digest, and limit");
+        assert_eq!(
+            value(&listed_by_kind_and_payload_digest_with_limit, "events"),
+            "1"
+        );
 
         let history = run(Cli::try_parse_from([
             "workvcs", "history", store, "--branch", &branch_id, "--limit", "1",

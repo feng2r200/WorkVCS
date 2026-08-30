@@ -3362,6 +3362,9 @@ enum ClaimCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_claims: Option<usize>,
     },
     Guard {
         #[arg(value_name = "STORE")]
@@ -8355,6 +8358,7 @@ fn run(cli: Cli) -> Result<String> {
                     task,
                     mode,
                     limit,
+                    expected_claims,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -8379,7 +8383,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 claims.claims.truncate(limit);
             }
-            Ok(render_claim_list(&claims))
+            let mut output = render_claim_list(&claims);
+            if let Some(expected_claims) = expected_claims {
+                let actual_claims = claims.claims.len();
+                if actual_claims != expected_claims {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "claims {actual_claims} does not match expected {expected_claims}"
+                    )));
+                }
+                output.push_str("claims_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Claim {
             command:
@@ -27724,6 +27738,34 @@ mod tests {
         assert_eq!(value(&listed, "claim.0.task_entity_id"), task_id);
         assert_eq!(value(&listed, "claim.0.lifecycle_state"), "active");
 
+        let expected_listed = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--expected-claims",
+            "1",
+        ])
+        .expect("parse expected claim list"))
+        .expect("expected claim list");
+        assert_eq!(value(&expected_listed, "claims"), "1");
+        assert_eq!(value(&expected_listed, "claims_match_expected"), "true");
+
+        let mismatched_claims = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--expected-claims",
+            "0",
+        ])
+        .expect("parse mismatched claim list"));
+        assert!(mismatched_claims.is_err());
+
         let limited = run(Cli::try_parse_from([
             "workvcs",
             "claim",
@@ -27868,6 +27910,20 @@ mod tests {
             )
             .expect("empty claim list");
         assert_eq!(value(&empty, "claims"), "0");
+        let expected_empty = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--expected-claims",
+            "0",
+        ])
+        .expect("parse expected empty claim list"))
+        .expect("expected empty claim list");
+        assert_eq!(value(&expected_empty, "claims"), "0");
+        assert_eq!(value(&expected_empty, "claims_match_expected"), "true");
         let released =
             run(
                 Cli::try_parse_from(["workvcs", "claim", "show", store, "--claim", &claim_id])

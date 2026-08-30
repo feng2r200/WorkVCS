@@ -2643,6 +2643,16 @@ enum VerificationCommand {
         #[arg(long, default_value = "{}")]
         detail_json: String,
     },
+    CacheShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        verification: String,
+    },
 }
 
 fn main() {
@@ -4439,6 +4449,24 @@ fn run(cli: Cli) -> Result<String> {
                 )?)?,
             )?;
             Ok(render_verification_applicability_cache(&snapshot))
+        }
+        Command::Verification {
+            command:
+                VerificationCommand::CacheShow {
+                    store,
+                    branch,
+                    verification,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let verification_id = EntityId::parse_canonical(&verification)?;
+            let snapshot = engine.verification_applicability_cache(branch_id, verification_id)?;
+            render_verification_applicability_cache_lookup(
+                branch_id,
+                verification_id,
+                snapshot.as_ref(),
+            )
         }
         Command::Record {
             command:
@@ -7307,6 +7335,82 @@ fn render_verification_applicability_cache(
         snapshot.evaluated_at_us,
         snapshot.resource_stamps.len()
     )
+}
+
+fn render_verification_applicability_cache_lookup(
+    branch_id: BranchId,
+    verification_entity_id: EntityId,
+    snapshot: Option<&VerificationApplicabilityCacheSnapshot>,
+) -> Result<String> {
+    let Some(snapshot) = snapshot else {
+        return Ok(format!(
+            "branch_id={branch_id}\nverification_entity_id={verification_entity_id}\ncache_found=false\n"
+        ));
+    };
+    let detail_json =
+        canonical_cli_json("verification applicability cache detail", &snapshot.detail)?;
+    let mut output = format!(
+        "branch_id={}\nverification_entity_id={}\ncache_found=true\nevaluated_commit_id={}\napplicability={}\nreason_code={}\nevaluated_at_us={}\ndetail_json={}\nresource_stamps={}\n",
+        snapshot.branch_id,
+        snapshot.verification_entity_id,
+        snapshot.evaluated_commit_id,
+        snapshot.applicability,
+        snapshot.reason_code,
+        snapshot.evaluated_at_us,
+        detail_json,
+        snapshot.resource_stamps.len()
+    );
+    for (index, stamp) in snapshot.resource_stamps.iter().enumerate() {
+        writeln!(
+            output,
+            "resource_stamp.{index}.resource_basis_ordinal={}",
+            stamp.resource_basis_ordinal
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_stamp.{index}.adapter_kind={}",
+            stamp.adapter_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_stamp.{index}.adapter_schema_version={}",
+            stamp.adapter_schema_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_stamp.{index}.scope_schema_version={}",
+            stamp.scope_schema_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_stamp.{index}.observation_status={}",
+            stamp.observation_status
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_stamp.{index}.observed_fingerprint={}",
+            render_optional_display_or_none(stamp.observed_fingerprint.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_stamp.{index}.observation_id={}",
+            render_optional_display_or_none(stamp.observation_id.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource_stamp.{index}.observed_at_us={}",
+            stamp.observed_at_us
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_record_create(record: &RecordCreateCommit) -> String {
@@ -15734,6 +15838,20 @@ mod tests {
         let verification_id = value(&verification, "verification_entity_id");
         head = value(&verification, "commit_id");
 
+        let missing_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse missing cache show"))
+        .expect("show missing cache");
+        assert_eq!(value(&missing_cache, "cache_found"), "false");
+
         let stale = run(Cli::try_parse_from([
             "workvcs",
             "ac",
@@ -15776,6 +15894,45 @@ mod tests {
         .expect("record cache");
         assert!(cache.contains("applicability=applicable"));
         assert!(cache.contains("reason_code=all_basis_applicable"));
+
+        let shown_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse cache show"))
+        .expect("show cache");
+        assert_eq!(value(&shown_cache, "cache_found"), "true");
+        assert_eq!(
+            value(&shown_cache, "evaluated_commit_id"),
+            value(&verification, "commit_id")
+        );
+        assert_eq!(value(&shown_cache, "applicability"), "applicable");
+        assert_eq!(value(&shown_cache, "reason_code"), "all_basis_applicable");
+        assert_eq!(value(&shown_cache, "detail_json"), "{}");
+        assert_eq!(value(&shown_cache, "resource_stamps"), "1");
+        assert_eq!(
+            value(&shown_cache, "resource_stamp.0.resource_basis_ordinal"),
+            "0"
+        );
+        assert_eq!(value(&shown_cache, "resource_stamp.0.adapter_kind"), "git");
+        assert_eq!(
+            value(&shown_cache, "resource_stamp.0.observation_status"),
+            "observed"
+        );
+        assert_eq!(
+            value(&shown_cache, "resource_stamp.0.observed_fingerprint"),
+            fingerprint
+        );
+        assert_eq!(
+            value(&shown_cache, "resource_stamp.0.observation_id"),
+            observation_id
+        );
 
         let verified = run(Cli::try_parse_from([
             "workvcs",

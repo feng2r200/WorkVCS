@@ -3712,6 +3712,24 @@ enum ClaimCommand {
 
         #[arg(long, default_value = "exclusive")]
         mode: String,
+
+        #[arg(long)]
+        expected_selected: Option<bool>,
+
+        #[arg(long)]
+        expected_head: Option<String>,
+
+        #[arg(long)]
+        expected_inspected_candidates: Option<usize>,
+
+        #[arg(long)]
+        expected_task: Option<String>,
+
+        #[arg(long)]
+        expected_mode: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
     },
     Task {
         #[arg(value_name = "STORE")]
@@ -9829,6 +9847,12 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     session,
                     mode,
+                    expected_selected,
+                    expected_head,
+                    expected_inspected_candidates,
+                    expected_task,
+                    expected_mode,
+                    expected_lifecycle_state,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -9836,7 +9860,82 @@ fn run(cli: Cli) -> Result<String> {
                 ClaimNextOptions::new(SessionId::parse_canonical(&session)?)
                     .with_mode(parse_claim_mode(&mode)?),
             )?;
-            Ok(render_claim_next(&claimed))
+            let mut output = render_claim_next(&claimed);
+            if let Some(expected_selected) = expected_selected {
+                let actual_selected = claimed.selected.is_some();
+                if actual_selected != expected_selected {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "claim next selected {actual_selected} does not match expected {expected_selected}"
+                    )));
+                }
+                output.push_str("selected_match_expected=true\n");
+            }
+            if let Some(expected_head) = expected_head {
+                let expected_head = CommitId::parse_canonical(&expected_head)?;
+                if claimed.head_commit_id != expected_head {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "claim next head {} does not match expected {}",
+                        claimed.head_commit_id, expected_head
+                    )));
+                }
+                output.push_str("head_match_expected=true\n");
+            }
+            append_expected_count_match(
+                &mut output,
+                "claim next inspected candidates",
+                claimed.inspected_candidates,
+                expected_inspected_candidates,
+                "inspected_candidates_match_expected",
+            )?;
+            if let Some(expected_task) = expected_task {
+                let expected_task = EntityId::parse_canonical(&expected_task)?;
+                let Some(selected) = &claimed.selected else {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "claim next selected no task".to_owned(),
+                    ));
+                };
+                if selected.task_entity_id != expected_task {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "claim next task {} does not match expected {}",
+                        selected.task_entity_id, expected_task
+                    )));
+                }
+                output.push_str("task_match_expected=true\n");
+            }
+            if let Some(expected_mode) = expected_mode {
+                let expected_mode = parse_claim_mode(&expected_mode)?;
+                let Some(selected) = &claimed.selected else {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "claim next selected no claim mode".to_owned(),
+                    ));
+                };
+                if selected.mode != expected_mode {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim next mode {} does not match expected {}",
+                        claim_mode(selected.mode),
+                        claim_mode(expected_mode)
+                    )));
+                }
+                output.push_str("mode_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+                let expected_lifecycle_state =
+                    parse_claim_lifecycle_state(&expected_lifecycle_state)?;
+                let Some(selected) = &claimed.selected else {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "claim next selected no claim lifecycle state".to_owned(),
+                    ));
+                };
+                if selected.state.lifecycle_state != expected_lifecycle_state {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim next lifecycle state {} does not match expected {}",
+                        claim_lifecycle_state(selected.state.lifecycle_state),
+                        claim_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Claim {
             command:
@@ -31399,6 +31498,95 @@ mod tests {
     }
 
     #[test]
+    fn cli_claim_next_expectations_validate_empty_selection() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let no_candidate = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "next",
+            store,
+            "--session",
+            &session_id,
+            "--expected-selected",
+            "false",
+            "--expected-head",
+            &head,
+            "--expected-inspected-candidates",
+            "0",
+        ])
+        .expect("parse empty claim next"))
+        .expect("empty claim next");
+        assert_eq!(value(&no_candidate, "selected"), "false");
+        assert_eq!(value(&no_candidate, "selected_match_expected"), "true");
+        assert_eq!(value(&no_candidate, "head_match_expected"), "true");
+        assert_eq!(
+            value(&no_candidate, "inspected_candidates_match_expected"),
+            "true"
+        );
+
+        let unexpected_selection = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "next",
+            store,
+            "--session",
+            &session_id,
+            "--expected-selected",
+            "true",
+        ])
+        .expect("parse unexpected selected claim next"));
+        assert!(unexpected_selection.is_err());
+
+        let missing_task = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "next",
+            store,
+            "--session",
+            &session_id,
+            "--expected-task",
+            &EntityId::new_v7().to_string(),
+        ])
+        .expect("parse missing selected task claim next"));
+        assert!(missing_task.is_err());
+    }
+
+    #[test]
     fn cli_claim_next_accepts_explicit_shared_mode() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
@@ -31489,12 +31677,27 @@ mod tests {
             &second_session_id,
             "--mode",
             "shared",
+            "--expected-selected",
+            "true",
+            "--expected-head",
+            &value(&task, "commit_id"),
+            "--expected-task",
+            &task_id,
+            "--expected-mode",
+            "shared",
+            "--expected-lifecycle-state",
+            "active",
         ])
         .expect("parse shared claim next"))
         .expect("shared claim next");
         assert_eq!(value(&claimed, "selected"), "true");
         assert_eq!(value(&claimed, "task_entity_id"), task_id);
         assert_eq!(value(&claimed, "mode"), "shared");
+        assert_eq!(value(&claimed, "selected_match_expected"), "true");
+        assert_eq!(value(&claimed, "head_match_expected"), "true");
+        assert_eq!(value(&claimed, "task_match_expected"), "true");
+        assert_eq!(value(&claimed, "mode_match_expected"), "true");
+        assert_eq!(value(&claimed, "lifecycle_state_match_expected"), "true");
 
         let runnable = run(Cli::try_parse_from([
             "workvcs",

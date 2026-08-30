@@ -26,8 +26,8 @@ use workvcs_core::{
     EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
     ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
     ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    GoalCreateCommit, GoalCreateOptions, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry,
-    HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
     KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
@@ -53,37 +53,38 @@ use workvcs_core::{
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
     MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
-    NextWorkOptions, NextWorkResult, PlanCreateCommit, PlanCreateOptions, PlanTransitionCommit,
-    PlanTransitionOptions, PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
-    PrimaryContainmentSnapshot, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
-    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskStatus, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
-    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
-    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
+    NextWorkOptions, NextWorkResult, PlanCreateCommit, PlanCreateOptions, PlanSnapshot,
+    PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
+    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
+    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreId, StoreInitOptions, StoreLineageListOptions,
+    StoreLineageListResult, StoreLineageRecordOptions, StoreLineageRecordResult,
+    StoreLineageSnapshot, StoreMigrationAttemptSnapshot, StoreMigrationListOptions,
+    StoreMigrationListResult, StoreMigrationRecordOptions, StoreMigrationRecordResult,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
+    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateRestoreCommit,
+    WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -1316,6 +1317,25 @@ enum GoalCommand {
         #[arg(long)]
         description: String,
     },
+    #[command(group(
+        ArgGroup::new("goal-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        goal: String,
+    },
     Achieve {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1395,6 +1415,25 @@ enum PlanCommand {
 
         #[arg(long = "constraint")]
         constraints: Vec<String>,
+    },
+    #[command(group(
+        ArgGroup::new("plan-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        plan: String,
     },
     Complete {
         #[arg(value_name = "STORE")]
@@ -3466,6 +3505,16 @@ fn run(cli: Cli) -> Result<String> {
                 )?)?;
                 Ok(render_goal_create(&goal))
             }
+            GoalCommand::Show {
+                store,
+                branch,
+                commit,
+                goal,
+            } => {
+                let engine = Engine::open(store)?;
+                let commit_id = resolve_goal_query_commit(&engine, branch, commit)?;
+                render_goal_snapshot(&engine.goal_at(commit_id, EntityId::parse_canonical(&goal)?)?)
+            }
             GoalCommand::Achieve {
                 store,
                 branch,
@@ -3542,6 +3591,16 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 let plan = engine.create_plan(options)?;
                 Ok(render_plan_create(&plan))
+            }
+            PlanCommand::Show {
+                store,
+                branch,
+                commit,
+                plan,
+            } => {
+                let engine = Engine::open(store)?;
+                let commit_id = resolve_plan_query_commit(&engine, branch, commit)?;
+                render_plan_snapshot(&engine.plan_at(commit_id, EntityId::parse_canonical(&plan)?)?)
             }
             PlanCommand::Complete {
                 store,
@@ -5147,6 +5206,38 @@ fn resolve_knowledge_query_commit(
     }
 }
 
+fn resolve_goal_query_commit(
+    engine: &Engine,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<CommitId> {
+    match (branch, commit) {
+        (Some(branch), None) => Ok(engine
+            .branch_head(BranchId::parse_canonical(&branch)?)
+            .map(|head| head.head_commit_id)?),
+        (None, Some(commit)) => CommitId::parse_canonical(&commit),
+        _ => Err(WorkVcsError::QueryInvalid(
+            "goal query target requires exactly one of --branch or --commit".to_owned(),
+        )),
+    }
+}
+
+fn resolve_plan_query_commit(
+    engine: &Engine,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<CommitId> {
+    match (branch, commit) {
+        (Some(branch), None) => Ok(engine
+            .branch_head(BranchId::parse_canonical(&branch)?)
+            .map(|head| head.head_commit_id)?),
+        (None, Some(commit)) => CommitId::parse_canonical(&commit),
+        _ => Err(WorkVcsError::QueryInvalid(
+            "plan query target requires exactly one of --branch or --commit".to_owned(),
+        )),
+    }
+}
+
 fn resolve_task_query_commit(
     engine: &Engine,
     branch: Option<String>,
@@ -5750,6 +5841,27 @@ fn knowledge_value_json(label: &str, value: &CanonicalValue) -> Result<String> {
     })
 }
 
+fn canonical_text_json(label: &str, value: &str) -> Result<String> {
+    knowledge_value_json(label, &CanonicalValue::String(value.to_owned()))
+}
+
+fn canonical_optional_text_json(label: &str, value: Option<&str>) -> Result<String> {
+    let value = value
+        .map(|value| CanonicalValue::String(value.to_owned()))
+        .unwrap_or(CanonicalValue::Null);
+    knowledge_value_json(label, &value)
+}
+
+fn canonical_string_array_json(label: &str, values: &[String]) -> Result<String> {
+    let value = CanonicalValue::Array(
+        values
+            .iter()
+            .map(|value| CanonicalValue::String(value.clone()))
+            .collect(),
+    );
+    knowledge_value_json(label, &value)
+}
+
 fn render_goal_create(goal: &GoalCreateCommit) -> String {
     format!(
         "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\ngoal_entity_id={}\ngoal_entity_version_id={}\ngoal_state_digest={}\nwork_state_digest={}\nstatus={}\n",
@@ -5765,6 +5877,25 @@ fn render_goal_create(goal: &GoalCreateCommit) -> String {
         goal.work_state_digest,
         goal.state.status
     )
+}
+
+fn render_goal_snapshot(goal: &GoalSnapshot) -> Result<String> {
+    let description_json = canonical_text_json("goal description", &goal.state.description)?;
+    let terminal_rationale_json = canonical_optional_text_json(
+        "goal terminal_rationale",
+        goal.state.terminal_rationale.as_deref(),
+    )?;
+    Ok(format!(
+        "workspace_id={}\ncommit_id={}\ngoal_entity_id={}\ngoal_entity_version_id={}\ngoal_state_digest={}\nstatus={}\ndescription_json={}\nterminal_rationale_json={}\n",
+        goal.workspace_id,
+        goal.commit_id,
+        goal.goal_entity_id,
+        goal.goal_entity_version_id,
+        goal.state_digest,
+        goal.state.status,
+        description_json,
+        terminal_rationale_json
+    ))
 }
 
 fn render_goal_transition(goal: &GoalTransitionCommit) -> String {
@@ -5802,6 +5933,31 @@ fn render_plan_create(plan: &PlanCreateCommit) -> String {
         plan.state.status,
         plan.state.constraints.len()
     )
+}
+
+fn render_plan_snapshot(plan: &PlanSnapshot) -> Result<String> {
+    let description_json = canonical_text_json("plan description", &plan.state.description)?;
+    let strategy_json = canonical_text_json("plan strategy", &plan.state.strategy)?;
+    let constraints_json =
+        canonical_string_array_json("plan constraints", &plan.state.constraints)?;
+    let completion_rationale_json = canonical_optional_text_json(
+        "plan completion_rationale",
+        plan.state.completion_rationale.as_deref(),
+    )?;
+    Ok(format!(
+        "workspace_id={}\ncommit_id={}\nplan_entity_id={}\nplan_entity_version_id={}\nplan_state_digest={}\nstatus={}\ndescription_json={}\nstrategy_json={}\nconstraints={}\nconstraints_json={}\ncompletion_rationale_json={}\n",
+        plan.workspace_id,
+        plan.commit_id,
+        plan.plan_entity_id,
+        plan.plan_entity_version_id,
+        plan.state_digest,
+        plan.state.status,
+        description_json,
+        strategy_json,
+        plan.state.constraints.len(),
+        constraints_json,
+        completion_rationale_json
+    ))
 }
 
 fn render_plan_transition(plan: &PlanTransitionCommit) -> String {
@@ -13132,6 +13288,188 @@ mod tests {
         .expect("abandon plan");
         assert_eq!(value(&abandoned_plan, "previous_status"), "active");
         assert_eq!(value(&abandoned_plan, "status"), "abandoned");
+    }
+
+    #[test]
+    fn cli_shows_goal_and_plan_snapshots_at_branch_or_commit() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Inspect goal snapshots",
+        ])
+        .expect("parse goal create"))
+        .expect("create goal");
+        let goal_id = value(&goal, "goal_entity_id");
+
+        let goal_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "show",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--goal",
+            &goal_id,
+        ])
+        .expect("parse goal show at commit"))
+        .expect("show goal at commit");
+        assert_eq!(value(&goal_at_create, "status"), "active");
+        assert_eq!(
+            value(&goal_at_create, "goal_entity_version_id"),
+            value(&goal, "goal_entity_version_id")
+        );
+        assert_eq!(
+            value(&goal_at_create, "description_json"),
+            "\"Inspect goal snapshots\""
+        );
+        assert_eq!(value(&goal_at_create, "terminal_rationale_json"), "null");
+
+        let achieved_goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "achieve",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal, "commit_id"),
+            "--goal",
+            &goal_id,
+            "--goal-version",
+            &value(&goal, "goal_entity_version_id"),
+            "--rationale",
+            "snapshot visible",
+        ])
+        .expect("parse goal achieve"))
+        .expect("achieve goal");
+
+        let goal_at_branch = run(Cli::try_parse_from([
+            "workvcs", "goal", "show", store, "--branch", &branch, "--goal", &goal_id,
+        ])
+        .expect("parse goal show at branch"))
+        .expect("show goal at branch");
+        assert_eq!(
+            value(&goal_at_branch, "commit_id"),
+            value(&achieved_goal, "commit_id")
+        );
+        assert_eq!(value(&goal_at_branch, "status"), "achieved");
+        assert_eq!(
+            value(&goal_at_branch, "goal_entity_version_id"),
+            value(&achieved_goal, "goal_entity_version_id")
+        );
+        assert_eq!(
+            value(&goal_at_branch, "terminal_rationale_json"),
+            "\"snapshot visible\""
+        );
+
+        let plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&achieved_goal, "commit_id"),
+            "--description",
+            "Inspect plan snapshots",
+            "--strategy",
+            "Use show commands",
+            "--constraint",
+            "branch selector",
+            "--constraint",
+            "commit selector",
+        ])
+        .expect("parse plan create"))
+        .expect("create plan");
+        let plan_id = value(&plan, "plan_entity_id");
+
+        let plan_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--plan",
+            &plan_id,
+        ])
+        .expect("parse plan show at commit"))
+        .expect("show plan at commit");
+        assert_eq!(value(&plan_at_create, "status"), "active");
+        assert_eq!(value(&plan_at_create, "constraints"), "2");
+        assert_eq!(
+            value(&plan_at_create, "constraints_json"),
+            "[\"branch selector\",\"commit selector\"]"
+        );
+        assert_eq!(value(&plan_at_create, "completion_rationale_json"), "null");
+
+        let completed_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "complete",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&plan, "commit_id"),
+            "--plan",
+            &plan_id,
+            "--plan-version",
+            &value(&plan, "plan_entity_version_id"),
+            "--completion-rationale",
+            "snapshot confirms completion",
+        ])
+        .expect("parse plan complete"))
+        .expect("complete plan");
+
+        let plan_at_branch = run(Cli::try_parse_from([
+            "workvcs", "plan", "show", store, "--branch", &branch, "--plan", &plan_id,
+        ])
+        .expect("parse plan show at branch"))
+        .expect("show plan at branch");
+        assert_eq!(
+            value(&plan_at_branch, "commit_id"),
+            value(&completed_plan, "commit_id")
+        );
+        assert_eq!(value(&plan_at_branch, "status"), "completed");
+        assert_eq!(
+            value(&plan_at_branch, "plan_entity_version_id"),
+            value(&completed_plan, "plan_entity_version_id")
+        );
+        assert_eq!(
+            value(&plan_at_branch, "completion_rationale_json"),
+            "\"snapshot confirms completion\""
+        );
     }
 
     #[test]

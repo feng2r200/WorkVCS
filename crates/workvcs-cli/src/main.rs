@@ -3795,6 +3795,12 @@ enum ClaimCommand {
 
         #[arg(long)]
         claim: String,
+
+        #[arg(long)]
+        expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
     },
 }
 
@@ -10033,6 +10039,8 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     session,
                     claim,
+                    expected_session,
+                    expected_lifecycle_state,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -10040,7 +10048,30 @@ fn run(cli: Cli) -> Result<String> {
                 SessionId::parse_canonical(&session)?,
                 ClaimId::parse_canonical(&claim)?,
             ))?;
-            Ok(render_claim_release(&released))
+            let mut output = render_claim_release(&released);
+            if let Some(expected_session) = expected_session {
+                let expected_session = SessionId::parse_canonical(&expected_session)?;
+                if released.session_id != expected_session {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim release session {} does not match expected {}",
+                        released.session_id, expected_session
+                    )));
+                }
+                output.push_str("session_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+                let expected_lifecycle_state =
+                    parse_claim_lifecycle_state(&expected_lifecycle_state)?;
+                if released.state.lifecycle_state != expected_lifecycle_state {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim release lifecycle state {} does not match expected {}",
+                        claim_lifecycle_state(released.state.lifecycle_state),
+                        claim_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Context {
             store,
@@ -31275,10 +31306,16 @@ mod tests {
             &session_id,
             "--claim",
             &claim_id,
+            "--expected-session",
+            &session_id,
+            "--expected-lifecycle-state",
+            "released",
         ])
         .expect("parse release"))
         .expect("release claim");
         assert!(release.contains("lifecycle_state=released"));
+        assert_eq!(value(&release, "session_match_expected"), "true");
+        assert_eq!(value(&release, "lifecycle_state_match_expected"), "true");
 
         let ended = run(Cli::try_parse_from([
             "workvcs",
@@ -31603,6 +31640,10 @@ mod tests {
             &session_id,
             "--claim",
             &claim_id,
+            "--expected-session",
+            &session_id,
+            "--expected-lifecycle-state",
+            "released",
         ])
         .expect("parse release"))
         .expect("release claim");

@@ -1372,6 +1372,12 @@ enum BundleCommand {
 
         #[arg(long)]
         output_dir: PathBuf,
+
+        #[arg(long)]
+        expected_payload_files: Option<usize>,
+
+        #[arg(long)]
+        expected_payload_references: Option<usize>,
     },
     ValidateDir {
         #[arg(value_name = "STORE")]
@@ -5309,13 +5315,34 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 commit,
                 output_dir,
+                expected_payload_files,
+                expected_payload_references,
             } => {
                 let engine = Engine::open(store)?;
                 let export = engine.export_bundle_payloads(
                     BundlePayloadExportOptions::for_commit(CommitId::parse_canonical(&commit)?),
                 )?;
+                let mut output = render_bundle_payload_export(&export, &output_dir);
+                if let Some(expected_payload_files) = expected_payload_files {
+                    let actual_payload_files = export.payload_files.len();
+                    if actual_payload_files != expected_payload_files {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle export-dir payload files {actual_payload_files} does not match expected {expected_payload_files}"
+                        )));
+                    }
+                    output.push_str("payload_files_match_expected=true\n");
+                }
+                if let Some(expected_payload_references) = expected_payload_references {
+                    let actual_payload_references = export.payload_references.len();
+                    if actual_payload_references != expected_payload_references {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle export-dir payload references {actual_payload_references} does not match expected {expected_payload_references}"
+                        )));
+                    }
+                    output.push_str("payload_references_match_expected=true\n");
+                }
                 write_bundle_payload_export_directory(&output_dir, &export)?;
-                Ok(render_bundle_payload_export(&export, &output_dir))
+                Ok(output)
             }
             BundleCommand::ValidateDir {
                 store,
@@ -22192,6 +22219,10 @@ mod tests {
             &genesis,
             "--output-dir",
             export_dir.to_str().expect("export dir path"),
+            "--expected-payload-files",
+            "3",
+            "--expected-payload-references",
+            "5",
         ])
         .expect("parse bundle export-dir"))
         .expect("export bundle directory");
@@ -22203,6 +22234,11 @@ mod tests {
         assert_eq!(value(&exported_dir, "commit_id"), genesis);
         assert_eq!(value(&exported_dir, "payload_files"), "3");
         assert_eq!(value(&exported_dir, "payload_references"), "5");
+        assert_eq!(value(&exported_dir, "payload_files_match_expected"), "true");
+        assert_eq!(
+            value(&exported_dir, "payload_references_match_expected"),
+            "true"
+        );
         assert_eq!(
             fs::read_to_string(export_dir.join("manifest.json")).expect("manifest file"),
             manifest_json
@@ -22210,6 +22246,25 @@ mod tests {
         let payload_index =
             fs::read(export_dir.join("payload-index.json")).expect("payload index file");
         parse_canonical_json(&payload_index).expect("payload index is canonical JSON");
+
+        let mismatched_export_dir = tempdir.path().join("bundle-export-mismatch");
+        let mismatched_export_dir_result = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export-dir",
+            store,
+            "--commit",
+            &genesis,
+            "--output-dir",
+            mismatched_export_dir
+                .to_str()
+                .expect("mismatched export dir path"),
+            "--expected-payload-files",
+            "0",
+        ])
+        .expect("parse mismatched bundle export-dir"));
+        assert!(mismatched_export_dir_result.is_err());
+        assert!(!mismatched_export_dir.exists());
 
         let validated_dir = run(Cli::try_parse_from([
             "workvcs",

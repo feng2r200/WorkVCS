@@ -3057,6 +3057,15 @@ enum RunnableCommand {
 
         #[arg(long)]
         session: String,
+
+        #[arg(long)]
+        task: Option<String>,
+
+        #[arg(long)]
+        status: Option<String>,
+
+        #[arg(long)]
+        runnable: Option<bool>,
     },
 }
 
@@ -6591,12 +6600,36 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_next_work(&next))
         }
         Command::Runnable {
-            command: RunnableCommand::Tasks { store, session },
+            command:
+                RunnableCommand::Tasks {
+                    store,
+                    session,
+                    task,
+                    status,
+                    runnable,
+                },
         } => {
             let engine = Engine::open(store)?;
-            let projection = engine.runnable_tasks(RunnableTasksOptions::new(
+            let mut projection = engine.runnable_tasks(RunnableTasksOptions::new(
                 SessionId::parse_canonical(&session)?,
             ))?;
+            if let Some(task) = task {
+                let task_id = EntityId::parse_canonical(&task)?;
+                projection
+                    .candidates
+                    .retain(|candidate| candidate.task.task_entity_id == task_id);
+            }
+            if let Some(status) = status {
+                let status = parse_task_list_status(&status)?;
+                projection
+                    .candidates
+                    .retain(|candidate| candidate.task.state.status == status);
+            }
+            if let Some(runnable) = runnable {
+                projection
+                    .candidates
+                    .retain(|candidate| candidate.runnable == runnable);
+            }
             Ok(render_runnable_tasks(&projection))
         }
         Command::Merge {
@@ -21263,6 +21296,72 @@ mod tests {
         assert!(runnable.contains(&format!("candidate.0.task_entity_id={task_id}")));
         assert!(runnable.contains("candidate.0.runnable=true"));
         assert!(runnable.contains("candidate.0.claim=unclaimed"));
+
+        let runnable_by_task = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+        ])
+        .expect("parse runnable by task"))
+        .expect("runnable tasks by task");
+        assert_eq!(value(&runnable_by_task, "candidates"), "1");
+        assert_eq!(
+            value(&runnable_by_task, "candidate.0.task_entity_id"),
+            task_id
+        );
+
+        let runnable_by_status = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--status",
+            "pending",
+            "--runnable",
+            "true",
+        ])
+        .expect("parse runnable by status"))
+        .expect("runnable tasks by status");
+        assert_eq!(value(&runnable_by_status, "candidates"), "1");
+        assert_eq!(
+            value(&runnable_by_status, "candidate.0.task_entity_id"),
+            task_id
+        );
+
+        let non_runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--runnable",
+            "false",
+        ])
+        .expect("parse non-runnable tasks"))
+        .expect("non-runnable tasks");
+        assert_eq!(value(&non_runnable, "candidates"), "0");
+
+        let missing_runnable_task = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            "018b4ed6-0e2f-7000-8000-000000000004",
+        ])
+        .expect("parse missing runnable task"))
+        .expect("missing runnable task");
+        assert_eq!(value(&missing_runnable_task, "candidates"), "0");
 
         let claim = run(Cli::try_parse_from([
             "workvcs",

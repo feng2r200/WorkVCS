@@ -792,6 +792,9 @@ enum StoreCommand {
 
         #[arg(long)]
         exposure: String,
+
+        #[arg(long)]
+        expected_source_knowledge_state_digest: Option<String>,
     },
     #[command(name = "knowledge-exposure-adopt")]
     KnowledgeExposureAdopt {
@@ -4165,14 +4168,35 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 Ok(output)
             }
-            StoreCommand::KnowledgeExposureAdoptionCandidate { store, exposure } => {
+            StoreCommand::KnowledgeExposureAdoptionCandidate {
+                store,
+                exposure,
+                expected_source_knowledge_state_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let result = engine.knowledge_exposure_adoption_candidate(
                     KnowledgeExposureAdoptionCandidateOptions::new(ExposureId::parse_canonical(
                         &exposure,
                     )?),
                 )?;
-                render_knowledge_exposure_adoption_candidate(&result)
+                let mut output = render_knowledge_exposure_adoption_candidate(&result)?;
+                if let Some(expected_source_knowledge_state_digest) =
+                    expected_source_knowledge_state_digest
+                {
+                    let expected_source_knowledge_state_digest =
+                        Digest::from_hex(&expected_source_knowledge_state_digest)?;
+                    if result.candidate.source_knowledge_state_digest
+                        != expected_source_knowledge_state_digest
+                    {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "knowledge exposure adoption candidate source knowledge state digest {} does not match expected {}",
+                            result.candidate.source_knowledge_state_digest,
+                            expected_source_knowledge_state_digest
+                        )));
+                    }
+                    output.push_str("source_knowledge_state_matches_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::KnowledgeExposureAdopt {
                 store,
@@ -19150,6 +19174,44 @@ mod tests {
             value(&candidate, "source_knowledge_state_digest"),
             value(&knowledge, "knowledge_state_digest")
         );
+
+        let expected_candidate = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-adoption-candidate",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--expected-source-knowledge-state-digest",
+            &value(&candidate, "source_knowledge_state_digest"),
+        ])
+        .expect("parse expected adoption candidate"))
+        .expect("show expected adoption candidate");
+        assert_eq!(
+            value(&expected_candidate, "source_knowledge_state_digest"),
+            value(&candidate, "source_knowledge_state_digest")
+        );
+        assert_eq!(
+            value(
+                &expected_candidate,
+                "source_knowledge_state_matches_expected"
+            ),
+            "true"
+        );
+
+        let mismatched_candidate = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-adoption-candidate",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--expected-source-knowledge-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched adoption candidate"));
+        assert!(mismatched_candidate.is_err());
+
         assert_eq!(value(&candidate, "source_status"), "current");
         assert_eq!(value(&candidate, "knowledge_status"), "active");
         assert_eq!(

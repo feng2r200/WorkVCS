@@ -2103,7 +2103,7 @@ enum ResourceCommand {
         ArgGroup::new("resource-observation-fingerprint")
             .required(true)
             .multiple(false)
-            .args(["fingerprint", "content"])
+            .args(["fingerprint", "content", "content_file"])
     ))]
     Observe {
         #[arg(value_name = "STORE")]
@@ -2123,6 +2123,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         content: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        content_file: Option<PathBuf>,
 
         #[arg(long, default_value = "{}")]
         summary_json: String,
@@ -4971,11 +4974,12 @@ fn run(cli: Cli) -> Result<String> {
                     adapter_schema_version,
                     fingerprint,
                     content,
+                    content_file,
                     summary_json,
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let fingerprint = fingerprint_from_cli(fingerprint, content)?;
+            let fingerprint = fingerprint_from_cli(fingerprint, content, content_file)?;
             let observation =
                 engine.record_resource_observation(ResourceObservationCreateOptions::new(
                     ResourceId::parse_canonical(&resource)?,
@@ -6824,10 +6828,18 @@ fn evidence_content_from_cli(args: EvidenceContentArgs) -> Result<Option<Evidenc
     Ok(Some(content))
 }
 
-fn fingerprint_from_cli(fingerprint: Option<String>, content: Option<String>) -> Result<Digest> {
-    match (fingerprint, content) {
-        (Some(fingerprint), None) => Digest::from_hex(&fingerprint),
-        (None, Some(content)) => Ok(content_object_digest(content.as_bytes())),
+fn fingerprint_from_cli(
+    fingerprint: Option<String>,
+    content: Option<String>,
+    content_file: Option<PathBuf>,
+) -> Result<Digest> {
+    match (fingerprint, content, content_file) {
+        (Some(fingerprint), None, None) => Digest::from_hex(&fingerprint),
+        (None, Some(content), None) => Ok(content_object_digest(content.as_bytes())),
+        (None, None, Some(path)) => {
+            let bytes = read_cli_file("resource observation content", &path)?;
+            Ok(content_object_digest(&bytes))
+        }
         _ => Err(WorkVcsError::TaskInvalid(
             "expected exactly one fingerprint source".to_owned(),
         )),
@@ -18695,6 +18707,11 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
+        let observation_file = tempdir.path().join("observation.bin");
+        fs::write(&observation_file, b"baseline bytes").expect("write observation content");
+        let observation_file_path = observation_file
+            .to_str()
+            .expect("observation file path text");
 
         run(
             Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
@@ -18773,8 +18790,8 @@ mod tests {
             "git",
             "--adapter-schema-version",
             "1",
-            "--content",
-            "baseline bytes",
+            "--content-file",
+            observation_file_path,
         ])
         .expect("parse observe"))
         .expect("record observation");
@@ -18799,6 +18816,24 @@ mod tests {
         assert_eq!(value(&shown_observation, "summary_json"), "{}");
         assert_eq!(value(&shown_observation, "detail_content_present"), "false");
         assert_eq!(value(&shown_observation, "source_session_id"), "none");
+
+        let duplicate_fingerprint_source = Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--content",
+            "baseline bytes",
+            "--content-file",
+            observation_file_path,
+        ]);
+        assert!(duplicate_fingerprint_source.is_err());
 
         let observations =
             run(

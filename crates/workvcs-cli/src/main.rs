@@ -2001,6 +2001,9 @@ enum AcceptanceCriterionCommand {
 
         #[arg(long)]
         classification: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("acceptance-criterion-status-target")
@@ -5158,6 +5161,7 @@ fn run(cli: Cli) -> Result<String> {
                     commit,
                     task,
                     classification,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5170,6 +5174,14 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(classification) = classification {
                 let classification = parse_acceptance_criterion_classification(&classification)?;
                 criteria.retain(|criterion| criterion.state.classification == classification);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "ac list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                criteria.truncate(limit);
             }
             render_acceptance_criterion_list(commit_id, &criteria)
         }
@@ -18865,6 +18877,35 @@ mod tests {
         .expect("parse ac list by task"))
         .expect("list ac by task");
         assert_eq!(value(&task_criteria, "criteria"), "2");
+
+        let limited_task_criteria = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited ac list by task"))
+        .expect("list limited ac by task");
+        assert_eq!(value(&limited_task_criteria, "criteria"), "1");
+        assert_ne!(
+            value(
+                &limited_task_criteria,
+                "criterion.0.acceptance_criterion_entity_id"
+            ),
+            ""
+        );
+
+        let zero_limit_task_criteria = run(Cli::try_parse_from([
+            "workvcs", "ac", "list", store, "--branch", &branch, "--limit", "0",
+        ])
+        .expect("parse zero-limit ac list"));
+        assert!(zero_limit_task_criteria.is_err());
 
         let optional_task_criteria = run(Cli::try_parse_from([
             "workvcs",

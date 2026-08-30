@@ -1446,6 +1446,12 @@ enum MergeCommand {
 
         #[arg(long)]
         merge: String,
+
+        #[arg(long)]
+        expected_runtime_state: Option<String>,
+
+        #[arg(long)]
+        expected_outcome: Option<String>,
     },
     List {
         #[arg(value_name = "STORE")]
@@ -8485,12 +8491,40 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_merge_continue(&engine.continue_merge(options)?))
         }
         Command::Merge {
-            command: MergeCommand::Show { store, merge },
+            command:
+                MergeCommand::Show {
+                    store,
+                    merge,
+                    expected_runtime_state,
+                    expected_outcome,
+                },
         } => {
             let engine = Engine::open(store)?;
-            Ok(render_merge_attempt(
-                &engine.merge_attempt(MergeId::parse_canonical(&merge)?)?,
-            )?)
+            let snapshot = engine.merge_attempt(MergeId::parse_canonical(&merge)?)?;
+            let mut output = render_merge_attempt(&snapshot)?;
+            if let Some(expected_runtime_state) = expected_runtime_state {
+                let actual_runtime_state = snapshot.runtime_state.as_str();
+                if actual_runtime_state != expected_runtime_state {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "merge runtime state {actual_runtime_state} does not match expected {expected_runtime_state}"
+                    )));
+                }
+                output.push_str("runtime_state_matches_expected=true\n");
+            }
+            if let Some(expected_outcome) = expected_outcome {
+                let actual_outcome = snapshot
+                    .outcome
+                    .as_ref()
+                    .map(|outcome| outcome.outcome.as_str())
+                    .unwrap_or("none");
+                if actual_outcome != expected_outcome {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "merge outcome {actual_outcome} does not match expected {expected_outcome}"
+                    )));
+                }
+                output.push_str("outcome_matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Merge {
             command:
@@ -32799,6 +32833,54 @@ mod tests {
         assert_eq!(value(&shown, "outcome"), "none");
         let merge_item_id = value(&shown, "item.0.merge_item_id");
 
+        let expected_active = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "show",
+            store,
+            "--merge",
+            &merge_id,
+            "--expected-runtime-state",
+            "active",
+            "--expected-outcome",
+            "none",
+        ])
+        .expect("parse expected active merge show"))
+        .expect("show expected active merge");
+        assert_eq!(value(&expected_active, "runtime_state"), "active");
+        assert_eq!(value(&expected_active, "outcome"), "none");
+        assert_eq!(
+            value(&expected_active, "runtime_state_matches_expected"),
+            "true"
+        );
+        assert_eq!(value(&expected_active, "outcome_matches_expected"), "true");
+
+        let mismatched_runtime = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "show",
+            store,
+            "--merge",
+            &merge_id,
+            "--expected-runtime-state",
+            "completed",
+        ])
+        .expect("parse mismatched active merge runtime show"));
+        assert!(mismatched_runtime.is_err());
+
+        let mismatched_outcome = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "show",
+            store,
+            "--merge",
+            &merge_id,
+            "--expected-outcome",
+            "completed",
+        ])
+        .expect("parse mismatched active merge outcome show"));
+        assert!(mismatched_outcome.is_err());
+
         let resolved = run(Cli::try_parse_from([
             "workvcs",
             "merge",
@@ -32974,6 +33056,28 @@ mod tests {
             value(&closed, "outcome.detail_json"),
             "{\"reason\":\"complete merge\"}"
         );
+
+        let expected_closed = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "show",
+            store,
+            "--merge",
+            &merge_id,
+            "--expected-runtime-state",
+            "completed",
+            "--expected-outcome",
+            "completed",
+        ])
+        .expect("parse expected closed merge show"))
+        .expect("show expected closed merge");
+        assert_eq!(value(&expected_closed, "runtime_state"), "completed");
+        assert_eq!(value(&expected_closed, "outcome"), "completed");
+        assert_eq!(
+            value(&expected_closed, "runtime_state_matches_expected"),
+            "true"
+        );
+        assert_eq!(value(&expected_closed, "outcome_matches_expected"), "true");
 
         let all = run(Cli::try_parse_from([
             "workvcs",

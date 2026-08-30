@@ -2371,6 +2371,9 @@ enum ResourceCommand {
         source_session: Option<String>,
 
         #[arg(long)]
+        fingerprint: Option<String>,
+
+        #[arg(long)]
         detail_content_digest: Option<String>,
 
         #[arg(long)]
@@ -5796,6 +5799,7 @@ fn run(cli: Cli) -> Result<String> {
                     adapter_kind,
                     adapter_schema_version,
                     source_session,
+                    fingerprint,
                     detail_content_digest,
                     detail_media_type,
                     limit,
@@ -5824,6 +5828,12 @@ fn run(cli: Cli) -> Result<String> {
                 ));
             }
             let mut result = engine.resource_observations(options)?;
+            if let Some(fingerprint) = fingerprint {
+                let fingerprint = Digest::from_hex(&fingerprint)?;
+                result
+                    .observations
+                    .retain(|observation| observation.fingerprint == fingerprint);
+            }
             let detail_content_digest = detail_content_digest
                 .as_deref()
                 .map(Digest::from_hex)
@@ -22646,6 +22656,22 @@ mod tests {
             observation_id
         );
 
+        let fingerprint_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--fingerprint",
+            &fingerprint,
+        ])
+        .expect("parse fingerprint-filtered observation list"))
+        .expect("list fingerprint-filtered observations");
+        assert_eq!(value(&fingerprint_observations, "observations"), "1");
+        assert_eq!(
+            value(&fingerprint_observations, "observation.0.observation_id"),
+            observation_id
+        );
+
         let schema_version_observations = run(Cli::try_parse_from([
             "workvcs",
             "resource",
@@ -22762,6 +22788,21 @@ mod tests {
         .expect("parse missing observation list"))
         .expect("list missing observations");
         assert_eq!(value(&missing_observations, "observations"), "0");
+
+        let missing_fingerprint_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--fingerprint",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse missing fingerprint observation list"))
+        .expect("list missing fingerprint observations");
+        assert_eq!(
+            value(&missing_fingerprint_observations, "observations"),
+            "0"
+        );
 
         let missing_schema_observations = run(Cli::try_parse_from([
             "workvcs",

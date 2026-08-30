@@ -836,6 +836,18 @@ enum ReferenceCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        referrer: Option<String>,
+
+        #[arg(long)]
+        target: Option<String>,
+
+        #[arg(long)]
+        referrer_kind: Option<String>,
+
+        #[arg(long)]
+        target_kind: Option<String>,
     },
 }
 
@@ -3819,12 +3831,32 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 branch,
                 commit,
+                referrer,
+                target,
+                referrer_kind,
+                target_kind,
             } => {
                 let engine = Engine::open(&store)?;
                 let commit_id = resolve_reference_query_commit(&engine, branch, commit)?;
-                Ok(render_structural_reference_list(
-                    &engine.structural_references_at(commit_id)?,
-                ))
+                let mut references = engine.structural_references_at(commit_id)?;
+                if let Some(referrer) = referrer {
+                    let referrer_id = EntityId::parse_canonical(&referrer)?;
+                    references.retain(|reference| reference.referrer_entity_id == referrer_id);
+                }
+                if let Some(target) = target {
+                    let target_id = EntityId::parse_canonical(&target)?;
+                    references.retain(|reference| reference.target_entity_id == target_id);
+                }
+                if let Some(referrer_kind) = referrer_kind {
+                    let referrer_kind = parse_structural_reference_endpoint_kind(&referrer_kind)?;
+                    references
+                        .retain(|reference| reference.referrer_kind.as_str() == referrer_kind);
+                }
+                if let Some(target_kind) = target_kind {
+                    let target_kind = parse_structural_reference_endpoint_kind(&target_kind)?;
+                    references.retain(|reference| reference.target_kind.as_str() == target_kind);
+                }
+                Ok(render_structural_reference_list(&references))
             }
         },
         Command::Restore {
@@ -6591,6 +6623,17 @@ fn parse_verification_target_kind(value: &str) -> Result<&'static str> {
         "verification_requirement" => Ok("verification_requirement"),
         other => Err(WorkVcsError::TaskInvalid(format!(
             "verification target kind {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_structural_reference_endpoint_kind(value: &str) -> Result<&'static str> {
+    match value {
+        "goal" => Ok("goal"),
+        "plan" => Ok("plan"),
+        "task" => Ok("task"),
+        other => Err(WorkVcsError::TaskInvalid(format!(
+            "structural reference endpoint kind {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -12962,6 +13005,100 @@ mod tests {
             value(&goal, "goal_entity_id")
         );
         assert_eq!(value(&listed, "reference[0].target_kind"), "plan");
+
+        let listed_by_referrer = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--referrer",
+            &value(&goal, "goal_entity_id"),
+        ])
+        .expect("parse reference list by referrer"))
+        .expect("list references by referrer");
+        assert_eq!(value(&listed_by_referrer, "structural_references"), "1");
+
+        let listed_by_target = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--target",
+            &value(&plan, "plan_entity_id"),
+        ])
+        .expect("parse reference list by target"))
+        .expect("list references by target");
+        assert_eq!(value(&listed_by_target, "structural_references"), "1");
+
+        let listed_by_referrer_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--referrer-kind",
+            "goal",
+        ])
+        .expect("parse reference list by referrer kind"))
+        .expect("list references by referrer kind");
+        assert_eq!(
+            value(&listed_by_referrer_kind, "structural_references"),
+            "1"
+        );
+
+        let listed_by_target_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--target-kind",
+            "plan",
+        ])
+        .expect("parse reference list by target kind"))
+        .expect("list references by target kind");
+        assert_eq!(value(&listed_by_target_kind, "structural_references"), "1");
+
+        let listed_by_combined_filters = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--referrer-kind",
+            "goal",
+            "--target-kind",
+            "plan",
+            "--target",
+            &value(&plan, "plan_entity_id"),
+        ])
+        .expect("parse reference list by combined filters"))
+        .expect("list references by combined filters");
+        assert_eq!(
+            value(&listed_by_combined_filters, "structural_references"),
+            "1"
+        );
+
+        let listed_by_missing_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--target-kind",
+            "task",
+        ])
+        .expect("parse reference list by missing kind"))
+        .expect("list references by missing kind");
+        assert_eq!(value(&listed_by_missing_kind, "structural_references"), "0");
     }
 
     #[test]

@@ -923,6 +923,9 @@ enum BranchCommand {
 
         #[arg(long)]
         lifecycle_state: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Head {
         #[arg(value_name = "STORE")]
@@ -4336,6 +4339,7 @@ fn run(cli: Cli) -> Result<String> {
                     workspace,
                     name,
                     lifecycle_state,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -4346,6 +4350,14 @@ fn run(cli: Cli) -> Result<String> {
             }
             if let Some(lifecycle_state) = lifecycle_state {
                 branches.retain(|branch| branch.lifecycle_state == lifecycle_state);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "branch list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                branches.truncate(limit);
             }
             Ok(render_branch_list(&branches))
         }
@@ -17432,6 +17444,34 @@ mod tests {
         .expect("list branches by name and lifecycle state");
         assert!(active_experiment.contains("branches=1"));
         assert_eq!(value(&active_experiment, "branch.0.branch_id"), fork_branch);
+
+        let limited_branches = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited branch list"))
+        .expect("list limited branches");
+        assert!(limited_branches.contains("branches=1"));
+        assert_ne!(value(&limited_branches, "branch.0.branch_id"), "");
+
+        let zero_limit_branches = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit branch list"));
+        assert!(zero_limit_branches.is_err());
 
         let missing_branch_name = run(Cli::try_parse_from([
             "workvcs",

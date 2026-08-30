@@ -2469,6 +2469,9 @@ enum EvidenceCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_evidences: Option<usize>,
     },
 }
 
@@ -6802,6 +6805,7 @@ fn run(cli: Cli) -> Result<String> {
                     content_role,
                     media_type,
                     limit,
+                    expected_evidences,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6836,7 +6840,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.evidences.truncate(limit);
             }
-            render_evidence_list(&result)
+            let mut output = render_evidence_list(&result)?;
+            if let Some(expected_evidences) = expected_evidences {
+                let actual_evidences = result.evidences.len();
+                if actual_evidences != expected_evidences {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "evidences {actual_evidences} does not match expected {expected_evidences}"
+                    )));
+                }
+                output.push_str("evidences_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Resource {
             command: ResourceCommand::Create { store, kind },
@@ -24480,13 +24494,44 @@ mod tests {
         assert!(listed_ids.contains(&evidence_id));
         assert!(listed_ids.contains(&second_evidence_id));
 
-        let limited_list =
-            run(
-                Cli::try_parse_from(["workvcs", "evidence", "list", store, "--limit", "1"])
-                    .expect("parse limited evidence list"),
-            )
-            .expect("list limited evidence");
+        let expected_list = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--expected-evidences",
+            "2",
+        ])
+        .expect("parse expected evidence list"))
+        .expect("list expected evidence");
+        assert_eq!(value(&expected_list, "evidences"), "2");
+        assert_eq!(value(&expected_list, "evidences_match_expected"), "true");
+
+        let mismatched_list = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--expected-evidences",
+            "1",
+        ])
+        .expect("parse mismatched evidence list"));
+        assert!(mismatched_list.is_err());
+
+        let limited_list = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--limit",
+            "1",
+            "--expected-evidences",
+            "1",
+        ])
+        .expect("parse limited evidence list"))
+        .expect("list limited evidence");
         assert_eq!(value(&limited_list, "evidences"), "1");
+        assert_eq!(value(&limited_list, "evidences_match_expected"), "true");
         assert_ne!(value(&limited_list, "evidence.0.evidence_id"), "");
 
         let zero_limit_list =
@@ -24503,10 +24548,13 @@ mod tests {
             store,
             "--kind",
             "terminal-log",
+            "--expected-evidences",
+            "1",
         ])
         .expect("parse filtered evidence list"))
         .expect("list filtered evidence");
         assert_eq!(value(&filtered, "evidences"), "1");
+        assert_eq!(value(&filtered, "evidences_match_expected"), "true");
         assert_eq!(value(&filtered, "evidence.0.evidence_id"), evidence_id);
         assert_eq!(value(&filtered, "evidence.0.evidence_kind"), "terminal-log");
         assert_eq!(value(&filtered, "evidence.0.contents"), "1");

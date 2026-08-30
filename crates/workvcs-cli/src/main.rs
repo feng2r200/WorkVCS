@@ -202,6 +202,12 @@ enum Command {
 
         #[arg(long)]
         to_commit: Option<String>,
+
+        #[arg(long)]
+        target_kind: Option<String>,
+
+        #[arg(long)]
+        change_kind: Option<String>,
     },
     Entity {
         #[command(subcommand)]
@@ -3858,13 +3864,24 @@ fn run(cli: Cli) -> Result<String> {
             from_commit,
             to_branch,
             to_commit,
+            target_kind,
+            change_kind,
         } => {
             let engine = Engine::open(store)?;
             let from = work_state_diff_target_from_cli("from", from_branch, from_commit)?;
             let to = work_state_diff_target_from_cli("to", to_branch, to_commit)?;
-            Ok(render_work_state_diff(
-                &engine.diff(WorkStateDiffOptions::new(from, to))?,
-            ))
+            let mut diff = engine.diff(WorkStateDiffOptions::new(from, to))?;
+            if let Some(target_kind) = target_kind {
+                filter_work_state_diff_target_kind(&mut diff, &target_kind)?;
+            }
+            if let Some(change_kind) = change_kind {
+                let change_kind = parse_work_state_diff_change_kind(&change_kind)?;
+                diff.entity_changes
+                    .retain(|change| change.change_kind == change_kind);
+                diff.relation_changes
+                    .retain(|change| change.change_kind == change_kind);
+            }
+            Ok(render_work_state_diff(&diff))
         }
         Command::Entity { command } => match command {
             EntityCommand::Create {
@@ -12753,6 +12770,30 @@ fn work_state_diff_target_from_cli(
     }
 }
 
+fn filter_work_state_diff_target_kind(diff: &mut WorkStateDiff, value: &str) -> Result<()> {
+    match value {
+        "entity" => diff.relation_changes.clear(),
+        "relation" => diff.entity_changes.clear(),
+        other => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "diff target kind {other:?} is not in the CLI vocabulary"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parse_work_state_diff_change_kind(value: &str) -> Result<WorkStateDiffChangeKind> {
+    match value {
+        "added" => Ok(WorkStateDiffChangeKind::Added),
+        "removed" => Ok(WorkStateDiffChangeKind::Removed),
+        "updated" => Ok(WorkStateDiffChangeKind::Updated),
+        other => Err(WorkVcsError::QueryInvalid(format!(
+            "diff change kind {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
 fn resolve_reference_query_commit(
     engine: &Engine,
     branch: Option<String>,
@@ -13188,6 +13229,70 @@ mod tests {
             value(&diff, "entity[0].after_entity_version_id"),
             value(&task, "task_entity_version_id")
         );
+
+        let entity_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--target-kind",
+            "entity",
+        ])
+        .expect("parse entity diff"))
+        .expect("diff entity changes");
+        assert_eq!(value(&entity_diff, "entity_changes"), "1");
+        assert_eq!(value(&entity_diff, "relation_changes"), "0");
+
+        let relation_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--target-kind",
+            "relation",
+        ])
+        .expect("parse relation diff"))
+        .expect("diff relation changes");
+        assert_eq!(value(&relation_diff, "entity_changes"), "0");
+        assert_eq!(value(&relation_diff, "relation_changes"), "0");
+
+        let added_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--change-kind",
+            "added",
+        ])
+        .expect("parse added diff"))
+        .expect("diff added changes");
+        assert_eq!(value(&added_diff, "entity_changes"), "1");
+        assert_eq!(value(&added_diff, "relation_changes"), "0");
+
+        let removed_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--change-kind",
+            "removed",
+        ])
+        .expect("parse removed diff"))
+        .expect("diff removed changes");
+        assert_eq!(value(&removed_diff, "entity_changes"), "0");
+        assert_eq!(value(&removed_diff, "relation_changes"), "0");
     }
 
     #[test]

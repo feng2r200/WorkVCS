@@ -208,6 +208,9 @@ enum Command {
 
         #[arg(long)]
         change_kind: Option<String>,
+
+        #[arg(long)]
+        entity: Option<String>,
     },
     Entity {
         #[command(subcommand)]
@@ -3866,6 +3869,7 @@ fn run(cli: Cli) -> Result<String> {
             to_commit,
             target_kind,
             change_kind,
+            entity,
         } => {
             let engine = Engine::open(store)?;
             let from = work_state_diff_target_from_cli("from", from_branch, from_commit)?;
@@ -3880,6 +3884,12 @@ fn run(cli: Cli) -> Result<String> {
                     .retain(|change| change.change_kind == change_kind);
                 diff.relation_changes
                     .retain(|change| change.change_kind == change_kind);
+            }
+            if let Some(entity) = entity {
+                let entity_id = EntityId::parse_canonical(&entity)?;
+                diff.entity_changes
+                    .retain(|change| change.entity_id == entity_id);
+                diff.relation_changes.clear();
             }
             Ok(render_work_state_diff(&diff))
         }
@@ -13293,6 +13303,42 @@ mod tests {
         .expect("diff removed changes");
         assert_eq!(value(&removed_diff, "entity_changes"), "0");
         assert_eq!(value(&removed_diff, "relation_changes"), "0");
+
+        let entity_id_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--entity",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse entity id diff"))
+        .expect("diff one entity");
+        assert_eq!(value(&entity_id_diff, "entity_changes"), "1");
+        assert_eq!(value(&entity_id_diff, "relation_changes"), "0");
+        assert_eq!(
+            value(&entity_id_diff, "entity[0].entity_id"),
+            value(&task, "task_entity_id")
+        );
+
+        let missing_entity_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--entity",
+            &EntityId::new_v7().to_string(),
+        ])
+        .expect("parse missing entity diff"))
+        .expect("diff missing entity");
+        assert_eq!(value(&missing_entity_diff, "entity_changes"), "0");
+        assert_eq!(value(&missing_entity_diff, "relation_changes"), "0");
     }
 
     #[test]

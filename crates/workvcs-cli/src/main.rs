@@ -548,6 +548,12 @@ enum StoreCommand {
 
         #[arg(long)]
         lineage: String,
+
+        #[arg(long)]
+        expected_source_root_descriptor_digest: Option<String>,
+
+        #[arg(long)]
+        expected_source_bundle_digest: Option<String>,
     },
     #[command(name = "lineage-list")]
     List {
@@ -3684,10 +3690,46 @@ fn run(cli: Cli) -> Result<String> {
                 let result = engine.record_store_lineage(options)?;
                 render_store_lineage_record_result(&result)
             }
-            StoreCommand::Show { store, lineage } => {
+            StoreCommand::Show {
+                store,
+                lineage,
+                expected_source_root_descriptor_digest,
+                expected_source_bundle_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.store_lineage(LineageId::parse_canonical(&lineage)?)?;
-                render_store_lineage_snapshot(&snapshot)
+                let mut output = render_store_lineage_snapshot(&snapshot)?;
+                if let Some(expected_source_root_descriptor_digest) =
+                    expected_source_root_descriptor_digest
+                {
+                    let expected_source_root_descriptor_digest =
+                        Digest::from_hex(&expected_source_root_descriptor_digest)?;
+                    if snapshot.source_root_descriptor_digest
+                        != expected_source_root_descriptor_digest
+                    {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "store lineage source root descriptor digest {} does not match expected {}",
+                            snapshot.source_root_descriptor_digest,
+                            expected_source_root_descriptor_digest
+                        )));
+                    }
+                    output.push_str("source_root_descriptor_matches_expected=true\n");
+                }
+                if let Some(expected_source_bundle_digest) = expected_source_bundle_digest {
+                    let expected_source_bundle_digest =
+                        Digest::from_hex(&expected_source_bundle_digest)?;
+                    if snapshot.source_bundle_digest.as_ref()
+                        != Some(&expected_source_bundle_digest)
+                    {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "store lineage source bundle digest {} does not match expected {}",
+                            render_optional_display_or_none(snapshot.source_bundle_digest.as_ref()),
+                            expected_source_bundle_digest
+                        )));
+                    }
+                    output.push_str("source_bundle_matches_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::List {
                 store,
@@ -17248,6 +17290,63 @@ mod tests {
             value(&shown, "source_root_descriptor_digest"),
             value(&recorded, "source_root_descriptor_digest")
         );
+
+        let expected_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "lineage-show",
+            target,
+            "--lineage",
+            &lineage_id,
+            "--expected-source-root-descriptor-digest",
+            &value(&shown, "source_root_descriptor_digest"),
+            "--expected-source-bundle-digest",
+            &source_bundle_digest,
+        ])
+        .expect("parse expected store lineage-show"))
+        .expect("show expected store lineage");
+        assert_eq!(
+            value(&expected_shown, "source_root_descriptor_digest"),
+            value(&shown, "source_root_descriptor_digest")
+        );
+        assert_eq!(
+            value(&expected_shown, "source_bundle_digest"),
+            source_bundle_digest
+        );
+        assert_eq!(
+            value(&expected_shown, "source_root_descriptor_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_shown, "source_bundle_matches_expected"),
+            "true"
+        );
+
+        let mismatched_source_root = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "lineage-show",
+            target,
+            "--lineage",
+            &lineage_id,
+            "--expected-source-root-descriptor-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched source root store lineage-show"));
+        assert!(mismatched_source_root.is_err());
+
+        let mismatched_source_bundle = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "lineage-show",
+            target,
+            "--lineage",
+            &lineage_id,
+            "--expected-source-bundle-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched source bundle store lineage-show"));
+        assert!(mismatched_source_bundle.is_err());
 
         let listed = run(Cli::try_parse_from([
             "workvcs",

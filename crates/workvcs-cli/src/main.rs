@@ -195,6 +195,9 @@ enum Command {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("diff-from")
@@ -4257,11 +4260,23 @@ fn run(cli: Cli) -> Result<String> {
             store,
             branch,
             commit,
+            expected_state_digest,
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_show_at_commit(&engine, branch, commit)?;
             let state = engine.show_at(commit_id)?;
-            Ok(render_replayed_state(&state))
+            let mut output = render_replayed_state(&state);
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if state.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "show-at state digest {} does not match expected {}",
+                        state.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Diff {
             store,
@@ -14780,6 +14795,35 @@ mod tests {
         assert_eq!(value(&branch_state, "commit_id"), value(&task, "commit_id"));
         assert_eq!(value(&branch_state, "entities"), "1");
         assert_eq!(value(&branch_state, "relations"), "0");
+
+        let expected_branch_state = run(Cli::try_parse_from([
+            "workvcs",
+            "show-at",
+            store,
+            "--branch",
+            &branch,
+            "--expected-state-digest",
+            &value(&branch_state, "state_digest"),
+        ])
+        .expect("parse expected branch show-at"))
+        .expect("show expected branch state");
+        assert_eq!(
+            value(&expected_branch_state, "state_digest"),
+            value(&branch_state, "state_digest")
+        );
+        assert_eq!(value(&expected_branch_state, "matches_expected"), "true");
+
+        let mismatched_branch_state = run(Cli::try_parse_from([
+            "workvcs",
+            "show-at",
+            store,
+            "--branch",
+            &branch,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched branch show-at"));
+        assert!(mismatched_branch_state.is_err());
 
         let entity_diff = run(Cli::try_parse_from([
             "workvcs",

@@ -2371,6 +2371,12 @@ enum ResourceCommand {
         source_session: Option<String>,
 
         #[arg(long)]
+        detail_content_digest: Option<String>,
+
+        #[arg(long)]
+        detail_media_type: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
 }
@@ -5790,6 +5796,8 @@ fn run(cli: Cli) -> Result<String> {
                     adapter_kind,
                     adapter_schema_version,
                     source_session,
+                    detail_content_digest,
+                    detail_media_type,
                     limit,
                 },
         } => {
@@ -5816,6 +5824,19 @@ fn run(cli: Cli) -> Result<String> {
                 ));
             }
             let mut result = engine.resource_observations(options)?;
+            let detail_content_digest = detail_content_digest
+                .as_deref()
+                .map(Digest::from_hex)
+                .transpose()?;
+            if detail_content_digest.is_some() || detail_media_type.is_some() {
+                result.observations.retain(|observation| {
+                    resource_observation_matches_detail_filters(
+                        observation,
+                        detail_content_digest,
+                        detail_media_type.as_deref(),
+                    )
+                });
+            }
             if let Some(limit) = limit {
                 result.observations.truncate(limit);
             }
@@ -9898,6 +9919,25 @@ fn render_resource_observation_list(result: &ResourceObservationListResult) -> R
         .expect("write to String");
     }
     Ok(output)
+}
+
+fn resource_observation_matches_detail_filters(
+    observation: &ResourceObservationSnapshot,
+    detail_content_digest: Option<Digest>,
+    detail_media_type: Option<&str>,
+) -> bool {
+    let Some(detail) = &observation.detail_content else {
+        return false;
+    };
+    let digest_matches = match detail_content_digest {
+        Some(detail_content_digest) => detail.content_digest == detail_content_digest,
+        None => true,
+    };
+    let media_type_matches = match detail_media_type {
+        Some(detail_media_type) => detail.media_type.as_deref() == Some(detail_media_type),
+        None => true,
+    };
+    digest_matches && media_type_matches
 }
 
 fn render_verification_applicability_cache(
@@ -22641,6 +22681,53 @@ mod tests {
             value(&session_observations, "observation.0.source_session_id"),
             session_id
         );
+
+        let detail_content_digest = value(&shown_observation, "detail.content_digest");
+        let detail_digest_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--detail-content-digest",
+            &detail_content_digest,
+        ])
+        .expect("parse detail-digest observation list"))
+        .expect("list detail-digest observations");
+        assert_eq!(value(&detail_digest_observations, "observations"), "1");
+        assert_eq!(
+            value(&detail_digest_observations, "observation.0.observation_id"),
+            observation_id
+        );
+
+        let detail_media_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--detail-media-type",
+            "text/plain",
+        ])
+        .expect("parse detail-media observation list"))
+        .expect("list detail-media observations");
+        assert_eq!(value(&detail_media_observations, "observations"), "1");
+        assert_eq!(
+            value(&detail_media_observations, "observation.0.observation_id"),
+            observation_id
+        );
+
+        let missing_detail_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--detail-content-digest",
+            &detail_content_digest,
+            "--detail-media-type",
+            "application/json",
+        ])
+        .expect("parse missing detail observation list"))
+        .expect("list missing detail observations");
+        assert_eq!(value(&missing_detail_observations, "observations"), "0");
 
         let combined_observations = run(Cli::try_parse_from([
             "workvcs",

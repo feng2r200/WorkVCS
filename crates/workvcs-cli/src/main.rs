@@ -994,6 +994,18 @@ enum ChangeSetCommand {
 
         #[arg(long)]
         changeset: String,
+
+        #[arg(long)]
+        operation: Option<String>,
+
+        #[arg(long)]
+        subject_family: Option<String>,
+
+        #[arg(long)]
+        subject_object: Option<String>,
+
+        #[arg(long)]
+        payload_digest: Option<String>,
     },
     Anchors {
         #[arg(value_name = "STORE")]
@@ -3975,10 +3987,39 @@ fn run(cli: Cli) -> Result<String> {
                 let snapshot = engine.changeset(ChangeSetId::parse_canonical(&changeset)?)?;
                 Ok(render_changeset_snapshot(&snapshot))
             }
-            ChangeSetCommand::Operations { store, changeset } => {
+            ChangeSetCommand::Operations {
+                store,
+                changeset,
+                operation,
+                subject_family,
+                subject_object,
+                payload_digest,
+            } => {
                 let engine = Engine::open(store)?;
-                let result =
+                let mut result =
                     engine.changeset_operations(ChangeSetId::parse_canonical(&changeset)?)?;
+                if let Some(operation) = operation {
+                    let operation_id = OperationId::parse_canonical(&operation)?;
+                    result
+                        .operations
+                        .retain(|operation| operation.operation_id == operation_id);
+                }
+                if let Some(subject_family) = subject_family {
+                    result
+                        .operations
+                        .retain(|operation| operation.subject.family() == subject_family);
+                }
+                if let Some(subject_object) = subject_object {
+                    result
+                        .operations
+                        .retain(|operation| operation.subject.object_id() == subject_object);
+                }
+                if let Some(payload_digest) = payload_digest {
+                    let payload_digest = Digest::from_hex(&payload_digest)?;
+                    result
+                        .operations
+                        .retain(|operation| operation.operation_payload_digest == payload_digest);
+                }
                 Ok(render_change_operations(&result))
             }
             ChangeSetCommand::Anchors { store, changeset } => {
@@ -15201,9 +15242,156 @@ mod tests {
             value(&operations, "operation[0].subject_object_id"),
             task_entity_id
         );
+        let operation_id = value(&operations, "operation[0].operation_id");
+        let operation_payload_digest = value(&operations, "operation[0].operation_payload_digest");
         assert_ne!(
             value(&operations, "operation[0].operation_payload_json"),
             ""
+        );
+
+        let operations_by_operation = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--operation",
+            &operation_id,
+        ])
+        .expect("parse operation-filtered changeset operations"))
+        .expect("list operation-filtered changeset operations");
+        assert_eq!(value(&operations_by_operation, "operations"), "1");
+        assert_eq!(
+            value(&operations_by_operation, "operation[0].operation_id"),
+            operation_id
+        );
+
+        let operations_by_subject_family = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--subject-family",
+            "entity",
+        ])
+        .expect("parse subject-family-filtered changeset operations"))
+        .expect("list subject-family-filtered changeset operations");
+        assert_eq!(value(&operations_by_subject_family, "operations"), "1");
+
+        let operations_by_subject_object = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--subject-object",
+            &task_entity_id,
+        ])
+        .expect("parse subject-object-filtered changeset operations"))
+        .expect("list subject-object-filtered changeset operations");
+        assert_eq!(value(&operations_by_subject_object, "operations"), "1");
+
+        let operations_by_payload_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--payload-digest",
+            &operation_payload_digest,
+        ])
+        .expect("parse payload-digest-filtered changeset operations"))
+        .expect("list payload-digest-filtered changeset operations");
+        assert_eq!(value(&operations_by_payload_digest, "operations"), "1");
+
+        let operations_by_combined_filters = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--operation",
+            &operation_id,
+            "--subject-family",
+            "entity",
+            "--subject-object",
+            &task_entity_id,
+            "--payload-digest",
+            &operation_payload_digest,
+        ])
+        .expect("parse combined-filtered changeset operations"))
+        .expect("list combined-filtered changeset operations");
+        assert_eq!(value(&operations_by_combined_filters, "operations"), "1");
+
+        let operations_by_missing_operation = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--operation",
+            &OperationId::new_v7().to_string(),
+        ])
+        .expect("parse missing operation changeset operations"))
+        .expect("list missing operation changeset operations");
+        assert_eq!(value(&operations_by_missing_operation, "operations"), "0");
+
+        let operations_by_missing_subject_family = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--subject-family",
+            "relation",
+        ])
+        .expect("parse missing subject-family changeset operations"))
+        .expect("list missing subject-family changeset operations");
+        assert_eq!(
+            value(&operations_by_missing_subject_family, "operations"),
+            "0"
+        );
+
+        let operations_by_missing_subject_object = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--subject-object",
+            &EntityId::new_v7().to_string(),
+        ])
+        .expect("parse missing subject-object changeset operations"))
+        .expect("list missing subject-object changeset operations");
+        assert_eq!(
+            value(&operations_by_missing_subject_object, "operations"),
+            "0"
+        );
+
+        let operations_by_missing_payload_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--payload-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse missing payload-digest changeset operations"))
+        .expect("list missing payload-digest changeset operations");
+        assert_eq!(
+            value(&operations_by_missing_payload_digest, "operations"),
+            "0"
         );
 
         let anchors = run(Cli::try_parse_from([

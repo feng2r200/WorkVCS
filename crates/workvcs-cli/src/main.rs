@@ -1410,6 +1410,27 @@ enum BundleCommand {
 
         #[arg(long)]
         require_can_apply: bool,
+
+        #[arg(long)]
+        expected_payload_files: Option<usize>,
+
+        #[arg(long)]
+        expected_payload_references: Option<usize>,
+
+        #[arg(long)]
+        expected_exported_branch_heads: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_heads_already_present: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_heads_missing: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_heads_fast_forward: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_heads_diverged: Option<usize>,
     },
     ApplyDir {
         #[arg(value_name = "STORE")]
@@ -5404,6 +5425,13 @@ fn run(cli: Cli) -> Result<String> {
                 input_dir,
                 require_valid,
                 require_can_apply,
+                expected_payload_files,
+                expected_payload_references,
+                expected_exported_branch_heads,
+                expected_branch_heads_already_present,
+                expected_branch_heads_missing,
+                expected_branch_heads_fast_forward,
+                expected_branch_heads_diverged,
             } => {
                 let engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
@@ -5434,6 +5462,55 @@ fn run(cli: Cli) -> Result<String> {
                     }
                     output.push_str("can_apply_required=true\n");
                 }
+                append_expected_count_match(
+                    &mut output,
+                    "bundle preflight payload files",
+                    preflight.payload_files,
+                    expected_payload_files,
+                    "payload_files_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle preflight payload references",
+                    preflight.payload_references,
+                    expected_payload_references,
+                    "payload_references_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle preflight exported branch heads",
+                    preflight.exported_branch_heads,
+                    expected_exported_branch_heads,
+                    "exported_branch_heads_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle preflight branch heads already present",
+                    preflight.branch_heads_already_present,
+                    expected_branch_heads_already_present,
+                    "branch_heads_already_present_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle preflight branch heads missing",
+                    preflight.branch_heads_missing,
+                    expected_branch_heads_missing,
+                    "branch_heads_missing_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle preflight branch heads fast forward",
+                    preflight.branch_heads_fast_forward,
+                    expected_branch_heads_fast_forward,
+                    "branch_heads_fast_forward_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle preflight branch heads diverged",
+                    preflight.branch_heads_diverged,
+                    expected_branch_heads_diverged,
+                    "branch_heads_diverged_match_expected",
+                )?;
                 Ok(output)
             }
             BundleCommand::ApplyDir {
@@ -14470,6 +14547,25 @@ fn render_bundle_payload_validation(result: &BundlePayloadValidationResult) -> S
     )
 }
 
+fn append_expected_count_match(
+    output: &mut String,
+    label: &str,
+    actual: usize,
+    expected: Option<usize>,
+    marker: &str,
+) -> Result<()> {
+    if let Some(expected) = expected {
+        if actual != expected {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {actual} does not match expected {expected}"
+            )));
+        }
+        output.push_str(marker);
+        output.push_str("=true\n");
+    }
+    Ok(())
+}
+
 fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> String {
     format!(
         "valid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\naction={}\nmanifest_digest={}\npayload_index_digest={}\npayload_files={}\npayload_references={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nproblem={}\n",
@@ -22361,6 +22457,20 @@ mod tests {
             store,
             "--input-dir",
             export_dir.to_str().expect("export dir path"),
+            "--expected-payload-files",
+            "3",
+            "--expected-payload-references",
+            "5",
+            "--expected-exported-branch-heads",
+            "1",
+            "--expected-branch-heads-already-present",
+            "1",
+            "--expected-branch-heads-missing",
+            "0",
+            "--expected-branch-heads-fast-forward",
+            "0",
+            "--expected-branch-heads-diverged",
+            "0",
         ])
         .expect("parse bundle preflight-dir"))
         .expect("preflight bundle directory");
@@ -22373,9 +22483,47 @@ mod tests {
         assert_eq!(value(&preflight, "action"), "already_present");
         assert_eq!(value(&preflight, "exported_branch_heads"), "1");
         assert_eq!(value(&preflight, "branch_heads_already_present"), "1");
+        assert_eq!(value(&preflight, "branch_heads_missing"), "0");
         assert_eq!(value(&preflight, "branch_heads_fast_forward"), "0");
         assert_eq!(value(&preflight, "branch_heads_diverged"), "0");
+        assert_eq!(value(&preflight, "payload_files_match_expected"), "true");
+        assert_eq!(
+            value(&preflight, "payload_references_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "exported_branch_heads_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "branch_heads_already_present_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "branch_heads_missing_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "branch_heads_fast_forward_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "branch_heads_diverged_match_expected"),
+            "true"
+        );
         assert_eq!(value(&preflight, "problem"), "none");
+        let mismatched_preflight = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "preflight-dir",
+            store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--expected-branch-heads-missing",
+            "1",
+        ])
+        .expect("parse mismatched bundle preflight-dir"));
+        assert!(mismatched_preflight.is_err());
         let required_preflight = run(Cli::try_parse_from([
             "workvcs",
             "bundle",
@@ -22660,11 +22808,23 @@ mod tests {
             old_store,
             "--input-dir",
             export_dir.to_str().expect("export dir path"),
+            "--expected-exported-branch-heads",
+            "1",
+            "--expected-branch-heads-fast-forward",
+            "1",
         ])
         .expect("parse bundle preflight-dir"))
         .expect("preflight bundle directory");
         assert_eq!(value(&preflight, "action"), "same_store_fast_forward_ready");
         assert_eq!(value(&preflight, "can_apply"), "true");
+        assert_eq!(
+            value(&preflight, "exported_branch_heads_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "branch_heads_fast_forward_match_expected"),
+            "true"
+        );
         let required_preflight = run(Cli::try_parse_from([
             "workvcs",
             "bundle",

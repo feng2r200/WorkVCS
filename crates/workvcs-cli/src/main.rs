@@ -3431,6 +3431,12 @@ enum RunnableCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_head: Option<String>,
+
+        #[arg(long)]
+        expected_candidates: Option<usize>,
     },
 }
 
@@ -8484,6 +8490,8 @@ fn run(cli: Cli) -> Result<String> {
                     status,
                     runnable,
                     limit,
+                    expected_head,
+                    expected_candidates,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -8515,7 +8523,27 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 projection.candidates.truncate(limit);
             }
-            Ok(render_runnable_tasks(&projection))
+            let mut output = render_runnable_tasks(&projection);
+            if let Some(expected_head) = expected_head {
+                let expected_head = CommitId::parse_canonical(&expected_head)?;
+                if projection.head_commit_id != expected_head {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "runnable tasks head {} does not match expected {expected_head}",
+                        projection.head_commit_id
+                    )));
+                }
+                output.push_str("head_matches_expected=true\n");
+            }
+            if let Some(expected_candidates) = expected_candidates {
+                let actual_candidates = projection.candidates.len();
+                if actual_candidates != expected_candidates {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "runnable task candidates {actual_candidates} does not match expected {expected_candidates}"
+                    )));
+                }
+                output.push_str("candidates_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Merge {
             command:
@@ -27302,6 +27330,7 @@ mod tests {
         .expect("parse task"))
         .expect("create task");
         let task_id = value(&task, "task_entity_id");
+        let task_head = value(&task, "commit_id");
 
         let session = run(Cli::try_parse_from([
             "workvcs",
@@ -27378,6 +27407,41 @@ mod tests {
         assert!(runnable.contains("candidate.0.runnable=true"));
         assert!(runnable.contains("candidate.0.claim=unclaimed"));
 
+        let expected_runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--expected-head",
+            &task_head,
+            "--expected-candidates",
+            "1",
+        ])
+        .expect("parse expected runnable"))
+        .expect("expected runnable tasks");
+        assert_eq!(value(&expected_runnable, "head_commit_id"), task_head);
+        assert_eq!(value(&expected_runnable, "candidates"), "1");
+        assert_eq!(value(&expected_runnable, "head_matches_expected"), "true");
+        assert_eq!(
+            value(&expected_runnable, "candidates_match_expected"),
+            "true"
+        );
+
+        let mismatched_runnable_count = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--expected-candidates",
+            "0",
+        ])
+        .expect("parse mismatched runnable count"));
+        assert!(mismatched_runnable_count.is_err());
+
         let runnable_by_task = run(Cli::try_parse_from([
             "workvcs",
             "runnable",
@@ -27429,6 +27493,26 @@ mod tests {
         .expect("parse non-runnable tasks"))
         .expect("non-runnable tasks");
         assert_eq!(value(&non_runnable, "candidates"), "0");
+
+        let expected_non_runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--runnable",
+            "false",
+            "--expected-candidates",
+            "0",
+        ])
+        .expect("parse expected non-runnable tasks"))
+        .expect("expected non-runnable tasks");
+        assert_eq!(value(&expected_non_runnable, "candidates"), "0");
+        assert_eq!(
+            value(&expected_non_runnable, "candidates_match_expected"),
+            "true"
+        );
 
         let missing_runnable_task = run(Cli::try_parse_from([
             "workvcs",

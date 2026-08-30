@@ -96,6 +96,7 @@ use workvcs_core::{
     WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
     content_object_digest, entity_version_digest, parse_canonical_json, relation_version_digest,
+    work_state_mapping_digest,
 };
 
 #[derive(Debug, Parser)]
@@ -332,6 +333,13 @@ enum CanonicalCommand {
 
         #[arg(long)]
         content_hex: Option<String>,
+    },
+    WorkStateDigest {
+        #[arg(long, value_name = "ENTITY_ID=ENTITY_VERSION_ID")]
+        entity: Vec<String>,
+
+        #[arg(long, value_name = "RELATION_ID=RELATION_VERSION_ID")]
+        relation: Vec<String>,
     },
 }
 
@@ -2909,6 +2917,9 @@ fn run(cli: Cli) -> Result<String> {
                 content,
                 content_hex,
             } => render_content_digest(content, content_hex),
+            CanonicalCommand::WorkStateDigest { entity, relation } => {
+                render_work_state_mapping_digest(entity, relation)
+            }
         },
         Command::Store { command } => match command {
             StoreCommand::Record {
@@ -6288,6 +6299,57 @@ fn render_content_digest(content: Option<String>, content_hex: Option<String>) -
         content_object_digest(&bytes),
         bytes.len()
     ))
+}
+
+fn render_work_state_mapping_digest(
+    entity_mappings: Vec<String>,
+    relation_mappings: Vec<String>,
+) -> Result<String> {
+    let entities = entity_mappings
+        .iter()
+        .map(|mapping| parse_work_state_entity_mapping(mapping))
+        .collect::<Result<Vec<_>>>()?;
+    let relations = relation_mappings
+        .iter()
+        .map(|mapping| parse_work_state_relation_mapping(mapping))
+        .collect::<Result<Vec<_>>>()?;
+    let state = WorkState::new(entities, relations)?;
+    Ok(format!(
+        "work_state_digest={}\nentities={}\nrelations={}\n",
+        work_state_mapping_digest(&state),
+        state.entities().len(),
+        state.relations().len()
+    ))
+}
+
+fn parse_work_state_entity_mapping(value: &str) -> Result<(EntityId, EntityVersionId)> {
+    let (entity_id, version_id) = split_work_state_mapping("entity", value)?;
+    Ok((
+        EntityId::parse_canonical(entity_id)?,
+        EntityVersionId::parse_canonical(version_id)?,
+    ))
+}
+
+fn parse_work_state_relation_mapping(value: &str) -> Result<(RelationId, RelationVersionId)> {
+    let (relation_id, version_id) = split_work_state_mapping("relation", value)?;
+    Ok((
+        RelationId::parse_canonical(relation_id)?,
+        RelationVersionId::parse_canonical(version_id)?,
+    ))
+}
+
+fn split_work_state_mapping<'a>(label: &str, value: &'a str) -> Result<(&'a str, &'a str)> {
+    let (subject, version) = value.split_once('=').ok_or_else(|| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "{label} mapping must use SUBJECT_ID=VERSION_ID"
+        ))
+    })?;
+    if subject.is_empty() || version.is_empty() || version.contains('=') {
+        return Err(WorkVcsError::CanonicalEncodingInvalid(format!(
+            "{label} mapping must use SUBJECT_ID=VERSION_ID"
+        )));
+    }
+    Ok((subject, version))
 }
 
 struct EvidenceContentArgs {
@@ -11664,6 +11726,75 @@ mod tests {
                     .expect("parse float canonical encode"),
             );
         assert!(float.is_err());
+    }
+
+    #[test]
+    fn canonical_cli_computes_work_state_digest() {
+        let e1 = EntityId::new_v7().to_string();
+        let ev1 = EntityVersionId::new_v7().to_string();
+        let e2 = EntityId::new_v7().to_string();
+        let ev2 = EntityVersionId::new_v7().to_string();
+        let r1 = RelationId::new_v7().to_string();
+        let rv1 = RelationVersionId::new_v7().to_string();
+        let first_entity = format!("{e1}={ev1}");
+        let second_entity = format!("{e2}={ev2}");
+        let relation = format!("{r1}={rv1}");
+
+        let forward = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "work-state-digest",
+            "--entity",
+            &second_entity,
+            "--relation",
+            &relation,
+            "--entity",
+            &first_entity,
+        ])
+        .expect("parse forward work state digest"))
+        .expect("forward work state digest");
+        let reverse = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "work-state-digest",
+            "--relation",
+            &relation,
+            "--entity",
+            &first_entity,
+            "--entity",
+            &second_entity,
+        ])
+        .expect("parse reverse work state digest"))
+        .expect("reverse work state digest");
+
+        assert_eq!(value(&forward, "entities"), "2");
+        assert_eq!(value(&forward, "relations"), "1");
+        assert_eq!(
+            value(&forward, "work_state_digest"),
+            value(&reverse, "work_state_digest")
+        );
+
+        let duplicate = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "work-state-digest",
+            "--entity",
+            &first_entity,
+            "--entity",
+            &format!("{e1}={ev2}"),
+        ])
+        .expect("parse duplicate work state digest"));
+        assert!(duplicate.is_err());
+
+        let malformed = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "work-state-digest",
+            "--relation",
+            &r1,
+        ])
+        .expect("parse malformed work state digest"));
+        assert!(malformed.is_err());
     }
 
     #[test]

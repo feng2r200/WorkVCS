@@ -24,15 +24,16 @@ use workvcs_core::{
     ClaimTaskOptions, ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview,
     ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
     Engine, EntityId, EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot,
-    EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
-    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
-    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
-    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
-    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
-    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureDerivedFromRelationCreateCommit,
+    EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceId,
+    EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
+    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
+    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
+    ExternalRefId, ExternalVersionId, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
+    GoalTransitionCommit, GoalTransitionOptions, HistoryEntry, HistoryQueryOptions, ImportId,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
+    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -234,6 +235,10 @@ enum Command {
     Vr {
         #[command(subcommand)]
         command: VerificationRequirementCommand,
+    },
+    Evidence {
+        #[command(subcommand)]
+        command: EvidenceCommand,
     },
     Resource {
         #[command(subcommand)]
@@ -1750,6 +1755,30 @@ enum VerificationRequirementCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum EvidenceCommand {
+    Create {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        kind: String,
+
+        #[arg(long, default_value = "{}")]
+        metadata_json: String,
+
+        #[arg(long)]
+        source_session: Option<String>,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        evidence: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum ResourceCommand {
     Create {
         #[arg(value_name = "STORE")]
@@ -2586,6 +2615,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         method: Option<String>,
+
+        #[arg(long)]
+        evidence: Vec<String>,
 
         #[arg(long)]
         acceptance_criterion: Option<String>,
@@ -4327,6 +4359,32 @@ fn run(cli: Cli) -> Result<String> {
                 &engine.verification_requirements_at(commit_id)?,
             )
         }
+        Command::Evidence {
+            command:
+                EvidenceCommand::Create {
+                    store,
+                    kind,
+                    metadata_json,
+                    source_session,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = EvidenceCreateOptions::new(
+                kind,
+                parse_cli_object("evidence metadata", &metadata_json)?,
+            )?;
+            if let Some(source_session) = source_session {
+                options =
+                    options.with_source_session_id(SessionId::parse_canonical(&source_session)?);
+            }
+            render_evidence_create(&engine.create_evidence(options)?)
+        }
+        Command::Evidence {
+            command: EvidenceCommand::Show { store, evidence },
+        } => {
+            let engine = Engine::open(store)?;
+            render_evidence_snapshot(&engine.evidence(EvidenceId::parse_canonical(&evidence)?)?)
+        }
         Command::Resource {
             command: ResourceCommand::Create { store, kind },
         } => {
@@ -4423,6 +4481,7 @@ fn run(cli: Cli) -> Result<String> {
                     head,
                     result,
                     method,
+                    evidence,
                     acceptance_criterion,
                     verification_requirement,
                     resource,
@@ -4459,6 +4518,13 @@ fn run(cli: Cli) -> Result<String> {
             )?;
             if let Some(method) = method {
                 options = options.with_method(method_value(&method))?;
+            }
+            if !evidence.is_empty() {
+                let evidence_ids = evidence
+                    .iter()
+                    .map(|evidence_id| EvidenceId::parse_canonical(evidence_id))
+                    .collect::<Result<Vec<_>>>()?;
+                options = options.with_evidence(evidence_ids)?;
             }
             if resource.is_some()
                 || adapter_kind.is_some()
@@ -7404,6 +7470,66 @@ fn render_verification_list(
         .expect("write to String");
     }
     Ok(output)
+}
+
+fn render_evidence_create(evidence: &EvidenceCreateResult) -> Result<String> {
+    let mut output = format!(
+        "evidence_id={}\nevidence_kind={}\ncaptured_at_us={}\nsource_session_id={}\nmetadata_json={}\ncontents={}\n",
+        evidence.evidence_id,
+        evidence.evidence_kind,
+        evidence.captured_at_us,
+        render_optional_display_or_none(evidence.source_session_id.as_ref()),
+        canonical_cli_json("evidence metadata", &evidence.metadata)?,
+        evidence.contents.len()
+    );
+    write_evidence_content_fields(&mut output, &evidence.contents)?;
+    Ok(output)
+}
+
+fn render_evidence_snapshot(evidence: &EvidenceSnapshot) -> Result<String> {
+    let mut output = format!(
+        "evidence_id={}\nevidence_kind={}\ncaptured_at_us={}\nsource_session_id={}\nmetadata_json={}\ncontents={}\n",
+        evidence.evidence_id,
+        evidence.evidence_kind,
+        evidence.captured_at_us,
+        render_optional_display_or_none(evidence.source_session_id.as_ref()),
+        canonical_cli_json("evidence metadata", &evidence.metadata)?,
+        evidence.contents.len()
+    );
+    write_evidence_content_fields(&mut output, &evidence.contents)?;
+    Ok(output)
+}
+
+fn write_evidence_content_fields(
+    output: &mut String,
+    contents: &[EvidenceContentSnapshot],
+) -> Result<()> {
+    for content in contents {
+        let index = content.ordinal;
+        writeln!(output, "content.{index}.ordinal={}", content.ordinal).expect("write to String");
+        writeln!(output, "content.{index}.role={}", content.role).expect("write to String");
+        writeln!(
+            output,
+            "content.{index}.content_digest={}",
+            content.content_digest
+        )
+        .expect("write to String");
+        writeln!(output, "content.{index}.size_bytes={}", content.size_bytes)
+            .expect("write to String");
+        writeln!(
+            output,
+            "content.{index}.media_type={}",
+            render_optional_display_or_none(content.media_type.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "content.{index}.format_metadata_json={}",
+            canonical_cli_json("evidence content format metadata", &content.format_metadata)?
+        )
+        .expect("write to String");
+    }
+    Ok(())
 }
 
 fn render_resource_create(resource: &ResourceCreateResult) -> String {
@@ -10694,6 +10820,7 @@ mod tests {
                 "task",
                 "ac",
                 "vr",
+                "evidence",
                 "resource",
                 "record",
                 "session",
@@ -14907,6 +15034,44 @@ mod tests {
         .expect("create ac");
         let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
 
+        let evidence = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "create",
+            store,
+            "--kind",
+            "manual-review",
+            "--metadata-json",
+            r#"{"summary":"reviewed locally"}"#,
+        ])
+        .expect("parse evidence create"))
+        .expect("create evidence");
+        let evidence_id = value(&evidence, "evidence_id");
+        assert_eq!(value(&evidence, "evidence_kind"), "manual-review");
+        assert_eq!(
+            value(&evidence, "metadata_json"),
+            r#"{"summary":"reviewed locally"}"#
+        );
+        assert_eq!(value(&evidence, "contents"), "0");
+
+        let shown_evidence = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "show",
+            store,
+            "--evidence",
+            &evidence_id,
+        ])
+        .expect("parse evidence show"))
+        .expect("show evidence");
+        assert_eq!(value(&shown_evidence, "evidence_id"), evidence_id);
+        assert_eq!(value(&shown_evidence, "evidence_kind"), "manual-review");
+        assert_eq!(
+            value(&shown_evidence, "metadata_json"),
+            r#"{"summary":"reviewed locally"}"#
+        );
+        assert_eq!(value(&shown_evidence, "contents"), "0");
+
         let empty_verifications = run(Cli::try_parse_from([
             "workvcs",
             "verification",
@@ -14932,6 +15097,8 @@ mod tests {
             "passed",
             "--method",
             "manual-review",
+            "--evidence",
+            &evidence_id,
             "--acceptance-criterion",
             &criterion_id,
         ])
@@ -14988,7 +15155,22 @@ mod tests {
             ),
             value(&criterion, "acceptance_criterion_entity_version_id")
         );
-        assert_eq!(value(&verification_at_branch, "evidence"), "0");
+        assert_eq!(value(&verification_at_branch, "evidence"), "1");
+        assert_eq!(
+            value(&verification_at_branch, "evidence.0.evidence_id"),
+            evidence_id
+        );
+        assert_eq!(
+            value(&verification_at_branch, "evidenced_by_relations"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &verification_at_branch,
+                "evidenced_by_relation.0.evidence_id"
+            ),
+            evidence_id
+        );
         assert_eq!(value(&verification_at_branch, "resource_basis"), "0");
 
         let verifications_at_branch = run(Cli::try_parse_from([
@@ -15028,6 +15210,10 @@ mod tests {
         assert_eq!(
             value(&verifications_at_branch, "verification.0.method_json"),
             r#"{"kind":"manual","name":"manual-review"}"#
+        );
+        assert_eq!(
+            value(&verifications_at_branch, "verification.0.evidence"),
+            "1"
         );
     }
 

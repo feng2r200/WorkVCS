@@ -1200,6 +1200,9 @@ enum EventCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_events: Option<usize>,
     },
 }
 
@@ -4608,6 +4611,7 @@ fn run(cli: Cli) -> Result<String> {
                 kind,
                 payload_digest,
                 limit,
+                expected_events,
             } => {
                 let engine = Engine::open(store)?;
                 let mut options = match (changeset, session, workspace) {
@@ -4651,7 +4655,17 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     result.events.truncate(limit);
                 }
-                Ok(render_event_list(&result))
+                let mut output = render_event_list(&result);
+                if let Some(expected_events) = expected_events {
+                    let actual_events = result.events.len();
+                    if actual_events != expected_events {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "events {actual_events} does not match expected {expected_events}"
+                        )));
+                    }
+                    output.push_str("events_match_expected=true\n");
+                }
+                Ok(output)
             }
         },
         Command::ShowAt {
@@ -17437,6 +17451,34 @@ mod tests {
         let event_id = value(&listed, "event[0].event_id");
         let payload_digest = value(&listed, "event[0].payload_digest");
 
+        let expected_events = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--expected-events",
+            "1",
+        ])
+        .expect("parse expected event list"))
+        .expect("expected event list");
+        assert_eq!(value(&expected_events, "events"), "1");
+        assert_eq!(value(&expected_events, "events_match_expected"), "true");
+
+        let mismatched_events = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--expected-events",
+            "0",
+        ])
+        .expect("parse mismatched event list"));
+        assert!(mismatched_events.is_err());
+
         let listed_by_kind = run(Cli::try_parse_from([
             "workvcs",
             "event",
@@ -17497,6 +17539,26 @@ mod tests {
         .expect("parse event list by missing payload digest"))
         .expect("list events by missing payload digest");
         assert_eq!(value(&listed_by_missing_payload_digest, "events"), "0");
+
+        let expected_missing_events = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--payload-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--expected-events",
+            "0",
+        ])
+        .expect("parse expected missing event list"))
+        .expect("expected missing event list");
+        assert_eq!(value(&expected_missing_events, "events"), "0");
+        assert_eq!(
+            value(&expected_missing_events, "events_match_expected"),
+            "true"
+        );
 
         let listed_by_kind_with_limit = run(Cli::try_parse_from([
             "workvcs",

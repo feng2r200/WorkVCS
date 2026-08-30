@@ -3023,6 +3023,9 @@ enum SessionCommand {
 
         #[arg(long)]
         focus: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     FocusSet {
         #[arg(value_name = "STORE")]
@@ -6767,6 +6770,7 @@ fn run(cli: Cli) -> Result<String> {
                     workspace,
                     branch,
                     focus,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6791,6 +6795,14 @@ fn run(cli: Cli) -> Result<String> {
                         .as_ref()
                         .is_some_and(|focus| focus.focus_entity_id == focus_entity_id)
                 });
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "session list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                result.sessions.truncate(limit);
             }
             render_session_list(&result)
         }
@@ -18014,6 +18026,22 @@ mod tests {
         assert_eq!(value(&sessions, "session.0.lifecycle_state"), "active");
         assert_eq!(value(&sessions, "session.0.active_branch_id"), fork_branch);
         assert_eq!(value(&sessions, "session.0.focus_entity_id"), task_id);
+
+        let limited_sessions =
+            run(
+                Cli::try_parse_from(["workvcs", "session", "list", store, "--limit", "1"])
+                    .expect("parse limited session list"),
+            )
+            .expect("list limited sessions");
+        assert_eq!(value(&limited_sessions, "sessions"), "1");
+        assert_eq!(value(&limited_sessions, "session.0.session_id"), session_id);
+
+        let zero_limit =
+            run(
+                Cli::try_parse_from(["workvcs", "session", "list", store, "--limit", "0"])
+                    .expect("parse zero-limit session list"),
+            );
+        assert!(zero_limit.is_err());
 
         let focused_sessions =
             run(

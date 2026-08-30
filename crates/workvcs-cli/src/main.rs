@@ -1185,6 +1185,12 @@ enum CheckpointCommand {
 
         #[arg(long)]
         checkpoint: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
+
+        #[arg(long)]
+        expected_content_digest: Option<String>,
     },
     Validate {
         #[arg(value_name = "STORE")]
@@ -4918,10 +4924,36 @@ fn run(cli: Cli) -> Result<String> {
                 ))?;
                 Ok(render_checkpoint_create(&result))
             }
-            CheckpointCommand::Show { store, checkpoint } => {
+            CheckpointCommand::Show {
+                store,
+                checkpoint,
+                expected_state_digest,
+                expected_content_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.checkpoint(CheckpointId::parse_canonical(&checkpoint)?)?;
-                Ok(render_checkpoint_snapshot(&snapshot))
+                let mut output = render_checkpoint_snapshot(&snapshot);
+                if let Some(expected_state_digest) = expected_state_digest {
+                    let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                    if snapshot.state_digest != expected_state_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "checkpoint state digest {} does not match expected {}",
+                            snapshot.state_digest, expected_state_digest
+                        )));
+                    }
+                    output.push_str("state_matches_expected=true\n");
+                }
+                if let Some(expected_content_digest) = expected_content_digest {
+                    let expected_content_digest = Digest::from_hex(&expected_content_digest)?;
+                    if snapshot.content_digest != expected_content_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "checkpoint content digest {} does not match expected {}",
+                            snapshot.content_digest, expected_content_digest
+                        )));
+                    }
+                    output.push_str("content_matches_expected=true\n");
+                }
+                Ok(output)
             }
             CheckpointCommand::Validate { store, checkpoint } => {
                 let mut engine = Engine::open(store)?;
@@ -19814,6 +19846,57 @@ mod tests {
             value(&shown, "content_digest"),
             value(&created, "content_digest")
         );
+
+        let expected_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "show",
+            store,
+            "--checkpoint",
+            &checkpoint,
+            "--expected-state-digest",
+            &value(&shown, "state_digest"),
+            "--expected-content-digest",
+            &value(&shown, "content_digest"),
+        ])
+        .expect("parse expected checkpoint show"))
+        .expect("show expected checkpoint");
+        assert_eq!(
+            value(&expected_shown, "state_digest"),
+            value(&shown, "state_digest")
+        );
+        assert_eq!(
+            value(&expected_shown, "content_digest"),
+            value(&shown, "content_digest")
+        );
+        assert_eq!(value(&expected_shown, "state_matches_expected"), "true");
+        assert_eq!(value(&expected_shown, "content_matches_expected"), "true");
+
+        let mismatched_state_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "show",
+            store,
+            "--checkpoint",
+            &checkpoint,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched checkpoint state show"));
+        assert!(mismatched_state_shown.is_err());
+
+        let mismatched_content_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "show",
+            store,
+            "--checkpoint",
+            &checkpoint,
+            "--expected-content-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched checkpoint content show"));
+        assert!(mismatched_content_shown.is_err());
 
         let validated = run(Cli::try_parse_from([
             "workvcs",

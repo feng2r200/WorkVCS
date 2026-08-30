@@ -95,7 +95,7 @@ use workvcs_core::{
     WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
     WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
-    content_object_digest, parse_canonical_json,
+    content_object_digest, entity_version_digest, parse_canonical_json, relation_version_digest,
 };
 
 #[derive(Debug, Parser)]
@@ -118,6 +118,10 @@ enum Command {
     Doctor {
         #[arg(value_name = "STORE")]
         store: PathBuf,
+    },
+    Canonical {
+        #[command(subcommand)]
+        command: CanonicalCommand,
     },
     Store {
         #[command(subcommand)]
@@ -300,6 +304,34 @@ enum Command {
     Merge {
         #[command(subcommand)]
         command: MergeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CanonicalCommand {
+    Encode {
+        #[arg(long)]
+        json: String,
+    },
+    Digest {
+        #[arg(long)]
+        domain: String,
+
+        #[arg(long)]
+        json: String,
+    },
+    #[command(group(
+        ArgGroup::new("canonical-content-source")
+            .required(true)
+            .multiple(false)
+            .args(["content", "content_hex"])
+    ))]
+    ContentDigest {
+        #[arg(long)]
+        content: Option<String>,
+
+        #[arg(long)]
+        content_hex: Option<String>,
     },
 }
 
@@ -2870,6 +2902,14 @@ fn run(cli: Cli) -> Result<String> {
                 integrity.invalid_checkpoints
             ))
         }
+        Command::Canonical { command } => match command {
+            CanonicalCommand::Encode { json } => render_canonical_encode(&json),
+            CanonicalCommand::Digest { domain, json } => render_canonical_digest(&domain, &json),
+            CanonicalCommand::ContentDigest {
+                content,
+                content_hex,
+            } => render_content_digest(content, content_hex),
+        },
         Command::Store { command } => match command {
             StoreCommand::Record {
                 store,
@@ -6202,6 +6242,52 @@ fn parse_cli_object(label: &str, json: &str) -> Result<CanonicalValue> {
             "{label} must be an object"
         )))
     }
+}
+
+fn render_canonical_encode(json: &str) -> Result<String> {
+    let value = parse_canonical_json(json.as_bytes())?;
+    let canonical_json = canonical_cli_json("canonical JSON", &value)?;
+    Ok(format!(
+        "canonical_json={canonical_json}\nsize_bytes={}\n",
+        canonical_json.len()
+    ))
+}
+
+fn render_canonical_digest(domain: &str, json: &str) -> Result<String> {
+    let value = parse_canonical_json(json.as_bytes())?;
+    let canonical_json = canonical_cli_json("canonical JSON", &value)?;
+    let digest = match domain {
+        "entity-version" => entity_version_digest(&value)?,
+        "relation-version" => relation_version_digest(&value)?,
+        other => {
+            return Err(WorkVcsError::DigestInvalid(format!(
+                "canonical digest domain {other:?} is not supported"
+            )));
+        }
+    };
+    Ok(format!(
+        "domain={domain}\ndigest={digest}\ncanonical_json={canonical_json}\nsize_bytes={}\n",
+        canonical_json.len()
+    ))
+}
+
+fn render_content_digest(content: Option<String>, content_hex: Option<String>) -> Result<String> {
+    let bytes = match (content, content_hex) {
+        (Some(content), None) => content.into_bytes(),
+        (None, Some(content_hex)) => hex::decode(&content_hex).map_err(|error| {
+            WorkVcsError::DigestInvalid(format!("content hex decode failed: {error}"))
+        })?,
+        _ => {
+            return Err(WorkVcsError::DigestInvalid(
+                "content digest requires exactly one of --content or --content-hex".to_owned(),
+            ));
+        }
+    };
+    Ok(format!(
+        "content_digest={}\nsize_bytes={}\n",
+        content_object_digest(&bytes),
+        bytes.len()
+    ))
 }
 
 struct EvidenceContentArgs {
@@ -11439,6 +11525,7 @@ mod tests {
             vec![
                 "init",
                 "doctor",
+                "canonical",
                 "store",
                 "history",
                 "changeset",
@@ -11489,6 +11576,94 @@ mod tests {
             &commit,
         ]);
         assert!(both.is_err());
+    }
+
+    #[test]
+    fn canonical_cli_encodes_and_digests_confirmed_profiles() {
+        let encoded = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "encode",
+            "--json",
+            r#"{"b":2,"a":1}"#,
+        ])
+        .expect("parse canonical encode"))
+        .expect("canonical encode");
+        assert_eq!(value(&encoded, "canonical_json"), r#"{"a":1,"b":2}"#);
+        assert_eq!(value(&encoded, "size_bytes"), "13");
+
+        let entity_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "digest",
+            "--domain",
+            "entity-version",
+            "--json",
+            r#"{"b":2,"a":1}"#,
+        ])
+        .expect("parse entity digest"))
+        .expect("entity digest");
+        let relation_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "digest",
+            "--domain",
+            "relation-version",
+            "--json",
+            r#"{"a":1,"b":2}"#,
+        ])
+        .expect("parse relation digest"))
+        .expect("relation digest");
+        assert_eq!(value(&entity_digest, "domain"), "entity-version");
+        assert_eq!(
+            value(&entity_digest, "canonical_json"),
+            value(&relation_digest, "canonical_json")
+        );
+        assert_ne!(
+            value(&entity_digest, "digest"),
+            value(&relation_digest, "digest")
+        );
+
+        let raw_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "content-digest",
+            "--content",
+            r#"{"b":2,"a":1}"#,
+        ])
+        .expect("parse raw content digest"))
+        .expect("raw content digest");
+        let canonical_content_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "content-digest",
+            "--content",
+            r#"{"a":1,"b":2}"#,
+        ])
+        .expect("parse canonical content digest"))
+        .expect("canonical content digest");
+        assert_ne!(
+            value(&raw_digest, "content_digest"),
+            value(&canonical_content_digest, "content_digest")
+        );
+
+        let hex_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "content-digest",
+            "--content-hex",
+            "00ff",
+        ])
+        .expect("parse hex content digest"))
+        .expect("hex content digest");
+        assert_eq!(value(&hex_digest, "size_bytes"), "2");
+
+        let float =
+            run(
+                Cli::try_parse_from(["workvcs", "canonical", "encode", "--json", r#"{"n":1.0}"#])
+                    .expect("parse float canonical encode"),
+            );
+        assert!(float.is_err());
     }
 
     #[test]

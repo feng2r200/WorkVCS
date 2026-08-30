@@ -1985,6 +1985,9 @@ enum GoalCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_goals: Option<usize>,
     },
     Achieve {
         #[arg(value_name = "STORE")]
@@ -2109,6 +2112,9 @@ enum PlanCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_plans: Option<usize>,
     },
     Complete {
         #[arg(value_name = "STORE")]
@@ -5921,6 +5927,7 @@ fn run(cli: Cli) -> Result<String> {
                 commit,
                 status,
                 limit,
+                expected_goals,
             } => {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_goal_query_commit(&engine, branch, commit)?;
@@ -5937,7 +5944,17 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     goals.truncate(limit);
                 }
-                render_goal_list(commit_id, &goals)
+                let mut output = render_goal_list(commit_id, &goals)?;
+                if let Some(expected_goals) = expected_goals {
+                    let actual_goals = goals.len();
+                    if actual_goals != expected_goals {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "goals {actual_goals} does not match expected {expected_goals}"
+                        )));
+                    }
+                    output.push_str("goals_match_expected=true\n");
+                }
+                Ok(output)
             }
             GoalCommand::Achieve {
                 store,
@@ -6045,6 +6062,7 @@ fn run(cli: Cli) -> Result<String> {
                 commit,
                 status,
                 limit,
+                expected_plans,
             } => {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_plan_query_commit(&engine, branch, commit)?;
@@ -6061,7 +6079,17 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     plans.truncate(limit);
                 }
-                render_plan_list(commit_id, &plans)
+                let mut output = render_plan_list(commit_id, &plans)?;
+                if let Some(expected_plans) = expected_plans {
+                    let actual_plans = plans.len();
+                    if actual_plans != expected_plans {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "plans {actual_plans} does not match expected {expected_plans}"
+                        )));
+                    }
+                    output.push_str("plans_match_expected=true\n");
+                }
+                Ok(output)
             }
             PlanCommand::Complete {
                 store,
@@ -26345,6 +26373,21 @@ mod tests {
             .expect("list empty goals");
         assert_eq!(value(&empty_goals, "goals"), "0");
 
+        let expected_empty_goals = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-goals",
+            "0",
+        ])
+        .expect("parse expected empty goal list"))
+        .expect("expected empty goal list");
+        assert_eq!(value(&expected_empty_goals, "goals"), "0");
+        assert_eq!(value(&expected_empty_goals, "goals_match_expected"), "true");
+
         let empty_plans =
             run(
                 Cli::try_parse_from(["workvcs", "plan", "list", store, "--commit", &genesis])
@@ -26352,6 +26395,21 @@ mod tests {
             )
             .expect("list empty plans");
         assert_eq!(value(&empty_plans, "plans"), "0");
+
+        let expected_empty_plans = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-plans",
+            "0",
+        ])
+        .expect("parse expected empty plan list"))
+        .expect("expected empty plan list");
+        assert_eq!(value(&expected_empty_plans, "plans"), "0");
+        assert_eq!(value(&expected_empty_plans, "plans_match_expected"), "true");
 
         let goal = run(Cli::try_parse_from([
             "workvcs",
@@ -26382,6 +26440,37 @@ mod tests {
         assert_eq!(value(&goals_at_create, "goals"), "1");
         assert_eq!(value(&goals_at_create, "goal.0.goal_entity_id"), goal_id);
         assert_eq!(value(&goals_at_create, "goal.0.status"), "active");
+
+        let expected_goals_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--expected-goals",
+            "1",
+        ])
+        .expect("parse expected goal list at commit"))
+        .expect("expected goal list at commit");
+        assert_eq!(value(&expected_goals_at_create, "goals"), "1");
+        assert_eq!(
+            value(&expected_goals_at_create, "goals_match_expected"),
+            "true"
+        );
+
+        let mismatched_goals_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--expected-goals",
+            "0",
+        ])
+        .expect("parse mismatched goal list at commit"));
+        assert!(mismatched_goals_at_create.is_err());
 
         let active_goals_at_create = run(Cli::try_parse_from([
             "workvcs",
@@ -26536,6 +26625,37 @@ mod tests {
         assert_eq!(value(&plans_at_create, "plan.0.plan_entity_id"), plan_id);
         assert_eq!(value(&plans_at_create, "plan.0.status"), "active");
         assert_eq!(value(&plans_at_create, "plan.0.constraints"), "1");
+
+        let expected_plans_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--expected-plans",
+            "1",
+        ])
+        .expect("parse expected plan list at commit"))
+        .expect("expected plan list at commit");
+        assert_eq!(value(&expected_plans_at_create, "plans"), "1");
+        assert_eq!(
+            value(&expected_plans_at_create, "plans_match_expected"),
+            "true"
+        );
+
+        let mismatched_plans_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--expected-plans",
+            "0",
+        ])
+        .expect("parse mismatched plan list at commit"));
+        assert!(mismatched_plans_at_create.is_err());
 
         let active_plans_at_create = run(Cli::try_parse_from([
             "workvcs",

@@ -3226,6 +3226,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         result: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     CacheRecord {
         #[arg(value_name = "STORE")]
@@ -5715,6 +5718,7 @@ fn run(cli: Cli) -> Result<String> {
                     target_kind,
                     target,
                     result,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5733,6 +5737,14 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(result) = result {
                 let result = parse_verification_result(&result)?;
                 verifications.retain(|verification| verification.state.result == result);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "verification list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                verifications.truncate(limit);
             }
             render_verification_list(commit_id, &verifications)
         }
@@ -19756,6 +19768,42 @@ mod tests {
             ),
             verification_id
         );
+
+        let limited_passed_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--result",
+            "passed",
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited verification list"))
+        .expect("list limited verifications");
+        assert_eq!(value(&limited_passed_verifications, "verifications"), "1");
+        assert_eq!(
+            value(
+                &limited_passed_verifications,
+                "verification.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
+        let zero_limit_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit verification list"));
+        assert!(zero_limit_verifications.is_err());
 
         let failed_verifications = run(Cli::try_parse_from([
             "workvcs",

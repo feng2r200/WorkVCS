@@ -2357,6 +2357,9 @@ enum EvidenceCommand {
 
         #[arg(long)]
         evidence: String,
+
+        #[arg(long)]
+        expected_content_digest: Option<String>,
     },
     List {
         #[arg(value_name = "STORE")]
@@ -6292,10 +6295,31 @@ fn run(cli: Cli) -> Result<String> {
             render_evidence_create(&engine.create_evidence(options)?)
         }
         Command::Evidence {
-            command: EvidenceCommand::Show { store, evidence },
+            command:
+                EvidenceCommand::Show {
+                    store,
+                    evidence,
+                    expected_content_digest,
+                },
         } => {
             let engine = Engine::open(store)?;
-            render_evidence_snapshot(&engine.evidence(EvidenceId::parse_canonical(&evidence)?)?)
+            let snapshot = engine.evidence(EvidenceId::parse_canonical(&evidence)?)?;
+            let mut output = render_evidence_snapshot(&snapshot)?;
+            if let Some(expected_content_digest) = expected_content_digest {
+                let expected_content_digest = Digest::from_hex(&expected_content_digest)?;
+                if !snapshot
+                    .contents
+                    .iter()
+                    .any(|content| content.content_digest == expected_content_digest)
+                {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "evidence contents do not include expected content digest {}",
+                        expected_content_digest
+                    )));
+                }
+                output.push_str("content_matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Evidence {
             command:
@@ -22628,6 +22652,37 @@ mod tests {
             value(&shown, "content.0.format_metadata_json"),
             r#"{"encoding":"utf-8"}"#
         );
+
+        let expected_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "show",
+            store,
+            "--evidence",
+            &evidence_id,
+            "--expected-content-digest",
+            &value(&shown, "content.0.content_digest"),
+        ])
+        .expect("parse expected evidence show"))
+        .expect("show expected evidence");
+        assert_eq!(
+            value(&expected_shown, "content.0.content_digest"),
+            value(&shown, "content.0.content_digest")
+        );
+        assert_eq!(value(&expected_shown, "content_matches_expected"), "true");
+
+        let mismatched_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "show",
+            store,
+            "--evidence",
+            &evidence_id,
+            "--expected-content-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched evidence show"));
+        assert!(mismatched_shown.is_err());
 
         let duplicate_content_source = Cli::try_parse_from([
             "workvcs",

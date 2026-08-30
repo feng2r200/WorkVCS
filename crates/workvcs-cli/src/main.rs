@@ -1896,6 +1896,12 @@ enum AcceptanceCriterionCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        task: Option<String>,
+
+        #[arg(long)]
+        classification: Option<String>,
     },
     #[command(group(
         ArgGroup::new("acceptance-criterion-status-target")
@@ -1998,6 +2004,12 @@ enum VerificationRequirementCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        criterion: Option<String>,
+
+        #[arg(long)]
+        local_key: Option<String>,
     },
 }
 
@@ -4809,11 +4821,22 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     branch,
                     commit,
+                    task,
+                    classification,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            render_acceptance_criterion_list(commit_id, &engine.acceptance_criteria_at(commit_id)?)
+            let mut criteria = engine.acceptance_criteria_at(commit_id)?;
+            if let Some(task) = task {
+                let task_id = EntityId::parse_canonical(&task)?;
+                criteria.retain(|criterion| criterion.task_entity_id == task_id);
+            }
+            if let Some(classification) = classification {
+                let classification = parse_acceptance_criterion_classification(&classification)?;
+                criteria.retain(|criterion| criterion.state.classification == classification);
+            }
+            render_acceptance_criterion_list(commit_id, &criteria)
         }
         Command::Ac {
             command:
@@ -4919,14 +4942,23 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     branch,
                     commit,
+                    criterion,
+                    local_key,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            render_verification_requirement_list(
-                commit_id,
-                &engine.verification_requirements_at(commit_id)?,
-            )
+            let mut requirements = engine.verification_requirements_at(commit_id)?;
+            if let Some(criterion) = criterion {
+                let criterion_id = EntityId::parse_canonical(&criterion)?;
+                requirements.retain(|requirement| {
+                    requirement.acceptance_criterion_entity_id == criterion_id
+                });
+            }
+            if let Some(local_key) = local_key {
+                requirements.retain(|requirement| requirement.local_key == local_key);
+            }
+            render_verification_requirement_list(commit_id, &requirements)
         }
         Command::Evidence {
             command:
@@ -17473,6 +17505,192 @@ mod tests {
         assert_eq!(
             value(&criteria_at_branch, "criterion.0.statement_json"),
             "\"The AC list is visible.\""
+        );
+
+        let requirements_for_criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse vr list by criterion"))
+        .expect("list vr by criterion");
+        assert_eq!(value(&requirements_for_criterion, "requirements"), "1");
+        assert_eq!(
+            value(
+                &requirements_for_criterion,
+                "requirement.0.verification_requirement_entity_id"
+            ),
+            requirement_id
+        );
+
+        let requirements_for_local_key = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--local-key",
+            "VR-1",
+        ])
+        .expect("parse vr list by local key"))
+        .expect("list vr by local key");
+        assert_eq!(value(&requirements_for_local_key, "requirements"), "1");
+
+        let requirements_for_missing_local_key = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+            "--local-key",
+            "VR-404",
+        ])
+        .expect("parse vr list by missing local key"))
+        .expect("list vr by missing local key");
+        assert_eq!(
+            value(&requirements_for_missing_local_key, "requirements"),
+            "0"
+        );
+
+        let task_after_requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--task",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse task show after requirement"))
+        .expect("show task after requirement");
+        let optional_criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&requirement, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task_after_requirement, "task_entity_version_id"),
+            "--local-key",
+            "AC-2",
+            "--statement",
+            "The optional AC list filter is visible.",
+            "--classification",
+            "optional",
+        ])
+        .expect("parse optional ac create"))
+        .expect("create optional ac");
+        let optional_criterion_id = value(&optional_criterion, "acceptance_criterion_entity_id");
+
+        let required_criteria = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--classification",
+            "required",
+        ])
+        .expect("parse required ac list"))
+        .expect("list required ac");
+        assert_eq!(value(&required_criteria, "criteria"), "1");
+        assert_eq!(
+            value(
+                &required_criteria,
+                "criterion.0.acceptance_criterion_entity_id"
+            ),
+            criterion_id
+        );
+
+        let optional_criteria = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--classification",
+            "optional",
+        ])
+        .expect("parse optional ac list"))
+        .expect("list optional ac");
+        assert_eq!(value(&optional_criteria, "criteria"), "1");
+        assert_eq!(
+            value(
+                &optional_criteria,
+                "criterion.0.acceptance_criterion_entity_id"
+            ),
+            optional_criterion_id
+        );
+
+        let task_criteria = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--task",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse ac list by task"))
+        .expect("list ac by task");
+        assert_eq!(value(&task_criteria, "criteria"), "2");
+
+        let optional_task_criteria = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--classification",
+            "optional",
+        ])
+        .expect("parse ac list by task and classification"))
+        .expect("list ac by task and classification");
+        assert_eq!(value(&optional_task_criteria, "criteria"), "1");
+        assert_eq!(
+            value(
+                &optional_task_criteria,
+                "criterion.0.acceptance_criterion_entity_id"
+            ),
+            optional_criterion_id
+        );
+
+        let requirements_for_optional_criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &optional_criterion_id,
+        ])
+        .expect("parse vr list by optional criterion"))
+        .expect("list vr by optional criterion");
+        assert_eq!(
+            value(&requirements_for_optional_criterion, "requirements"),
+            "0"
         );
     }
 

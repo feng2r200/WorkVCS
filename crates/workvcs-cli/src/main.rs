@@ -3575,6 +3575,15 @@ enum VerificationCommand {
 
         #[arg(long)]
         verification: String,
+
+        #[arg(long)]
+        expected_evaluated_commit: Option<String>,
+
+        #[arg(long)]
+        expected_applicability: Option<String>,
+
+        #[arg(long)]
+        expected_reason_code: Option<String>,
     },
     CacheList {
         #[arg(value_name = "STORE")]
@@ -7110,17 +7119,61 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     branch,
                     verification,
+                    expected_evaluated_commit,
+                    expected_applicability,
+                    expected_reason_code,
                 },
         } => {
             let engine = Engine::open(store)?;
             let branch_id = BranchId::parse_canonical(&branch)?;
             let verification_id = EntityId::parse_canonical(&verification)?;
             let snapshot = engine.verification_applicability_cache(branch_id, verification_id)?;
-            render_verification_applicability_cache_lookup(
+            let mut output = render_verification_applicability_cache_lookup(
                 branch_id,
                 verification_id,
                 snapshot.as_ref(),
-            )
+            )?;
+            if let Some(expected_evaluated_commit) = expected_evaluated_commit {
+                let expected_evaluated_commit =
+                    CommitId::parse_canonical(&expected_evaluated_commit)?;
+                if snapshot
+                    .as_ref()
+                    .is_none_or(|cache| cache.evaluated_commit_id != expected_evaluated_commit)
+                {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "verification cache evaluated commit does not match expected {}",
+                        expected_evaluated_commit
+                    )));
+                }
+                output.push_str("evaluated_commit_matches_expected=true\n");
+            }
+            if let Some(expected_applicability) = expected_applicability {
+                let expected_applicability =
+                    parse_verification_applicability(&expected_applicability)?;
+                if snapshot
+                    .as_ref()
+                    .is_none_or(|cache| cache.applicability != expected_applicability)
+                {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "verification cache applicability does not match expected {}",
+                        expected_applicability
+                    )));
+                }
+                output.push_str("applicability_matches_expected=true\n");
+            }
+            if let Some(expected_reason_code) = expected_reason_code {
+                if snapshot
+                    .as_ref()
+                    .is_none_or(|cache| cache.reason_code != expected_reason_code)
+                {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "verification cache reason code does not match expected {}",
+                        expected_reason_code
+                    )));
+                }
+                output.push_str("reason_code_matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Verification {
             command:
@@ -26520,6 +26573,91 @@ mod tests {
             value(&shown_cache, "resource_stamp.0.observation_id"),
             observation_id
         );
+
+        let expected_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--expected-evaluated-commit",
+            &value(&shown_cache, "evaluated_commit_id"),
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+        ])
+        .expect("parse expected cache show"))
+        .expect("show expected cache");
+        assert_eq!(
+            value(&expected_cache, "evaluated_commit_id"),
+            value(&shown_cache, "evaluated_commit_id")
+        );
+        assert_eq!(value(&expected_cache, "applicability"), "applicable");
+        assert_eq!(
+            value(&expected_cache, "reason_code"),
+            "all_basis_applicable"
+        );
+        assert_eq!(
+            value(&expected_cache, "evaluated_commit_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_cache, "applicability_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_cache, "reason_code_matches_expected"),
+            "true"
+        );
+
+        let mismatched_cache_commit = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--expected-evaluated-commit",
+            &CommitId::new_v7().to_string(),
+        ])
+        .expect("parse mismatched cache commit show"));
+        assert!(mismatched_cache_commit.is_err());
+
+        let mismatched_cache_applicability = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--expected-applicability",
+            "stale",
+        ])
+        .expect("parse mismatched cache applicability show"));
+        assert!(mismatched_cache_applicability.is_err());
+
+        let mismatched_cache_reason = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--expected-reason-code",
+            "missing_basis",
+        ])
+        .expect("parse mismatched cache reason show"));
+        assert!(mismatched_cache_reason.is_err());
 
         let cache_list = run(Cli::try_parse_from([
             "workvcs",

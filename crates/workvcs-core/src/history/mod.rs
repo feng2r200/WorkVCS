@@ -63,7 +63,7 @@ pub use external::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
     ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
 };
-pub use genesis::{WorkspaceInfo, WorkspaceInitOptions};
+pub use genesis::{WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult};
 pub use goal::{
     GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalState, GoalStatus, GoalTransitionCommit,
     GoalTransitionOptions,
@@ -188,7 +188,7 @@ pub(crate) use diff::diff_work_state;
 pub(crate) use entity::commit_entity_transition;
 pub(crate) use evidence::{create_evidence, evidence, evidences};
 pub(crate) use external::{external_object_ref, external_object_refs, record_external_object_ref};
-pub(crate) use genesis::{create_workspace, load_workspace_info};
+pub(crate) use genesis::{create_workspace, load_workspace_info, workspaces};
 pub(crate) use goal::{create_goal, goal_at, goals_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use knowledge::{

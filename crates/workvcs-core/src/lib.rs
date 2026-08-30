@@ -109,7 +109,8 @@ pub use history::{
     WhyQuerySubject, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint,
     WhyRelationKind, WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions,
     WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkspaceInfo,
-    WorkspaceInitOptions, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
     WorkspaceResourceAssociationSnapshot,
 };
 pub use identity::{

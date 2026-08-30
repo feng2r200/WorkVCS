@@ -46,8 +46,8 @@ use crate::history::{
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
     WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
-    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions,
+    WorkspaceListResult, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::history::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
@@ -149,6 +149,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::load_workspace_info(&self.connection, workspace_id)
+    }
+
+    pub(crate) fn workspaces(&self, options: &WorkspaceListOptions) -> Result<WorkspaceListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::workspaces(&self.connection, options)
     }
 
     pub(crate) fn state_at(&self, commit_id: CommitId) -> Result<ReplayedState> {

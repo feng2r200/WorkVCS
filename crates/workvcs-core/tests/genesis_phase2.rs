@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     ChangeSetId, CommitId, Engine, EntityId, ErrorCode, EventId, StoreInitOptions, WorkState,
-    WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, work_state_mapping_digest,
+    WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions,
+    work_state_mapping_digest,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -182,6 +183,37 @@ fn creates_workspace_genesis_and_reopens_it() {
             .expect("reopened workspace info"),
         workspace
     );
+}
+
+#[test]
+fn lists_created_workspaces() {
+    let (_tempdir, path) = store_path();
+    let mut engine = init_engine(&path);
+    let empty = engine
+        .workspaces(WorkspaceListOptions::all())
+        .expect("empty workspace list");
+    assert!(empty.workspaces.is_empty());
+
+    let alpha = engine
+        .create_workspace(WorkspaceInitOptions::new("alpha").expect("alpha options"))
+        .expect("create alpha");
+    let beta = engine
+        .create_workspace(WorkspaceInitOptions::new("beta").expect("beta options"))
+        .expect("create beta");
+
+    let listed = engine
+        .workspaces(WorkspaceListOptions::all())
+        .expect("workspace list");
+    assert_eq!(listed.workspaces.len(), 2);
+    assert!(listed.workspaces.contains(&alpha));
+    assert!(listed.workspaces.contains(&beta));
+
+    drop(engine);
+    let reopened = Engine::open(&path).expect("reopen engine");
+    let reopened_list = reopened
+        .workspaces(WorkspaceListOptions::all())
+        .expect("reopened workspace list");
+    assert_eq!(reopened_list, listed);
 }
 
 #[test]

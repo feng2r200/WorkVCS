@@ -92,9 +92,9 @@ use workvcs_core::{
     VerificationSnapshot, VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind,
     WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
     WhyRelationKind, WorkState, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
-    WorkspaceInfo, WorkspaceInitOptions, WorkspaceResourceAssociationOptions,
-    WorkspaceResourceAssociationResult, canonical_bytes, content_object_digest,
-    parse_canonical_json,
+    WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
+    content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -635,6 +635,17 @@ enum WorkspaceCommand {
 
         #[arg(long)]
         initial_branch_name: Option<String>,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        workspace: String,
+    },
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
     },
 }
 
@@ -3615,6 +3626,22 @@ fn run(cli: Cli) -> Result<String> {
             let workspace = engine.create_workspace(options)?;
             Ok(render_workspace_info(&workspace))
         }
+        Command::Workspace {
+            command: WorkspaceCommand::Show { store, workspace },
+        } => {
+            let engine = Engine::open(store)?;
+            let workspace =
+                engine.workspace_info(workvcs_core::WorkspaceId::parse_canonical(&workspace)?)?;
+            Ok(render_workspace_info(&workspace))
+        }
+        Command::Workspace {
+            command: WorkspaceCommand::List { store },
+        } => {
+            let engine = Engine::open(store)?;
+            Ok(render_workspace_list(
+                &engine.workspaces(WorkspaceListOptions::all())?,
+            ))
+        }
         Command::Branch {
             command: BranchCommand::List { store, workspace },
         } => {
@@ -6324,14 +6351,63 @@ fn method_value(name: &str) -> CanonicalValue {
 
 fn render_workspace_info(workspace: &WorkspaceInfo) -> String {
     format!(
-        "workspace_id={}\nbranch_id={}\nbranch_name={}\ngenesis_commit_id={}\ngenesis_changeset_id={}\nstate_digest={}\n",
+        "workspace_id={}\ndisplay_name={}\nbranch_id={}\nbranch_name={}\ngenesis_commit_id={}\ngenesis_changeset_id={}\nstate_digest={}\ncreated_at_us={}\n",
         workspace.workspace_id,
+        workspace.display_name,
         workspace.initial_branch_id,
         workspace.initial_branch_name,
         workspace.genesis_commit_id,
         workspace.genesis_changeset_id,
-        workspace.state_digest
+        workspace.state_digest,
+        workspace.created_at_us
     )
+}
+
+fn render_workspace_list(result: &WorkspaceListResult) -> String {
+    let mut output = format!("workspaces={}\n", result.workspaces.len());
+    for (index, workspace) in result.workspaces.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "workspace.{index}.workspace_id={}",
+            workspace.workspace_id
+        );
+        let _ = writeln!(
+            output,
+            "workspace.{index}.display_name={}",
+            workspace.display_name
+        );
+        let _ = writeln!(
+            output,
+            "workspace.{index}.branch_id={}",
+            workspace.initial_branch_id
+        );
+        let _ = writeln!(
+            output,
+            "workspace.{index}.branch_name={}",
+            workspace.initial_branch_name
+        );
+        let _ = writeln!(
+            output,
+            "workspace.{index}.genesis_commit_id={}",
+            workspace.genesis_commit_id
+        );
+        let _ = writeln!(
+            output,
+            "workspace.{index}.genesis_changeset_id={}",
+            workspace.genesis_changeset_id
+        );
+        let _ = writeln!(
+            output,
+            "workspace.{index}.state_digest={}",
+            workspace.state_digest
+        );
+        let _ = writeln!(
+            output,
+            "workspace.{index}.created_at_us={}",
+            workspace.created_at_us
+        );
+    }
+    output
 }
 
 fn render_branch_head(head: &BranchHead) -> String {
@@ -11415,6 +11491,78 @@ mod tests {
         assert!(doctor.contains("checked_events=0"));
         assert!(doctor.contains("checked_checkpoints=0"));
         assert!(doctor.contains("invalid_checkpoints=0"));
+    }
+
+    #[test]
+    fn cli_creates_shows_and_lists_workspaces() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(Cli::try_parse_from(["workvcs", "init", store]).expect("parse init"))
+            .expect("init store");
+        let empty = run(Cli::try_parse_from(["workvcs", "workspace", "list", store])
+            .expect("parse empty workspace list"))
+        .expect("list empty workspaces");
+        assert_eq!(value(&empty, "workspaces"), "0");
+
+        let created = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace alpha",
+            "--initial-branch-name",
+            "trunk",
+        ])
+        .expect("parse workspace create"))
+        .expect("create workspace");
+        let workspace_id = value(&created, "workspace_id");
+        assert_eq!(value(&created, "display_name"), "workspace alpha");
+        assert_eq!(value(&created, "branch_name"), "trunk");
+        assert_ne!(value(&created, "created_at_us"), "");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "show",
+            store,
+            "--workspace",
+            &workspace_id,
+        ])
+        .expect("parse workspace show"))
+        .expect("show workspace");
+        assert_eq!(value(&shown, "workspace_id"), workspace_id);
+        assert_eq!(value(&shown, "display_name"), "workspace alpha");
+        assert_eq!(value(&shown, "branch_id"), value(&created, "branch_id"));
+        assert_eq!(
+            value(&shown, "genesis_commit_id"),
+            value(&created, "genesis_commit_id")
+        );
+        assert_eq!(
+            value(&shown, "genesis_changeset_id"),
+            value(&created, "genesis_changeset_id")
+        );
+        assert_eq!(
+            value(&shown, "state_digest"),
+            value(&created, "state_digest")
+        );
+
+        let listed = run(Cli::try_parse_from(["workvcs", "workspace", "list", store])
+            .expect("parse workspace list"))
+        .expect("list workspaces");
+        assert_eq!(value(&listed, "workspaces"), "1");
+        assert_eq!(value(&listed, "workspace.0.workspace_id"), workspace_id);
+        assert_eq!(
+            value(&listed, "workspace.0.display_name"),
+            "workspace alpha"
+        );
+        assert_eq!(
+            value(&listed, "workspace.0.branch_id"),
+            value(&created, "branch_id")
+        );
+        assert_eq!(value(&listed, "workspace.0.branch_name"), "trunk");
     }
 
     #[test]

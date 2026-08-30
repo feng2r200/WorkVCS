@@ -53,6 +53,21 @@ pub struct WorkspaceInfo {
     pub initial_branch_id: BranchId,
     pub initial_branch_name: String,
     pub state_digest: Digest,
+    pub created_at_us: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkspaceListOptions;
+
+impl WorkspaceListOptions {
+    pub fn all() -> Self {
+        Self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceListResult {
+    pub workspaces: Vec<WorkspaceInfo>,
 }
 
 pub(crate) fn create_workspace(
@@ -203,20 +218,28 @@ pub(crate) fn load_workspace_info(
     let workspace = connection
         .inner()
         .query_row(
-            "SELECT display_name, genesis_commit_id
+            "SELECT display_name, genesis_commit_id, created_at_us
              FROM workspace
              WHERE workspace_id = ?1",
             params![&workspace_id_bytes[..]],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
         )
         .optional()
         .map_err(storage_error)?;
 
-    let Some((display_name, genesis_commit_id_bytes)) = workspace else {
+    let Some((display_name, genesis_commit_id_bytes, created_at_us)) = workspace else {
         return Err(WorkVcsError::WorkspaceNotFound(format!(
             "workspace {workspace_id} does not exist"
         )));
     };
+    validate_workspace_display_name(&display_name)?;
+    validate_created_at_us("workspace.created_at_us", created_at_us)?;
 
     let genesis_commit_id =
         decode_commit_id("workspace.genesis_commit_id", genesis_commit_id_bytes)?;
@@ -279,7 +302,45 @@ pub(crate) fn load_workspace_info(
         initial_branch_id: branch.0,
         initial_branch_name: branch.1,
         state_digest,
+        created_at_us,
     })
+}
+
+pub(crate) fn workspaces(
+    connection: &StoreConnection,
+    _options: &WorkspaceListOptions,
+) -> Result<WorkspaceListResult> {
+    connection.verify_foreign_keys()?;
+
+    let workspace_ids = list_workspace_ids(connection)?;
+    let mut workspaces = Vec::with_capacity(workspace_ids.len());
+    for workspace_id in workspace_ids {
+        workspaces.push(load_workspace_info(connection, workspace_id)?);
+    }
+    Ok(WorkspaceListResult { workspaces })
+}
+
+fn list_workspace_ids(connection: &StoreConnection) -> Result<Vec<WorkspaceId>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT workspace_id
+             FROM workspace
+             ORDER BY created_at_us, workspace_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(storage_error)?;
+
+    let mut workspace_ids = Vec::new();
+    for row in rows {
+        workspace_ids.push(decode_workspace_id(
+            "workspace.workspace_id",
+            row.map_err(storage_error)?,
+        )?);
+    }
+    Ok(workspace_ids)
 }
 
 fn validate_genesis_changeset(
@@ -467,6 +528,15 @@ fn validate_workspace_display_name(value: &str) -> Result<()> {
     }
 }
 
+fn validate_created_at_us(column: &str, value: i64) -> Result<()> {
+    if value <= 0 {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "{column} must be positive, found {value}"
+        )));
+    }
+    Ok(())
+}
+
 fn canonical_empty_object_json() -> Result<String> {
     let value = CanonicalValue::object(Vec::new())?;
     String::from_utf8(canonical_bytes(&value)?).map_err(|error| {
@@ -502,6 +572,13 @@ fn query_count<P: Params>(connection: &StoreConnection, sql: &str, params: P) ->
         .inner()
         .query_row(sql, params, |row| row.get(0))
         .map_err(storage_error)
+}
+
+fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
+    let bytes = decode_16(column, bytes)?;
+    WorkspaceId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::StoreBootstrapInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
 }
 
 fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {

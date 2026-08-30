@@ -1502,6 +1502,9 @@ enum BundleCommand {
         expected_detail_digest: Option<String>,
 
         #[arg(long)]
+        expected_detail_size_bytes: Option<i64>,
+
+        #[arg(long)]
         expected_outcome: Option<String>,
     },
     ImportList {
@@ -5723,6 +5726,7 @@ fn run(cli: Cli) -> Result<String> {
                 import,
                 expected_bundle_digest,
                 expected_detail_digest,
+                expected_detail_size_bytes,
                 expected_outcome,
             } => {
                 let engine = Engine::open(store)?;
@@ -5753,6 +5757,31 @@ fn run(cli: Cli) -> Result<String> {
                         None => {
                             return Err(WorkVcsError::DigestInvalid(format!(
                                 "bundle import detail digest none does not match expected {expected_detail_digest}"
+                            )));
+                        }
+                    }
+                }
+                if let Some(expected_detail_size_bytes) = expected_detail_size_bytes {
+                    if expected_detail_size_bytes < 0 {
+                        return Err(WorkVcsError::QueryInvalid(
+                            "bundle import expected detail size must not be negative".to_owned(),
+                        ));
+                    }
+                    match snapshot.outcome.as_ref() {
+                        Some(outcome)
+                            if outcome.detail_size_bytes == expected_detail_size_bytes =>
+                        {
+                            output.push_str("detail_size_matches_expected=true\n");
+                        }
+                        Some(outcome) => {
+                            return Err(WorkVcsError::QueryInvalid(format!(
+                                "bundle import detail size {} does not match expected {}",
+                                outcome.detail_size_bytes, expected_detail_size_bytes
+                            )));
+                        }
+                        None => {
+                            return Err(WorkVcsError::QueryInvalid(format!(
+                                "bundle import detail size none does not match expected {expected_detail_size_bytes}"
                             )));
                         }
                     }
@@ -22916,6 +22945,8 @@ mod tests {
             &value(&shown_import, "bundle_digest"),
             "--expected-detail-digest",
             &value(&shown_import, "detail_digest"),
+            "--expected-detail-size-bytes",
+            &value(&shown_import, "detail_size_bytes"),
             "--expected-outcome",
             "already_present",
         ])
@@ -22928,6 +22959,10 @@ mod tests {
         assert_eq!(value(&expected_import, "outcome"), "already_present");
         assert_eq!(value(&expected_import, "bundle_matches_expected"), "true");
         assert_eq!(value(&expected_import, "detail_matches_expected"), "true");
+        assert_eq!(
+            value(&expected_import, "detail_size_matches_expected"),
+            "true"
+        );
         assert_eq!(value(&expected_import, "outcome_matches_expected"), "true");
         let mismatched_import_detail = run(Cli::try_parse_from([
             "workvcs",
@@ -22941,6 +22976,18 @@ mod tests {
         ])
         .expect("parse mismatched bundle import detail digest"));
         assert!(mismatched_import_detail.is_err());
+        let mismatched_import_detail_size = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-show",
+            store,
+            "--import",
+            &import_id,
+            "--expected-detail-size-bytes",
+            "0",
+        ])
+        .expect("parse mismatched bundle import detail size"));
+        assert!(mismatched_import_detail_size.is_err());
         let mismatched_import_bundle = run(Cli::try_parse_from([
             "workvcs",
             "bundle",

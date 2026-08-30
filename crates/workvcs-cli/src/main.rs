@@ -2006,6 +2006,9 @@ enum PlanCommand {
 
         #[arg(long)]
         plan: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("plan-list-target")
@@ -5615,10 +5618,23 @@ fn run(cli: Cli) -> Result<String> {
                 branch,
                 commit,
                 plan,
+                expected_state_digest,
             } => {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_plan_query_commit(&engine, branch, commit)?;
-                render_plan_snapshot(&engine.plan_at(commit_id, EntityId::parse_canonical(&plan)?)?)
+                let snapshot = engine.plan_at(commit_id, EntityId::parse_canonical(&plan)?)?;
+                let mut output = render_plan_snapshot(&snapshot)?;
+                if let Some(expected_state_digest) = expected_state_digest {
+                    let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                    if snapshot.state_digest != expected_state_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "plan state digest {} does not match expected {}",
+                            snapshot.state_digest, expected_state_digest
+                        )));
+                    }
+                    output.push_str("matches_expected=true\n");
+                }
+                Ok(output)
             }
             PlanCommand::List {
                 store,
@@ -24027,6 +24043,41 @@ mod tests {
             "[\"branch selector\",\"commit selector\"]"
         );
         assert_eq!(value(&plan_at_create, "completion_rationale_json"), "null");
+
+        let expected_plan_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--plan",
+            &plan_id,
+            "--expected-state-digest",
+            &value(&plan_at_create, "plan_state_digest"),
+        ])
+        .expect("parse expected plan show at commit"))
+        .expect("show expected plan at commit");
+        assert_eq!(
+            value(&expected_plan_at_create, "plan_state_digest"),
+            value(&plan_at_create, "plan_state_digest")
+        );
+        assert_eq!(value(&expected_plan_at_create, "matches_expected"), "true");
+
+        let mismatched_plan_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--plan",
+            &plan_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched plan show at commit"));
+        assert!(mismatched_plan_at_create.is_err());
 
         let completed_plan = run(Cli::try_parse_from([
             "workvcs",

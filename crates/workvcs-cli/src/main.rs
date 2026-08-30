@@ -718,6 +718,9 @@ enum StoreCommand {
 
         #[arg(long)]
         name: Option<String>,
+
+        #[arg(long)]
+        expected_knowledge_spaces: Option<usize>,
     },
     #[command(name = "knowledge-space-available-exposures")]
     KnowledgeSpaceAvailableExposures {
@@ -892,6 +895,9 @@ enum StoreCommand {
 
         #[arg(long)]
         source_status: Option<String>,
+
+        #[arg(long)]
+        expected_exposures: Option<usize>,
     },
 }
 
@@ -4151,7 +4157,12 @@ fn run(cli: Cli) -> Result<String> {
                     engine.knowledge_space(KnowledgeSpaceId::parse_canonical(&knowledge_space)?)?;
                 Ok(render_knowledge_space_snapshot(&snapshot))
             }
-            StoreCommand::KnowledgeSpaceList { store, limit, name } => {
+            StoreCommand::KnowledgeSpaceList {
+                store,
+                limit,
+                name,
+                expected_knowledge_spaces,
+            } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
                         "store knowledge-space-list limit must be greater than zero".to_owned(),
@@ -4166,7 +4177,17 @@ fn run(cli: Cli) -> Result<String> {
                     options = options.with_name(name)?;
                 }
                 let result = engine.knowledge_spaces(options)?;
-                Ok(render_knowledge_space_list(&result))
+                let mut output = render_knowledge_space_list(&result);
+                if let Some(expected_knowledge_spaces) = expected_knowledge_spaces {
+                    let actual_knowledge_spaces = result.knowledge_spaces.len();
+                    if actual_knowledge_spaces != expected_knowledge_spaces {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "knowledge spaces {actual_knowledge_spaces} does not match expected {expected_knowledge_spaces}"
+                        )));
+                    }
+                    output.push_str("knowledge_spaces_match_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::KnowledgeSpaceAvailableExposures {
                 store,
@@ -4437,6 +4458,7 @@ fn run(cli: Cli) -> Result<String> {
                 knowledge,
                 lifecycle_status,
                 source_status,
+                expected_exposures,
             } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
@@ -4471,7 +4493,17 @@ fn run(cli: Cli) -> Result<String> {
                         .with_source_status(KnowledgeExposureSourceStatus::parse(&source_status)?);
                 }
                 let result = engine.knowledge_exposures(options)?;
-                render_knowledge_exposure_list(&result)
+                let mut output = render_knowledge_exposure_list(&result)?;
+                if let Some(expected_exposures) = expected_exposures {
+                    let actual_exposures = result.exposures.len();
+                    if actual_exposures != expected_exposures {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "exposures {actual_exposures} does not match expected {expected_exposures}"
+                        )));
+                    }
+                    output.push_str("exposures_match_expected=true\n");
+                }
+                Ok(output)
             }
         },
         Command::History {
@@ -18885,10 +18917,13 @@ mod tests {
             store,
             "--limit",
             "1",
+            "--expected-knowledge-spaces",
+            "1",
         ])
         .expect("parse knowledge-space-list"))
         .expect("list knowledge spaces");
         assert_eq!(value(&listed, "knowledge_spaces"), "1");
+        assert_eq!(value(&listed, "knowledge_spaces_match_expected"), "true");
         assert_eq!(
             value(&listed, "knowledge_space[0].knowledge_space_id"),
             knowledge_space_id
@@ -18913,14 +18948,33 @@ mod tests {
             store,
             "--name",
             "Records",
+            "--expected-knowledge-spaces",
+            "1",
         ])
         .expect("parse name-filtered knowledge-space-list"))
         .expect("list name-filtered knowledge spaces");
         assert_eq!(value(&name_filtered, "knowledge_spaces"), "1");
         assert_eq!(
+            value(&name_filtered, "knowledge_spaces_match_expected"),
+            "true"
+        );
+        assert_eq!(
             value(&name_filtered, "knowledge_space[0].knowledge_space_id"),
             records_space_id
         );
+
+        let mismatched_name_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-list",
+            store,
+            "--name",
+            "Records",
+            "--expected-knowledge-spaces",
+            "0",
+        ])
+        .expect("parse mismatched knowledge-space-list"));
+        assert!(mismatched_name_filtered.is_err());
 
         let case_sensitive_filtered = run(Cli::try_parse_from([
             "workvcs",
@@ -18929,10 +18983,16 @@ mod tests {
             store,
             "--name",
             "records",
+            "--expected-knowledge-spaces",
+            "0",
         ])
         .expect("parse case-sensitive knowledge-space-list"))
         .expect("list case-sensitive knowledge spaces");
         assert_eq!(value(&case_sensitive_filtered, "knowledge_spaces"), "0");
+        assert_eq!(
+            value(&case_sensitive_filtered, "knowledge_spaces_match_expected"),
+            "true"
+        );
     }
 
     #[test]
@@ -19140,14 +19200,38 @@ mod tests {
             "active",
             "--source-status",
             "current",
+            "--expected-exposures",
+            "1",
         ])
         .expect("parse knowledge-exposure-list"))
         .expect("list knowledge exposures");
         assert_eq!(value(&listed, "exposures"), "1");
+        assert_eq!(value(&listed, "exposures_match_expected"), "true");
         assert_eq!(
             value(&listed, "exposure[0].exposure_id"),
             value(&exposure, "exposure_id")
         );
+
+        let mismatched_list = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-list",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--workspace",
+            &workspace_id,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--lifecycle-status",
+            "active",
+            "--source-status",
+            "current",
+            "--expected-exposures",
+            "0",
+        ])
+        .expect("parse mismatched knowledge-exposure-list"));
+        assert!(mismatched_list.is_err());
     }
 
     #[test]

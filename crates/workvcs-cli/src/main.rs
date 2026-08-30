@@ -1589,6 +1589,18 @@ enum TaskCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        parent: Option<String>,
+
+        #[arg(long)]
+        child: Option<String>,
+
+        #[arg(long)]
+        parent_kind: Option<String>,
+
+        #[arg(long)]
+        child_kind: Option<String>,
     },
 }
 
@@ -3848,12 +3860,12 @@ fn run(cli: Cli) -> Result<String> {
                     references.retain(|reference| reference.target_entity_id == target_id);
                 }
                 if let Some(referrer_kind) = referrer_kind {
-                    let referrer_kind = parse_structural_reference_endpoint_kind(&referrer_kind)?;
+                    let referrer_kind = parse_goal_plan_task_endpoint_kind(&referrer_kind)?;
                     references
                         .retain(|reference| reference.referrer_kind.as_str() == referrer_kind);
                 }
                 if let Some(target_kind) = target_kind {
-                    let target_kind = parse_structural_reference_endpoint_kind(&target_kind)?;
+                    let target_kind = parse_goal_plan_task_endpoint_kind(&target_kind)?;
                     references.retain(|reference| reference.target_kind.as_str() == target_kind);
                 }
                 Ok(render_structural_reference_list(&references))
@@ -4765,11 +4777,31 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     branch,
                     commit,
+                    parent,
+                    child,
+                    parent_kind,
+                    child_kind,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            let relations = engine.primary_containment_relations_at(commit_id)?;
+            let mut relations = engine.primary_containment_relations_at(commit_id)?;
+            if let Some(parent) = parent {
+                let parent_id = EntityId::parse_canonical(&parent)?;
+                relations.retain(|relation| relation.parent_entity_id == parent_id);
+            }
+            if let Some(child) = child {
+                let child_id = EntityId::parse_canonical(&child)?;
+                relations.retain(|relation| relation.child_entity_id == child_id);
+            }
+            if let Some(parent_kind) = parent_kind {
+                let parent_kind = parse_goal_plan_task_endpoint_kind(&parent_kind)?;
+                relations.retain(|relation| relation.parent_kind.as_str() == parent_kind);
+            }
+            if let Some(child_kind) = child_kind {
+                let child_kind = parse_goal_plan_task_endpoint_kind(&child_kind)?;
+                relations.retain(|relation| relation.child_kind.as_str() == child_kind);
+            }
             Ok(render_primary_containment_list(commit_id, &relations))
         }
         Command::Ac {
@@ -6627,13 +6659,13 @@ fn parse_verification_target_kind(value: &str) -> Result<&'static str> {
     }
 }
 
-fn parse_structural_reference_endpoint_kind(value: &str) -> Result<&'static str> {
+fn parse_goal_plan_task_endpoint_kind(value: &str) -> Result<&'static str> {
     match value {
         "goal" => Ok("goal"),
         "plan" => Ok("plan"),
         "task" => Ok("task"),
         other => Err(WorkVcsError::TaskInvalid(format!(
-            "structural reference endpoint kind {other:?} is not in the CLI vocabulary"
+            "goal/plan/task endpoint kind {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -18861,6 +18893,96 @@ mod tests {
             value(&containment_list, "relation.0.child_entity_id"),
             second_task
         );
+
+        let containment_by_parent = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--parent",
+            &first_task,
+        ])
+        .expect("parse containment list by parent"))
+        .expect("list containment by parent");
+        assert_eq!(value(&containment_by_parent, "relations"), "1");
+
+        let containment_by_child = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--child",
+            &second_task,
+        ])
+        .expect("parse containment list by child"))
+        .expect("list containment by child");
+        assert_eq!(value(&containment_by_child, "relations"), "1");
+
+        let containment_by_parent_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--parent-kind",
+            "task",
+        ])
+        .expect("parse containment list by parent kind"))
+        .expect("list containment by parent kind");
+        assert_eq!(value(&containment_by_parent_kind, "relations"), "1");
+
+        let containment_by_child_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--child-kind",
+            "task",
+        ])
+        .expect("parse containment list by child kind"))
+        .expect("list containment by child kind");
+        assert_eq!(value(&containment_by_child_kind, "relations"), "1");
+
+        let containment_by_combined_filters = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--parent",
+            &first_task,
+            "--child",
+            &second_task,
+            "--parent-kind",
+            "task",
+            "--child-kind",
+            "task",
+        ])
+        .expect("parse containment list by combined filters"))
+        .expect("list containment by combined filters");
+        assert_eq!(value(&containment_by_combined_filters, "relations"), "1");
+
+        let containment_by_missing_child = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--child",
+            &first_task,
+        ])
+        .expect("parse containment list by missing child"))
+        .expect("list containment by missing child");
+        assert_eq!(value(&containment_by_missing_child, "relations"), "0");
 
         let historical_containment_list = run(Cli::try_parse_from([
             "workvcs",

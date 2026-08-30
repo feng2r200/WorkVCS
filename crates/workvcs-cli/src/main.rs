@@ -483,6 +483,7 @@ enum CanonicalCommand {
 
 #[derive(Debug, Subcommand)]
 enum IdCommand {
+    Kinds,
     New {
         #[arg(long)]
         kind: String,
@@ -3525,6 +3526,7 @@ fn run(cli: Cli) -> Result<String> {
             }
         },
         Command::Id { command } => match command {
+            IdCommand::Kinds => Ok(render_id_kinds()),
             IdCommand::New { kind } => render_new_id(&kind),
             IdCommand::Validate { kind, id } => render_validate_id(&kind, &id),
         },
@@ -8133,6 +8135,46 @@ fn read_cli_file(label: &str, path: &Path) -> Result<Vec<u8>> {
             path.display()
         ))
     })
+}
+
+const SUPPORTED_ID_KINDS: &[&str] = &[
+    "store",
+    "workspace",
+    "entity",
+    "entity-version",
+    "exposure",
+    "exposure-transition",
+    "external-object",
+    "external-ref",
+    "external-version",
+    "evidence",
+    "resource",
+    "resource-observation",
+    "knowledge-space",
+    "relation",
+    "relation-version",
+    "branch",
+    "commit",
+    "changeset",
+    "checkpoint",
+    "import",
+    "lineage",
+    "migration",
+    "operation",
+    "event",
+    "session",
+    "session-diff",
+    "claim",
+    "merge",
+    "merge-item",
+];
+
+fn render_id_kinds() -> String {
+    let mut output = format!("kinds={}\n", SUPPORTED_ID_KINDS.len());
+    for (index, kind) in SUPPORTED_ID_KINDS.iter().enumerate() {
+        writeln!(output, "kind.{index}={kind}").expect("write to String");
+    }
+    output
 }
 
 fn render_new_id(kind: &str) -> Result<String> {
@@ -14333,39 +14375,14 @@ mod tests {
 
     #[test]
     fn id_cli_generates_typed_uuidv7_values() {
-        let supported_kinds = [
-            "store",
-            "workspace",
-            "entity",
-            "entity-version",
-            "exposure",
-            "exposure-transition",
-            "external-object",
-            "external-ref",
-            "external-version",
-            "evidence",
-            "resource",
-            "resource-observation",
-            "knowledge-space",
-            "relation",
-            "relation-version",
-            "branch",
-            "commit",
-            "changeset",
-            "checkpoint",
-            "import",
-            "lineage",
-            "migration",
-            "operation",
-            "event",
-            "session",
-            "session-diff",
-            "claim",
-            "merge",
-            "merge-item",
-        ];
+        let kinds = run(Cli::try_parse_from(["workvcs", "id", "kinds"]).expect("parse id kinds"))
+            .expect("list id kinds");
+        assert_eq!(value(&kinds, "kinds"), SUPPORTED_ID_KINDS.len().to_string());
+        assert_eq!(value(&kinds, "kind.0"), "store");
+        assert_eq!(value(&kinds, "kind.28"), "merge-item");
+
         let mut generated_entity_id = None;
-        for kind in supported_kinds {
+        for &kind in SUPPORTED_ID_KINDS {
             let generated = run(
                 Cli::try_parse_from(["workvcs", "id", "new", "--kind", kind])
                     .expect("parse id new"),

@@ -2154,6 +2154,9 @@ enum ResourceCommand {
 
         #[arg(long, default_value = "{}")]
         detail_format_metadata_json: String,
+
+        #[arg(long)]
+        source_session: Option<String>,
     },
     ObservationShow {
         #[arg(value_name = "STORE")]
@@ -5007,6 +5010,7 @@ fn run(cli: Cli) -> Result<String> {
                     detail_content_size_bytes,
                     detail_media_type,
                     detail_format_metadata_json,
+                    source_session,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -5029,6 +5033,10 @@ fn run(cli: Cli) -> Result<String> {
                 })?
             {
                 options = options.with_detail_content(detail_content);
+            }
+            if let Some(source_session) = source_session {
+                options =
+                    options.with_source_session_id(SessionId::parse_canonical(&source_session)?);
             }
             let observation = engine.record_resource_observation(options)?;
             Ok(render_resource_observation_create(&observation))
@@ -18832,8 +18840,24 @@ mod tests {
         ])
         .expect("parse workspace"))
         .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
         let branch = value(&workspace, "branch_id");
         let mut head = value(&workspace, "genesis_commit_id");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+            "--metadata-json",
+            r#"{"purpose":"resource observation"}"#,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
 
         let task = run(Cli::try_parse_from([
             "workvcs",
@@ -18902,6 +18926,8 @@ mod tests {
             "text/plain",
             "--detail-format-metadata-json",
             r#"{"encoding":"utf-8"}"#,
+            "--source-session",
+            &session_id,
         ])
         .expect("parse observe"))
         .expect("record observation");
@@ -18932,7 +18958,7 @@ mod tests {
             value(&shown_observation, "detail.format_metadata_json"),
             r#"{"encoding":"utf-8"}"#
         );
-        assert_eq!(value(&shown_observation, "source_session_id"), "none");
+        assert_eq!(value(&shown_observation, "source_session_id"), session_id);
 
         let duplicate_fingerprint_source = Cli::try_parse_from([
             "workvcs",
@@ -18991,6 +19017,10 @@ mod tests {
         assert_eq!(
             value(&observations, "observation.0.fingerprint"),
             fingerprint
+        );
+        assert_eq!(
+            value(&observations, "observation.0.source_session_id"),
+            session_id
         );
 
         let resource_observations = run(Cli::try_parse_from([

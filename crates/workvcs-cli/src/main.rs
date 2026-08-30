@@ -1857,12 +1857,21 @@ enum AcceptanceCriterionCommand {
         #[arg(long)]
         commit: Option<String>,
     },
+    #[command(group(
+        ArgGroup::new("acceptance-criterion-status-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
     Status {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
         #[arg(long)]
-        branch: String,
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
 
         #[arg(long)]
         criterion: String,
@@ -4674,14 +4683,27 @@ fn run(cli: Cli) -> Result<String> {
                 AcceptanceCriterionCommand::Status {
                     store,
                     branch,
+                    commit,
                     criterion,
                 },
         } => {
             let engine = Engine::open(store)?;
-            let status = engine.acceptance_criterion_effective_status_for_branch(
-                BranchId::parse_canonical(&branch)?,
-                EntityId::parse_canonical(&criterion)?,
-            )?;
+            let criterion_id = EntityId::parse_canonical(&criterion)?;
+            let status = match (branch, commit) {
+                (Some(branch), None) => engine.acceptance_criterion_effective_status_for_branch(
+                    BranchId::parse_canonical(&branch)?,
+                    criterion_id,
+                )?,
+                (None, Some(commit)) => engine.acceptance_criterion_effective_status(
+                    CommitId::parse_canonical(&commit)?,
+                    criterion_id,
+                )?,
+                _ => {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "ac status requires exactly one of --branch or --commit".to_owned(),
+                    ));
+                }
+            };
             Ok(render_acceptance_criterion_status(status))
         }
         Command::Vr {
@@ -16214,6 +16236,44 @@ mod tests {
         .expect("parse status"))
         .expect("initial status");
         assert_eq!(status, "status=unverified\n");
+
+        let status_at_commit = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "status",
+            store,
+            "--commit",
+            &head,
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse status at commit"))
+        .expect("initial status at commit");
+        assert_eq!(status_at_commit, "status=unverified\n");
+
+        let status_without_target = Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "status",
+            store,
+            "--criterion",
+            &criterion_id,
+        ]);
+        assert!(status_without_target.is_err());
+
+        let status_with_both_targets = Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "status",
+            store,
+            "--branch",
+            &branch,
+            "--commit",
+            &head,
+            "--criterion",
+            &criterion_id,
+        ]);
+        assert!(status_with_both_targets.is_err());
 
         let verification = run(Cli::try_parse_from([
             "workvcs",

@@ -1887,6 +1887,9 @@ enum TaskCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_relations: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("task-containment-list-target")
@@ -1918,6 +1921,9 @@ enum TaskCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_relations: Option<usize>,
     },
 }
 
@@ -6313,6 +6319,7 @@ fn run(cli: Cli) -> Result<String> {
                     source_task,
                     target_task,
                     limit,
+                    expected_relations,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6338,7 +6345,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 relations.truncate(limit);
             }
-            Ok(render_task_scheduling_relation_list(commit_id, &relations))
+            let mut output = render_task_scheduling_relation_list(commit_id, &relations);
+            if let Some(expected_relations) = expected_relations {
+                let actual_relations = relations.len();
+                if actual_relations != expected_relations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "task scheduling relations {actual_relations} does not match expected {expected_relations}"
+                    )));
+                }
+                output.push_str("relations_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Task {
             command:
@@ -6351,6 +6368,7 @@ fn run(cli: Cli) -> Result<String> {
                     parent_kind,
                     child_kind,
                     limit,
+                    expected_relations,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6380,7 +6398,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 relations.truncate(limit);
             }
-            Ok(render_primary_containment_list(commit_id, &relations))
+            let mut output = render_primary_containment_list(commit_id, &relations);
+            if let Some(expected_relations) = expected_relations {
+                let actual_relations = relations.len();
+                if actual_relations != expected_relations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "task containment relations {actual_relations} does not match expected {expected_relations}"
+                    )));
+                }
+                output.push_str("relations_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Ac {
             command:
@@ -25299,6 +25327,37 @@ mod tests {
             first_task
         );
 
+        let expected_scheduling_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-relations",
+            "2",
+        ])
+        .expect("parse expected scheduling list"))
+        .expect("expected scheduling relations");
+        assert_eq!(value(&expected_scheduling_list, "relations"), "2");
+        assert_eq!(
+            value(&expected_scheduling_list, "relations_match_expected"),
+            "true"
+        );
+
+        let mismatched_scheduling_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-relations",
+            "1",
+        ])
+        .expect("parse mismatched scheduling list"));
+        assert!(mismatched_scheduling_list.is_err());
+
         let limited_scheduling_list = run(Cli::try_parse_from([
             "workvcs",
             "task",
@@ -25436,6 +25495,31 @@ mod tests {
         .expect("list missing scheduling relations");
         assert_eq!(value(&missing_scheduling_list, "relations"), "0");
 
+        let expected_missing_scheduling_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--relation-type",
+            "depends_on",
+            "--target-task",
+            &second_task,
+            "--expected-relations",
+            "0",
+        ])
+        .expect("parse expected missing scheduling list"))
+        .expect("expected missing scheduling relations");
+        assert_eq!(value(&expected_missing_scheduling_list, "relations"), "0");
+        assert_eq!(
+            value(
+                &expected_missing_scheduling_list,
+                "relations_match_expected"
+            ),
+            "true"
+        );
+
         let containment_list = run(Cli::try_parse_from([
             "workvcs",
             "task",
@@ -25459,6 +25543,37 @@ mod tests {
             value(&containment_list, "relation.0.child_entity_id"),
             second_task
         );
+
+        let expected_containment_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-relations",
+            "1",
+        ])
+        .expect("parse expected containment list"))
+        .expect("expected containment relations");
+        assert_eq!(value(&expected_containment_list, "relations"), "1");
+        assert_eq!(
+            value(&expected_containment_list, "relations_match_expected"),
+            "true"
+        );
+
+        let mismatched_containment_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-relations",
+            "0",
+        ])
+        .expect("parse mismatched containment list"));
+        assert!(mismatched_containment_list.is_err());
 
         let containment_by_parent = run(Cli::try_parse_from([
             "workvcs",
@@ -25561,6 +25676,30 @@ mod tests {
         .expect("parse historical containment list"))
         .expect("list historical containment relations");
         assert_eq!(value(&historical_containment_list, "relations"), "0");
+
+        let expected_historical_containment_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--commit",
+            &value(&order, "commit_id"),
+            "--expected-relations",
+            "0",
+        ])
+        .expect("parse expected historical containment list"))
+        .expect("expected historical containment relations");
+        assert_eq!(
+            value(&expected_historical_containment_list, "relations"),
+            "0"
+        );
+        assert_eq!(
+            value(
+                &expected_historical_containment_list,
+                "relations_match_expected"
+            ),
+            "true"
+        );
     }
 
     #[test]

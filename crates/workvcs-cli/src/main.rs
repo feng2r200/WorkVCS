@@ -3369,6 +3369,15 @@ enum VerificationCommand {
         reason_code: Option<String>,
 
         #[arg(long)]
+        resource: Option<String>,
+
+        #[arg(long)]
+        observation: Option<String>,
+
+        #[arg(long)]
+        observed_fingerprint: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
 }
@@ -6112,6 +6121,9 @@ fn run(cli: Cli) -> Result<String> {
                     verification,
                     applicability,
                     reason_code,
+                    resource,
+                    observation,
+                    observed_fingerprint,
                     limit,
                 },
         } => {
@@ -6131,6 +6143,30 @@ fn run(cli: Cli) -> Result<String> {
                 result
                     .caches
                     .retain(|cache| cache.reason_code == reason_code);
+            }
+            let resource_id = resource
+                .map(|resource| ResourceId::parse_canonical(&resource))
+                .transpose()?;
+            let observation_id = observation
+                .map(|observation| ResourceObservationId::parse_canonical(&observation))
+                .transpose()?;
+            let observed_fingerprint = observed_fingerprint
+                .map(|fingerprint| Digest::from_hex(&fingerprint))
+                .transpose()?;
+            if resource_id.is_some() || observation_id.is_some() || observed_fingerprint.is_some() {
+                let mut filtered = Vec::new();
+                for cache in result.caches {
+                    if verification_cache_matches_resource_filters(
+                        &engine,
+                        &cache,
+                        resource_id,
+                        observation_id,
+                        observed_fingerprint,
+                    )? {
+                        filtered.push(cache);
+                    }
+                }
+                result.caches = filtered;
             }
             if matches!(limit, Some(0)) {
                 return Err(WorkVcsError::TaskInvalid(
@@ -10145,6 +10181,45 @@ fn render_verification_applicability_cache_list(
         .expect("write to String");
     }
     output
+}
+
+fn verification_cache_matches_resource_filters(
+    engine: &Engine,
+    cache: &VerificationApplicabilityCacheSnapshot,
+    resource_id: Option<ResourceId>,
+    observation_id: Option<ResourceObservationId>,
+    observed_fingerprint: Option<Digest>,
+) -> Result<bool> {
+    let verification = if resource_id.is_some() {
+        Some(engine.verification_at(cache.evaluated_commit_id, cache.verification_entity_id)?)
+    } else {
+        None
+    };
+    Ok(cache.resource_stamps.iter().any(|stamp| {
+        let resource_matches = match (resource_id, verification.as_ref()) {
+            (Some(resource_id), Some(verification)) => {
+                match usize::try_from(stamp.resource_basis_ordinal) {
+                    Ok(ordinal) => verification
+                        .state
+                        .resource_basis
+                        .get(ordinal)
+                        .is_some_and(|basis| basis.resource_id == resource_id),
+                    Err(_) => false,
+                }
+            }
+            (None, _) => true,
+            (Some(_), None) => false,
+        };
+        let observation_matches = match observation_id {
+            Some(observation_id) => stamp.observation_id == Some(observation_id),
+            None => true,
+        };
+        let fingerprint_matches = match observed_fingerprint {
+            Some(fingerprint) => stamp.observed_fingerprint == Some(fingerprint),
+            None => true,
+        };
+        resource_matches && observation_matches && fingerprint_matches
+    }))
 }
 
 fn render_record_create(record: &RecordCreateCommit) -> String {
@@ -23273,6 +23348,81 @@ mod tests {
             verification_id
         );
 
+        let cache_list_by_resource = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--resource",
+            &resource_id,
+        ])
+        .expect("parse resource-filtered cache list"))
+        .expect("list resource-filtered caches");
+        assert_eq!(value(&cache_list_by_resource, "caches"), "1");
+        assert_eq!(
+            value(&cache_list_by_resource, "cache.0.verification_entity_id"),
+            verification_id
+        );
+
+        let cache_list_by_observation = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--observation",
+            &observation_id,
+        ])
+        .expect("parse observation-filtered cache list"))
+        .expect("list observation-filtered caches");
+        assert_eq!(value(&cache_list_by_observation, "caches"), "1");
+        assert_eq!(
+            value(&cache_list_by_observation, "cache.0.verification_entity_id"),
+            verification_id
+        );
+
+        let cache_list_by_observed_fingerprint = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--observed-fingerprint",
+            &fingerprint,
+        ])
+        .expect("parse observed-fingerprint-filtered cache list"))
+        .expect("list observed-fingerprint-filtered caches");
+        assert_eq!(value(&cache_list_by_observed_fingerprint, "caches"), "1");
+        assert_eq!(
+            value(
+                &cache_list_by_observed_fingerprint,
+                "cache.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
+        let cache_list_by_combined_resource_stamp = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--resource",
+            &resource_id,
+            "--observation",
+            &observation_id,
+            "--observed-fingerprint",
+            &fingerprint,
+        ])
+        .expect("parse combined resource-stamp cache list"))
+        .expect("list combined resource-stamp caches");
+        assert_eq!(value(&cache_list_by_combined_resource_stamp, "caches"), "1");
+
         let limited_cache_list = run(Cli::try_parse_from([
             "workvcs",
             "verification",
@@ -23317,6 +23467,48 @@ mod tests {
         .expect("parse missing reason cache list"))
         .expect("list missing reason caches");
         assert_eq!(value(&missing_reason_cache_list, "caches"), "0");
+
+        let missing_resource_cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--resource",
+            &ResourceId::new_v7().to_string(),
+        ])
+        .expect("parse missing resource cache list"))
+        .expect("list missing resource caches");
+        assert_eq!(value(&missing_resource_cache_list, "caches"), "0");
+
+        let missing_observation_cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--observation",
+            &ResourceObservationId::new_v7().to_string(),
+        ])
+        .expect("parse missing observation cache list"))
+        .expect("list missing observation caches");
+        assert_eq!(value(&missing_observation_cache_list, "caches"), "0");
+
+        let missing_fingerprint_cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--observed-fingerprint",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse missing fingerprint cache list"))
+        .expect("list missing fingerprint caches");
+        assert_eq!(value(&missing_fingerprint_cache_list, "caches"), "0");
 
         let missing_cache_list = run(Cli::try_parse_from([
             "workvcs",

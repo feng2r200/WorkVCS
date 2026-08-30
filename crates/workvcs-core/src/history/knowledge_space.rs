@@ -34,14 +34,18 @@ pub struct KnowledgeSpaceSnapshot {
     pub created_at_us: i64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeSpaceListOptions {
     limit: usize,
+    name: Option<String>,
 }
 
 impl KnowledgeSpaceListOptions {
     pub fn new() -> Self {
-        Self { limit: 50 }
+        Self {
+            limit: 50,
+            name: None,
+        }
     }
 
     pub fn with_limit(mut self, limit: usize) -> Result<Self> {
@@ -54,8 +58,19 @@ impl KnowledgeSpaceListOptions {
         Ok(self)
     }
 
-    fn limit(self) -> usize {
+    pub fn with_name(mut self, name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        validate_knowledge_space_name(&name)?;
+        self.name = Some(name);
+        Ok(self)
+    }
+
+    fn limit(&self) -> usize {
         self.limit
+    }
+
+    fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 }
 
@@ -130,18 +145,16 @@ pub(crate) fn knowledge_spaces(
     options: KnowledgeSpaceListOptions,
 ) -> Result<KnowledgeSpaceListResult> {
     connection.verify_foreign_keys()?;
-    let limit = usize_to_i64("knowledge space list limit", options.limit())?;
     let mut statement = connection
         .inner()
         .prepare(
             "SELECT knowledge_space_id
              FROM knowledge_space
-             ORDER BY created_at_us DESC, knowledge_space_id DESC
-             LIMIT ?1",
+             ORDER BY created_at_us DESC, knowledge_space_id DESC",
         )
         .map_err(storage_error)?;
     let rows = statement
-        .query_map(params![limit], |row| row.get::<_, Vec<u8>>(0))
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
         .map_err(storage_error)?;
 
     let mut knowledge_spaces = Vec::new();
@@ -150,7 +163,16 @@ pub(crate) fn knowledge_spaces(
             "knowledge_space.knowledge_space_id",
             row.map_err(storage_error)?,
         )?;
-        knowledge_spaces.push(knowledge_space(connection, knowledge_space_id)?);
+        let knowledge_space = knowledge_space(connection, knowledge_space_id)?;
+        if options
+            .name()
+            .is_none_or(|name| knowledge_space.name == name)
+        {
+            knowledge_spaces.push(knowledge_space);
+            if knowledge_spaces.len() == options.limit() {
+                break;
+            }
+        }
     }
     Ok(KnowledgeSpaceListResult { knowledge_spaces })
 }
@@ -247,11 +269,6 @@ fn validate_positive_i64(label: &str, value: i64) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn usize_to_i64(label: &str, value: usize) -> Result<i64> {
-    i64::try_from(value)
-        .map_err(|_| WorkVcsError::QueryInvalid(format!("{label} does not fit i64")))
 }
 
 fn decode_knowledge_space_id(column: &str, bytes: Vec<u8>) -> Result<KnowledgeSpaceId> {

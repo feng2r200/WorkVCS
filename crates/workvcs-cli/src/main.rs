@@ -587,6 +587,9 @@ enum StoreCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        name: Option<String>,
     },
     #[command(name = "knowledge-space-available-exposures")]
     KnowledgeSpaceAvailableExposures {
@@ -3379,11 +3382,14 @@ fn run(cli: Cli) -> Result<String> {
                     engine.knowledge_space(KnowledgeSpaceId::parse_canonical(&knowledge_space)?)?;
                 Ok(render_knowledge_space_snapshot(&snapshot))
             }
-            StoreCommand::KnowledgeSpaceList { store, limit } => {
+            StoreCommand::KnowledgeSpaceList { store, limit, name } => {
                 let engine = Engine::open(store)?;
                 let mut options = KnowledgeSpaceListOptions::new();
                 if let Some(limit) = limit {
                     options = options.with_limit(limit)?;
+                }
+                if let Some(name) = name {
+                    options = options.with_name(name)?;
                 }
                 let result = engine.knowledge_spaces(options)?;
                 Ok(render_knowledge_space_list(&result))
@@ -13769,6 +13775,46 @@ mod tests {
             value(&listed, "knowledge_space[0].knowledge_space_id"),
             knowledge_space_id
         );
+
+        let created_records = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-create",
+            store,
+            "--name",
+            "Records",
+        ])
+        .expect("parse second knowledge-space-create"))
+        .expect("create second knowledge space");
+        let records_space_id = value(&created_records, "knowledge_space_id");
+
+        let name_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-list",
+            store,
+            "--name",
+            "Records",
+        ])
+        .expect("parse name-filtered knowledge-space-list"))
+        .expect("list name-filtered knowledge spaces");
+        assert_eq!(value(&name_filtered, "knowledge_spaces"), "1");
+        assert_eq!(
+            value(&name_filtered, "knowledge_space[0].knowledge_space_id"),
+            records_space_id
+        );
+
+        let case_sensitive_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-list",
+            store,
+            "--name",
+            "records",
+        ])
+        .expect("parse case-sensitive knowledge-space-list"))
+        .expect("list case-sensitive knowledge spaces");
+        assert_eq!(value(&case_sensitive_filtered, "knowledge_spaces"), "0");
     }
 
     #[test]

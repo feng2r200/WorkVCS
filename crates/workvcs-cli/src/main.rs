@@ -69,17 +69,18 @@ use workvcs_core::{
     RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
     ResolvedWhyQuerySubject, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
     ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, ResourceSnapshot, Result,
-    RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
-    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, StoreId, StoreInitOptions, StoreLineageListOptions,
-    StoreLineageListResult, StoreLineageRecordOptions, StoreLineageRecordResult,
-    StoreLineageSnapshot, StoreMigrationAttemptSnapshot, StoreMigrationListOptions,
-    StoreMigrationListResult, StoreMigrationRecordOptions, StoreMigrationRecordResult,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    ResourceObservationCreateResult, ResourceObservationId, ResourceObservationSnapshot,
+    ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInitOptions,
+    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
+    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
+    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
@@ -1820,6 +1821,13 @@ enum ResourceCommand {
 
         #[arg(long, default_value = "{}")]
         summary_json: String,
+    },
+    ObservationShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        observation: String,
     },
 }
 
@@ -4397,6 +4405,15 @@ fn run(cli: Cli) -> Result<String> {
                     parse_cli_object("resource observation summary", &summary_json)?,
                 )?)?;
             Ok(render_resource_observation_create(&observation))
+        }
+        Command::Resource {
+            command: ResourceCommand::ObservationShow { store, observation },
+        } => {
+            let engine = Engine::open(store)?;
+            render_resource_observation_snapshot(
+                &engine
+                    .resource_observation(ResourceObservationId::parse_canonical(&observation)?)?,
+            )
         }
         Command::Verification {
             command:
@@ -7478,6 +7495,44 @@ fn render_resource_observation_create(observation: &ResourceObservationCreateRes
         observation.state.fingerprint,
         observation.captured_at_us
     )
+}
+
+fn render_resource_observation_snapshot(
+    observation: &ResourceObservationSnapshot,
+) -> Result<String> {
+    let mut output = format!(
+        "observation_id={}\nresource_id={}\nadapter_kind={}\nadapter_schema_version={}\nfingerprint={}\ncaptured_at_us={}\nsummary_json={}\ndetail_content_present={}\nsource_session_id={}\n",
+        observation.observation_id,
+        observation.resource_id,
+        observation.adapter_kind,
+        observation.adapter_schema_version,
+        observation.fingerprint,
+        observation.captured_at_us,
+        canonical_cli_json("resource observation summary", &observation.summary)?,
+        observation.detail_content.is_some(),
+        render_optional_display_or_none(observation.source_session_id.as_ref())
+    );
+    if let Some(detail) = &observation.detail_content {
+        writeln!(output, "detail.content_digest={}", detail.content_digest)
+            .expect("write to String");
+        writeln!(output, "detail.size_bytes={}", detail.size_bytes).expect("write to String");
+        writeln!(
+            output,
+            "detail.media_type={}",
+            render_optional_display_or_none(detail.media_type.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "detail.format_metadata_json={}",
+            canonical_cli_json(
+                "resource observation detail format metadata",
+                &detail.format_metadata
+            )?
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_verification_applicability_cache(
@@ -16097,6 +16152,25 @@ mod tests {
         .expect("record observation");
         let observation_id = value(&observation, "observation_id");
         let fingerprint = value(&observation, "fingerprint");
+
+        let shown_observation = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-show",
+            store,
+            "--observation",
+            &observation_id,
+        ])
+        .expect("parse observation show"))
+        .expect("show observation");
+        assert_eq!(value(&shown_observation, "observation_id"), observation_id);
+        assert_eq!(value(&shown_observation, "resource_id"), resource_id);
+        assert_eq!(value(&shown_observation, "adapter_kind"), "git");
+        assert_eq!(value(&shown_observation, "adapter_schema_version"), "1");
+        assert_eq!(value(&shown_observation, "fingerprint"), fingerprint);
+        assert_eq!(value(&shown_observation, "summary_json"), "{}");
+        assert_eq!(value(&shown_observation, "detail_content_present"), "false");
+        assert_eq!(value(&shown_observation, "source_session_id"), "none");
 
         let verification = run(Cli::try_parse_from([
             "workvcs",

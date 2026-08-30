@@ -387,6 +387,9 @@ enum Command {
 
         #[arg(long)]
         session: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     Next {
         #[arg(value_name = "STORE")]
@@ -8229,12 +8232,27 @@ fn run(cli: Cli) -> Result<String> {
             ))?;
             Ok(render_claim_release(&released))
         }
-        Command::Context { store, session } => {
+        Command::Context {
+            store,
+            session,
+            expected_state_digest,
+        } => {
             let engine = Engine::open(store)?;
             let context = engine.context_overview(ContextOverviewOptions::new(
                 SessionId::parse_canonical(&session)?,
             ))?;
-            Ok(render_context_overview(&context))
+            let mut output = render_context_overview(&context);
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if context.branch.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "context state digest {} does not match expected {}",
+                        context.branch.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Next {
             store,
@@ -26858,6 +26876,35 @@ mod tests {
         assert!(context.contains("records=0"));
         assert!(context.contains("record_relations=0"));
         assert!(context.contains(&format!("candidate.0.task_entity_id={task_id}")));
+
+        let expected_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--expected-state-digest",
+            &value(&context, "state_digest"),
+        ])
+        .expect("parse expected context"))
+        .expect("context overview with expected digest");
+        assert_eq!(
+            value(&expected_context, "state_digest"),
+            value(&context, "state_digest")
+        );
+        assert_eq!(value(&expected_context, "matches_expected"), "true");
+
+        let mismatched_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched context"));
+        assert!(mismatched_context.is_err());
 
         let runnable = run(Cli::try_parse_from([
             "workvcs",

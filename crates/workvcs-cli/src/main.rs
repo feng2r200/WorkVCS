@@ -3255,6 +3255,18 @@ enum SessionCommand {
 
         #[arg(long)]
         session: String,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
+
+        #[arg(long)]
+        expected_active_workspace: Option<String>,
+
+        #[arg(long)]
+        expected_active_branch: Option<String>,
+
+        #[arg(long)]
+        expected_focus: Option<String>,
     },
     List {
         #[arg(value_name = "STORE")]
@@ -8096,12 +8108,98 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_session_start(&session))
         }
         Command::Session {
-            command: SessionCommand::Show { store, session },
+            command:
+                SessionCommand::Show {
+                    store,
+                    session,
+                    expected_lifecycle_state,
+                    expected_active_workspace,
+                    expected_active_branch,
+                    expected_focus,
+                },
         } => {
             let engine = Engine::open(store)?;
-            render_session_snapshot(
-                &engine.session_snapshot(SessionId::parse_canonical(&session)?)?,
-            )
+            let snapshot = engine.session_snapshot(SessionId::parse_canonical(&session)?)?;
+            let mut output = render_session_snapshot(&snapshot)?;
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+                let expected_lifecycle_state =
+                    parse_session_lifecycle_state(&expected_lifecycle_state)?;
+                if snapshot.lifecycle_state != expected_lifecycle_state {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session lifecycle state {} does not match expected {}",
+                        session_lifecycle_state(snapshot.lifecycle_state),
+                        session_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                output.push_str("lifecycle_state_matches_expected=true\n");
+            }
+            if let Some(expected_active_workspace) = expected_active_workspace {
+                let expected_active_workspace =
+                    workvcs_core::WorkspaceId::parse_canonical(&expected_active_workspace)?;
+                match snapshot.active_workspace_id {
+                    Some(actual) if actual == expected_active_workspace => {
+                        output.push_str("active_workspace_matches_expected=true\n");
+                    }
+                    Some(actual) => {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session active workspace {actual} does not match expected {expected_active_workspace}"
+                        )));
+                    }
+                    None => {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session active workspace none does not match expected {expected_active_workspace}"
+                        )));
+                    }
+                }
+            }
+            if let Some(expected_active_branch) = expected_active_branch {
+                let expected_active_branch = BranchId::parse_canonical(&expected_active_branch)?;
+                match snapshot.active_branch_id {
+                    Some(actual) if actual == expected_active_branch => {
+                        output.push_str("active_branch_matches_expected=true\n");
+                    }
+                    Some(actual) => {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session active branch {actual} does not match expected {expected_active_branch}"
+                        )));
+                    }
+                    None => {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session active branch none does not match expected {expected_active_branch}"
+                        )));
+                    }
+                }
+            }
+            if let Some(expected_focus) = expected_focus {
+                if expected_focus == "none" {
+                    if let Some(actual_focus) = snapshot.focus.as_ref() {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session focus {} does not match expected none",
+                            actual_focus.focus_entity_id
+                        )));
+                    }
+                    output.push_str("focus_matches_expected=true\n");
+                } else {
+                    let expected_focus = EntityId::parse_canonical(&expected_focus)?;
+                    match snapshot.focus.as_ref() {
+                        Some(actual_focus) if actual_focus.focus_entity_id == expected_focus => {
+                            output.push_str("focus_matches_expected=true\n");
+                        }
+                        Some(actual_focus) => {
+                            return Err(WorkVcsError::SessionInvalid(format!(
+                                "session focus {} does not match expected {expected_focus}",
+                                actual_focus.focus_entity_id
+                            )));
+                        }
+                        None => {
+                            return Err(WorkVcsError::SessionInvalid(format!(
+                                "session focus none does not match expected {expected_focus}"
+                            )));
+                        }
+                    }
+                }
+            }
+            Ok(output)
         }
         Command::Session {
             command:
@@ -21587,6 +21685,60 @@ mod tests {
         assert_eq!(value(&shown_session, "focus_entity_id"), "none");
         assert_eq!(value(&shown_session, "session_diff_id"), "none");
 
+        let expected_started_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+            "--expected-lifecycle-state",
+            "active",
+            "--expected-active-workspace",
+            &workspace_id,
+            "--expected-active-branch",
+            &source_branch,
+            "--expected-focus",
+            "none",
+        ])
+        .expect("parse expected started session show"))
+        .expect("show expected started session");
+        assert_eq!(
+            value(
+                &expected_started_session,
+                "lifecycle_state_matches_expected"
+            ),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &expected_started_session,
+                "active_workspace_matches_expected"
+            ),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_started_session, "active_branch_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_started_session, "focus_matches_expected"),
+            "true"
+        );
+
+        let mismatched_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+            "--expected-active-branch",
+            &fork_branch,
+        ])
+        .expect("parse mismatched session branch show"));
+        assert!(mismatched_branch.is_err());
+
         let claim = run(Cli::try_parse_from([
             "workvcs",
             "claim",
@@ -21640,6 +21792,60 @@ mod tests {
         );
         assert_eq!(value(&shown_switched_session, "focus_entity_id"), task_id);
         assert_eq!(value(&shown_switched_session, "focus_path_entries"), "0");
+
+        let expected_switched_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+            "--expected-lifecycle-state",
+            "active",
+            "--expected-active-workspace",
+            &workspace_id,
+            "--expected-active-branch",
+            &fork_branch,
+            "--expected-focus",
+            &task_id,
+        ])
+        .expect("parse expected switched session show"))
+        .expect("show expected switched session");
+        assert_eq!(
+            value(
+                &expected_switched_session,
+                "lifecycle_state_matches_expected"
+            ),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &expected_switched_session,
+                "active_workspace_matches_expected"
+            ),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_switched_session, "active_branch_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_switched_session, "focus_matches_expected"),
+            "true"
+        );
+
+        let mismatched_focus = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+            "--expected-focus",
+            "none",
+        ])
+        .expect("parse mismatched session focus show"));
+        assert!(mismatched_focus.is_err());
 
         let sessions =
             run(Cli::try_parse_from(["workvcs", "session", "list", store])
@@ -21794,6 +22000,23 @@ mod tests {
         .expect("parse cleared session show"))
         .expect("show cleared session");
         assert_eq!(value(&shown_cleared_session, "focus_entity_id"), "none");
+
+        let expected_cleared_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+            "--expected-focus",
+            "none",
+        ])
+        .expect("parse expected cleared session show"))
+        .expect("show expected cleared session");
+        assert_eq!(
+            value(&expected_cleared_session, "focus_matches_expected"),
+            "true"
+        );
 
         let focused_session = run(Cli::try_parse_from([
             "workvcs",

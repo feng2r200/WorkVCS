@@ -257,12 +257,16 @@ pub struct SessionSnapshot {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionListOptions {
     lifecycle_state: Option<SessionLifecycleState>,
+    active_workspace_id: Option<WorkspaceId>,
+    active_branch_id: Option<BranchId>,
 }
 
 impl SessionListOptions {
     pub fn all() -> Self {
         Self {
             lifecycle_state: None,
+            active_workspace_id: None,
+            active_branch_id: None,
         }
     }
 
@@ -271,8 +275,26 @@ impl SessionListOptions {
         self
     }
 
+    pub fn with_active_workspace_id(mut self, active_workspace_id: WorkspaceId) -> Self {
+        self.active_workspace_id = Some(active_workspace_id);
+        self
+    }
+
+    pub fn with_active_branch_id(mut self, active_branch_id: BranchId) -> Self {
+        self.active_branch_id = Some(active_branch_id);
+        self
+    }
+
     pub fn lifecycle_state(&self) -> Option<SessionLifecycleState> {
         self.lifecycle_state
+    }
+
+    pub fn active_workspace_id(&self) -> Option<WorkspaceId> {
+        self.active_workspace_id
+    }
+
+    pub fn active_branch_id(&self) -> Option<BranchId> {
+        self.active_branch_id
     }
 }
 
@@ -811,11 +833,17 @@ pub(crate) fn sessions(
     let mut sessions = Vec::with_capacity(session_ids.len());
     for session_id in session_ids {
         let snapshot = session_snapshot_from_connection(&transaction, session_id)?;
-        let include = match options.lifecycle_state() {
+        let include_lifecycle = match options.lifecycle_state() {
             Some(state) => state == snapshot.lifecycle_state,
             None => true,
         };
-        if include {
+        let include_workspace = options
+            .active_workspace_id()
+            .is_none_or(|workspace_id| snapshot.active_workspace_id == Some(workspace_id));
+        let include_branch = options
+            .active_branch_id()
+            .is_none_or(|branch_id| snapshot.active_branch_id == Some(branch_id));
+        if include_lifecycle && include_workspace && include_branch {
             sessions.push(snapshot);
         }
     }

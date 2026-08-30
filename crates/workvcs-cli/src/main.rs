@@ -2828,6 +2828,12 @@ enum SessionCommand {
 
         #[arg(long)]
         lifecycle: Option<String>,
+
+        #[arg(long)]
+        workspace: Option<String>,
+
+        #[arg(long)]
+        branch: Option<String>,
     },
     FocusSet {
         #[arg(value_name = "STORE")]
@@ -6053,12 +6059,26 @@ fn run(cli: Cli) -> Result<String> {
             )
         }
         Command::Session {
-            command: SessionCommand::List { store, lifecycle },
+            command:
+                SessionCommand::List {
+                    store,
+                    lifecycle,
+                    workspace,
+                    branch,
+                },
         } => {
             let engine = Engine::open(store)?;
             let mut options = SessionListOptions::all();
             if let Some(lifecycle) = lifecycle {
                 options = options.with_lifecycle_state(parse_session_lifecycle_state(&lifecycle)?);
+            }
+            if let Some(workspace) = workspace {
+                options = options.with_active_workspace_id(
+                    workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
+                );
+            }
+            if let Some(branch) = branch {
+                options = options.with_active_branch_id(BranchId::parse_canonical(&branch)?);
             }
             render_session_list(&engine.sessions(options)?)
         }
@@ -16300,6 +16320,67 @@ mod tests {
         .expect("list active sessions");
         assert_eq!(value(&active_sessions, "sessions"), "1");
         assert_eq!(value(&active_sessions, "session.0.session_id"), session_id);
+
+        let workspace_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+        ])
+        .expect("parse workspace session list"))
+        .expect("list workspace sessions");
+        assert_eq!(value(&workspace_sessions, "sessions"), "1");
+        assert_eq!(
+            value(&workspace_sessions, "session.0.session_id"),
+            session_id
+        );
+
+        let branch_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--branch",
+            &fork_branch,
+        ])
+        .expect("parse branch session list"))
+        .expect("list branch sessions");
+        assert_eq!(value(&branch_sessions, "sessions"), "1");
+        assert_eq!(value(&branch_sessions, "session.0.session_id"), session_id);
+
+        let old_branch_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--branch",
+            &source_branch,
+        ])
+        .expect("parse old branch session list"))
+        .expect("list old branch sessions");
+        assert_eq!(value(&old_branch_sessions, "sessions"), "0");
+
+        let combined_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--lifecycle",
+            "active",
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+        ])
+        .expect("parse combined session list"))
+        .expect("list combined sessions");
+        assert_eq!(value(&combined_sessions, "sessions"), "1");
+        assert_eq!(
+            value(&combined_sessions, "session.0.session_id"),
+            session_id
+        );
 
         let ended_sessions =
             run(

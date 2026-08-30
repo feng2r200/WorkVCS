@@ -167,6 +167,9 @@ enum Command {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_entries: Option<usize>,
     },
     Changeset {
         #[command(subcommand)]
@@ -4372,6 +4375,7 @@ fn run(cli: Cli) -> Result<String> {
             operation,
             state_digest,
             limit,
+            expected_entries,
         } => {
             if matches!(limit, Some(0)) {
                 return Err(WorkVcsError::QueryInvalid(
@@ -4433,6 +4437,15 @@ fn run(cli: Cli) -> Result<String> {
             );
             for entry in &history.entries {
                 render_history_entry(&mut output, entry);
+            }
+            if let Some(expected_entries) = expected_entries {
+                let actual_entries = history.entries.len();
+                if actual_entries != expected_entries {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "history entries {actual_entries} does not match expected {expected_entries}"
+                    )));
+                }
+                output.push_str("entries_match_expected=true\n");
             }
             Ok(output)
         }
@@ -17532,6 +17545,34 @@ mod tests {
         assert!(history.contains("committed_at_us="));
         assert!(history.contains("changeset_created_at_us="));
 
+        let expected_history = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--limit",
+            "1",
+            "--expected-entries",
+            "1",
+        ])
+        .expect("parse expected history"))
+        .expect("expected history");
+        assert_eq!(value(&expected_history, "entries"), "1");
+        assert_eq!(value(&expected_history, "entries_match_expected"), "true");
+
+        let mismatched_history_entries = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--expected-entries",
+            "0",
+        ])
+        .expect("parse mismatched history entries"));
+        assert!(mismatched_history_entries.is_err());
+
         let commit_state_digest = value(&shown_commit, "state_digest");
         let history_by_changeset = run(Cli::try_parse_from([
             "workvcs",
@@ -17648,6 +17689,25 @@ mod tests {
         .expect("parse history by missing state digest"))
         .expect("history by missing state digest");
         assert_eq!(value(&history_by_missing_state_digest, "entries"), "0");
+
+        let expected_missing_history = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch_id,
+            "--state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--expected-entries",
+            "0",
+        ])
+        .expect("parse expected missing history"))
+        .expect("expected missing history");
+        assert_eq!(value(&expected_missing_history, "entries"), "0");
+        assert_eq!(
+            value(&expected_missing_history, "entries_match_expected"),
+            "true"
+        );
 
         let shown =
             run(

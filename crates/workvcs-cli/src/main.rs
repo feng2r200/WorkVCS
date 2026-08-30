@@ -3743,6 +3743,21 @@ enum ClaimCommand {
 
         #[arg(long, default_value = "exclusive")]
         mode: String,
+
+        #[arg(long)]
+        expected_workspace: Option<String>,
+
+        #[arg(long)]
+        expected_branch: Option<String>,
+
+        #[arg(long)]
+        expected_task: Option<String>,
+
+        #[arg(long)]
+        expected_mode: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
     },
     Release {
         #[arg(value_name = "STORE")]
@@ -9944,6 +9959,11 @@ fn run(cli: Cli) -> Result<String> {
                     session,
                     task,
                     mode,
+                    expected_workspace,
+                    expected_branch,
+                    expected_task,
+                    expected_mode,
+                    expected_lifecycle_state,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -9954,7 +9974,62 @@ fn run(cli: Cli) -> Result<String> {
                 )
                 .with_mode(parse_claim_mode(&mode)?),
             )?;
-            Ok(render_claim_task(&claim))
+            let mut output = render_claim_task(&claim);
+            if let Some(expected_workspace) = expected_workspace {
+                let expected_workspace =
+                    workvcs_core::WorkspaceId::parse_canonical(&expected_workspace)?;
+                if claim.workspace_id != expected_workspace {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "claim task workspace {} does not match expected {}",
+                        claim.workspace_id, expected_workspace
+                    )));
+                }
+                output.push_str("workspace_match_expected=true\n");
+            }
+            if let Some(expected_branch) = expected_branch {
+                let expected_branch = BranchId::parse_canonical(&expected_branch)?;
+                if claim.branch_id != expected_branch {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "claim task branch {} does not match expected {}",
+                        claim.branch_id, expected_branch
+                    )));
+                }
+                output.push_str("branch_match_expected=true\n");
+            }
+            if let Some(expected_task) = expected_task {
+                let expected_task = EntityId::parse_canonical(&expected_task)?;
+                if claim.task_entity_id != expected_task {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "claim task task {} does not match expected {}",
+                        claim.task_entity_id, expected_task
+                    )));
+                }
+                output.push_str("task_match_expected=true\n");
+            }
+            if let Some(expected_mode) = expected_mode {
+                let expected_mode = parse_claim_mode(&expected_mode)?;
+                if claim.mode != expected_mode {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim task mode {} does not match expected {}",
+                        claim_mode(claim.mode),
+                        claim_mode(expected_mode)
+                    )));
+                }
+                output.push_str("mode_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+                let expected_lifecycle_state =
+                    parse_claim_lifecycle_state(&expected_lifecycle_state)?;
+                if claim.state.lifecycle_state != expected_lifecycle_state {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim task lifecycle state {} does not match expected {}",
+                        claim_lifecycle_state(claim.state.lifecycle_state),
+                        claim_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Claim {
             command:
@@ -30981,12 +31056,27 @@ mod tests {
             &session_id,
             "--task",
             &task_id,
+            "--expected-workspace",
+            &workspace_id,
+            "--expected-branch",
+            &branch,
+            "--expected-task",
+            &task_id,
+            "--expected-mode",
+            "exclusive",
+            "--expected-lifecycle-state",
+            "active",
         ])
         .expect("parse claim"))
         .expect("claim task");
         let claim_id = value(&claim, "claim_id");
         assert!(claim.contains("mode=exclusive"));
         assert!(claim.contains("lifecycle_state=active"));
+        assert_eq!(value(&claim, "workspace_match_expected"), "true");
+        assert_eq!(value(&claim, "branch_match_expected"), "true");
+        assert_eq!(value(&claim, "task_match_expected"), "true");
+        assert_eq!(value(&claim, "mode_match_expected"), "true");
+        assert_eq!(value(&claim, "lifecycle_state_match_expected"), "true");
 
         let claimed_runnable = run(Cli::try_parse_from([
             "workvcs",
@@ -31463,11 +31553,29 @@ mod tests {
             &task_id,
             "--mode",
             "shared",
+            "--expected-workspace",
+            &workspace_id,
+            "--expected-branch",
+            &branch,
+            "--expected-task",
+            &task_id,
+            "--expected-mode",
+            "shared",
+            "--expected-lifecycle-state",
+            "active",
         ])
         .expect("parse first shared claim"))
         .expect("first shared claim");
         assert!(first_claim.contains("mode=shared"));
         assert!(first_claim.contains("lifecycle_state=active"));
+        assert_eq!(value(&first_claim, "workspace_match_expected"), "true");
+        assert_eq!(value(&first_claim, "branch_match_expected"), "true");
+        assert_eq!(value(&first_claim, "task_match_expected"), "true");
+        assert_eq!(value(&first_claim, "mode_match_expected"), "true");
+        assert_eq!(
+            value(&first_claim, "lifecycle_state_match_expected"),
+            "true"
+        );
         let second_claim = run(Cli::try_parse_from([
             "workvcs",
             "claim",
@@ -31495,6 +31603,35 @@ mod tests {
         .expect("parse runnable"))
         .expect("runnable with shared claim");
         assert!(runnable.contains("candidate.0.claim=shared:true:"));
+
+        let third_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse third session"))
+        .expect("start third session");
+        let mismatched_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &value(&third_session, "session_id"),
+            "--task",
+            &task_id,
+            "--mode",
+            "shared",
+            "--expected-mode",
+            "exclusive",
+        ])
+        .expect("parse mismatched shared claim"));
+        assert!(mismatched_claim.is_err());
     }
 
     #[test]

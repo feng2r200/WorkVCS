@@ -1441,6 +1441,18 @@ enum BundleCommand {
 
         #[arg(long)]
         require_applied: bool,
+
+        #[arg(long)]
+        expected_outcome: Option<String>,
+
+        #[arg(long)]
+        expected_imported_commits: Option<usize>,
+
+        #[arg(long)]
+        expected_imported_entity_versions: Option<usize>,
+
+        #[arg(long)]
+        expected_updated_branch_heads: Option<usize>,
     },
     ImportDir {
         #[arg(value_name = "STORE")]
@@ -5517,6 +5529,10 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 input_dir,
                 require_applied,
+                expected_outcome,
+                expected_imported_commits,
+                expected_imported_entity_versions,
+                expected_updated_branch_heads,
             } => {
                 let mut engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
@@ -5537,6 +5553,36 @@ fn run(cli: Cli) -> Result<String> {
                     }
                     output.push_str("applied_required=true\n");
                 }
+                if let Some(expected_outcome) = expected_outcome {
+                    let actual_outcome = &result.outcome;
+                    if actual_outcome != &expected_outcome {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle apply outcome {actual_outcome} does not match expected {expected_outcome}"
+                        )));
+                    }
+                    output.push_str("outcome_matches_expected=true\n");
+                }
+                append_expected_count_match(
+                    &mut output,
+                    "bundle apply imported commits",
+                    result.imported_commits,
+                    expected_imported_commits,
+                    "imported_commits_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle apply imported entity versions",
+                    result.imported_entity_versions,
+                    expected_imported_entity_versions,
+                    "imported_entity_versions_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle apply updated branch heads",
+                    result.updated_branch_heads,
+                    expected_updated_branch_heads,
+                    "updated_branch_heads_match_expected",
+                )?;
                 Ok(output)
             }
             BundleCommand::ImportDir {
@@ -22840,6 +22886,24 @@ mod tests {
         assert_eq!(value(&required_preflight, "valid_required"), "true");
         assert_eq!(value(&required_preflight, "can_apply_required"), "true");
 
+        let mismatch_apply_path = tempdir.path().join("mismatch-apply.sqlite");
+        fs::copy(&old_path, &mismatch_apply_path).expect("copy mismatch apply store");
+        let mismatch_apply_store = mismatch_apply_path
+            .to_str()
+            .expect("mismatch apply store path text");
+        let mismatched_apply = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "apply-dir",
+            mismatch_apply_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--expected-imported-commits",
+            "0",
+        ])
+        .expect("parse mismatched bundle apply-dir"));
+        assert!(mismatched_apply.is_err());
+
         let applied = run(Cli::try_parse_from([
             "workvcs",
             "bundle",
@@ -22848,6 +22912,14 @@ mod tests {
             "--input-dir",
             export_dir.to_str().expect("export dir path"),
             "--require-applied",
+            "--expected-outcome",
+            "same_store_fast_forward_applied",
+            "--expected-imported-commits",
+            "1",
+            "--expected-imported-entity-versions",
+            "1",
+            "--expected-updated-branch-heads",
+            "1",
         ])
         .expect("parse bundle apply-dir"))
         .expect("apply bundle directory");
@@ -22861,6 +22933,16 @@ mod tests {
         assert_eq!(value(&applied, "imported_commits"), "1");
         assert_eq!(value(&applied, "imported_entity_versions"), "1");
         assert_eq!(value(&applied, "updated_branch_heads"), "1");
+        assert_eq!(value(&applied, "outcome_matches_expected"), "true");
+        assert_eq!(value(&applied, "imported_commits_match_expected"), "true");
+        assert_eq!(
+            value(&applied, "imported_entity_versions_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&applied, "updated_branch_heads_match_expected"),
+            "true"
+        );
 
         let branch_head =
             run(

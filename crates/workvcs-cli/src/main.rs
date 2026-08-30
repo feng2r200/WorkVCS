@@ -1725,6 +1725,9 @@ enum GoalCommand {
 
         #[arg(long)]
         status: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Achieve {
         #[arg(value_name = "STORE")]
@@ -4647,6 +4650,7 @@ fn run(cli: Cli) -> Result<String> {
                 branch,
                 commit,
                 status,
+                limit,
             } => {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_goal_query_commit(&engine, branch, commit)?;
@@ -4654,6 +4658,14 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(status) = status {
                     let status = parse_goal_list_status(&status)?;
                     goals.retain(|goal| goal.state.status == status);
+                }
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "goal list limit must be greater than zero".to_owned(),
+                    ));
+                }
+                if let Some(limit) = limit {
+                    goals.truncate(limit);
                 }
                 render_goal_list(commit_id, &goals)
             }
@@ -20686,6 +20698,39 @@ mod tests {
             value(&active_goals_at_create, "goal.0.goal_entity_id"),
             goal_id
         );
+
+        let limited_active_goals_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--status",
+            "active",
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited active goal list at commit"))
+        .expect("list limited active goals at commit");
+        assert_eq!(value(&limited_active_goals_at_create, "goals"), "1");
+        assert_eq!(
+            value(&limited_active_goals_at_create, "goal.0.goal_entity_id"),
+            goal_id
+        );
+
+        let zero_limit_goals_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit goal list at commit"));
+        assert!(zero_limit_goals_at_create.is_err());
 
         let achieved_goals_at_create = run(Cli::try_parse_from([
             "workvcs",

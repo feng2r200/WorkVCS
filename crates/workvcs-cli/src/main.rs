@@ -2387,6 +2387,9 @@ enum RecordCommand {
 
         #[arg(long)]
         statement_contains: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     LinkInvalidates {
         #[arg(value_name = "STORE")]
@@ -5868,6 +5871,7 @@ fn run(cli: Cli) -> Result<String> {
                     status,
                     scope_json,
                     statement_contains,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5885,7 +5889,16 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(statement_contains) = statement_contains {
                 options = options.with_statement_contains(statement_contains)?;
             }
-            Ok(render_record_list(&engine.records_at(options)?))
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "record list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.records_at(options)?;
+            if let Some(limit) = limit {
+                result.records.truncate(limit);
+            }
+            Ok(render_record_list(&result))
         }
         Command::Record {
             command:
@@ -24439,6 +24452,34 @@ mod tests {
         assert!(list.contains("record_kind=assumption"));
         assert!(list.contains("record_status=active"));
         assert!(list.contains("record_status=unverified"));
+
+        let limited_list = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&assumption, "commit_id"),
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited record list"))
+        .expect("list limited records");
+        assert_eq!(value(&limited_list, "records"), "1");
+        assert_ne!(value(&limited_list, "record.0.record_entity_id"), "");
+
+        let zero_limit_list = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&assumption, "commit_id"),
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit record list"));
+        assert!(zero_limit_list.is_err());
 
         let branch_list =
             run(

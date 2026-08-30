@@ -1223,6 +1223,12 @@ enum BundleCommand {
 
         #[arg(long)]
         commit: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
+
+        #[arg(long)]
+        expected_manifest_digest: Option<String>,
     },
     ExportJson {
         #[arg(value_name = "STORE")]
@@ -4583,12 +4589,38 @@ fn run(cli: Cli) -> Result<String> {
             }
         },
         Command::Bundle { command } => match command {
-            BundleCommand::Export { store, commit } => {
+            BundleCommand::Export {
+                store,
+                commit,
+                expected_state_digest,
+                expected_manifest_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let manifest = engine.export_bundle_manifest(BundleExportOptions::for_commit(
                     CommitId::parse_canonical(&commit)?,
                 ))?;
-                Ok(render_bundle_export_manifest(&manifest))
+                let mut output = render_bundle_export_manifest(&manifest);
+                if let Some(expected_state_digest) = expected_state_digest {
+                    let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                    if manifest.state_digest != expected_state_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "bundle export state digest {} does not match expected {}",
+                            manifest.state_digest, expected_state_digest
+                        )));
+                    }
+                    output.push_str("state_matches_expected=true\n");
+                }
+                if let Some(expected_manifest_digest) = expected_manifest_digest {
+                    let expected_manifest_digest = Digest::from_hex(&expected_manifest_digest)?;
+                    if manifest.manifest_digest != expected_manifest_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "bundle export manifest digest {} does not match expected {}",
+                            manifest.manifest_digest, expected_manifest_digest
+                        )));
+                    }
+                    output.push_str("manifest_matches_expected=true\n");
+                }
+                Ok(output)
             }
             BundleCommand::ExportJson { store, commit } => {
                 let engine = Engine::open(store)?;
@@ -19601,6 +19633,54 @@ mod tests {
             value(&exported, "checkpoint_candidate[0].content_digest"),
             value(&created, "content_digest")
         );
+        let expected_export = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-state-digest",
+            &value(&exported, "state_digest"),
+            "--expected-manifest-digest",
+            &value(&exported, "manifest_digest"),
+        ])
+        .expect("parse expected bundle export"))
+        .expect("export expected bundle manifest");
+        assert_eq!(
+            value(&expected_export, "state_digest"),
+            value(&exported, "state_digest")
+        );
+        assert_eq!(
+            value(&expected_export, "manifest_digest"),
+            value(&exported, "manifest_digest")
+        );
+        assert_eq!(value(&expected_export, "state_matches_expected"), "true");
+        assert_eq!(value(&expected_export, "manifest_matches_expected"), "true");
+        let mismatched_export_state = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched bundle export state"));
+        assert!(mismatched_export_state.is_err());
+        let mismatched_export_manifest = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-manifest-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched bundle export manifest"));
+        assert!(mismatched_export_manifest.is_err());
 
         let manifest_json = run(Cli::try_parse_from([
             "workvcs",

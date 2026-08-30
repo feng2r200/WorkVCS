@@ -3162,6 +3162,9 @@ enum RunnableCommand {
 
         #[arg(long)]
         runnable: Option<bool>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -7002,6 +7005,7 @@ fn run(cli: Cli) -> Result<String> {
                     task,
                     status,
                     runnable,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -7024,6 +7028,14 @@ fn run(cli: Cli) -> Result<String> {
                 projection
                     .candidates
                     .retain(|candidate| candidate.runnable == runnable);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "runnable tasks limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                projection.candidates.truncate(limit);
             }
             Ok(render_runnable_tasks(&projection))
         }
@@ -18309,6 +18321,34 @@ mod tests {
         .expect("runnable after claim next");
         assert!(runnable.contains(&format!("candidate.0.task_entity_id={selected_task}")));
         assert!(runnable.contains("candidate.0.claim=claimed_by_session:"));
+
+        let limited_runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited runnable"))
+        .expect("limited runnable after claim next");
+        assert_eq!(value(&limited_runnable, "candidates"), "1");
+        assert!(limited_runnable.contains(&format!("candidate.0.task_entity_id={selected_task}")));
+
+        let zero_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit runnable"));
+        assert!(zero_limit.is_err());
     }
 
     #[test]

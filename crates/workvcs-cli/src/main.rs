@@ -109,7 +109,7 @@ use workvcs_core::{
 #[command(about = "WorkVCS v0.1 thin command shell")]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Box<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -120,6 +120,27 @@ enum Command {
 
         #[arg(long, default_value = "WorkVCS store")]
         display_name: String,
+
+        #[arg(long)]
+        expected_display_name: Option<String>,
+
+        #[arg(long)]
+        expected_store_format_version: Option<i64>,
+
+        #[arg(long)]
+        expected_schema_version: Option<i64>,
+
+        #[arg(long)]
+        expected_object_store_format_version: Option<i64>,
+
+        #[arg(long)]
+        expected_id_scheme: Option<String>,
+
+        #[arg(long)]
+        expected_digest_algorithm: Option<String>,
+
+        #[arg(long)]
+        expected_canonical_json_profile: Option<String>,
     },
     Doctor {
         #[arg(value_name = "STORE")]
@@ -3968,17 +3989,74 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<String> {
-    match cli.command {
+    match *cli.command {
         Command::Init {
             store,
             display_name,
+            expected_display_name,
+            expected_store_format_version,
+            expected_schema_version,
+            expected_object_store_format_version,
+            expected_id_scheme,
+            expected_digest_algorithm,
+            expected_canonical_json_profile,
         } => {
             let engine = Engine::init(store, StoreInitOptions::new(display_name)?)?;
             let info = engine.store_info()?;
-            Ok(format!(
+            let mut output = format!(
                 "initialized store_id={} schema_version={}\n",
                 info.store_id, info.manifest.schema_version
-            ))
+            );
+            append_expected_text_match(
+                &mut output,
+                "init display name",
+                &info.display_name,
+                expected_display_name.as_deref(),
+                "display_name_match_expected",
+            )?;
+            append_expected_i64_match(
+                &mut output,
+                "init store format version",
+                info.manifest.store_format_version,
+                expected_store_format_version,
+                "store_format_version_match_expected",
+            )?;
+            append_expected_i64_match(
+                &mut output,
+                "init schema version",
+                info.manifest.schema_version,
+                expected_schema_version,
+                "schema_version_match_expected",
+            )?;
+            append_expected_i64_match(
+                &mut output,
+                "init object store format version",
+                info.manifest.object_store_format_version,
+                expected_object_store_format_version,
+                "object_store_format_version_match_expected",
+            )?;
+            append_expected_text_match(
+                &mut output,
+                "init id scheme",
+                &info.manifest.id_scheme,
+                expected_id_scheme.as_deref(),
+                "id_scheme_match_expected",
+            )?;
+            append_expected_text_match(
+                &mut output,
+                "init digest algorithm",
+                &info.manifest.digest_algorithm,
+                expected_digest_algorithm.as_deref(),
+                "digest_algorithm_match_expected",
+            )?;
+            append_expected_text_match(
+                &mut output,
+                "init canonical JSON profile",
+                &info.manifest.canonical_json_profile,
+                expected_canonical_json_profile.as_deref(),
+                "canonical_json_profile_match_expected",
+            )?;
+            Ok(output)
         }
         Command::Doctor {
             store,
@@ -18420,11 +18498,51 @@ mod tests {
             path.to_str().expect("path text"),
             "--display-name",
             "cli-store",
+            "--expected-display-name",
+            "cli-store",
+            "--expected-store-format-version",
+            "1",
+            "--expected-schema-version",
+            "1",
+            "--expected-object-store-format-version",
+            "1",
+            "--expected-id-scheme",
+            "uuidv7-blob16",
+            "--expected-digest-algorithm",
+            "blake3-256",
+            "--expected-canonical-json-profile",
+            "workvcs-jcs-v1",
         ])
         .expect("parse init"))
         .expect("run init");
         assert!(init.starts_with("initialized store_id="));
         assert!(init.contains("schema_version=1"));
+        assert_eq!(value(&init, "display_name_match_expected"), "true");
+        assert_eq!(value(&init, "store_format_version_match_expected"), "true");
+        assert_eq!(value(&init, "schema_version_match_expected"), "true");
+        assert_eq!(
+            value(&init, "object_store_format_version_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&init, "id_scheme_match_expected"), "true");
+        assert_eq!(value(&init, "digest_algorithm_match_expected"), "true");
+        assert_eq!(
+            value(&init, "canonical_json_profile_match_expected"),
+            "true"
+        );
+
+        let mismatch_path = tempdir.path().join("mismatch.sqlite");
+        let mismatched_init = run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            mismatch_path.to_str().expect("path text"),
+            "--display-name",
+            "cli-store",
+            "--expected-schema-version",
+            "2",
+        ])
+        .expect("parse mismatched init"));
+        assert!(mismatched_init.is_err());
 
         let doctor = run(Cli::try_parse_from([
             "workvcs",

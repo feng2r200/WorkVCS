@@ -1121,6 +1121,9 @@ enum EventCommand {
 
         #[arg(long)]
         event: String,
+
+        #[arg(long)]
+        expected_payload_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("event-list-target")
@@ -4218,10 +4221,25 @@ fn run(cli: Cli) -> Result<String> {
             }
         },
         Command::Event { command } => match command {
-            EventCommand::Show { store, event } => {
+            EventCommand::Show {
+                store,
+                event,
+                expected_payload_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.event(EventId::parse_canonical(&event)?)?;
-                Ok(render_event_snapshot(&snapshot))
+                let mut output = render_event_snapshot(&snapshot);
+                if let Some(expected_payload_digest) = expected_payload_digest {
+                    let expected_payload_digest = Digest::from_hex(&expected_payload_digest)?;
+                    if snapshot.payload_digest != expected_payload_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "event payload digest {} does not match expected {}",
+                            snapshot.payload_digest, expected_payload_digest
+                        )));
+                    }
+                    output.push_str("matches_expected=true\n");
+                }
+                Ok(output)
             }
             EventCommand::List {
                 store,
@@ -16568,6 +16586,35 @@ mod tests {
             value(&shown, "payload_digest"),
             value(&listed, "event[0].payload_digest")
         );
+        let expected_event = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "show",
+            store,
+            "--event",
+            &event_id,
+            "--expected-payload-digest",
+            &value(&shown, "payload_digest"),
+        ])
+        .expect("parse expected event show"))
+        .expect("show expected event");
+        assert_eq!(
+            value(&expected_event, "payload_digest"),
+            value(&shown, "payload_digest")
+        );
+        assert_eq!(value(&expected_event, "matches_expected"), "true");
+        let mismatched_event = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "show",
+            store,
+            "--event",
+            &event_id,
+            "--expected-payload-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched event show"));
+        assert!(mismatched_event.is_err());
     }
 
     #[test]

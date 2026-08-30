@@ -1083,6 +1083,9 @@ enum CheckpointCommand {
 
         #[arg(long)]
         content_digest: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Latest {
         #[arg(value_name = "STORE")]
@@ -4277,6 +4280,7 @@ fn run(cli: Cli) -> Result<String> {
                 commit,
                 usability_state,
                 content_digest,
+                limit,
             } => {
                 let engine = Engine::open(store)?;
                 let mut result = engine.checkpoints(CheckpointListOptions::for_commit(
@@ -4292,6 +4296,14 @@ fn run(cli: Cli) -> Result<String> {
                     result
                         .checkpoints
                         .retain(|checkpoint| checkpoint.content_digest == content_digest);
+                }
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "checkpoint list limit must be greater than zero".to_owned(),
+                    ));
+                }
+                if let Some(limit) = limit {
+                    result.checkpoints.truncate(limit);
                 }
                 Ok(render_checkpoint_list(&result))
             }
@@ -17191,6 +17203,34 @@ mod tests {
         assert_eq!(value(&listed, "commit_id"), genesis);
         assert_eq!(value(&listed, "checkpoints"), "1");
         assert_eq!(value(&listed, "checkpoint[0].id"), checkpoint);
+
+        let limited = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited checkpoint list"))
+        .expect("list limited checkpoints");
+        assert_eq!(value(&limited, "checkpoints"), "1");
+        assert_eq!(value(&limited, "checkpoint[0].id"), checkpoint);
+
+        let zero_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit checkpoint list"));
+        assert!(zero_limit.is_err());
 
         let listed_usable = run(Cli::try_parse_from([
             "workvcs",

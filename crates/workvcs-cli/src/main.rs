@@ -1107,6 +1107,9 @@ enum CommitCommand {
 
         #[arg(long)]
         commit: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
 }
 
@@ -4193,10 +4196,25 @@ fn run(cli: Cli) -> Result<String> {
             }
         },
         Command::Commit { command } => match command {
-            CommitCommand::Show { store, commit } => {
+            CommitCommand::Show {
+                store,
+                commit,
+                expected_state_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.commit(CommitId::parse_canonical(&commit)?)?;
-                Ok(render_commit_snapshot(&snapshot))
+                let mut output = render_commit_snapshot(&snapshot);
+                if let Some(expected_state_digest) = expected_state_digest {
+                    let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                    if snapshot.state_digest != expected_state_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "commit state digest {} does not match expected {}",
+                            snapshot.state_digest, expected_state_digest
+                        )));
+                    }
+                    output.push_str("matches_expected=true\n");
+                }
+                Ok(output)
             }
         },
         Command::Event { command } => match command {
@@ -16031,6 +16049,35 @@ mod tests {
         assert_eq!(value(&shown_commit, "parent[0].ordinal"), "0");
         assert_eq!(value(&shown_commit, "parent[0].role"), "primary");
         assert_eq!(value(&shown_commit, "parent[0].commit_id"), head);
+        let expected_commit = run(Cli::try_parse_from([
+            "workvcs",
+            "commit",
+            "show",
+            store,
+            "--commit",
+            &commit_id,
+            "--expected-state-digest",
+            &value(&shown_commit, "state_digest"),
+        ])
+        .expect("parse expected commit show"))
+        .expect("show expected commit");
+        assert_eq!(
+            value(&expected_commit, "state_digest"),
+            value(&shown_commit, "state_digest")
+        );
+        assert_eq!(value(&expected_commit, "matches_expected"), "true");
+        let mismatched_commit = run(Cli::try_parse_from([
+            "workvcs",
+            "commit",
+            "show",
+            store,
+            "--commit",
+            &commit_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched commit show"));
+        assert!(mismatched_commit.is_err());
 
         let shown_changeset = run(Cli::try_parse_from([
             "workvcs",

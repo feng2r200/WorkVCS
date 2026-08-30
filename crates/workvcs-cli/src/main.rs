@@ -1683,6 +1683,9 @@ enum TaskCommand {
 
         #[arg(long)]
         task: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("task-list-target")
@@ -5747,11 +5750,24 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     task,
+                    expected_state_digest,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            render_task_snapshot(&engine.task_at(commit_id, EntityId::parse_canonical(&task)?)?)
+            let snapshot = engine.task_at(commit_id, EntityId::parse_canonical(&task)?)?;
+            let mut output = render_task_snapshot(&snapshot)?;
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "task state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Task {
             command:
@@ -21369,6 +21385,41 @@ mod tests {
         );
         assert_eq!(value(&task_at_create, "outcome_json"), "null");
         assert_eq!(value(&task_at_create, "priority"), "7");
+
+        let expected_task_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "show",
+            store,
+            "--commit",
+            &value(&task, "commit_id"),
+            "--task",
+            &task_id,
+            "--expected-state-digest",
+            &value(&task_at_create, "task_state_digest"),
+        ])
+        .expect("parse expected task show at commit"))
+        .expect("show expected task at commit");
+        assert_eq!(
+            value(&expected_task_at_create, "task_state_digest"),
+            value(&task_at_create, "task_state_digest")
+        );
+        assert_eq!(value(&expected_task_at_create, "matches_expected"), "true");
+
+        let mismatched_task_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "show",
+            store,
+            "--commit",
+            &value(&task, "commit_id"),
+            "--task",
+            &task_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched task show at commit"));
+        assert!(mismatched_task_at_create.is_err());
 
         let tasks_at_create = run(Cli::try_parse_from([
             "workvcs",

@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
-    ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchForkOptions,
-    BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
-    BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
-    BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
+    AcceptanceCriterionSnapshot, ApplicabilityResourceObservationStatus,
+    ApplicabilityResourceStampInput, BranchForkOptions, BranchForkResult, BranchHead, BranchId,
+    BranchProjectionRefreshOptions, BranchProjectionRefreshResult, BranchProjectionSnapshot,
+    BundleExportManifest, BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
     BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
     BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
     BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
@@ -80,11 +80,11 @@ use workvcs_core::{
     TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationResourceBasis, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
-    content_object_digest, parse_canonical_json,
+    VerificationRequirementSnapshot, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
+    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 
 #[derive(Debug, Parser)]
@@ -1588,6 +1588,25 @@ enum AcceptanceCriterionCommand {
         #[arg(long, default_value = "required")]
         classification: String,
     },
+    #[command(group(
+        ArgGroup::new("acceptance-criterion-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        criterion: String,
+    },
     Status {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1623,6 +1642,25 @@ enum VerificationRequirementCommand {
 
         #[arg(long)]
         statement: String,
+    },
+    #[command(group(
+        ArgGroup::new("verification-requirement-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        requirement: String,
     },
 }
 
@@ -3948,6 +3986,22 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Ac {
             command:
+                AcceptanceCriterionCommand::Show {
+                    store,
+                    branch,
+                    commit,
+                    criterion,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            render_acceptance_criterion_snapshot(
+                &engine
+                    .acceptance_criterion_at(commit_id, EntityId::parse_canonical(&criterion)?)?,
+            )
+        }
+        Command::Ac {
+            command:
                 AcceptanceCriterionCommand::Status {
                     store,
                     branch,
@@ -3985,6 +4039,24 @@ fn run(cli: Cli) -> Result<String> {
                 )?,
             )?;
             Ok(render_verification_requirement_create(&requirement))
+        }
+        Command::Vr {
+            command:
+                VerificationRequirementCommand::Show {
+                    store,
+                    branch,
+                    commit,
+                    requirement,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            render_verification_requirement_snapshot(
+                &engine.verification_requirement_at(
+                    commit_id,
+                    EntityId::parse_canonical(&requirement)?,
+                )?,
+            )
         }
         Command::Resource {
             command: ResourceCommand::Create { store, kind },
@@ -6465,6 +6537,39 @@ fn render_acceptance_criterion_create(criterion: &AcceptanceCriterionCreateCommi
     )
 }
 
+fn render_acceptance_criterion_snapshot(criterion: &AcceptanceCriterionSnapshot) -> Result<String> {
+    let statement_json =
+        canonical_text_json("acceptance criterion statement", &criterion.state.statement)?;
+    let mut output = format!(
+        "workspace_id={}\ncommit_id={}\ntask_entity_id={}\nlocal_key={}\nacceptance_criterion_entity_id={}\nacceptance_criterion_entity_version_id={}\nacceptance_criterion_state_digest={}\nclassification={}\nstatement_json={}\nverification_requirements={}\n",
+        criterion.workspace_id,
+        criterion.commit_id,
+        criterion.task_entity_id,
+        criterion.local_key,
+        criterion.acceptance_criterion_entity_id,
+        criterion.acceptance_criterion_entity_version_id,
+        criterion.state_digest,
+        criterion.state.classification,
+        statement_json,
+        criterion.state.verification_requirements.len()
+    );
+    for (index, requirement) in criterion.state.verification_requirements.iter().enumerate() {
+        writeln!(
+            output,
+            "verification_requirement.{index}.local_key={}",
+            requirement.local_key
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification_requirement.{index}.verification_requirement_entity_id={}",
+            requirement.verification_requirement_entity_id
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
 fn render_acceptance_criterion_status(status: AcceptanceCriterionEffectiveStatus) -> String {
     format!("status={status}\n")
 }
@@ -6487,6 +6592,26 @@ fn render_verification_requirement_create(
         requirement.work_state_digest,
         requirement.local_key
     )
+}
+
+fn render_verification_requirement_snapshot(
+    requirement: &VerificationRequirementSnapshot,
+) -> Result<String> {
+    let statement_json = canonical_text_json(
+        "verification requirement statement",
+        &requirement.state.statement,
+    )?;
+    Ok(format!(
+        "workspace_id={}\ncommit_id={}\nacceptance_criterion_entity_id={}\nlocal_key={}\nverification_requirement_entity_id={}\nverification_requirement_entity_version_id={}\nverification_requirement_state_digest={}\nstatement_json={}\n",
+        requirement.workspace_id,
+        requirement.commit_id,
+        requirement.acceptance_criterion_entity_id,
+        requirement.local_key,
+        requirement.verification_requirement_entity_id,
+        requirement.verification_requirement_entity_version_id,
+        requirement.state_digest,
+        statement_json
+    ))
 }
 
 fn render_verification_create(verification: &VerificationCreateCommit) -> String {
@@ -13172,6 +13297,176 @@ mod tests {
         assert_eq!(value(&tasks_at_branch, "tasks"), "1");
         assert_eq!(value(&tasks_at_branch, "task.0.status"), "blocked");
         assert_eq!(value(&tasks_at_branch, "task.0.priority"), "7");
+    }
+
+    #[test]
+    fn cli_shows_acceptance_criterion_and_verification_requirement_snapshots() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Inspect AC and VR snapshots",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "The AC snapshot is visible.",
+        ])
+        .expect("parse ac create"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+
+        let criterion_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "show",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse ac show at commit"))
+        .expect("show ac at commit");
+        assert_eq!(value(&criterion_at_create, "classification"), "required");
+        assert_eq!(
+            value(
+                &criterion_at_create,
+                "acceptance_criterion_entity_version_id"
+            ),
+            value(&criterion, "acceptance_criterion_entity_version_id")
+        );
+        assert_eq!(
+            value(&criterion_at_create, "statement_json"),
+            "\"The AC snapshot is visible.\""
+        );
+        assert_eq!(
+            value(&criterion_at_create, "verification_requirements"),
+            "0"
+        );
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &criterion_id,
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-1",
+            "--statement",
+            "Manual review must pass.",
+        ])
+        .expect("parse vr create"))
+        .expect("create vr");
+        let requirement_id = value(&requirement, "verification_requirement_entity_id");
+
+        let requirement_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--requirement",
+            &requirement_id,
+        ])
+        .expect("parse vr show at branch"))
+        .expect("show vr at branch");
+        assert_eq!(
+            value(&requirement_at_branch, "commit_id"),
+            value(&requirement, "commit_id")
+        );
+        assert_eq!(value(&requirement_at_branch, "local_key"), "VR-1");
+        assert_eq!(
+            value(&requirement_at_branch, "acceptance_criterion_entity_id"),
+            criterion_id
+        );
+        assert_eq!(
+            value(&requirement_at_branch, "statement_json"),
+            "\"Manual review must pass.\""
+        );
+
+        let criterion_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &value(&requirement, "acceptance_criterion_entity_id"),
+        ])
+        .expect("parse ac show at branch"))
+        .expect("show ac at branch");
+        assert_eq!(
+            value(
+                &criterion_at_branch,
+                "acceptance_criterion_entity_version_id"
+            ),
+            value(&requirement, "acceptance_criterion_entity_version_id")
+        );
+        assert_eq!(
+            value(&criterion_at_branch, "verification_requirements"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &criterion_at_branch,
+                "verification_requirement.0.verification_requirement_entity_id"
+            ),
+            requirement_id
+        );
     }
 
     #[test]

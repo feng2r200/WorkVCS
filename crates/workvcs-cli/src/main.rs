@@ -316,6 +316,9 @@ enum Command {
 
         #[arg(long)]
         target_kind: Option<String>,
+
+        #[arg(long)]
+        relation_limit: Option<usize>,
     },
     Workspace {
         #[command(subcommand)]
@@ -4613,7 +4616,13 @@ fn run(cli: Cli) -> Result<String> {
             target: target_endpoint,
             source_kind,
             target_kind,
+            relation_limit,
         } => {
+            if matches!(relation_limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "why relation limit must be greater than zero".to_owned(),
+                ));
+            }
             let engine = Engine::open(store)?;
             let target = match (branch, commit) {
                 (Some(branch_id), None) => {
@@ -4677,6 +4686,9 @@ fn run(cli: Cli) -> Result<String> {
                 result
                     .relation_edges
                     .retain(|edge| why_endpoint_kind(edge.target) == target_kind);
+            }
+            if let Some(relation_limit) = relation_limit {
+                result.relation_edges.truncate(relation_limit);
             }
             Ok(render_why(&result))
         }
@@ -17932,6 +17944,35 @@ mod tests {
         .expect("parse why by missing target kind"))
         .expect("why by missing target kind");
         assert_eq!(value(&why_by_missing_target_kind, "relation_edges"), "0");
+
+        let why_by_relation_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--relation-limit",
+            "1",
+        ])
+        .expect("parse why by relation limit"))
+        .expect("why by relation limit");
+        assert_eq!(value(&why_by_relation_limit, "relation_edges"), "1");
+
+        let why_by_zero_relation_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--relation-limit",
+            "0",
+        ])
+        .expect("parse why by zero relation limit"));
+        assert!(why_by_zero_relation_limit.is_err());
 
         let why_by_missing_relation_kind = run(Cli::try_parse_from([
             "workvcs",

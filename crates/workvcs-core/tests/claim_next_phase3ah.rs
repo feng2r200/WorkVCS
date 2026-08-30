@@ -4,8 +4,8 @@ use tempfile::TempDir;
 use workvcs_core::{
     ClaimLifecycleState, ClaimNextOptions, CommitId, Engine, EntityId,
     RunnableTaskClaimCoordination, RunnableTasksOptions, SessionId, SessionLifecycleState,
-    SessionStartOptions, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    SessionStartOptions, StoreInitOptions, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,6 +199,109 @@ fn claim_next_uses_entity_id_as_final_stable_tiebreaker() {
     let selected = claimed.selected.expect("selected claim");
 
     assert_eq!(selected.task_entity_id, expected);
+}
+
+#[test]
+fn claim_next_uses_ordered_before_before_entity_id_tiebreaker() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let first = create_task(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Manual order candidate A",
+    );
+    let second = create_task(
+        &mut engine,
+        &workspace,
+        first.commit_id,
+        "Manual order candidate B",
+    );
+    let (earlier, later) = if first.task_entity_id > second.task_entity_id {
+        (first.task_entity_id, second.task_entity_id)
+    } else {
+        (second.task_entity_id, first.task_entity_id)
+    };
+    engine
+        .create_task_scheduling_relation(
+            TaskSchedulingRelationCreateOptions::ordered_before(
+                workspace.initial_branch_id,
+                second.commit_id,
+                earlier,
+                later,
+            )
+            .expect("ordered_before options"),
+        )
+        .expect("create ordered_before");
+    let started = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let claimed = engine
+        .claim_next_task(ClaimNextOptions::new(started.session_id))
+        .expect("claim next");
+    let selected = claimed.selected.expect("selected claim");
+
+    assert_eq!(selected.task_entity_id, earlier);
+}
+
+#[test]
+fn runnable_projection_rejects_ordered_before_cycle() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let first = create_task(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Cycle candidate A",
+    );
+    let second = create_task(
+        &mut engine,
+        &workspace,
+        first.commit_id,
+        "Cycle candidate B",
+    );
+    let first_order = engine
+        .create_task_scheduling_relation(
+            TaskSchedulingRelationCreateOptions::ordered_before(
+                workspace.initial_branch_id,
+                second.commit_id,
+                first.task_entity_id,
+                second.task_entity_id,
+            )
+            .expect("first order options"),
+        )
+        .expect("create first ordered_before");
+    engine
+        .create_task_scheduling_relation(
+            TaskSchedulingRelationCreateOptions::ordered_before(
+                workspace.initial_branch_id,
+                first_order.commit_id,
+                second.task_entity_id,
+                first.task_entity_id,
+            )
+            .expect("second order options"),
+        )
+        .expect("create second ordered_before");
+    let started = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let error = engine
+        .runnable_tasks(RunnableTasksOptions::new(started.session_id))
+        .expect_err("ordered_before cycle should fail projection");
+
+    assert!(
+        error
+            .to_string()
+            .contains("current ordered_before graph contains a cycle")
+    );
 }
 
 #[test]

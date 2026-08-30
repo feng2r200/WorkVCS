@@ -224,7 +224,6 @@ fn runnable_projection_lists_lifecycle_candidates_without_mutation() {
         vec![
             RunnableTaskProjectionDimension::ActiveScopePlanPath,
             RunnableTaskProjectionDimension::ExecutableTaskDescendants,
-            RunnableTaskProjectionDimension::ExplicitManualOrder,
         ]
     );
     assert_eq!(projection.candidates.len(), 3);

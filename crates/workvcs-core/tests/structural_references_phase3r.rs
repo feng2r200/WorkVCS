@@ -4,11 +4,10 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     BranchId, CommitId, Engine, EntityId, ErrorCategory, ErrorCode, GoalCreateOptions,
-    GoalSnapshot, PlanCreateOptions, PlanSnapshot, RunnableTaskProjectionDimension,
-    RunnableTasksOptions, SessionFocusOptions, SessionFocusPathEntry, SessionStartOptions,
-    StoreInitOptions, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceEndpointKind, StructuralReferenceSnapshot, TaskCreateOptions, TaskSnapshot,
-    WorkspaceInfo, WorkspaceInitOptions,
+    GoalSnapshot, PlanCreateOptions, PlanSnapshot, RunnableTasksOptions, SessionFocusOptions,
+    SessionFocusPathEntry, SessionStartOptions, StoreInitOptions, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceEndpointKind, StructuralReferenceSnapshot,
+    TaskCreateOptions, TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -405,10 +404,7 @@ fn structural_references_do_not_drive_primary_containment_or_runnable_scope() {
 
     assert!(containment.is_empty());
     assert_eq!(projection.head_commit_id, structural_reference.commit_id);
-    assert_eq!(
-        projection.deferred_dimensions,
-        vec![RunnableTaskProjectionDimension::ExplicitManualOrder]
-    );
+    assert!(projection.deferred_dimensions.is_empty());
     assert!(projection.candidates.is_empty());
     assert_eq!(history_counts(&connection), before_counts);
     assert_eq!(

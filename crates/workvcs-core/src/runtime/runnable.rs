@@ -162,7 +162,8 @@ pub(crate) fn runnable_tasks(
             candidate_with_claims(task, dependency_readiness, coordination)
         })
         .collect::<Vec<_>>();
-    sort_candidates(&mut candidates);
+    let manual_order = manual_order_rank_by_task(&candidates, &scheduling_relations)?;
+    sort_candidates(&mut candidates, &manual_order);
     ensure_projection_anchor_unchanged(connection, options.session_id(), &anchor)?;
 
     Ok(RunnableTasksProjection {
@@ -524,13 +525,85 @@ fn validate_primary_containment_acyclic(
     Ok(())
 }
 
-fn sort_candidates(candidates: &mut [RunnableTaskCandidate]) {
+fn sort_candidates(
+    candidates: &mut [RunnableTaskCandidate],
+    manual_order: &BTreeMap<EntityId, usize>,
+) {
     candidates.sort_by(|left, right| {
         right
             .runnable
             .cmp(&left.runnable)
+            .then_with(|| {
+                manual_order[&left.task.task_entity_id]
+                    .cmp(&manual_order[&right.task.task_entity_id])
+            })
             .then_with(|| left.task.task_entity_id.cmp(&right.task.task_entity_id))
     });
+}
+
+fn manual_order_rank_by_task(
+    candidates: &[RunnableTaskCandidate],
+    relations: &[TaskSchedulingRelationSnapshot],
+) -> Result<BTreeMap<EntityId, usize>> {
+    let candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate.task.task_entity_id)
+        .collect::<BTreeSet<_>>();
+    let mut outgoing = BTreeMap::<EntityId, BTreeSet<EntityId>>::new();
+    let mut indegree = candidate_ids
+        .iter()
+        .map(|task_entity_id| (*task_entity_id, 0usize))
+        .collect::<BTreeMap<_, _>>();
+
+    for relation in relations {
+        if relation.relation_type != TaskSchedulingRelationType::OrderedBefore
+            || !candidate_ids.contains(&relation.source_task_entity_id)
+            || !candidate_ids.contains(&relation.target_task_entity_id)
+        {
+            continue;
+        }
+        if outgoing
+            .entry(relation.source_task_entity_id)
+            .or_default()
+            .insert(relation.target_task_entity_id)
+        {
+            *indegree
+                .get_mut(&relation.target_task_entity_id)
+                .expect("candidate indegree must exist") += 1;
+        }
+    }
+
+    let mut ready = indegree
+        .iter()
+        .filter_map(|(task_entity_id, degree)| (*degree == 0).then_some(*task_entity_id))
+        .collect::<BTreeSet<_>>();
+    let mut ranks = BTreeMap::new();
+    while let Some(task_entity_id) = ready.iter().next().copied() {
+        ready.remove(&task_entity_id);
+        ranks.insert(task_entity_id, ranks.len());
+        if let Some(targets) = outgoing.get(&task_entity_id) {
+            for target_task_entity_id in targets {
+                let degree = indegree
+                    .get_mut(target_task_entity_id)
+                    .expect("candidate indegree must exist");
+                *degree -= 1;
+                if *degree == 0 {
+                    ready.insert(*target_task_entity_id);
+                }
+            }
+        }
+    }
+
+    if ranks.len() != candidate_ids.len() {
+        let cycle_task_entity_id = candidate_ids
+            .into_iter()
+            .find(|task_entity_id| !ranks.contains_key(task_entity_id))
+            .expect("cycle task candidate");
+        return Err(WorkVcsError::RelationInvalid(format!(
+            "current ordered_before graph contains a cycle at task {cycle_task_entity_id}"
+        )));
+    }
+    Ok(ranks)
 }
 
 fn projection_anchor(
@@ -701,6 +774,5 @@ fn deferred_dimensions(focused: bool) -> Vec<RunnableTaskProjectionDimension> {
         dimensions.push(RunnableTaskProjectionDimension::ActiveScopePlanPath);
         dimensions.push(RunnableTaskProjectionDimension::ExecutableTaskDescendants);
     }
-    dimensions.push(RunnableTaskProjectionDimension::ExplicitManualOrder);
     dimensions
 }

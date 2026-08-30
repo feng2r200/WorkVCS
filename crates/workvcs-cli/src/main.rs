@@ -23,14 +23,15 @@ use workvcs_core::{
     ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
     ClaimTaskOptions, ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview,
     ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
-    Engine, EntityId, EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot,
-    EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceId, EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, ExposureId,
-    ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
-    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
-    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
-    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    Engine, EntityId, EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceContentInput,
+    EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceId,
+    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId,
+    ExternalObjectId, ExternalObjectRefListOptions, ExternalObjectRefListResult,
+    ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
+    ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry,
+    HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
     KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
@@ -194,6 +195,10 @@ enum Command {
 
         #[arg(long)]
         to_commit: Option<String>,
+    },
+    Entity {
+        #[command(subcommand)]
+        command: EntityCommand,
     },
     Restore {
         #[arg(value_name = "STORE")]
@@ -691,6 +696,51 @@ enum StoreCommand {
 
         #[arg(long)]
         source_status: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum EntityCommand {
+    Create {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        kind: String,
+
+        #[arg(long)]
+        state_json: String,
+
+        #[arg(long, default_value = "{}")]
+        rationale_json: String,
+    },
+    Update {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        entity: String,
+
+        #[arg(long)]
+        entity_version: String,
+
+        #[arg(long)]
+        state_json: String,
+
+        #[arg(long, default_value = "{}")]
+        rationale_json: String,
     },
 }
 
@@ -3473,6 +3523,50 @@ fn run(cli: Cli) -> Result<String> {
                 &engine.diff(WorkStateDiffOptions::new(from, to))?,
             ))
         }
+        Command::Entity { command } => match command {
+            EntityCommand::Create {
+                store,
+                branch,
+                head,
+                kind,
+                state_json,
+                rationale_json,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let options = EntityTransitionOptions::create(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    kind,
+                    parse_canonical_json(state_json.as_bytes())?,
+                )?
+                .with_rationale(parse_cli_object("entity rationale", &rationale_json)?);
+                Ok(render_entity_transition_commit(
+                    &engine.commit_entity_transition(options)?,
+                ))
+            }
+            EntityCommand::Update {
+                store,
+                branch,
+                head,
+                entity,
+                entity_version,
+                state_json,
+                rationale_json,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let options = EntityTransitionOptions::update(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&entity)?,
+                    EntityVersionId::parse_canonical(&entity_version)?,
+                    parse_canonical_json(state_json.as_bytes())?,
+                )?
+                .with_rationale(parse_cli_object("entity rationale", &rationale_json)?);
+                Ok(render_entity_transition_commit(
+                    &engine.commit_entity_transition(options)?,
+                ))
+            }
+        },
         Command::Restore {
             store,
             branch,
@@ -11702,6 +11796,22 @@ fn render_work_state_diff_change_kind(kind: WorkStateDiffChangeKind) -> &'static
     }
 }
 
+fn render_entity_transition_commit(commit: &EntityTransitionCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nentity_id={}\nentity_version_id={}\nentity_state_digest={}\nwork_state_digest={}\n",
+        commit.workspace_id,
+        commit.branch_id,
+        commit.previous_head_commit_id,
+        commit.commit_id,
+        commit.changeset_id,
+        commit.operation_id,
+        commit.entity_id,
+        commit.entity_version_id,
+        commit.entity_state_digest,
+        commit.work_state_digest
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11727,6 +11837,7 @@ mod tests {
                 "event",
                 "show-at",
                 "diff",
+                "entity",
                 "restore",
                 "why",
                 "workspace",
@@ -11875,6 +11986,101 @@ mod tests {
         assert_eq!(
             value(&diff, "entity[0].after_entity_version_id"),
             value(&task, "task_entity_version_id")
+        );
+    }
+
+    #[test]
+    fn cli_commits_generic_entity_transitions() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "entity-store"])
+                .expect("parse init"),
+        )
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let created = run(Cli::try_parse_from([
+            "workvcs",
+            "entity",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--kind",
+            "generic_record",
+            "--state-json",
+            r#"{"title":"draft","status":"open"}"#,
+            "--rationale-json",
+            r#"{"reason":"cli"}"#,
+        ])
+        .expect("parse entity create"))
+        .expect("create generic entity");
+        assert_eq!(value(&created, "branch_id"), branch);
+        assert_eq!(value(&created, "previous_head_commit_id"), genesis);
+
+        let updated = run(Cli::try_parse_from([
+            "workvcs",
+            "entity",
+            "update",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&created, "commit_id"),
+            "--entity",
+            &value(&created, "entity_id"),
+            "--entity-version",
+            &value(&created, "entity_version_id"),
+            "--state-json",
+            r#"{"status":"done","title":"draft"}"#,
+        ])
+        .expect("parse entity update"))
+        .expect("update generic entity");
+        assert_eq!(value(&updated, "entity_id"), value(&created, "entity_id"));
+        assert_ne!(
+            value(&updated, "entity_version_id"),
+            value(&created, "entity_version_id")
+        );
+        assert_ne!(
+            value(&updated, "entity_state_digest"),
+            value(&created, "entity_state_digest")
+        );
+
+        let diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &value(&created, "commit_id"),
+            "--to-commit",
+            &value(&updated, "commit_id"),
+        ])
+        .expect("parse update diff"))
+        .expect("diff update");
+        assert_eq!(value(&diff, "entity_changes"), "1");
+        assert_eq!(value(&diff, "entity[0].change_kind"), "updated");
+        assert_eq!(
+            value(&diff, "entity[0].before_entity_version_id"),
+            value(&created, "entity_version_id")
+        );
+        assert_eq!(
+            value(&diff, "entity[0].after_entity_version_id"),
+            value(&updated, "entity_version_id")
         );
     }
 

@@ -1299,6 +1299,12 @@ enum BundleCommand {
 
         #[arg(long)]
         import: String,
+
+        #[arg(long)]
+        expected_bundle_digest: Option<String>,
+
+        #[arg(long)]
+        expected_outcome: Option<String>,
     },
     ImportList {
         #[arg(value_name = "STORE")]
@@ -4782,10 +4788,39 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 Ok(output)
             }
-            BundleCommand::ImportShow { store, import } => {
+            BundleCommand::ImportShow {
+                store,
+                import,
+                expected_bundle_digest,
+                expected_outcome,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.bundle_import_attempt(ImportId::parse_canonical(&import)?)?;
-                Ok(render_bundle_import_attempt_snapshot(&snapshot))
+                let mut output = render_bundle_import_attempt_snapshot(&snapshot);
+                if let Some(expected_bundle_digest) = expected_bundle_digest {
+                    let expected_bundle_digest = Digest::from_hex(&expected_bundle_digest)?;
+                    if snapshot.bundle_digest != expected_bundle_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "bundle import digest {} does not match expected {}",
+                            snapshot.bundle_digest, expected_bundle_digest
+                        )));
+                    }
+                    output.push_str("bundle_matches_expected=true\n");
+                }
+                if let Some(expected_outcome) = expected_outcome {
+                    let actual_outcome = snapshot
+                        .outcome
+                        .as_ref()
+                        .map(|outcome| outcome.outcome.as_str())
+                        .unwrap_or("none");
+                    if actual_outcome != expected_outcome {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle import outcome {actual_outcome} does not match expected {expected_outcome}"
+                        )));
+                    }
+                    output.push_str("outcome_matches_expected=true\n");
+                }
+                Ok(output)
             }
             BundleCommand::ImportList {
                 store,
@@ -20011,6 +20046,51 @@ mod tests {
         assert_eq!(value(&shown_import, "outcome"), "already_present");
         assert_ne!(value(&shown_import, "detail_digest"), "none");
         assert_ne!(value(&shown_import, "detail_size_bytes"), "none");
+        let expected_import = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-show",
+            store,
+            "--import",
+            &import_id,
+            "--expected-bundle-digest",
+            &value(&shown_import, "bundle_digest"),
+            "--expected-outcome",
+            "already_present",
+        ])
+        .expect("parse expected bundle import-show"))
+        .expect("show expected bundle import attempt");
+        assert_eq!(
+            value(&expected_import, "bundle_digest"),
+            value(&shown_import, "bundle_digest")
+        );
+        assert_eq!(value(&expected_import, "outcome"), "already_present");
+        assert_eq!(value(&expected_import, "bundle_matches_expected"), "true");
+        assert_eq!(value(&expected_import, "outcome_matches_expected"), "true");
+        let mismatched_import_bundle = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-show",
+            store,
+            "--import",
+            &import_id,
+            "--expected-bundle-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched bundle import digest"));
+        assert!(mismatched_import_bundle.is_err());
+        let mismatched_import_outcome = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-show",
+            store,
+            "--import",
+            &import_id,
+            "--expected-outcome",
+            "same_store_fast_forward_applied",
+        ])
+        .expect("parse mismatched bundle import outcome"));
+        assert!(mismatched_import_outcome.is_err());
 
         let listed_imports =
             run(

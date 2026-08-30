@@ -2642,6 +2642,9 @@ enum RecordCommand {
 
         #[arg(long)]
         target_record: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("record-knowledge-relation-list-target")
@@ -6189,6 +6192,7 @@ fn run(cli: Cli) -> Result<String> {
                     label,
                     source_record,
                     target_record,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6207,9 +6211,16 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(target_record) = target_record {
                 options = options.with_target_record(EntityId::parse_canonical(&target_record)?);
             }
-            Ok(render_record_relation_list(
-                &engine.record_relations_at(options)?,
-            ))
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "record relation-list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.record_relations_at(options)?;
+            if let Some(limit) = limit {
+                result.relations.truncate(limit);
+            }
+            Ok(render_record_relation_list(&result))
         }
         Command::Record {
             command:
@@ -24256,6 +24267,34 @@ mod tests {
             value(&listed, "relation.0.relation_id"),
             value(&superseded, "relation_id")
         );
+
+        let limited_relations = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited relation list"))
+        .expect("list limited relations");
+        assert!(limited_relations.contains("relations=1"));
+        assert_ne!(value(&limited_relations, "relation.0.relation_id"), "");
+
+        let zero_limit_relations = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit relation list"));
+        assert!(zero_limit_relations.is_err());
 
         let derived = run(Cli::try_parse_from([
             "workvcs",

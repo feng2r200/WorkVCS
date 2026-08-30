@@ -1474,6 +1474,9 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         knowledge: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("knowledge-list-target")
@@ -5249,14 +5252,25 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     knowledge,
+                    expected_state_digest,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_knowledge_query_commit(&engine, branch, commit)?;
-            Ok(render_knowledge_snapshot(&engine.knowledge_at(
-                commit_id,
-                EntityId::parse_canonical(&knowledge)?,
-            )?)?)
+            let snapshot =
+                engine.knowledge_at(commit_id, EntityId::parse_canonical(&knowledge)?)?;
+            let mut output = render_knowledge_snapshot(&snapshot)?;
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "knowledge state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Knowledge {
             command:
@@ -29550,6 +29564,41 @@ mod tests {
         assert!(
             show.contains("knowledge_scope_json={\"kind\":\"workspace\",\"local_ref\":\"root\"}")
         );
+
+        let expected_show = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--expected-state-digest",
+            &value(&show, "knowledge_state_digest"),
+        ])
+        .expect("parse expected knowledge show"))
+        .expect("show expected knowledge");
+        assert_eq!(
+            value(&expected_show, "knowledge_state_digest"),
+            value(&show, "knowledge_state_digest")
+        );
+        assert_eq!(value(&expected_show, "matches_expected"), "true");
+
+        let mismatched_show = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched knowledge show"));
+        assert!(mismatched_show.is_err());
 
         let listed = run(Cli::try_parse_from([
             "workvcs",

@@ -1573,6 +1573,15 @@ enum TaskCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        relation_type: Option<String>,
+
+        #[arg(long)]
+        source_task: Option<String>,
+
+        #[arg(long)]
+        target_task: Option<String>,
     },
     #[command(group(
         ArgGroup::new("task-containment-list-target")
@@ -4764,11 +4773,26 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     branch,
                     commit,
+                    relation_type,
+                    source_task,
+                    target_task,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            let relations = engine.task_scheduling_relations_at(commit_id)?;
+            let mut relations = engine.task_scheduling_relations_at(commit_id)?;
+            if let Some(relation_type) = relation_type {
+                let relation_type = parse_task_scheduling_relation_type(&relation_type)?;
+                relations.retain(|relation| relation.relation_type.as_str() == relation_type);
+            }
+            if let Some(source_task) = source_task {
+                let source_task_id = EntityId::parse_canonical(&source_task)?;
+                relations.retain(|relation| relation.source_task_entity_id == source_task_id);
+            }
+            if let Some(target_task) = target_task {
+                let target_task_id = EntityId::parse_canonical(&target_task)?;
+                relations.retain(|relation| relation.target_task_entity_id == target_task_id);
+            }
             Ok(render_task_scheduling_relation_list(commit_id, &relations))
         }
         Command::Task {
@@ -6666,6 +6690,16 @@ fn parse_goal_plan_task_endpoint_kind(value: &str) -> Result<&'static str> {
         "task" => Ok("task"),
         other => Err(WorkVcsError::TaskInvalid(format!(
             "goal/plan/task endpoint kind {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_task_scheduling_relation_type(value: &str) -> Result<&'static str> {
+    match value {
+        "depends_on" => Ok("depends_on"),
+        "ordered_before" => Ok("ordered_before"),
+        other => Err(WorkVcsError::TaskInvalid(format!(
+            "task scheduling relation type {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -18869,6 +18903,112 @@ mod tests {
             value(&scheduling_list, "relation.0.target_task_entity_id"),
             first_task
         );
+
+        let depends_on_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--relation-type",
+            "depends_on",
+        ])
+        .expect("parse depends-on scheduling list"))
+        .expect("list depends-on scheduling relations");
+        assert_eq!(value(&depends_on_list, "relations"), "1");
+        assert_eq!(
+            value(&depends_on_list, "relation.0.relation_type"),
+            "depends_on"
+        );
+
+        let ordered_before_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--relation-type",
+            "ordered_before",
+        ])
+        .expect("parse ordered-before scheduling list"))
+        .expect("list ordered-before scheduling relations");
+        assert_eq!(value(&ordered_before_list, "relations"), "1");
+        assert_eq!(
+            value(&ordered_before_list, "relation.0.relation_type"),
+            "ordered_before"
+        );
+
+        let source_task_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--source-task",
+            &first_task,
+        ])
+        .expect("parse scheduling list by source task"))
+        .expect("list scheduling relations by source task");
+        assert_eq!(value(&source_task_list, "relations"), "1");
+        assert_eq!(
+            value(&source_task_list, "relation.0.relation_type"),
+            "ordered_before"
+        );
+
+        let target_task_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--target-task",
+            &first_task,
+        ])
+        .expect("parse scheduling list by target task"))
+        .expect("list scheduling relations by target task");
+        assert_eq!(value(&target_task_list, "relations"), "1");
+        assert_eq!(
+            value(&target_task_list, "relation.0.relation_type"),
+            "depends_on"
+        );
+
+        let combined_scheduling_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--relation-type",
+            "ordered_before",
+            "--source-task",
+            &first_task,
+            "--target-task",
+            &second_task,
+        ])
+        .expect("parse combined scheduling list"))
+        .expect("list scheduling relations by combined filters");
+        assert_eq!(value(&combined_scheduling_list, "relations"), "1");
+
+        let missing_scheduling_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+            "--relation-type",
+            "depends_on",
+            "--target-task",
+            &second_task,
+        ])
+        .expect("parse missing scheduling list"))
+        .expect("list missing scheduling relations");
+        assert_eq!(value(&missing_scheduling_list, "relations"), "0");
 
         let containment_list = run(Cli::try_parse_from([
             "workvcs",

@@ -318,6 +318,12 @@ enum Command {
         target_kind: Option<String>,
 
         #[arg(long)]
+        source_entity_kind: Option<String>,
+
+        #[arg(long)]
+        target_entity_kind: Option<String>,
+
+        #[arg(long)]
         relation_limit: Option<usize>,
     },
     Workspace {
@@ -4616,6 +4622,8 @@ fn run(cli: Cli) -> Result<String> {
             target: target_endpoint,
             source_kind,
             target_kind,
+            source_entity_kind,
+            target_entity_kind,
             relation_limit,
         } => {
             if matches!(relation_limit, Some(0)) {
@@ -4686,6 +4694,16 @@ fn run(cli: Cli) -> Result<String> {
                 result
                     .relation_edges
                     .retain(|edge| why_endpoint_kind(edge.target) == target_kind);
+            }
+            if let Some(source_entity_kind) = source_entity_kind {
+                result.relation_edges.retain(|edge| {
+                    why_endpoint_entity_kind(edge.source) == Some(source_entity_kind.as_str())
+                });
+            }
+            if let Some(target_entity_kind) = target_entity_kind {
+                result.relation_edges.retain(|edge| {
+                    why_endpoint_entity_kind(edge.target) == Some(target_entity_kind.as_str())
+                });
             }
             if let Some(relation_limit) = relation_limit {
                 result.relation_edges.truncate(relation_limit);
@@ -13592,6 +13610,15 @@ fn why_endpoint_kind(endpoint: WhyRelationEndpoint) -> &'static str {
     }
 }
 
+fn why_endpoint_entity_kind(endpoint: WhyRelationEndpoint) -> Option<&'static str> {
+    match endpoint {
+        WhyRelationEndpoint::Entity { entity_kind, .. } => Some(why_entity_kind(entity_kind)),
+        WhyRelationEndpoint::Evidence { .. } | WhyRelationEndpoint::KnowledgeExposure { .. } => {
+            None
+        }
+    }
+}
+
 fn why_entity_kind(kind: WhyEntityKind) -> &'static str {
     match kind {
         WhyEntityKind::Goal => "goal",
@@ -17914,6 +17941,39 @@ mod tests {
         .expect("parse why by endpoint kinds"))
         .expect("why by endpoint kinds");
         assert_eq!(value(&why_by_endpoint_kinds, "relation_edges"), "1");
+
+        let why_by_source_entity_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--source-entity-kind",
+            "knowledge",
+        ])
+        .expect("parse why by source entity kind"))
+        .expect("why by source entity kind");
+        assert_eq!(value(&why_by_source_entity_kind, "relation_edges"), "1");
+
+        let why_by_missing_target_entity_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--target-entity-kind",
+            "knowledge",
+        ])
+        .expect("parse why by missing target entity kind"))
+        .expect("why by missing target entity kind");
+        assert_eq!(
+            value(&why_by_missing_target_entity_kind, "relation_edges"),
+            "0"
+        );
 
         let why_by_missing_source = run(Cli::try_parse_from([
             "workvcs",

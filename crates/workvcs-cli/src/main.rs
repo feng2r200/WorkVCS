@@ -1307,6 +1307,9 @@ enum BundleCommand {
 
         #[arg(long)]
         manifest_file: PathBuf,
+
+        #[arg(long)]
+        require_valid: bool,
     },
 }
 
@@ -4732,6 +4735,7 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 commit,
                 manifest_file,
+                require_valid,
             } => {
                 let engine = Engine::open(store)?;
                 let manifest_bytes = fs::read(&manifest_file).map_err(|error| {
@@ -4746,7 +4750,17 @@ fn run(cli: Cli) -> Result<String> {
                         manifest_bytes,
                     )?,
                 )?;
-                Ok(render_bundle_manifest_validation(&validation))
+                let mut output = render_bundle_manifest_validation(&validation);
+                if require_valid {
+                    if !validation.valid {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle manifest validation failed: {}",
+                            validation.problem.as_deref().unwrap_or("unknown problem")
+                        )));
+                    }
+                    output.push_str("valid_required=true\n");
+                }
+                Ok(output)
             }
         },
         Command::Checkpoint { command } => match command {
@@ -19711,6 +19725,53 @@ mod tests {
         assert_eq!(value(&validation, "commit_id"), genesis);
         assert_eq!(value(&validation, "valid"), "true");
         assert_eq!(value(&validation, "problem"), "none");
+        let required_validation = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-manifest",
+            store,
+            "--commit",
+            &genesis,
+            "--manifest-file",
+            manifest_file.to_str().expect("manifest file path"),
+            "--require-valid",
+        ])
+        .expect("parse required bundle validate-manifest"))
+        .expect("require valid bundle manifest");
+        assert_eq!(value(&required_validation, "valid"), "true");
+        assert_eq!(value(&required_validation, "valid_required"), "true");
+        let invalid_manifest_file = tempdir.path().join("invalid-bundle-manifest.json");
+        fs::write(&invalid_manifest_file, b"{}").expect("write invalid manifest file");
+        let invalid_validation = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-manifest",
+            store,
+            "--commit",
+            &genesis,
+            "--manifest-file",
+            invalid_manifest_file
+                .to_str()
+                .expect("invalid manifest file path"),
+        ])
+        .expect("parse invalid bundle validate-manifest"))
+        .expect("report invalid bundle manifest");
+        assert_eq!(value(&invalid_validation, "valid"), "false");
+        let required_invalid_validation = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-manifest",
+            store,
+            "--commit",
+            &genesis,
+            "--manifest-file",
+            invalid_manifest_file
+                .to_str()
+                .expect("invalid manifest file path"),
+            "--require-valid",
+        ])
+        .expect("parse required invalid bundle validate-manifest"));
+        assert!(required_invalid_validation.is_err());
 
         let export_dir = tempdir.path().join("bundle-export");
         let exported_dir = run(Cli::try_parse_from([

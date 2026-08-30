@@ -970,6 +970,9 @@ enum WorkspaceCommand {
 
         #[arg(long)]
         workspace: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     List {
         #[arg(value_name = "STORE")]
@@ -5087,12 +5090,28 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_workspace_info(&workspace))
         }
         Command::Workspace {
-            command: WorkspaceCommand::Show { store, workspace },
+            command:
+                WorkspaceCommand::Show {
+                    store,
+                    workspace,
+                    expected_state_digest,
+                },
         } => {
             let engine = Engine::open(store)?;
             let workspace =
                 engine.workspace_info(workvcs_core::WorkspaceId::parse_canonical(&workspace)?)?;
-            Ok(render_workspace_info(&workspace))
+            let mut output = render_workspace_info(&workspace);
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if workspace.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "workspace state digest {} does not match expected {}",
+                        workspace.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Workspace {
             command:
@@ -16161,6 +16180,35 @@ mod tests {
             value(&shown, "state_digest"),
             value(&created, "state_digest")
         );
+        let expected_workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "show",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--expected-state-digest",
+            &value(&shown, "state_digest"),
+        ])
+        .expect("parse expected workspace show"))
+        .expect("show expected workspace");
+        assert_eq!(
+            value(&expected_workspace, "state_digest"),
+            value(&shown, "state_digest")
+        );
+        assert_eq!(value(&expected_workspace, "matches_expected"), "true");
+        let mismatched_workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "show",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched workspace show"));
+        assert!(mismatched_workspace.is_err());
 
         let listed = run(Cli::try_parse_from(["workvcs", "workspace", "list", store])
             .expect("parse workspace list"))

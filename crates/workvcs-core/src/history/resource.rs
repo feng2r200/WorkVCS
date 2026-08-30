@@ -282,6 +282,36 @@ pub struct ResourceSnapshot {
     pub workspace_associations: Vec<WorkspaceResourceAssociationSnapshot>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResourceListOptions {
+    resource_kind: Option<String>,
+}
+
+impl ResourceListOptions {
+    pub fn all() -> Self {
+        Self {
+            resource_kind: None,
+        }
+    }
+
+    pub fn for_kind(resource_kind: impl Into<String>) -> Result<Self> {
+        let resource_kind = resource_kind.into();
+        validate_stored_text("resource kind", &resource_kind)?;
+        Ok(Self {
+            resource_kind: Some(resource_kind),
+        })
+    }
+
+    pub fn resource_kind(&self) -> Option<&str> {
+        self.resource_kind.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceListResult {
+    pub resources: Vec<ResourceSnapshot>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourceBindingSnapshot {
     pub resource_id: ResourceId,
@@ -413,6 +443,22 @@ pub(crate) fn resource(
         binding: load_resource_binding(connection, resource_id)?,
         workspace_associations: load_workspace_resource_associations(connection, resource_id)?,
     })
+}
+
+pub(crate) fn resources(
+    connection: &StoreConnection,
+    options: &ResourceListOptions,
+) -> Result<ResourceListResult> {
+    if let Some(resource_kind) = options.resource_kind() {
+        validate_stored_text("resource kind", resource_kind)?;
+    }
+
+    let resource_ids = list_resource_ids(connection, options)?;
+    let mut resources = Vec::with_capacity(resource_ids.len());
+    for resource_id in resource_ids {
+        resources.push(resource(connection, resource_id)?);
+    }
+    Ok(ResourceListResult { resources })
 }
 
 pub(crate) fn bind_resource(
@@ -785,6 +831,65 @@ fn load_resource_binding(
         },
     )
     .transpose()
+}
+
+fn list_resource_ids(
+    connection: &StoreConnection,
+    options: &ResourceListOptions,
+) -> Result<Vec<ResourceId>> {
+    let mut resource_ids = Vec::new();
+    match options.resource_kind() {
+        Some(resource_kind) => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT resource.resource_id
+                     FROM resource
+                     JOIN object_identity
+                       ON object_identity.object_id = resource.resource_id
+                     WHERE object_identity.object_kind = ?1
+                       AND resource.resource_kind = ?2
+                     ORDER BY resource.created_at_us, resource.resource_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(params![RESOURCE_OBJECT_KIND, resource_kind], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .map_err(storage_error)?;
+            for row in rows {
+                resource_ids.push(decode_resource_id(
+                    "resource.resource_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+        None => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT resource.resource_id
+                     FROM resource
+                     JOIN object_identity
+                       ON object_identity.object_id = resource.resource_id
+                     WHERE object_identity.object_kind = ?1
+                     ORDER BY resource.created_at_us, resource.resource_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(params![RESOURCE_OBJECT_KIND], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .map_err(storage_error)?;
+            for row in rows {
+                resource_ids.push(decode_resource_id(
+                    "resource.resource_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+    }
+    Ok(resource_ids)
 }
 
 fn load_workspace_resource_associations(

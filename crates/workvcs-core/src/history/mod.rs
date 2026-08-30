@@ -140,7 +140,8 @@ pub use reference::{
 pub use replay::ReplayedState;
 pub use resource::{
     ResourceBindOptions, ResourceBindResult, ResourceBindingSnapshot, ResourceCreateOptions,
-    ResourceCreateResult, ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceCreateResult, ResourceListOptions, ResourceListResult,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult,
     ResourceObservationDetailInput, ResourceObservationDetailSnapshot, ResourceObservationSnapshot,
     ResourceSnapshot, WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
     WorkspaceResourceAssociationSnapshot,
@@ -223,7 +224,7 @@ pub(crate) use reference::{create_structural_reference, structural_references_at
 pub(crate) use replay::state_at;
 pub(crate) use resource::{
     associate_workspace_resource, bind_resource, create_resource, record_resource_observation,
-    resource, resource_observation,
+    resource, resource_observation, resources,
 };
 pub(crate) use restore::restore_work_state;
 pub(crate) use task::{

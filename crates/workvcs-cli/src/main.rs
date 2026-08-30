@@ -70,13 +70,13 @@ use workvcs_core::{
     RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
     RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
     ResolvedWhyQuerySubject, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
-    ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, ResourceObservationSnapshot,
-    ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
-    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInitOptions,
-    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    ResourceCreateResult, ResourceId, ResourceListOptions, ResourceListResult,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    ResourceObservationSnapshot, ResourceSnapshot, Result, RunnableTaskBlockedReason,
+    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
+    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
     StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
     StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
@@ -1819,6 +1819,13 @@ enum ResourceCommand {
 
         #[arg(long)]
         resource: String,
+    },
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        kind: Option<String>,
     },
     Bind {
         #[arg(value_name = "STORE")]
@@ -4449,6 +4456,16 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let engine = Engine::open(store)?;
             render_resource_snapshot(&engine.resource(ResourceId::parse_canonical(&resource)?)?)
+        }
+        Command::Resource {
+            command: ResourceCommand::List { store, kind },
+        } => {
+            let engine = Engine::open(store)?;
+            let options = match kind {
+                Some(kind) => ResourceListOptions::for_kind(kind)?,
+                None => ResourceListOptions::all(),
+            };
+            Ok(render_resource_list(&engine.resources(options)?))
         }
         Command::Resource {
             command:
@@ -7728,6 +7745,43 @@ fn render_resource_snapshot(resource: &ResourceSnapshot) -> Result<String> {
         .expect("write to String");
     }
     Ok(output)
+}
+
+fn render_resource_list(result: &ResourceListResult) -> String {
+    let mut output = format!("resources={}\n", result.resources.len());
+    for (index, resource) in result.resources.iter().enumerate() {
+        writeln!(
+            output,
+            "resource.{index}.resource_id={}",
+            resource.resource_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource.{index}.resource_kind={}",
+            resource.resource_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource.{index}.created_at_us={}",
+            resource.created_at_us
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource.{index}.binding_present={}",
+            resource.binding.is_some()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "resource.{index}.workspace_associations={}",
+            resource.workspace_associations.len()
+        )
+        .expect("write to String");
+    }
+    output
 }
 
 fn render_resource_bind(result: &ResourceBindResult) -> Result<String> {
@@ -16496,6 +16550,52 @@ mod tests {
                 "workspace_association.0.metadata_json"
             ),
             r#"{"role":"primary"}"#
+        );
+
+        let second_resource = run(Cli::try_parse_from([
+            "workvcs", "resource", "create", store, "--kind", "document",
+        ])
+        .expect("parse second resource create"))
+        .expect("create second resource");
+        let second_resource_id = value(&second_resource, "resource_id");
+
+        let resources = run(Cli::try_parse_from(["workvcs", "resource", "list", store])
+            .expect("parse resource list"))
+        .expect("list resources");
+        assert_eq!(value(&resources, "resources"), "2");
+        let listed_ids = [
+            value(&resources, "resource.0.resource_id"),
+            value(&resources, "resource.1.resource_id"),
+        ];
+        assert!(listed_ids.contains(&resource_id));
+        assert!(listed_ids.contains(&second_resource_id));
+
+        let filtered_resources = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "list",
+            store,
+            "--kind",
+            "git-worktree",
+        ])
+        .expect("parse filtered resource list"))
+        .expect("list filtered resources");
+        assert_eq!(value(&filtered_resources, "resources"), "1");
+        assert_eq!(
+            value(&filtered_resources, "resource.0.resource_id"),
+            resource_id
+        );
+        assert_eq!(
+            value(&filtered_resources, "resource.0.resource_kind"),
+            "git-worktree"
+        );
+        assert_eq!(
+            value(&filtered_resources, "resource.0.binding_present"),
+            "true"
+        );
+        assert_eq!(
+            value(&filtered_resources, "resource.0.workspace_associations"),
+            "1"
         );
     }
 

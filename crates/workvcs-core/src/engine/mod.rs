@@ -66,18 +66,19 @@ use crate::history::{
     RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
     RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
     ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationSnapshot,
-    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
-    VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
-    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
-    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
-    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    ResourceListOptions, ResourceListResult, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationSnapshot, ResourceSnapshot,
+    StructuralReferenceCreateCommit, StructuralReferenceCreateOptions, StructuralReferenceSnapshot,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
+    VerificationRequirementSnapshot, VerificationSnapshot, WhyQueryOptions, WhyQueryResult,
+    WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit, WorkStateRestoreOptions,
+    WorkspaceInfo, WorkspaceInitOptions, WorkspaceResourceAssociationOptions,
+    WorkspaceResourceAssociationResult,
 };
 use crate::history::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
@@ -563,6 +564,10 @@ impl Engine {
 
     pub fn resource(&self, resource_id: ResourceId) -> Result<ResourceSnapshot> {
         self.store.resource(resource_id)
+    }
+
+    pub fn resources(&self, options: ResourceListOptions) -> Result<ResourceListResult> {
+        self.store.resources(&options)
     }
 
     pub fn bind_resource(&mut self, options: ResourceBindOptions) -> Result<ResourceBindResult> {

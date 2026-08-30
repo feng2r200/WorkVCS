@@ -2507,6 +2507,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_resources: Option<usize>,
     },
     Bind {
         #[arg(value_name = "STORE")]
@@ -2549,6 +2552,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_workspace_associations: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("resource-observation-fingerprint")
@@ -2644,6 +2650,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_observations: Option<usize>,
     },
 }
 
@@ -6873,6 +6882,7 @@ fn run(cli: Cli) -> Result<String> {
                     bound,
                     workspace,
                     limit,
+                    expected_resources,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6903,7 +6913,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.resources.truncate(limit);
             }
-            Ok(render_resource_list(&result))
+            let mut output = render_resource_list(&result);
+            if let Some(expected_resources) = expected_resources {
+                let actual_resources = result.resources.len();
+                if actual_resources != expected_resources {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "resources {actual_resources} does not match expected {expected_resources}"
+                    )));
+                }
+                output.push_str("resources_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Resource {
             command:
@@ -6954,6 +6974,7 @@ fn run(cli: Cli) -> Result<String> {
                     workspace,
                     resource,
                     limit,
+                    expected_workspace_associations,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6976,7 +6997,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.associations.truncate(limit);
             }
-            render_workspace_resource_association_list(&result)
+            let mut output = render_workspace_resource_association_list(&result)?;
+            if let Some(expected_workspace_associations) = expected_workspace_associations {
+                let actual_workspace_associations = result.associations.len();
+                if actual_workspace_associations != expected_workspace_associations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "workspace associations {actual_workspace_associations} does not match expected {expected_workspace_associations}"
+                    )));
+                }
+                output.push_str("workspace_associations_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Resource {
             command:
@@ -7067,6 +7098,7 @@ fn run(cli: Cli) -> Result<String> {
                     detail_content_digest,
                     detail_media_type,
                     limit,
+                    expected_observations,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -7114,7 +7146,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.observations.truncate(limit);
             }
-            render_resource_observation_list(&result)
+            let mut output = render_resource_observation_list(&result)?;
+            if let Some(expected_observations) = expected_observations {
+                let actual_observations = result.observations.len();
+                if actual_observations != expected_observations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "observations {actual_observations} does not match expected {expected_observations}"
+                    )));
+                }
+                output.push_str("observations_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Verification {
             command:
@@ -26991,6 +27033,8 @@ mod tests {
             store,
             "--workspace",
             &workspace_id,
+            "--expected-workspace-associations",
+            "1",
         ])
         .expect("parse workspace association list"))
         .expect("list workspace associations");
@@ -26998,6 +27042,13 @@ mod tests {
         assert_eq!(
             value(&workspace_associations, "workspace_associations"),
             "1"
+        );
+        assert_eq!(
+            value(
+                &workspace_associations,
+                "workspace_associations_match_expected"
+            ),
+            "true"
         );
         assert_eq!(
             value(
@@ -27048,6 +27099,8 @@ mod tests {
             store,
             "--workspace",
             &workspace_id,
+            "--expected-workspace-associations",
+            "2",
         ])
         .expect("parse all workspace association list"))
         .expect("list all workspace associations");
@@ -27055,6 +27108,26 @@ mod tests {
             value(&all_workspace_associations, "workspace_associations"),
             "2"
         );
+        assert_eq!(
+            value(
+                &all_workspace_associations,
+                "workspace_associations_match_expected"
+            ),
+            "true"
+        );
+
+        let mismatched_workspace_associations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "workspace-association-list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--expected-workspace-associations",
+            "1",
+        ])
+        .expect("parse mismatched workspace association list"));
+        assert!(mismatched_workspace_associations.is_err());
 
         let limited_workspace_associations = run(Cli::try_parse_from([
             "workvcs",
@@ -27065,12 +27138,21 @@ mod tests {
             &workspace_id,
             "--limit",
             "1",
+            "--expected-workspace-associations",
+            "1",
         ])
         .expect("parse limited workspace association list"))
         .expect("list limited workspace associations");
         assert_eq!(
             value(&limited_workspace_associations, "workspace_associations"),
             "1"
+        );
+        assert_eq!(
+            value(
+                &limited_workspace_associations,
+                "workspace_associations_match_expected"
+            ),
+            "true"
         );
         assert_ne!(
             value(
@@ -27102,6 +27184,8 @@ mod tests {
             &workspace_id,
             "--resource",
             &second_resource_id,
+            "--expected-workspace-associations",
+            "1",
         ])
         .expect("parse filtered workspace association list"))
         .expect("list filtered workspace associations");
@@ -27112,6 +27196,13 @@ mod tests {
         assert_eq!(
             value(&filtered_workspace_associations, "workspace_associations"),
             "1"
+        );
+        assert_eq!(
+            value(
+                &filtered_workspace_associations,
+                "workspace_associations_match_expected"
+            ),
+            "true"
         );
         assert_eq!(
             value(
@@ -27145,10 +27236,18 @@ mod tests {
             "0"
         );
 
-        let resources = run(Cli::try_parse_from(["workvcs", "resource", "list", store])
-            .expect("parse resource list"))
+        let resources = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "list",
+            store,
+            "--expected-resources",
+            "2",
+        ])
+        .expect("parse resource list"))
         .expect("list resources");
         assert_eq!(value(&resources, "resources"), "2");
+        assert_eq!(value(&resources, "resources_match_expected"), "true");
         let listed_ids = [
             value(&resources, "resource.0.resource_id"),
             value(&resources, "resource.1.resource_id"),
@@ -27156,13 +27255,34 @@ mod tests {
         assert!(listed_ids.contains(&resource_id));
         assert!(listed_ids.contains(&second_resource_id));
 
-        let limited_resources =
-            run(
-                Cli::try_parse_from(["workvcs", "resource", "list", store, "--limit", "1"])
-                    .expect("parse limited resource list"),
-            )
-            .expect("list limited resources");
+        let mismatched_resources = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "list",
+            store,
+            "--expected-resources",
+            "1",
+        ])
+        .expect("parse mismatched resource list"));
+        assert!(mismatched_resources.is_err());
+
+        let limited_resources = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "list",
+            store,
+            "--limit",
+            "1",
+            "--expected-resources",
+            "1",
+        ])
+        .expect("parse limited resource list"))
+        .expect("list limited resources");
         assert_eq!(value(&limited_resources, "resources"), "1");
+        assert_eq!(
+            value(&limited_resources, "resources_match_expected"),
+            "true"
+        );
         assert_ne!(value(&limited_resources, "resource.0.resource_id"), "");
 
         let zero_limit_resources =
@@ -27172,13 +27292,20 @@ mod tests {
             );
         assert!(zero_limit_resources.is_err());
 
-        let bound_resources =
-            run(
-                Cli::try_parse_from(["workvcs", "resource", "list", store, "--bound", "true"])
-                    .expect("parse bound resource list"),
-            )
-            .expect("list bound resources");
+        let bound_resources = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "list",
+            store,
+            "--bound",
+            "true",
+            "--expected-resources",
+            "1",
+        ])
+        .expect("parse bound resource list"))
+        .expect("list bound resources");
         assert_eq!(value(&bound_resources, "resources"), "1");
+        assert_eq!(value(&bound_resources, "resources_match_expected"), "true");
         assert_eq!(
             value(&bound_resources, "resource.0.resource_id"),
             resource_id
@@ -27475,13 +27602,18 @@ mod tests {
         ]);
         assert!(duplicate_detail_source.is_err());
 
-        let observations =
-            run(
-                Cli::try_parse_from(["workvcs", "resource", "observation-list", store])
-                    .expect("parse observation list"),
-            )
-            .expect("list observations");
+        let observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--expected-observations",
+            "1",
+        ])
+        .expect("parse observation list"))
+        .expect("list observations");
         assert_eq!(value(&observations, "observations"), "1");
+        assert_eq!(value(&observations, "observations_match_expected"), "true");
         assert_eq!(
             value(&observations, "observation.0.observation_id"),
             observation_id
@@ -27499,6 +27631,17 @@ mod tests {
             value(&observations, "observation.0.source_session_id"),
             session_id
         );
+
+        let mismatched_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--expected-observations",
+            "0",
+        ])
+        .expect("parse mismatched observation list"));
+        assert!(mismatched_observations.is_err());
 
         let resource_observations = run(Cli::try_parse_from([
             "workvcs",
@@ -27525,10 +27668,16 @@ mod tests {
             &resource_id,
             "--limit",
             "1",
+            "--expected-observations",
+            "1",
         ])
         .expect("parse limited observation list"))
         .expect("list limited observations");
         assert_eq!(value(&limited_observations, "observations"), "1");
+        assert_eq!(
+            value(&limited_observations, "observations_match_expected"),
+            "true"
+        );
         assert_eq!(
             value(&limited_observations, "observation.0.observation_id"),
             observation_id
@@ -27689,10 +27838,16 @@ mod tests {
             store,
             "--adapter-kind",
             "http",
+            "--expected-observations",
+            "0",
         ])
         .expect("parse missing observation list"))
         .expect("list missing observations");
         assert_eq!(value(&missing_observations, "observations"), "0");
+        assert_eq!(
+            value(&missing_observations, "observations_match_expected"),
+            "true"
+        );
 
         let missing_fingerprint_observations = run(Cli::try_parse_from([
             "workvcs",

@@ -732,6 +732,9 @@ enum StoreCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_exposures: Option<usize>,
     },
     #[command(name = "knowledge-space-source-stale-exposures")]
     KnowledgeSpaceSourceStaleExposures {
@@ -743,6 +746,9 @@ enum StoreCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_exposures: Option<usize>,
     },
     #[command(name = "knowledge-space-historical-exposures")]
     KnowledgeSpaceHistoricalExposures {
@@ -754,6 +760,9 @@ enum StoreCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_exposures: Option<usize>,
     },
     #[command(name = "knowledge-space-refresh-source-statuses")]
     KnowledgeSpaceRefreshSourceStatuses {
@@ -4193,6 +4202,7 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 knowledge_space,
                 limit,
+                expected_exposures,
             } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
@@ -4207,14 +4217,24 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     options = options.with_limit(limit)?;
                 }
-                render_knowledge_space_available_exposures(
-                    &engine.knowledge_space_available_exposures(options)?,
-                )
+                let result = engine.knowledge_space_available_exposures(options)?;
+                let mut output = render_knowledge_space_available_exposures(&result)?;
+                if let Some(expected_exposures) = expected_exposures {
+                    let actual_exposures = result.exposures.len();
+                    if actual_exposures != expected_exposures {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "available exposures {actual_exposures} does not match expected {expected_exposures}"
+                        )));
+                    }
+                    output.push_str("exposures_match_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::KnowledgeSpaceSourceStaleExposures {
                 store,
                 knowledge_space,
                 limit,
+                expected_exposures,
             } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
@@ -4229,14 +4249,24 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     options = options.with_limit(limit)?;
                 }
-                render_knowledge_space_source_stale_exposures(
-                    &engine.knowledge_space_source_stale_exposures(options)?,
-                )
+                let result = engine.knowledge_space_source_stale_exposures(options)?;
+                let mut output = render_knowledge_space_source_stale_exposures(&result)?;
+                if let Some(expected_exposures) = expected_exposures {
+                    let actual_exposures = result.exposures.len();
+                    if actual_exposures != expected_exposures {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "source-stale exposures {actual_exposures} does not match expected {expected_exposures}"
+                        )));
+                    }
+                    output.push_str("exposures_match_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::KnowledgeSpaceHistoricalExposures {
                 store,
                 knowledge_space,
                 limit,
+                expected_exposures,
             } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
@@ -4251,9 +4281,18 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     options = options.with_limit(limit)?;
                 }
-                render_knowledge_space_historical_exposures(
-                    &engine.knowledge_space_historical_exposures(options)?,
-                )
+                let result = engine.knowledge_space_historical_exposures(options)?;
+                let mut output = render_knowledge_space_historical_exposures(&result)?;
+                if let Some(expected_exposures) = expected_exposures {
+                    let actual_exposures = result.exposures.len();
+                    if actual_exposures != expected_exposures {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "historical exposures {actual_exposures} does not match expected {expected_exposures}"
+                        )));
+                    }
+                    output.push_str("exposures_match_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::KnowledgeSpaceRefreshSourceStatuses {
                 store,
@@ -19613,6 +19652,8 @@ mod tests {
             store,
             "--knowledge-space",
             &value(&knowledge_space, "knowledge_space_id"),
+            "--expected-exposures",
+            "1",
         ])
         .expect("parse knowledge-space-available-exposures"))
         .expect("list available exposures");
@@ -19622,11 +19663,25 @@ mod tests {
             value(&knowledge_space, "knowledge_space_id")
         );
         assert_eq!(value(&available, "exposures"), "1");
+        assert_eq!(value(&available, "exposures_match_expected"), "true");
         assert_eq!(
             value(&available, "exposure[0].exposure_id"),
             value(&current_exposure, "exposure_id")
         );
         assert_eq!(value(&available, "exposure[0].source_status"), "current");
+
+        let mismatched_available = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-space-available-exposures",
+            store,
+            "--knowledge-space",
+            &value(&knowledge_space, "knowledge_space_id"),
+            "--expected-exposures",
+            "0",
+        ])
+        .expect("parse mismatched knowledge-space-available-exposures"));
+        assert!(mismatched_available.is_err());
     }
 
     #[test]
@@ -19763,6 +19818,8 @@ mod tests {
             store,
             "--knowledge-space",
             &value(&knowledge_space, "knowledge_space_id"),
+            "--expected-exposures",
+            "1",
         ])
         .expect("parse knowledge-space-source-stale-exposures"))
         .expect("list source-stale exposures");
@@ -19772,6 +19829,7 @@ mod tests {
             value(&knowledge_space, "knowledge_space_id")
         );
         assert_eq!(value(&source_stale, "exposures"), "1");
+        assert_eq!(value(&source_stale, "exposures_match_expected"), "true");
         assert_eq!(
             value(&source_stale, "exposure[0].exposure_id"),
             value(&stale_exposure, "exposure_id")
@@ -19900,6 +19958,8 @@ mod tests {
             store,
             "--knowledge-space",
             &value(&knowledge_space, "knowledge_space_id"),
+            "--expected-exposures",
+            "1",
         ])
         .expect("parse knowledge-space-historical-exposures"))
         .expect("list historical exposures");
@@ -19909,6 +19969,7 @@ mod tests {
             value(&knowledge_space, "knowledge_space_id")
         );
         assert_eq!(value(&historical, "exposures"), "1");
+        assert_eq!(value(&historical, "exposures_match_expected"), "true");
         assert_eq!(
             value(&historical, "exposure[0].exposure_id"),
             value(&withdrawn, "exposure_id")

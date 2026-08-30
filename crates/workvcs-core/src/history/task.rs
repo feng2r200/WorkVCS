@@ -1060,6 +1060,14 @@ impl TaskTransitionOptions {
         self.actor_session_id
     }
 
+    pub fn branch_id(&self) -> BranchId {
+        self.branch_id
+    }
+
+    pub fn expected_head_commit_id(&self) -> CommitId {
+        self.expected_head_commit_id
+    }
+
     pub fn task_entity_id(&self) -> EntityId {
         self.task_entity_id
     }

@@ -2,10 +2,10 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    BranchId, CanonicalValue, ClaimTaskOptions, CommitId, Digest, Engine, EntityTransitionOptions,
-    EntityVersionId, ErrorCategory, ErrorCode, SessionStartOptions, StoreInitOptions,
-    TaskCreateOptions, TaskState, TaskStatus, TaskTransitionOptions, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes,
+    BranchForkOptions, BranchId, CanonicalValue, ClaimTaskOptions, CommitId, Digest, Engine,
+    EntityTransitionOptions, EntityVersionId, ErrorCategory, ErrorCode, SessionStartOptions,
+    StoreInitOptions, TaskCreateOptions, TaskState, TaskStatus, TaskTransitionOptions,
+    WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -335,6 +335,100 @@ fn actor_session_claim_guard_protects_terminal_task_transition() {
     assert_eq!(
         branch_head(&connection, workspace.initial_branch_id),
         before_head
+    );
+}
+
+#[test]
+fn actor_session_claim_guard_rejects_branch_or_head_mismatch_without_partial_rows() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Guard branch binding task",
+            )
+            .expect("task options"),
+        )
+        .expect("create task");
+    let fork = engine
+        .fork_branch(
+            BranchForkOptions::from_branch(workspace.initial_branch_id, "actor-branch")
+                .expect("fork options"),
+        )
+        .expect("fork branch");
+    let fork_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, fork.branch_id)
+                .expect("fork session options"),
+        )
+        .expect("start fork session");
+    let connection = raw_connection(&path);
+    let before_branch_mismatch = history_counts(&connection);
+    let before_branch_head = branch_head(&connection, workspace.initial_branch_id);
+
+    let branch_mismatch = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                task.commit_id,
+                task.task_entity_id,
+                task.task_entity_version_id,
+                TaskStatus::Failed,
+            )
+            .expect("branch mismatch options")
+            .with_actor_session(fork_session.session_id)
+            .with_rationale(rationale("wrong branch actor")),
+        )
+        .expect_err("actor branch mismatch rejected");
+    assert_eq!(branch_mismatch.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(branch_mismatch.category(), ErrorCategory::Runtime);
+    assert!(branch_mismatch.to_string().contains("targets branch"));
+    assert_eq!(history_counts(&connection), before_branch_mismatch);
+    assert_eq!(
+        branch_head(&connection, workspace.initial_branch_id),
+        before_branch_head
+    );
+
+    let initial_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("initial session options"),
+        )
+        .expect("start initial session");
+    let advanced = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                task.commit_id,
+                "Advance guarded branch",
+            )
+            .expect("advance task options"),
+        )
+        .expect("advance branch");
+    let before_head_mismatch = history_counts(&connection);
+
+    let head_mismatch = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                task.commit_id,
+                task.task_entity_id,
+                task.task_entity_version_id,
+                TaskStatus::Failed,
+            )
+            .expect("head mismatch options")
+            .with_actor_session(initial_session.session_id)
+            .with_rationale(rationale("stale head actor")),
+        )
+        .expect_err("actor head mismatch rejected");
+    assert_eq!(head_mismatch.code(), ErrorCode::BranchHeadConflict);
+    assert_eq!(head_mismatch.category(), ErrorCategory::Mutation);
+    assert_eq!(history_counts(&connection), before_head_mismatch);
+    assert_eq!(
+        branch_head(&connection, workspace.initial_branch_id),
+        advanced.commit_id
     );
 }
 

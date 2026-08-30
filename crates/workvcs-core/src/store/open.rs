@@ -951,6 +951,24 @@ impl Store {
                     options.task_entity_id(),
                 ),
             )?;
+            if guard.branch_id != options.branch_id() {
+                return Err(WorkVcsError::ClaimInvalid(format!(
+                    "terminal task transition for task {} targets branch {}, but actor session {} is active on branch {}",
+                    options.task_entity_id(),
+                    options.branch_id(),
+                    actor_session_id,
+                    guard.branch_id
+                )));
+            }
+            if guard.head_commit_id != options.expected_head_commit_id() {
+                return Err(WorkVcsError::BranchHeadConflict(format!(
+                    "branch {} expected head {}, found active session head {} before terminal task transition for task {}",
+                    options.branch_id(),
+                    options.expected_head_commit_id(),
+                    guard.head_commit_id,
+                    options.task_entity_id()
+                )));
+            }
             if !guard.allowed {
                 return Err(WorkVcsError::ClaimInvalid(format!(
                     "terminal task transition for task {} by session {} is blocked by claim guard reason {}",

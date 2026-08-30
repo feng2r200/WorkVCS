@@ -453,6 +453,7 @@ enum CanonicalCommand {
         json_file: Option<PathBuf>,
     },
     DigestDomains,
+    InputModes,
     #[command(group(
         ArgGroup::new("canonical-content-source")
             .required(true)
@@ -3517,6 +3518,7 @@ fn run(cli: Cli) -> Result<String> {
                 render_canonical_digest(&domain, &bytes)
             }
             CanonicalCommand::DigestDomains => Ok(render_canonical_digest_domains()),
+            CanonicalCommand::InputModes => Ok(render_canonical_input_modes()),
             CanonicalCommand::ContentDigest {
                 content,
                 content_hex,
@@ -8106,6 +8108,26 @@ fn render_canonical_digest_domains() -> String {
     let mut output = format!("domains={}\n", SUPPORTED_CANONICAL_DIGEST_DOMAINS.len());
     for (index, domain) in SUPPORTED_CANONICAL_DIGEST_DOMAINS.iter().enumerate() {
         writeln!(output, "domain.{index}={domain}").expect("write to String");
+    }
+    output
+}
+
+const CANONICAL_JSON_INPUT_MODES: &[&str] = &["--json", "--json-file"];
+const CANONICAL_CONTENT_INPUT_MODES: &[&str] = &["--content", "--content-hex", "--content-file"];
+
+fn render_canonical_input_modes() -> String {
+    let mut output = format!("json_input_modes={}\n", CANONICAL_JSON_INPUT_MODES.len());
+    for (index, mode) in CANONICAL_JSON_INPUT_MODES.iter().enumerate() {
+        writeln!(output, "json_input_mode.{index}={mode}").expect("write to String");
+    }
+    writeln!(
+        output,
+        "content_input_modes={}",
+        CANONICAL_CONTENT_INPUT_MODES.len()
+    )
+    .expect("write to String");
+    for (index, mode) in CANONICAL_CONTENT_INPUT_MODES.iter().enumerate() {
+        writeln!(output, "content_input_mode.{index}={mode}").expect("write to String");
     }
     output
 }
@@ -15255,6 +15277,26 @@ mod tests {
         );
         assert_eq!(value(&digest_domains, "domain.0"), "entity-version");
         assert_eq!(value(&digest_domains, "domain.1"), "relation-version");
+
+        let input_modes = run(Cli::try_parse_from(["workvcs", "canonical", "input-modes"])
+            .expect("parse input modes"))
+        .expect("list input modes");
+        assert_eq!(
+            value(&input_modes, "json_input_modes"),
+            CANONICAL_JSON_INPUT_MODES.len().to_string()
+        );
+        assert_eq!(value(&input_modes, "json_input_mode.0"), "--json");
+        assert_eq!(value(&input_modes, "json_input_mode.1"), "--json-file");
+        assert_eq!(
+            value(&input_modes, "content_input_modes"),
+            CANONICAL_CONTENT_INPUT_MODES.len().to_string()
+        );
+        assert_eq!(value(&input_modes, "content_input_mode.0"), "--content");
+        assert_eq!(value(&input_modes, "content_input_mode.1"), "--content-hex");
+        assert_eq!(
+            value(&input_modes, "content_input_mode.2"),
+            "--content-file"
+        );
 
         let entity_digest = run(Cli::try_parse_from([
             "workvcs",

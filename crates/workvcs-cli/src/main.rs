@@ -3720,6 +3720,15 @@ enum ClaimCommand {
 
         #[arg(long, default_value = "terminal-task")]
         action: String,
+
+        #[arg(long)]
+        expected_allowed: Option<bool>,
+
+        #[arg(long)]
+        expected_reason: Option<String>,
+
+        #[arg(long)]
+        expected_active_claims: Option<usize>,
     },
     Next {
         #[arg(value_name = "STORE")]
@@ -9864,6 +9873,9 @@ fn run(cli: Cli) -> Result<String> {
                     session,
                     task,
                     action,
+                    expected_allowed,
+                    expected_reason,
+                    expected_active_claims,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -9872,7 +9884,35 @@ fn run(cli: Cli) -> Result<String> {
                 EntityId::parse_canonical(&task)?,
                 parse_claim_guard_action(&action)?,
             ))?;
-            Ok(render_claim_guard(&guard))
+            let mut output = render_claim_guard(&guard);
+            if let Some(expected_allowed) = expected_allowed {
+                if guard.allowed != expected_allowed {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim guard allowed {} does not match expected {}",
+                        guard.allowed, expected_allowed
+                    )));
+                }
+                output.push_str("allowed_match_expected=true\n");
+            }
+            if let Some(expected_reason) = expected_reason {
+                let expected_reason = parse_claim_guard_reason(&expected_reason)?;
+                if guard.reason != expected_reason {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim guard reason {} does not match expected {}",
+                        claim_guard_reason(guard.reason),
+                        claim_guard_reason(expected_reason)
+                    )));
+                }
+                output.push_str("reason_match_expected=true\n");
+            }
+            append_expected_count_match(
+                &mut output,
+                "claim guard active claims",
+                guard.active_claims.len(),
+                expected_active_claims,
+                "active_claims_match_expected",
+            )?;
+            Ok(output)
         }
         Command::Claim {
             command:
@@ -10661,6 +10701,24 @@ fn parse_claim_guard_action(value: &str) -> Result<ClaimGuardAction> {
         "structural-task" | "structural_task" => Ok(ClaimGuardAction::StructuralTaskMutation),
         other => Err(WorkVcsError::ClaimInvalid(format!(
             "claim guard action {other:?} is not supported"
+        ))),
+    }
+}
+
+fn parse_claim_guard_reason(value: &str) -> Result<ClaimGuardReason> {
+    match value {
+        "unclaimed" => Ok(ClaimGuardReason::Unclaimed),
+        "owned_exclusive_claim" => Ok(ClaimGuardReason::OwnedExclusiveClaim),
+        "unique_shared_claimant" => Ok(ClaimGuardReason::UniqueSharedClaimant),
+        "exclusive_claim_owned_by_other_session" => {
+            Ok(ClaimGuardReason::ExclusiveClaimOwnedByOtherSession)
+        }
+        "shared_claim_set_does_not_include_session" => {
+            Ok(ClaimGuardReason::SharedClaimSetDoesNotIncludeSession)
+        }
+        "non_unique_shared_claim_set" => Ok(ClaimGuardReason::NonUniqueSharedClaimSet),
+        other => Err(WorkVcsError::ClaimInvalid(format!(
+            "claim guard reason {other:?} is not supported"
         ))),
     }
 }
@@ -31120,6 +31178,49 @@ mod tests {
         .expect("missing runnable task");
         assert_eq!(value(&missing_runnable_task, "candidates"), "0");
 
+        let unclaimed_guard = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "guard",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+            "--expected-allowed",
+            "true",
+            "--expected-reason",
+            "unclaimed",
+            "--expected-active-claims",
+            "0",
+        ])
+        .expect("parse unclaimed claim guard"))
+        .expect("unclaimed claim guard");
+        assert_eq!(value(&unclaimed_guard, "allowed"), "true");
+        assert_eq!(value(&unclaimed_guard, "reason"), "unclaimed");
+        assert_eq!(value(&unclaimed_guard, "active_claims"), "0");
+        assert_eq!(value(&unclaimed_guard, "allowed_match_expected"), "true");
+        assert_eq!(value(&unclaimed_guard, "reason_match_expected"), "true");
+        assert_eq!(
+            value(&unclaimed_guard, "active_claims_match_expected"),
+            "true"
+        );
+
+        let mismatched_unclaimed_guard = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "guard",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+            "--expected-allowed",
+            "false",
+        ])
+        .expect("parse mismatched unclaimed guard"));
+        assert!(mismatched_unclaimed_guard.is_err());
+
         let claim = run(Cli::try_parse_from([
             "workvcs",
             "claim",
@@ -31455,6 +31556,12 @@ mod tests {
             &session_id,
             "--task",
             &task_id,
+            "--expected-allowed",
+            "true",
+            "--expected-reason",
+            "owned_exclusive_claim",
+            "--expected-active-claims",
+            "1",
         ])
         .expect("parse claim guard"))
         .expect("claim guard");
@@ -31462,6 +31569,9 @@ mod tests {
         assert_eq!(value(&guard, "reason"), "owned_exclusive_claim");
         assert_eq!(value(&guard, "active_claims"), "1");
         assert_eq!(value(&guard, "active_claim.0.claim_id"), claim_id);
+        assert_eq!(value(&guard, "allowed_match_expected"), "true");
+        assert_eq!(value(&guard, "reason_match_expected"), "true");
+        assert_eq!(value(&guard, "active_claims_match_expected"), "true");
         let failed = run(Cli::try_parse_from([
             "workvcs",
             "task",

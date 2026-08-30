@@ -1499,6 +1499,9 @@ enum BundleCommand {
         expected_bundle_digest: Option<String>,
 
         #[arg(long)]
+        expected_detail_digest: Option<String>,
+
+        #[arg(long)]
         expected_outcome: Option<String>,
     },
     ImportList {
@@ -5713,6 +5716,7 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 import,
                 expected_bundle_digest,
+                expected_detail_digest,
                 expected_outcome,
             } => {
                 let engine = Engine::open(store)?;
@@ -5727,6 +5731,25 @@ fn run(cli: Cli) -> Result<String> {
                         )));
                     }
                     output.push_str("bundle_matches_expected=true\n");
+                }
+                if let Some(expected_detail_digest) = expected_detail_digest {
+                    let expected_detail_digest = Digest::from_hex(&expected_detail_digest)?;
+                    match snapshot.outcome.as_ref() {
+                        Some(outcome) if outcome.detail_digest == expected_detail_digest => {
+                            output.push_str("detail_matches_expected=true\n");
+                        }
+                        Some(outcome) => {
+                            return Err(WorkVcsError::DigestInvalid(format!(
+                                "bundle import detail digest {} does not match expected {}",
+                                outcome.detail_digest, expected_detail_digest
+                            )));
+                        }
+                        None => {
+                            return Err(WorkVcsError::DigestInvalid(format!(
+                                "bundle import detail digest none does not match expected {expected_detail_digest}"
+                            )));
+                        }
+                    }
                 }
                 if let Some(expected_outcome) = expected_outcome {
                     let actual_outcome = snapshot
@@ -22816,6 +22839,8 @@ mod tests {
             &import_id,
             "--expected-bundle-digest",
             &value(&shown_import, "bundle_digest"),
+            "--expected-detail-digest",
+            &value(&shown_import, "detail_digest"),
             "--expected-outcome",
             "already_present",
         ])
@@ -22827,7 +22852,20 @@ mod tests {
         );
         assert_eq!(value(&expected_import, "outcome"), "already_present");
         assert_eq!(value(&expected_import, "bundle_matches_expected"), "true");
+        assert_eq!(value(&expected_import, "detail_matches_expected"), "true");
         assert_eq!(value(&expected_import, "outcome_matches_expected"), "true");
+        let mismatched_import_detail = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-show",
+            store,
+            "--import",
+            &import_id,
+            "--expected-detail-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched bundle import detail digest"));
+        assert!(mismatched_import_detail.is_err());
         let mismatched_import_bundle = run(Cli::try_parse_from([
             "workvcs",
             "bundle",

@@ -775,6 +775,15 @@ enum StoreCommand {
 
         #[arg(long)]
         exposure: String,
+
+        #[arg(long)]
+        expected_transition_detail_digest: Option<String>,
+
+        #[arg(long)]
+        expected_source_knowledge_state_digest: Option<String>,
+
+        #[arg(long)]
+        expected_source_status_detail_digest: Option<String>,
     },
     #[command(name = "knowledge-exposure-adoption-candidate")]
     KnowledgeExposureAdoptionCandidate {
@@ -4101,11 +4110,60 @@ fn run(cli: Cli) -> Result<String> {
                 let result = engine.create_local_knowledge_exposure(options)?;
                 render_knowledge_exposure_create_result(&result)
             }
-            StoreCommand::KnowledgeExposureShow { store, exposure } => {
+            StoreCommand::KnowledgeExposureShow {
+                store,
+                exposure,
+                expected_transition_detail_digest,
+                expected_source_knowledge_state_digest,
+                expected_source_status_detail_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot =
                     engine.knowledge_exposure(ExposureId::parse_canonical(&exposure)?)?;
-                render_knowledge_exposure_snapshot(&snapshot)
+                let mut output = render_knowledge_exposure_snapshot(&snapshot)?;
+                if let Some(expected_transition_detail_digest) = expected_transition_detail_digest {
+                    let expected_transition_detail_digest =
+                        Digest::from_hex(&expected_transition_detail_digest)?;
+                    if snapshot.transition_detail_digest != expected_transition_detail_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "knowledge exposure transition detail digest {} does not match expected {}",
+                            snapshot.transition_detail_digest, expected_transition_detail_digest
+                        )));
+                    }
+                    output.push_str("transition_detail_matches_expected=true\n");
+                }
+                if let Some(expected_source_knowledge_state_digest) =
+                    expected_source_knowledge_state_digest
+                {
+                    let expected_source_knowledge_state_digest =
+                        Digest::from_hex(&expected_source_knowledge_state_digest)?;
+                    if snapshot.source.knowledge_state_digest
+                        != expected_source_knowledge_state_digest
+                    {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "knowledge exposure source knowledge state digest {} does not match expected {}",
+                            snapshot.source.knowledge_state_digest,
+                            expected_source_knowledge_state_digest
+                        )));
+                    }
+                    output.push_str("source_knowledge_state_matches_expected=true\n");
+                }
+                if let Some(expected_source_status_detail_digest) =
+                    expected_source_status_detail_digest
+                {
+                    let expected_source_status_detail_digest =
+                        Digest::from_hex(&expected_source_status_detail_digest)?;
+                    if snapshot.source_status.detail_digest != expected_source_status_detail_digest
+                    {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "knowledge exposure source status detail digest {} does not match expected {}",
+                            snapshot.source_status.detail_digest,
+                            expected_source_status_detail_digest
+                        )));
+                    }
+                    output.push_str("source_status_detail_matches_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::KnowledgeExposureAdoptionCandidate { store, exposure } => {
                 let engine = Engine::open(store)?;
@@ -17988,6 +18046,86 @@ mod tests {
             value(&shown, "exposure_id"),
             value(&exposure, "exposure_id")
         );
+
+        let expected_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-show",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--expected-transition-detail-digest",
+            &value(&shown, "transition_detail_digest"),
+            "--expected-source-knowledge-state-digest",
+            &value(&shown, "source_knowledge_state_digest"),
+            "--expected-source-status-detail-digest",
+            &value(&shown, "source_status_detail_digest"),
+        ])
+        .expect("parse expected knowledge-exposure-show"))
+        .expect("show expected knowledge exposure");
+        assert_eq!(
+            value(&expected_shown, "transition_detail_digest"),
+            value(&shown, "transition_detail_digest")
+        );
+        assert_eq!(
+            value(&expected_shown, "source_knowledge_state_digest"),
+            value(&shown, "source_knowledge_state_digest")
+        );
+        assert_eq!(
+            value(&expected_shown, "source_status_detail_digest"),
+            value(&shown, "source_status_detail_digest")
+        );
+        assert_eq!(
+            value(&expected_shown, "transition_detail_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_shown, "source_knowledge_state_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_shown, "source_status_detail_matches_expected"),
+            "true"
+        );
+
+        let mismatched_transition_detail = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-show",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--expected-transition-detail-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched knowledge exposure transition detail show"));
+        assert!(mismatched_transition_detail.is_err());
+
+        let mismatched_source_knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-show",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--expected-source-knowledge-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched knowledge exposure source knowledge show"));
+        assert!(mismatched_source_knowledge.is_err());
+
+        let mismatched_source_status = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "knowledge-exposure-show",
+            store,
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--expected-source-status-detail-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched knowledge exposure source status show"));
+        assert!(mismatched_source_status.is_err());
 
         let listed = run(Cli::try_parse_from([
             "workvcs",

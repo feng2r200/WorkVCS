@@ -187,6 +187,11 @@ enum Command {
             .multiple(false)
             .args(["to_branch", "to_commit"])
     ))]
+    #[command(group(
+        ArgGroup::new("diff-target-id")
+            .multiple(false)
+            .args(["entity", "relation"])
+    ))]
     Diff {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -211,6 +216,9 @@ enum Command {
 
         #[arg(long)]
         entity: Option<String>,
+
+        #[arg(long)]
+        relation: Option<String>,
     },
     Entity {
         #[command(subcommand)]
@@ -3870,6 +3878,7 @@ fn run(cli: Cli) -> Result<String> {
             target_kind,
             change_kind,
             entity,
+            relation,
         } => {
             let engine = Engine::open(store)?;
             let from = work_state_diff_target_from_cli("from", from_branch, from_commit)?;
@@ -3890,6 +3899,12 @@ fn run(cli: Cli) -> Result<String> {
                 diff.entity_changes
                     .retain(|change| change.entity_id == entity_id);
                 diff.relation_changes.clear();
+            }
+            if let Some(relation) = relation {
+                let relation_id = RelationId::parse_canonical(&relation)?;
+                diff.relation_changes
+                    .retain(|change| change.relation_id == relation_id);
+                diff.entity_changes.clear();
             }
             Ok(render_work_state_diff(&diff))
         }
@@ -13172,6 +13187,21 @@ mod tests {
             &CommitId::new_v7().to_string(),
         ]);
         assert!(both_to.is_err());
+
+        let both_target_ids = Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            "store.sqlite",
+            "--from-commit",
+            &CommitId::new_v7().to_string(),
+            "--to-commit",
+            &CommitId::new_v7().to_string(),
+            "--entity",
+            &EntityId::new_v7().to_string(),
+            "--relation",
+            &RelationId::new_v7().to_string(),
+        ]);
+        assert!(both_target_ids.is_err());
     }
 
     #[test]
@@ -13339,6 +13369,75 @@ mod tests {
         .expect("diff missing entity");
         assert_eq!(value(&missing_entity_diff, "entity_changes"), "0");
         assert_eq!(value(&missing_entity_diff, "relation_changes"), "0");
+
+        let successor = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--description",
+            "Diff relation successor",
+        ])
+        .expect("parse successor task"))
+        .expect("create successor task");
+        let before_relation = value(&successor, "commit_id");
+        let dependency = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "depends-on",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &before_relation,
+            "--task",
+            &value(&successor, "task_entity_id"),
+            "--depends-on",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse relation create"))
+        .expect("create relation");
+
+        let relation_id_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &before_relation,
+            "--to-branch",
+            &branch,
+            "--relation",
+            &value(&dependency, "relation_id"),
+        ])
+        .expect("parse relation id diff"))
+        .expect("diff one relation");
+        assert_eq!(value(&relation_id_diff, "entity_changes"), "0");
+        assert_eq!(value(&relation_id_diff, "relation_changes"), "1");
+        assert_eq!(
+            value(&relation_id_diff, "relation[0].relation_id"),
+            value(&dependency, "relation_id")
+        );
+        assert_eq!(value(&relation_id_diff, "relation[0].change_kind"), "added");
+
+        let missing_relation_diff = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &before_relation,
+            "--to-branch",
+            &branch,
+            "--relation",
+            &RelationId::new_v7().to_string(),
+        ])
+        .expect("parse missing relation diff"))
+        .expect("diff missing relation");
+        assert_eq!(value(&missing_relation_diff, "entity_changes"), "0");
+        assert_eq!(value(&missing_relation_diff, "relation_changes"), "0");
     }
 
     #[test]

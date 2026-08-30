@@ -1460,6 +1460,9 @@ enum TaskCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        status: Option<String>,
     },
     Transition {
         #[arg(value_name = "STORE")]
@@ -4558,11 +4561,17 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     branch,
                     commit,
+                    status,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            render_task_list(commit_id, &engine.tasks_at(commit_id)?)
+            let mut tasks = engine.tasks_at(commit_id)?;
+            if let Some(status) = status {
+                let status = parse_task_list_status(&status)?;
+                tasks.retain(|task| task.state.status == status);
+            }
+            render_task_list(commit_id, &tasks)
         }
         Command::Task {
             command:
@@ -6423,6 +6432,13 @@ fn parse_task_status(value: &str) -> Result<TaskStatus> {
         other => Err(WorkVcsError::TaskInvalid(format!(
             "task status {other:?} is not in the CLI vocabulary"
         ))),
+    }
+}
+
+fn parse_task_list_status(value: &str) -> Result<TaskStatus> {
+    match value {
+        "superseded" => Ok(TaskStatus::Superseded),
+        _ => parse_task_status(value),
     }
 }
 
@@ -16957,6 +16973,38 @@ mod tests {
         assert_eq!(value(&tasks_at_create, "task.0.task_entity_id"), task_id);
         assert_eq!(value(&tasks_at_create, "task.0.status"), "pending");
 
+        let pending_tasks_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "list",
+            store,
+            "--commit",
+            &value(&task, "commit_id"),
+            "--status",
+            "pending",
+        ])
+        .expect("parse pending task list at commit"))
+        .expect("list pending tasks at commit");
+        assert_eq!(value(&pending_tasks_at_create, "tasks"), "1");
+        assert_eq!(
+            value(&pending_tasks_at_create, "task.0.task_entity_id"),
+            task_id
+        );
+
+        let blocked_tasks_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "list",
+            store,
+            "--commit",
+            &value(&task, "commit_id"),
+            "--status",
+            "blocked",
+        ])
+        .expect("parse blocked task list at commit"))
+        .expect("list blocked tasks at commit");
+        assert_eq!(value(&blocked_tasks_at_create, "tasks"), "0");
+
         let blocked_task = run(Cli::try_parse_from([
             "workvcs",
             "task",
@@ -17004,6 +17052,38 @@ mod tests {
         assert_eq!(value(&tasks_at_branch, "tasks"), "1");
         assert_eq!(value(&tasks_at_branch, "task.0.status"), "blocked");
         assert_eq!(value(&tasks_at_branch, "task.0.priority"), "7");
+
+        let blocked_tasks_at_branch = run(Cli::try_parse_from([
+            "workvcs", "task", "list", store, "--branch", &branch, "--status", "blocked",
+        ])
+        .expect("parse blocked task list at branch"))
+        .expect("list blocked tasks at branch");
+        assert_eq!(value(&blocked_tasks_at_branch, "tasks"), "1");
+        assert_eq!(
+            value(&blocked_tasks_at_branch, "task.0.task_entity_id"),
+            task_id
+        );
+
+        let pending_tasks_at_branch = run(Cli::try_parse_from([
+            "workvcs", "task", "list", store, "--branch", &branch, "--status", "pending",
+        ])
+        .expect("parse pending task list at branch"))
+        .expect("list pending tasks at branch");
+        assert_eq!(value(&pending_tasks_at_branch, "tasks"), "0");
+
+        let superseded_tasks_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "superseded",
+        ])
+        .expect("parse superseded task list at branch"))
+        .expect("list superseded tasks at branch");
+        assert_eq!(value(&superseded_tasks_at_branch, "tasks"), "0");
     }
 
     #[test]

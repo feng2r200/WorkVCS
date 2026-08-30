@@ -82,7 +82,8 @@ use workvcs_core::{
     StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
     StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
+    StoreMigrationRecordResult, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
     TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
@@ -199,6 +200,10 @@ enum Command {
     Entity {
         #[command(subcommand)]
         command: EntityCommand,
+    },
+    Reference {
+        #[command(subcommand)]
+        command: ReferenceCommand,
     },
     Restore {
         #[arg(value_name = "STORE")]
@@ -741,6 +746,45 @@ enum EntityCommand {
 
         #[arg(long, default_value = "{}")]
         rationale_json: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ReferenceCommand {
+    Create {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        referrer: String,
+
+        #[arg(long)]
+        target: String,
+
+        #[arg(long, default_value = "{}")]
+        rationale_json: String,
+    },
+    #[command(group(
+        ArgGroup::new("reference-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
     },
 }
 
@@ -3564,6 +3608,42 @@ fn run(cli: Cli) -> Result<String> {
                 .with_rationale(parse_cli_object("entity rationale", &rationale_json)?);
                 Ok(render_entity_transition_commit(
                     &engine.commit_entity_transition(options)?,
+                ))
+            }
+        },
+        Command::Reference { command } => match command {
+            ReferenceCommand::Create {
+                store,
+                branch,
+                head,
+                referrer,
+                target,
+                rationale_json,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let options = StructuralReferenceCreateOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&referrer)?,
+                    EntityId::parse_canonical(&target)?,
+                )?
+                .with_rationale(parse_cli_object(
+                    "structural reference rationale",
+                    &rationale_json,
+                )?);
+                Ok(render_structural_reference_create(
+                    &engine.create_structural_reference(options)?,
+                ))
+            }
+            ReferenceCommand::List {
+                store,
+                branch,
+                commit,
+            } => {
+                let engine = Engine::open(&store)?;
+                let commit_id = resolve_reference_query_commit(&engine, branch, commit)?;
+                Ok(render_structural_reference_list(
+                    &engine.structural_references_at(commit_id)?,
                 ))
             }
         },
@@ -11725,6 +11805,23 @@ fn work_state_diff_target_from_cli(
     }
 }
 
+fn resolve_reference_query_commit(
+    engine: &Engine,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<CommitId> {
+    match (branch, commit) {
+        (Some(branch), None) => Ok(engine
+            .branch_head(BranchId::parse_canonical(&branch)?)
+            .map(|head| head.head_commit_id)?),
+        (None, Some(commit)) => CommitId::parse_canonical(&commit),
+        _ => Err(WorkVcsError::QueryInvalid(
+            "structural reference query target requires exactly one of --branch or --commit"
+                .to_owned(),
+        )),
+    }
+}
+
 fn render_work_state_diff(diff: &WorkStateDiff) -> String {
     let mut output = String::new();
     render_work_state_diff_target(&mut output, "from", &diff.from);
@@ -11812,6 +11909,55 @@ fn render_entity_transition_commit(commit: &EntityTransitionCommit) -> String {
     )
 }
 
+fn render_structural_reference_create(reference: &StructuralReferenceCreateCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nreferrer_entity_id={}\nreferrer_kind={}\ntarget_entity_id={}\ntarget_kind={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        reference.workspace_id,
+        reference.branch_id,
+        reference.previous_head_commit_id,
+        reference.commit_id,
+        reference.changeset_id,
+        reference.operation_id,
+        reference.relation_id,
+        reference.relation_version_id,
+        reference.referrer_entity_id,
+        reference.referrer_kind,
+        reference.target_entity_id,
+        reference.target_kind,
+        reference.relation_state_digest,
+        reference.work_state_digest
+    )
+}
+
+fn render_structural_reference_list(references: &[StructuralReferenceSnapshot]) -> String {
+    let mut output = format!("structural_references={}\n", references.len());
+    for (index, reference) in references.iter().enumerate() {
+        let prefix = format!("reference[{index}]");
+        let _ = writeln!(output, "{prefix}.workspace_id={}", reference.workspace_id);
+        let _ = writeln!(output, "{prefix}.commit_id={}", reference.commit_id);
+        let _ = writeln!(output, "{prefix}.relation_id={}", reference.relation_id);
+        let _ = writeln!(
+            output,
+            "{prefix}.relation_version_id={}",
+            reference.relation_version_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.referrer_entity_id={}",
+            reference.referrer_entity_id
+        );
+        let _ = writeln!(output, "{prefix}.referrer_kind={}", reference.referrer_kind);
+        let _ = writeln!(
+            output,
+            "{prefix}.target_entity_id={}",
+            reference.target_entity_id
+        );
+        let _ = writeln!(output, "{prefix}.target_kind={}", reference.target_kind);
+        let _ = writeln!(output, "{prefix}.state_digest={}", reference.state_digest);
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11838,6 +11984,7 @@ mod tests {
                 "show-at",
                 "diff",
                 "entity",
+                "reference",
                 "restore",
                 "why",
                 "workspace",
@@ -12082,6 +12229,110 @@ mod tests {
             value(&diff, "entity[0].after_entity_version_id"),
             value(&updated, "entity_version_id")
         );
+    }
+
+    #[test]
+    fn cli_creates_and_lists_structural_references() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "reference-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Reference goal",
+        ])
+        .expect("parse goal create"))
+        .expect("create goal");
+        let plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal, "commit_id"),
+            "--description",
+            "Reference plan",
+            "--strategy",
+            "Keep structure explicit",
+        ])
+        .expect("parse plan create"))
+        .expect("create plan");
+
+        let reference = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&plan, "commit_id"),
+            "--referrer",
+            &value(&goal, "goal_entity_id"),
+            "--target",
+            &value(&plan, "plan_entity_id"),
+            "--rationale-json",
+            r#"{"reason":"cli"}"#,
+        ])
+        .expect("parse reference create"))
+        .expect("create reference");
+        assert_eq!(
+            value(&reference, "referrer_entity_id"),
+            value(&goal, "goal_entity_id")
+        );
+        assert_eq!(value(&reference, "referrer_kind"), "goal");
+        assert_eq!(
+            value(&reference, "target_entity_id"),
+            value(&plan, "plan_entity_id")
+        );
+        assert_eq!(value(&reference, "target_kind"), "plan");
+
+        let listed =
+            run(
+                Cli::try_parse_from(["workvcs", "reference", "list", store, "--branch", &branch])
+                    .expect("parse reference list"),
+            )
+            .expect("list references");
+        assert_eq!(value(&listed, "structural_references"), "1");
+        assert_eq!(
+            value(&listed, "reference[0].relation_id"),
+            value(&reference, "relation_id")
+        );
+        assert_eq!(
+            value(&listed, "reference[0].referrer_entity_id"),
+            value(&goal, "goal_entity_id")
+        );
+        assert_eq!(value(&listed, "reference[0].target_kind"), "plan");
     }
 
     #[test]

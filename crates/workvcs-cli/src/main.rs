@@ -2176,6 +2176,9 @@ enum EvidenceCommand {
 
         #[arg(long)]
         source_session: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -5369,6 +5372,7 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     kind,
                     source_session,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5380,7 +5384,16 @@ fn run(cli: Cli) -> Result<String> {
                 options =
                     options.with_source_session_id(SessionId::parse_canonical(&source_session)?);
             }
-            render_evidence_list(&engine.evidences(options)?)
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "evidence list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.evidences(options)?;
+            if let Some(limit) = limit {
+                result.evidences.truncate(limit);
+            }
+            render_evidence_list(&result)
         }
         Command::Resource {
             command: ResourceCommand::Create { store, kind },
@@ -19370,6 +19383,22 @@ mod tests {
         ];
         assert!(listed_ids.contains(&evidence_id));
         assert!(listed_ids.contains(&second_evidence_id));
+
+        let limited_list =
+            run(
+                Cli::try_parse_from(["workvcs", "evidence", "list", store, "--limit", "1"])
+                    .expect("parse limited evidence list"),
+            )
+            .expect("list limited evidence");
+        assert_eq!(value(&limited_list, "evidences"), "1");
+        assert_ne!(value(&limited_list, "evidence.0.evidence_id"), "");
+
+        let zero_limit_list =
+            run(
+                Cli::try_parse_from(["workvcs", "evidence", "list", store, "--limit", "0"])
+                    .expect("parse zero-limit evidence list"),
+            );
+        assert!(zero_limit_list.is_err());
 
         let filtered = run(Cli::try_parse_from([
             "workvcs",

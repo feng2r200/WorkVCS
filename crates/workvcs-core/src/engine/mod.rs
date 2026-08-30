@@ -72,6 +72,7 @@ use crate::history::{
     StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
     TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
+    VerificationApplicabilityCacheListOptions, VerificationApplicabilityCacheListResult,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
@@ -898,6 +899,13 @@ impl Engine {
     ) -> Result<Option<VerificationApplicabilityCacheSnapshot>> {
         self.store
             .verification_applicability_cache(branch_id, verification_entity_id)
+    }
+
+    pub fn verification_applicability_caches(
+        &self,
+        options: VerificationApplicabilityCacheListOptions,
+    ) -> Result<VerificationApplicabilityCacheListResult> {
+        self.store.verification_applicability_caches(&options)
     }
 
     pub fn task_scheduling_relations_at(

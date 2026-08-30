@@ -87,7 +87,8 @@ use workvcs_core::{
     StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
     TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    TaskTransitionOptions, VerificationApplicability, VerificationApplicabilityCacheListOptions,
+    VerificationApplicabilityCacheListResult, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
@@ -3217,6 +3218,19 @@ enum VerificationCommand {
         #[arg(long)]
         verification: String,
     },
+    CacheList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        verification: Option<String>,
+
+        #[arg(long)]
+        applicability: Option<String>,
+    },
 }
 
 fn main() {
@@ -5597,6 +5611,30 @@ fn run(cli: Cli) -> Result<String> {
                 snapshot.as_ref(),
             )
         }
+        Command::Verification {
+            command:
+                VerificationCommand::CacheList {
+                    store,
+                    branch,
+                    verification,
+                    applicability,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options =
+                VerificationApplicabilityCacheListOptions::new(BranchId::parse_canonical(&branch)?);
+            if let Some(verification) = verification {
+                options =
+                    options.with_verification_entity_id(EntityId::parse_canonical(&verification)?);
+            }
+            if let Some(applicability) = applicability {
+                options =
+                    options.with_applicability(parse_verification_applicability(&applicability)?);
+            }
+            Ok(render_verification_applicability_cache_list(
+                &engine.verification_applicability_caches(options)?,
+            ))
+        }
         Command::Record {
             command:
                 RecordCommand::Show {
@@ -6871,6 +6909,17 @@ fn parse_verification_result(value: &str) -> Result<VerificationResult> {
         "inconclusive" => Ok(VerificationResult::Inconclusive),
         other => Err(WorkVcsError::TaskInvalid(format!(
             "verification result {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_verification_applicability(value: &str) -> Result<VerificationApplicability> {
+    match value {
+        "applicable" => Ok(VerificationApplicability::Applicable),
+        "stale" => Ok(VerificationApplicability::Stale),
+        "unknown" => Ok(VerificationApplicability::Unknown),
+        other => Err(WorkVcsError::TaskInvalid(format!(
+            "verification applicability {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -9440,6 +9489,51 @@ fn render_verification_applicability_cache_lookup(
         .expect("write to String");
     }
     Ok(output)
+}
+
+fn render_verification_applicability_cache_list(
+    result: &VerificationApplicabilityCacheListResult,
+) -> String {
+    let mut output = format!(
+        "branch_id={}\ncaches={}\n",
+        result.branch_id,
+        result.caches.len()
+    );
+    for (index, cache) in result.caches.iter().enumerate() {
+        writeln!(
+            output,
+            "cache.{index}.verification_entity_id={}",
+            cache.verification_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "cache.{index}.evaluated_commit_id={}",
+            cache.evaluated_commit_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "cache.{index}.applicability={}",
+            cache.applicability
+        )
+        .expect("write to String");
+        writeln!(output, "cache.{index}.reason_code={}", cache.reason_code)
+            .expect("write to String");
+        writeln!(
+            output,
+            "cache.{index}.evaluated_at_us={}",
+            cache.evaluated_at_us
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "cache.{index}.resource_stamps={}",
+            cache.resource_stamps.len()
+        )
+        .expect("write to String");
+    }
+    output
 }
 
 fn render_record_create(record: &RecordCreateCommit) -> String {
@@ -21172,6 +21266,89 @@ mod tests {
             value(&shown_cache, "resource_stamp.0.observation_id"),
             observation_id
         );
+
+        let cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse cache list"))
+        .expect("list caches");
+        assert_eq!(value(&cache_list, "branch_id"), branch);
+        assert_eq!(value(&cache_list, "caches"), "1");
+        assert_eq!(
+            value(&cache_list, "cache.0.verification_entity_id"),
+            verification_id
+        );
+        assert_eq!(
+            value(&cache_list, "cache.0.evaluated_commit_id"),
+            value(&verification, "commit_id")
+        );
+        assert_eq!(value(&cache_list, "cache.0.applicability"), "applicable");
+        assert_eq!(
+            value(&cache_list, "cache.0.reason_code"),
+            "all_basis_applicable"
+        );
+        assert_eq!(value(&cache_list, "cache.0.resource_stamps"), "1");
+
+        let cache_list_by_verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse verification-filtered cache list"))
+        .expect("list verification-filtered caches");
+        assert_eq!(value(&cache_list_by_verification, "caches"), "1");
+        assert_eq!(
+            value(
+                &cache_list_by_verification,
+                "cache.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
+        let cache_list_by_applicability = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--applicability",
+            "applicable",
+        ])
+        .expect("parse applicability-filtered cache list"))
+        .expect("list applicability-filtered caches");
+        assert_eq!(value(&cache_list_by_applicability, "caches"), "1");
+        assert_eq!(
+            value(
+                &cache_list_by_applicability,
+                "cache.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
+        let missing_cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--applicability",
+            "stale",
+        ])
+        .expect("parse missing cache list"))
+        .expect("list missing caches");
+        assert_eq!(value(&missing_cache_list, "caches"), "0");
 
         let verified = run(Cli::try_parse_from([
             "workvcs",

@@ -948,6 +948,51 @@ pub struct VerificationApplicabilityCacheSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationApplicabilityCacheListOptions {
+    branch_id: BranchId,
+    verification_entity_id: Option<EntityId>,
+    applicability: Option<VerificationApplicability>,
+}
+
+impl VerificationApplicabilityCacheListOptions {
+    pub fn new(branch_id: BranchId) -> Self {
+        Self {
+            branch_id,
+            verification_entity_id: None,
+            applicability: None,
+        }
+    }
+
+    pub fn with_verification_entity_id(mut self, verification_entity_id: EntityId) -> Self {
+        self.verification_entity_id = Some(verification_entity_id);
+        self
+    }
+
+    pub fn with_applicability(mut self, applicability: VerificationApplicability) -> Self {
+        self.applicability = Some(applicability);
+        self
+    }
+
+    fn branch_id(&self) -> BranchId {
+        self.branch_id
+    }
+
+    fn verification_entity_id(&self) -> Option<EntityId> {
+        self.verification_entity_id
+    }
+
+    fn applicability(&self) -> Option<VerificationApplicability> {
+        self.applicability
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationApplicabilityCacheListResult {
+    pub branch_id: BranchId,
+    pub caches: Vec<VerificationApplicabilityCacheSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskCreateOptions {
     branch_id: BranchId,
     expected_head_commit_id: CommitId,
@@ -3390,6 +3435,137 @@ pub(crate) fn verification_applicability_cache(
         evaluated_at_us,
         resource_stamps,
     }))
+}
+
+pub(crate) fn verification_applicability_caches(
+    connection: &StoreConnection,
+    options: &VerificationApplicabilityCacheListOptions,
+) -> Result<VerificationApplicabilityCacheListResult> {
+    let verification_entity_ids =
+        verification_applicability_cache_verification_ids(connection, options)?;
+    let mut caches = Vec::new();
+    for verification_entity_id in verification_entity_ids {
+        if let Some(cache) = verification_applicability_cache(
+            connection,
+            options.branch_id(),
+            verification_entity_id,
+        )? {
+            caches.push(cache);
+        }
+    }
+    Ok(VerificationApplicabilityCacheListResult {
+        branch_id: options.branch_id(),
+        caches,
+    })
+}
+
+fn verification_applicability_cache_verification_ids(
+    connection: &StoreConnection,
+    options: &VerificationApplicabilityCacheListOptions,
+) -> Result<Vec<EntityId>> {
+    let branch_id = options.branch_id().raw_bytes();
+    let mut verification_entity_ids = Vec::new();
+    match (options.verification_entity_id(), options.applicability()) {
+        (Some(verification_entity_id), Some(applicability)) => {
+            let verification_entity_id = verification_entity_id.raw_bytes();
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT verification_entity_id
+                     FROM verification_applicability_cache
+                     WHERE branch_id = ?1
+                       AND verification_entity_id = ?2
+                       AND applicability = ?3
+                     ORDER BY evaluated_at_us, verification_entity_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(
+                    params![
+                        &branch_id[..],
+                        &verification_entity_id[..],
+                        applicability.as_str()
+                    ],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .map_err(storage_error)?;
+            for row in rows {
+                verification_entity_ids.push(decode_entity_id(
+                    "verification_applicability_cache.verification_entity_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+        (Some(verification_entity_id), None) => {
+            let verification_entity_id = verification_entity_id.raw_bytes();
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT verification_entity_id
+                     FROM verification_applicability_cache
+                     WHERE branch_id = ?1
+                       AND verification_entity_id = ?2
+                     ORDER BY evaluated_at_us, verification_entity_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(
+                    params![&branch_id[..], &verification_entity_id[..]],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .map_err(storage_error)?;
+            for row in rows {
+                verification_entity_ids.push(decode_entity_id(
+                    "verification_applicability_cache.verification_entity_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+        (None, Some(applicability)) => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT verification_entity_id
+                     FROM verification_applicability_cache
+                     WHERE branch_id = ?1
+                       AND applicability = ?2
+                     ORDER BY evaluated_at_us, verification_entity_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(params![&branch_id[..], applicability.as_str()], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .map_err(storage_error)?;
+            for row in rows {
+                verification_entity_ids.push(decode_entity_id(
+                    "verification_applicability_cache.verification_entity_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+        (None, None) => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT verification_entity_id
+                     FROM verification_applicability_cache
+                     WHERE branch_id = ?1
+                     ORDER BY evaluated_at_us, verification_entity_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(params![&branch_id[..]], |row| row.get::<_, Vec<u8>>(0))
+                .map_err(storage_error)?;
+            for row in rows {
+                verification_entity_ids.push(decode_entity_id(
+                    "verification_applicability_cache.verification_entity_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+    }
+    Ok(verification_entity_ids)
 }
 
 pub(crate) fn acceptance_criterion_effective_status(

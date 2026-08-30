@@ -98,6 +98,7 @@ pub use history::{
     TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSchedulingRelationType, TaskSnapshot, TaskState,
     TaskStatus, TaskTransitionCommit, TaskTransitionOptions, VerificationApplicability,
+    VerificationApplicabilityCacheListOptions, VerificationApplicabilityCacheListResult,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationEvidenceRef,
     VerificationEvidenceRelationCreate, VerificationEvidenceRelationSnapshot,

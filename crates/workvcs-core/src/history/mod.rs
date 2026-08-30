@@ -160,6 +160,7 @@ pub use task::{
     TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSchedulingRelationType, TaskSnapshot, TaskState,
     TaskStatus, TaskTransitionCommit, TaskTransitionOptions, VerificationApplicability,
+    VerificationApplicabilityCacheListOptions, VerificationApplicabilityCacheListResult,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
     VerificationCreateCommit, VerificationCreateOptions, VerificationEvidenceRef,
     VerificationEvidenceRelationCreate, VerificationEvidenceRelationSnapshot,
@@ -237,7 +238,8 @@ pub(crate) use task::{
     record_verification_applicability, reject_reserved_semantic_entity_transition,
     revise_acceptance_criterion, revise_verification_requirement, task_at,
     task_scheduling_relations_at, tasks_at, transition_task, verification_applicability_cache,
-    verification_at, verification_evidence_relations_at, verification_relations_at,
-    verification_requirement_at, verification_requirements_at, verifications_at,
+    verification_applicability_caches, verification_at, verification_evidence_relations_at,
+    verification_relations_at, verification_requirement_at, verification_requirements_at,
+    verifications_at,
 };
 pub(crate) use why::explain_why;

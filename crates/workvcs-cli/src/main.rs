@@ -605,6 +605,12 @@ enum StoreCommand {
 
         #[arg(long)]
         migration: String,
+
+        #[arg(long)]
+        expected_detail_digest: Option<String>,
+
+        #[arg(long)]
+        expected_outcome: Option<String>,
     },
     #[command(name = "migration-list")]
     MigrationList {
@@ -3786,10 +3792,43 @@ fn run(cli: Cli) -> Result<String> {
                 let result = engine.record_store_migration(options)?;
                 render_store_migration_record_result(&result)
             }
-            StoreCommand::MigrationShow { store, migration } => {
+            StoreCommand::MigrationShow {
+                store,
+                migration,
+                expected_detail_digest,
+                expected_outcome,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.store_migration(MigrationId::parse_canonical(&migration)?)?;
-                render_store_migration_snapshot(&snapshot)
+                let mut output = render_store_migration_snapshot(&snapshot)?;
+                if let Some(expected_detail_digest) = expected_detail_digest {
+                    let expected_detail_digest = Digest::from_hex(&expected_detail_digest)?;
+                    if snapshot
+                        .outcome
+                        .as_ref()
+                        .is_none_or(|outcome| outcome.detail_digest != expected_detail_digest)
+                    {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "store migration detail digest does not match expected {}",
+                            expected_detail_digest
+                        )));
+                    }
+                    output.push_str("detail_matches_expected=true\n");
+                }
+                if let Some(expected_outcome) = expected_outcome {
+                    let actual_outcome = snapshot
+                        .outcome
+                        .as_ref()
+                        .map(|outcome| outcome.outcome.as_str())
+                        .unwrap_or("none");
+                    if actual_outcome != expected_outcome {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "store migration outcome {actual_outcome} does not match expected {expected_outcome}"
+                        )));
+                    }
+                    output.push_str("outcome_matches_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::MigrationList {
                 store,
@@ -17433,6 +17472,54 @@ mod tests {
             value(&shown, "detail_digest"),
             value(&recorded, "detail_digest")
         );
+
+        let expected_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-show",
+            store,
+            "--migration",
+            &migration_id,
+            "--expected-detail-digest",
+            &value(&shown, "detail_digest"),
+            "--expected-outcome",
+            "completed",
+        ])
+        .expect("parse expected store migration-show"))
+        .expect("show expected store migration");
+        assert_eq!(
+            value(&expected_shown, "detail_digest"),
+            value(&shown, "detail_digest")
+        );
+        assert_eq!(value(&expected_shown, "outcome"), "completed");
+        assert_eq!(value(&expected_shown, "detail_matches_expected"), "true");
+        assert_eq!(value(&expected_shown, "outcome_matches_expected"), "true");
+
+        let mismatched_detail = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-show",
+            store,
+            "--migration",
+            &migration_id,
+            "--expected-detail-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched store migration detail show"));
+        assert!(mismatched_detail.is_err());
+
+        let mismatched_outcome = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-show",
+            store,
+            "--migration",
+            &migration_id,
+            "--expected-outcome",
+            "failed",
+        ])
+        .expect("parse mismatched store migration outcome show"));
+        assert!(mismatched_outcome.is_err());
 
         let listed =
             run(

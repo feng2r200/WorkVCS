@@ -3328,6 +3328,12 @@ enum ClaimCommand {
 
         #[arg(long)]
         claim: String,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
+
+        #[arg(long)]
+        expected_mode: Option<String>,
     },
     List {
         #[arg(value_name = "STORE")]
@@ -8201,11 +8207,41 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_session_end(&ended))
         }
         Command::Claim {
-            command: ClaimCommand::Show { store, claim },
+            command:
+                ClaimCommand::Show {
+                    store,
+                    claim,
+                    expected_lifecycle_state,
+                    expected_mode,
+                },
         } => {
             let engine = Engine::open(store)?;
-            let snapshot = engine.claim_snapshot(ClaimId::parse_canonical(&claim)?);
-            Ok(render_claim_show(&snapshot?))
+            let snapshot = engine.claim_snapshot(ClaimId::parse_canonical(&claim)?)?;
+            let mut output = render_claim_show(&snapshot);
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+                let expected_lifecycle_state =
+                    parse_claim_lifecycle_state(&expected_lifecycle_state)?;
+                if snapshot.lifecycle_state != expected_lifecycle_state {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim lifecycle state {} does not match expected {}",
+                        claim_lifecycle_state(snapshot.lifecycle_state),
+                        claim_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                output.push_str("lifecycle_state_matches_expected=true\n");
+            }
+            if let Some(expected_mode) = expected_mode {
+                let expected_mode = parse_claim_mode(&expected_mode)?;
+                if snapshot.mode != expected_mode {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim mode {} does not match expected {}",
+                        claim_mode(snapshot.mode),
+                        claim_mode(expected_mode)
+                    )));
+                }
+                output.push_str("mode_matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Claim {
             command:
@@ -12957,6 +12993,16 @@ fn claim_lifecycle_state(state: ClaimLifecycleState) -> &'static str {
     match state {
         ClaimLifecycleState::Active => "active",
         ClaimLifecycleState::Released => "released",
+    }
+}
+
+fn parse_claim_lifecycle_state(value: &str) -> Result<ClaimLifecycleState> {
+    match value {
+        "active" => Ok(ClaimLifecycleState::Active),
+        "released" => Ok(ClaimLifecycleState::Released),
+        other => Err(WorkVcsError::ClaimInvalid(format!(
+            "unknown claim lifecycle state {other:?}"
+        ))),
     }
 }
 
@@ -27312,6 +27358,54 @@ mod tests {
         assert_eq!(value(&shown, "mode"), "exclusive");
         assert_eq!(value(&shown, "lifecycle_state"), "active");
 
+        let expected_active = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "show",
+            store,
+            "--claim",
+            &claim_id,
+            "--expected-lifecycle-state",
+            "active",
+            "--expected-mode",
+            "exclusive",
+        ])
+        .expect("parse expected active claim show"))
+        .expect("expected active claim show");
+        assert_eq!(value(&expected_active, "lifecycle_state"), "active");
+        assert_eq!(value(&expected_active, "mode"), "exclusive");
+        assert_eq!(
+            value(&expected_active, "lifecycle_state_matches_expected"),
+            "true"
+        );
+        assert_eq!(value(&expected_active, "mode_matches_expected"), "true");
+
+        let mismatched_lifecycle = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "show",
+            store,
+            "--claim",
+            &claim_id,
+            "--expected-lifecycle-state",
+            "released",
+        ])
+        .expect("parse mismatched active claim lifecycle show"));
+        assert!(mismatched_lifecycle.is_err());
+
+        let mismatched_mode = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "show",
+            store,
+            "--claim",
+            &claim_id,
+            "--expected-mode",
+            "shared",
+        ])
+        .expect("parse mismatched active claim mode show"));
+        assert!(mismatched_mode.is_err());
+
         let listed =
             run(
                 Cli::try_parse_from(["workvcs", "claim", "list", store, "--session", &session_id])
@@ -27474,6 +27568,28 @@ mod tests {
             )
             .expect("released claim show");
         assert_eq!(value(&released, "lifecycle_state"), "released");
+
+        let expected_released = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "show",
+            store,
+            "--claim",
+            &claim_id,
+            "--expected-lifecycle-state",
+            "released",
+            "--expected-mode",
+            "exclusive",
+        ])
+        .expect("parse expected released claim show"))
+        .expect("expected released claim show");
+        assert_eq!(value(&expected_released, "lifecycle_state"), "released");
+        assert_eq!(value(&expected_released, "mode"), "exclusive");
+        assert_eq!(
+            value(&expected_released, "lifecycle_state_matches_expected"),
+            "true"
+        );
+        assert_eq!(value(&expected_released, "mode_matches_expected"), "true");
     }
 
     #[test]

@@ -1317,6 +1317,12 @@ enum CheckpointCommand {
 
         #[arg(long)]
         commit: String,
+
+        #[arg(long)]
+        require_found: bool,
+
+        #[arg(long)]
+        expected_checkpoint: Option<String>,
     },
 }
 
@@ -5574,12 +5580,46 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 Ok(output)
             }
-            CheckpointCommand::Latest { store, commit } => {
+            CheckpointCommand::Latest {
+                store,
+                commit,
+                require_found,
+                expected_checkpoint,
+            } => {
                 let engine = Engine::open(store)?;
                 let result = engine.latest_usable_checkpoint(
                     CheckpointLatestOptions::usable_for_commit(CommitId::parse_canonical(&commit)?),
                 )?;
-                Ok(render_checkpoint_latest(&result))
+                let mut output = render_checkpoint_latest(&result);
+                if require_found {
+                    if result.checkpoint.is_none() {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "no usable checkpoint found for commit {}",
+                            result.commit_id
+                        )));
+                    }
+                    output.push_str("checkpoint_found_required=true\n");
+                }
+                if let Some(expected_checkpoint) = expected_checkpoint {
+                    let expected_checkpoint = CheckpointId::parse_canonical(&expected_checkpoint)?;
+                    match &result.checkpoint {
+                        Some(checkpoint) if checkpoint.checkpoint_id == expected_checkpoint => {
+                            output.push_str("checkpoint_matches_expected=true\n");
+                        }
+                        Some(checkpoint) => {
+                            return Err(WorkVcsError::QueryInvalid(format!(
+                                "checkpoint {} does not match expected {}",
+                                checkpoint.checkpoint_id, expected_checkpoint
+                            )));
+                        }
+                        None => {
+                            return Err(WorkVcsError::QueryInvalid(format!(
+                                "checkpoint none does not match expected {expected_checkpoint}"
+                            )));
+                        }
+                    }
+                }
+                Ok(output)
             }
         },
         Command::Why {
@@ -21635,6 +21675,18 @@ mod tests {
         .expect("create workspace");
         let genesis = value(&workspace, "genesis_commit_id");
 
+        let missing_latest = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "latest",
+            store,
+            "--commit",
+            &genesis,
+            "--require-found",
+        ])
+        .expect("parse missing checkpoint latest"));
+        assert!(missing_latest.is_err());
+
         let created = run(Cli::try_parse_from([
             "workvcs",
             "checkpoint",
@@ -21848,12 +21900,30 @@ mod tests {
             store,
             "--commit",
             &genesis,
+            "--require-found",
+            "--expected-checkpoint",
+            &checkpoint,
         ])
         .expect("parse checkpoint latest"))
         .expect("latest checkpoint");
         assert_eq!(value(&latest, "commit_id"), genesis);
         assert_eq!(value(&latest, "checkpoint_found"), "true");
         assert_eq!(value(&latest, "checkpoint_id"), checkpoint);
+        assert_eq!(value(&latest, "checkpoint_found_required"), "true");
+        assert_eq!(value(&latest, "checkpoint_matches_expected"), "true");
+
+        let mismatched_latest = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "latest",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-checkpoint",
+            &CheckpointId::new_v7().to_string(),
+        ])
+        .expect("parse mismatched checkpoint latest"));
+        assert!(mismatched_latest.is_err());
 
         let exported =
             run(

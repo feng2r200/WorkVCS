@@ -1266,6 +1266,12 @@ enum BundleCommand {
 
         #[arg(long)]
         input_dir: PathBuf,
+
+        #[arg(long)]
+        require_valid: bool,
+
+        #[arg(long)]
+        require_can_apply: bool,
     },
     ApplyDir {
         #[arg(value_name = "STORE")]
@@ -4676,7 +4682,12 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 Ok(output)
             }
-            BundleCommand::PreflightDir { store, input_dir } => {
+            BundleCommand::PreflightDir {
+                store,
+                input_dir,
+                require_valid,
+                require_can_apply,
+            } => {
                 let engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
                 let payload_index_bytes = read_bundle_file(&input_dir.join("payload-index.json"))?;
@@ -4687,7 +4698,26 @@ fn run(cli: Cli) -> Result<String> {
                         payload_index_bytes,
                         payloads,
                     )?)?;
-                Ok(render_bundle_import_preflight(&preflight))
+                let mut output = render_bundle_import_preflight(&preflight);
+                if require_valid {
+                    if !preflight.valid {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle preflight validation failed: {}",
+                            preflight.problem.as_deref().unwrap_or("unknown problem")
+                        )));
+                    }
+                    output.push_str("valid_required=true\n");
+                }
+                if require_can_apply {
+                    if !preflight.can_apply {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle preflight cannot apply: action={}",
+                            preflight.action
+                        )));
+                    }
+                    output.push_str("can_apply_required=true\n");
+                }
+                Ok(output)
             }
             BundleCommand::ApplyDir { store, input_dir } => {
                 let mut engine = Engine::open(store)?;
@@ -19872,6 +19902,30 @@ mod tests {
         assert_eq!(value(&preflight, "branch_heads_fast_forward"), "0");
         assert_eq!(value(&preflight, "branch_heads_diverged"), "0");
         assert_eq!(value(&preflight, "problem"), "none");
+        let required_preflight = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "preflight-dir",
+            store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-valid",
+        ])
+        .expect("parse required bundle preflight-dir"))
+        .expect("require valid bundle preflight");
+        assert_eq!(value(&required_preflight, "valid"), "true");
+        assert_eq!(value(&required_preflight, "valid_required"), "true");
+        let required_apply_preflight = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "preflight-dir",
+            store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-can-apply",
+        ])
+        .expect("parse required apply bundle preflight-dir"));
+        assert!(required_apply_preflight.is_err());
 
         let import_attempt = run(Cli::try_parse_from([
             "workvcs",
@@ -20061,6 +20115,20 @@ mod tests {
         .expect("preflight bundle directory");
         assert_eq!(value(&preflight, "action"), "same_store_fast_forward_ready");
         assert_eq!(value(&preflight, "can_apply"), "true");
+        let required_preflight = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "preflight-dir",
+            old_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-valid",
+            "--require-can-apply",
+        ])
+        .expect("parse required bundle preflight-dir"))
+        .expect("require valid applicable bundle preflight");
+        assert_eq!(value(&required_preflight, "valid_required"), "true");
+        assert_eq!(value(&required_preflight, "can_apply_required"), "true");
 
         let applied = run(Cli::try_parse_from([
             "workvcs",

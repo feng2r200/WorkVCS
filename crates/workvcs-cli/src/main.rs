@@ -480,6 +480,9 @@ enum CanonicalCommand {
 
         #[arg(long, value_name = "RELATION_ID=RELATION_VERSION_ID")]
         relation: Vec<String>,
+
+        #[arg(long)]
+        expected_digest: Option<String>,
     },
 }
 
@@ -3525,9 +3528,11 @@ fn run(cli: Cli) -> Result<String> {
                 content_file,
             } => render_content_digest(content, content_hex, content_file),
             CanonicalCommand::DigestValidate { digest } => render_validate_digest(&digest),
-            CanonicalCommand::WorkStateDigest { entity, relation } => {
-                render_work_state_mapping_digest(entity, relation)
-            }
+            CanonicalCommand::WorkStateDigest {
+                entity,
+                relation,
+                expected_digest,
+            } => render_work_state_mapping_digest(entity, relation, expected_digest),
         },
         Command::Id { command } => match command {
             IdCommand::Kinds => Ok(render_id_kinds()),
@@ -8324,6 +8329,7 @@ fn render_integrity_report(report: &IntegrityReport) -> String {
 fn render_work_state_mapping_digest(
     entity_mappings: Vec<String>,
     relation_mappings: Vec<String>,
+    expected_digest: Option<String>,
 ) -> Result<String> {
     let entities = entity_mappings
         .iter()
@@ -8334,11 +8340,23 @@ fn render_work_state_mapping_digest(
         .map(|mapping| parse_work_state_relation_mapping(mapping))
         .collect::<Result<Vec<_>>>()?;
     let state = WorkState::new(entities, relations)?;
+    let digest = work_state_mapping_digest(&state);
+    let matches_expected = if let Some(expected_digest) = expected_digest {
+        let expected_digest = Digest::from_hex(&expected_digest)?;
+        if digest != expected_digest {
+            return Err(WorkVcsError::DigestInvalid(format!(
+                "work state digest {digest} does not match expected {expected_digest}"
+            )));
+        }
+        "\nmatches_expected=true"
+    } else {
+        ""
+    };
     Ok(format!(
-        "work_state_digest={}\nentities={}\nrelations={}\n",
-        work_state_mapping_digest(&state),
+        "work_state_digest={digest}\nentities={}\nrelations={}{}\n",
         state.entities().len(),
-        state.relations().len()
+        state.relations().len(),
+        matches_expected
     ))
 }
 
@@ -15494,6 +15512,39 @@ mod tests {
             value(&forward, "work_state_digest"),
             value(&reverse, "work_state_digest")
         );
+
+        let expected = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "work-state-digest",
+            "--entity",
+            &first_entity,
+            "--entity",
+            &second_entity,
+            "--relation",
+            &relation,
+            "--expected-digest",
+            &value(&forward, "work_state_digest"),
+        ])
+        .expect("parse expected work state digest"))
+        .expect("expected work state digest");
+        assert_eq!(
+            value(&expected, "work_state_digest"),
+            value(&forward, "work_state_digest")
+        );
+        assert_eq!(value(&expected, "matches_expected"), "true");
+
+        let mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "work-state-digest",
+            "--entity",
+            &first_entity,
+            "--expected-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched work state digest"));
+        assert!(mismatch.is_err());
 
         let duplicate = run(Cli::try_parse_from([
             "workvcs",

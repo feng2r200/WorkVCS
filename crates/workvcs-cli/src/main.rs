@@ -3291,6 +3291,9 @@ enum VerificationCommand {
         result: Option<String>,
 
         #[arg(long)]
+        evidence: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
     CacheRecord {
@@ -5954,6 +5957,7 @@ fn run(cli: Cli) -> Result<String> {
                     target_kind,
                     target,
                     result,
+                    evidence,
                     limit,
                 },
         } => {
@@ -5973,6 +5977,16 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(result) = result {
                 let result = parse_verification_result(&result)?;
                 verifications.retain(|verification| verification.state.result == result);
+            }
+            if let Some(evidence) = evidence {
+                let evidence_id = EvidenceId::parse_canonical(&evidence)?;
+                verifications.retain(|verification| {
+                    verification
+                        .state
+                        .evidence
+                        .iter()
+                        .any(|evidence| evidence.evidence_id == evidence_id)
+                });
             }
             if matches!(limit, Some(0)) {
                 return Err(WorkVcsError::QueryInvalid(
@@ -20513,6 +20527,30 @@ mod tests {
             verification_id
         );
 
+        let evidence_filtered_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--evidence",
+            &evidence_id,
+        ])
+        .expect("parse verification list by evidence"))
+        .expect("list verification by evidence");
+        assert_eq!(
+            value(&evidence_filtered_verifications, "verifications"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &evidence_filtered_verifications,
+                "verification.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
         let limited_passed_verifications = run(Cli::try_parse_from([
             "workvcs",
             "verification",
@@ -20624,6 +20662,20 @@ mod tests {
         .expect("parse verification list by wrong target"))
         .expect("list verification by wrong target");
         assert_eq!(value(&wrong_target_verifications, "verifications"), "0");
+
+        let missing_evidence_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--evidence",
+            &EvidenceId::new_v7().to_string(),
+        ])
+        .expect("parse verification list by missing evidence"))
+        .expect("list verification by missing evidence");
+        assert_eq!(value(&missing_evidence_verifications, "verifications"), "0");
 
         let combined_verifications = run(Cli::try_parse_from([
             "workvcs",

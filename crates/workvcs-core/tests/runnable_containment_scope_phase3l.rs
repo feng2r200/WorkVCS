@@ -191,10 +191,7 @@ fn candidate_entity_ids(candidates: &[RunnableTaskCandidate]) -> Vec<EntityId> {
 fn assert_focused_dimensions(dimensions: &[RunnableTaskProjectionDimension]) {
     assert_eq!(
         dimensions,
-        vec![
-            RunnableTaskProjectionDimension::ExplicitManualOrder,
-            RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker,
-        ]
+        vec![RunnableTaskProjectionDimension::ExplicitManualOrder]
     );
 }
 
@@ -205,7 +202,6 @@ fn assert_workspace_wide_dimensions(dimensions: &[RunnableTaskProjectionDimensio
             RunnableTaskProjectionDimension::ActiveScopePlanPath,
             RunnableTaskProjectionDimension::ExecutableTaskDescendants,
             RunnableTaskProjectionDimension::ExplicitManualOrder,
-            RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker,
         ]
     );
 }

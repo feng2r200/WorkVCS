@@ -383,9 +383,9 @@ The logical-family model above is Confirmed. Decisions 443-566 subsequently
 closed the V1 ID/digest encodings, core SQLite type and foreign-key policy,
 canonical JSON storage boundary, writer-transaction baseline, bounded Physical
 DDL constraints, executable schema assembly, bootstrap/open validation, and
-integrity classification. The following remain Open:
+integrity classification. ADR-0175 closes the final equal-candidate stable
+tie-breaker for `next` as EntityId byte order. The following remain Open:
 
-- the final equal-candidate stable tie-breaker for `next`;
 - final CLI spelling and protocol encoding;
 - implementation language;
 - concrete performance indexes and query plans;

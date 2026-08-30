@@ -407,10 +407,7 @@ fn structural_references_do_not_drive_primary_containment_or_runnable_scope() {
     assert_eq!(projection.head_commit_id, structural_reference.commit_id);
     assert_eq!(
         projection.deferred_dimensions,
-        vec![
-            RunnableTaskProjectionDimension::ExplicitManualOrder,
-            RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker,
-        ]
+        vec![RunnableTaskProjectionDimension::ExplicitManualOrder]
     );
     assert!(projection.candidates.is_empty());
     assert_eq!(history_counts(&connection), before_counts);

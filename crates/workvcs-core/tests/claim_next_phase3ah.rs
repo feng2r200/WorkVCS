@@ -157,6 +157,51 @@ fn claim_next_selects_unclaimed_runnable_task_and_focuses_session() {
 }
 
 #[test]
+fn claim_next_uses_entity_id_as_final_stable_tiebreaker() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let first = create_task(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Equal candidate A",
+    );
+    let second = create_task(
+        &mut engine,
+        &workspace,
+        first.commit_id,
+        "Equal candidate B",
+    );
+    let third = create_task(
+        &mut engine,
+        &workspace,
+        second.commit_id,
+        "Equal candidate C",
+    );
+    let started = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    let expected = [
+        first.task_entity_id,
+        second.task_entity_id,
+        third.task_entity_id,
+    ]
+    .into_iter()
+    .min()
+    .expect("expected minimum task id");
+
+    let claimed = engine
+        .claim_next_task(ClaimNextOptions::new(started.session_id))
+        .expect("claim next");
+    let selected = claimed.selected.expect("selected claim");
+
+    assert_eq!(selected.task_entity_id, expected);
+}
+
+#[test]
 fn claim_next_skips_tasks_already_claimed_by_same_session() {
     let (_tempdir, path) = store_path();
     let (mut engine, workspace) = create_workspace(&path);

@@ -702,6 +702,5 @@ fn deferred_dimensions(focused: bool) -> Vec<RunnableTaskProjectionDimension> {
         dimensions.push(RunnableTaskProjectionDimension::ExecutableTaskDescendants);
     }
     dimensions.push(RunnableTaskProjectionDimension::ExplicitManualOrder);
-    dimensions.push(RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker);
     dimensions
 }

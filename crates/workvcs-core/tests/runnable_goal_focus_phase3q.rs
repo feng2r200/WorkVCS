@@ -212,10 +212,7 @@ fn candidate_entity_id_set(candidates: &[RunnableTaskCandidate]) -> BTreeSet<Ent
 fn assert_focused_dimensions(dimensions: &[RunnableTaskProjectionDimension]) {
     assert_eq!(
         dimensions,
-        vec![
-            RunnableTaskProjectionDimension::ExplicitManualOrder,
-            RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker,
-        ]
+        vec![RunnableTaskProjectionDimension::ExplicitManualOrder]
     );
 }
 
@@ -226,7 +223,6 @@ fn assert_workspace_wide_dimensions(dimensions: &[RunnableTaskProjectionDimensio
             RunnableTaskProjectionDimension::ActiveScopePlanPath,
             RunnableTaskProjectionDimension::ExecutableTaskDescendants,
             RunnableTaskProjectionDimension::ExplicitManualOrder,
-            RunnableTaskProjectionDimension::FinalEqualCandidateTieBreaker,
         ]
     );
 }

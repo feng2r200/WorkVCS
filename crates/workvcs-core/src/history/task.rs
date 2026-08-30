@@ -2513,6 +2513,54 @@ pub(crate) fn acceptance_criterion_at(
     })
 }
 
+pub(crate) fn acceptance_criteria_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<AcceptanceCriterionSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut criteria = Vec::new();
+
+    for (entity_id, entity_version_id) in replayed.state.entities() {
+        match load_entity_kind_for_public_boundary(connection, *entity_id)? {
+            Some(entity_kind) if entity_kind == ACCEPTANCE_CRITERION_ENTITY_KIND => {
+                let loaded = load_acceptance_criterion_version(
+                    connection,
+                    replayed.workspace_id,
+                    *entity_id,
+                    *entity_version_id,
+                )?;
+                criteria.push(AcceptanceCriterionSnapshot {
+                    workspace_id: replayed.workspace_id,
+                    commit_id,
+                    task_entity_id: loaded.task_entity_id,
+                    local_key: loaded.local_key,
+                    acceptance_criterion_entity_id: *entity_id,
+                    acceptance_criterion_entity_version_id: *entity_version_id,
+                    state_digest: loaded.state_digest,
+                    state: loaded.state,
+                });
+            }
+            Some(_) => {}
+            None => {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "WorkState at commit {commit_id} references missing entity {entity_id}"
+                )));
+            }
+        }
+    }
+
+    criteria.sort_by(|left, right| {
+        left.task_entity_id
+            .cmp(&right.task_entity_id)
+            .then_with(|| left.local_key.cmp(&right.local_key))
+            .then_with(|| {
+                left.acceptance_criterion_entity_id
+                    .cmp(&right.acceptance_criterion_entity_id)
+            })
+    });
+    Ok(criteria)
+}
+
 pub(crate) fn create_verification_requirement(
     connection: &mut StoreConnection,
     options: &VerificationRequirementCreateOptions,
@@ -2825,6 +2873,54 @@ pub(crate) fn verification_requirement_at(
         state_digest: loaded.state_digest,
         state: loaded.state,
     })
+}
+
+pub(crate) fn verification_requirements_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<VerificationRequirementSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut requirements = Vec::new();
+
+    for (entity_id, entity_version_id) in replayed.state.entities() {
+        match load_entity_kind_for_public_boundary(connection, *entity_id)? {
+            Some(entity_kind) if entity_kind == VERIFICATION_REQUIREMENT_ENTITY_KIND => {
+                let loaded = load_verification_requirement_version(
+                    connection,
+                    replayed.workspace_id,
+                    *entity_id,
+                    *entity_version_id,
+                )?;
+                requirements.push(VerificationRequirementSnapshot {
+                    workspace_id: replayed.workspace_id,
+                    commit_id,
+                    acceptance_criterion_entity_id: loaded.acceptance_criterion_entity_id,
+                    local_key: loaded.local_key,
+                    verification_requirement_entity_id: *entity_id,
+                    verification_requirement_entity_version_id: *entity_version_id,
+                    state_digest: loaded.state_digest,
+                    state: loaded.state,
+                });
+            }
+            Some(_) => {}
+            None => {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "WorkState at commit {commit_id} references missing entity {entity_id}"
+                )));
+            }
+        }
+    }
+
+    requirements.sort_by(|left, right| {
+        left.acceptance_criterion_entity_id
+            .cmp(&right.acceptance_criterion_entity_id)
+            .then_with(|| left.local_key.cmp(&right.local_key))
+            .then_with(|| {
+                left.verification_requirement_entity_id
+                    .cmp(&right.verification_requirement_entity_id)
+            })
+    });
+    Ok(requirements)
 }
 
 pub(crate) fn create_verification(

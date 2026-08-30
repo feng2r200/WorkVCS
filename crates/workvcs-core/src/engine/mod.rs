@@ -825,6 +825,13 @@ impl Engine {
             .acceptance_criterion_at(commit_id, acceptance_criterion_entity_id)
     }
 
+    pub fn acceptance_criteria_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<AcceptanceCriterionSnapshot>> {
+        self.store.acceptance_criteria_at(commit_id)
+    }
+
     pub fn verification_requirement_at(
         &self,
         commit_id: CommitId,
@@ -832,6 +839,13 @@ impl Engine {
     ) -> Result<VerificationRequirementSnapshot> {
         self.store
             .verification_requirement_at(commit_id, verification_requirement_entity_id)
+    }
+
+    pub fn verification_requirements_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<VerificationRequirementSnapshot>> {
+        self.store.verification_requirements_at(commit_id)
     }
 
     pub fn verification_at(

@@ -1295,6 +1295,15 @@ impl Store {
         )
     }
 
+    pub(crate) fn acceptance_criteria_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<AcceptanceCriterionSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::acceptance_criteria_at(&self.connection, commit_id)
+    }
+
     pub(crate) fn verification_requirement_at(
         &self,
         commit_id: CommitId,
@@ -1307,6 +1316,15 @@ impl Store {
             commit_id,
             verification_requirement_entity_id,
         )
+    }
+
+    pub(crate) fn verification_requirements_at(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<Vec<VerificationRequirementSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::verification_requirements_at(&self.connection, commit_id)
     }
 
     pub(crate) fn verification_at(

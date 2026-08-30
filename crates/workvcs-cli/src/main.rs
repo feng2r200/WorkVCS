@@ -1607,6 +1607,22 @@ enum AcceptanceCriterionCommand {
         #[arg(long)]
         criterion: String,
     },
+    #[command(group(
+        ArgGroup::new("acceptance-criterion-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+    },
     Status {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1661,6 +1677,22 @@ enum VerificationRequirementCommand {
 
         #[arg(long)]
         requirement: String,
+    },
+    #[command(group(
+        ArgGroup::new("verification-requirement-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
     },
 }
 
@@ -4002,6 +4034,18 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Ac {
             command:
+                AcceptanceCriterionCommand::List {
+                    store,
+                    branch,
+                    commit,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            render_acceptance_criterion_list(commit_id, &engine.acceptance_criteria_at(commit_id)?)
+        }
+        Command::Ac {
+            command:
                 AcceptanceCriterionCommand::Status {
                     store,
                     branch,
@@ -4056,6 +4100,21 @@ fn run(cli: Cli) -> Result<String> {
                     commit_id,
                     EntityId::parse_canonical(&requirement)?,
                 )?,
+            )
+        }
+        Command::Vr {
+            command:
+                VerificationRequirementCommand::List {
+                    store,
+                    branch,
+                    commit,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            render_verification_requirement_list(
+                commit_id,
+                &engine.verification_requirements_at(commit_id)?,
             )
         }
         Command::Resource {
@@ -6570,6 +6629,70 @@ fn render_acceptance_criterion_snapshot(criterion: &AcceptanceCriterionSnapshot)
     Ok(output)
 }
 
+fn render_acceptance_criterion_list(
+    commit_id: CommitId,
+    criteria: &[AcceptanceCriterionSnapshot],
+) -> Result<String> {
+    let mut output = format!("commit_id={commit_id}\ncriteria={}\n", criteria.len());
+    for (index, criterion) in criteria.iter().enumerate() {
+        writeln!(
+            output,
+            "criterion.{index}.workspace_id={}",
+            criterion.workspace_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "criterion.{index}.task_entity_id={}",
+            criterion.task_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "criterion.{index}.local_key={}",
+            criterion.local_key
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "criterion.{index}.acceptance_criterion_entity_id={}",
+            criterion.acceptance_criterion_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "criterion.{index}.acceptance_criterion_entity_version_id={}",
+            criterion.acceptance_criterion_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "criterion.{index}.acceptance_criterion_state_digest={}",
+            criterion.state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "criterion.{index}.classification={}",
+            criterion.state.classification
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "criterion.{index}.statement_json={}",
+            canonical_text_json("acceptance criterion statement", &criterion.state.statement)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "criterion.{index}.verification_requirements={}",
+            criterion.state.verification_requirements.len()
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
 fn render_acceptance_criterion_status(status: AcceptanceCriterionEffectiveStatus) -> String {
     format!("status={status}\n")
 }
@@ -6612,6 +6735,64 @@ fn render_verification_requirement_snapshot(
         requirement.state_digest,
         statement_json
     ))
+}
+
+fn render_verification_requirement_list(
+    commit_id: CommitId,
+    requirements: &[VerificationRequirementSnapshot],
+) -> Result<String> {
+    let mut output = format!(
+        "commit_id={commit_id}\nrequirements={}\n",
+        requirements.len()
+    );
+    for (index, requirement) in requirements.iter().enumerate() {
+        writeln!(
+            output,
+            "requirement.{index}.workspace_id={}",
+            requirement.workspace_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "requirement.{index}.acceptance_criterion_entity_id={}",
+            requirement.acceptance_criterion_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "requirement.{index}.local_key={}",
+            requirement.local_key
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "requirement.{index}.verification_requirement_entity_id={}",
+            requirement.verification_requirement_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "requirement.{index}.verification_requirement_entity_version_id={}",
+            requirement.verification_requirement_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "requirement.{index}.verification_requirement_state_digest={}",
+            requirement.state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "requirement.{index}.statement_json={}",
+            canonical_text_json(
+                "verification requirement statement",
+                &requirement.state.statement
+            )?
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_verification_create(verification: &VerificationCreateCommit) -> String {
@@ -13466,6 +13647,185 @@ mod tests {
                 "verification_requirement.0.verification_requirement_entity_id"
             ),
             requirement_id
+        );
+    }
+
+    #[test]
+    fn cli_lists_acceptance_criteria_and_verification_requirements() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let empty_criteria =
+            run(
+                Cli::try_parse_from(["workvcs", "ac", "list", store, "--commit", &genesis])
+                    .expect("parse empty ac list"),
+            )
+            .expect("list empty ac");
+        assert_eq!(value(&empty_criteria, "criteria"), "0");
+
+        let empty_requirements =
+            run(
+                Cli::try_parse_from(["workvcs", "vr", "list", store, "--commit", &genesis])
+                    .expect("parse empty vr list"),
+            )
+            .expect("list empty vr");
+        assert_eq!(value(&empty_requirements, "requirements"), "0");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "List AC and VR snapshots",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "The AC list is visible.",
+        ])
+        .expect("parse ac create"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+
+        let criteria_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+        ])
+        .expect("parse ac list at commit"))
+        .expect("list ac at commit");
+        assert_eq!(value(&criteria_at_create, "criteria"), "1");
+        assert_eq!(
+            value(
+                &criteria_at_create,
+                "criterion.0.acceptance_criterion_entity_id"
+            ),
+            criterion_id
+        );
+        assert_eq!(value(&criteria_at_create, "criterion.0.local_key"), "AC-1");
+        assert_eq!(
+            value(&criteria_at_create, "criterion.0.verification_requirements"),
+            "0"
+        );
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &criterion_id,
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-1",
+            "--statement",
+            "The VR list is visible.",
+        ])
+        .expect("parse vr create"))
+        .expect("create vr");
+        let requirement_id = value(&requirement, "verification_requirement_entity_id");
+
+        let requirements_before_create = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+        ])
+        .expect("parse vr list before create"))
+        .expect("list vr before create");
+        assert_eq!(value(&requirements_before_create, "requirements"), "0");
+
+        let requirements_at_branch =
+            run(
+                Cli::try_parse_from(["workvcs", "vr", "list", store, "--branch", &branch])
+                    .expect("parse vr list at branch"),
+            )
+            .expect("list vr at branch");
+        assert_eq!(
+            value(&requirements_at_branch, "commit_id"),
+            value(&requirement, "commit_id")
+        );
+        assert_eq!(value(&requirements_at_branch, "requirements"), "1");
+        assert_eq!(
+            value(
+                &requirements_at_branch,
+                "requirement.0.verification_requirement_entity_id"
+            ),
+            requirement_id
+        );
+        assert_eq!(
+            value(&requirements_at_branch, "requirement.0.local_key"),
+            "VR-1"
+        );
+
+        let criteria_at_branch =
+            run(
+                Cli::try_parse_from(["workvcs", "ac", "list", store, "--branch", &branch])
+                    .expect("parse ac list at branch"),
+            )
+            .expect("list ac at branch");
+        assert_eq!(
+            value(&criteria_at_branch, "commit_id"),
+            value(&requirement, "commit_id")
+        );
+        assert_eq!(value(&criteria_at_branch, "criteria"), "1");
+        assert_eq!(
+            value(&criteria_at_branch, "criterion.0.verification_requirements"),
+            "1"
+        );
+        assert_eq!(
+            value(&criteria_at_branch, "criterion.0.statement_json"),
+            "\"The AC list is visible.\""
         );
     }
 

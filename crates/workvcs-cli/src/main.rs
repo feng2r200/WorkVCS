@@ -2961,6 +2961,12 @@ enum ClaimCommand {
 
         #[arg(long)]
         session: String,
+
+        #[arg(long)]
+        task: Option<String>,
+
+        #[arg(long)]
+        mode: Option<String>,
     },
     Guard {
         #[arg(value_name = "STORE")]
@@ -6364,12 +6370,28 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_claim_show(&snapshot?))
         }
         Command::Claim {
-            command: ClaimCommand::List { store, session },
+            command:
+                ClaimCommand::List {
+                    store,
+                    session,
+                    task,
+                    mode,
+                },
         } => {
             let engine = Engine::open(store)?;
-            let claims = engine.active_claims_for_session(ClaimListOptions::for_session(
+            let mut claims = engine.active_claims_for_session(ClaimListOptions::for_session(
                 SessionId::parse_canonical(&session)?,
             ))?;
+            if let Some(task) = task {
+                let task_id = EntityId::parse_canonical(&task)?;
+                claims
+                    .claims
+                    .retain(|claim| claim.task_entity_id == task_id);
+            }
+            if let Some(mode) = mode {
+                let mode = parse_claim_mode(&mode)?;
+                claims.claims.retain(|claim| claim.mode == mode);
+            }
             Ok(render_claim_list(&claims))
         }
         Command::Claim {
@@ -20957,6 +20979,66 @@ mod tests {
         assert_eq!(value(&listed, "claim.0.claim_id"), claim_id);
         assert_eq!(value(&listed, "claim.0.task_entity_id"), task_id);
         assert_eq!(value(&listed, "claim.0.lifecycle_state"), "active");
+
+        let listed_by_task = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+        ])
+        .expect("parse claim list by task"))
+        .expect("claim list by task");
+        assert_eq!(value(&listed_by_task, "claims"), "1");
+        assert_eq!(value(&listed_by_task, "claim.0.claim_id"), claim_id);
+
+        let listed_by_exclusive_mode = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--mode",
+            "exclusive",
+        ])
+        .expect("parse claim list by exclusive mode"))
+        .expect("claim list by exclusive mode");
+        assert_eq!(value(&listed_by_exclusive_mode, "claims"), "1");
+
+        let listed_by_shared_mode = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--mode",
+            "shared",
+        ])
+        .expect("parse claim list by shared mode"))
+        .expect("claim list by shared mode");
+        assert_eq!(value(&listed_by_shared_mode, "claims"), "0");
+
+        let listed_by_combined_filters = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+            "--mode",
+            "exclusive",
+        ])
+        .expect("parse claim list by combined filters"))
+        .expect("claim list by combined filters");
+        assert_eq!(value(&listed_by_combined_filters, "claims"), "1");
+
         let guard = run(Cli::try_parse_from([
             "workvcs",
             "claim",

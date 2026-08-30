@@ -472,6 +472,9 @@ enum CanonicalCommand {
 
         #[arg(long, value_name = "PATH")]
         content_file: Option<PathBuf>,
+
+        #[arg(long)]
+        expected_digest: Option<String>,
     },
     DigestValidate {
         #[arg(long)]
@@ -3530,7 +3533,8 @@ fn run(cli: Cli) -> Result<String> {
                 content,
                 content_hex,
                 content_file,
-            } => render_content_digest(content, content_hex, content_file),
+                expected_digest,
+            } => render_content_digest(content, content_hex, content_file, expected_digest),
             CanonicalCommand::DigestValidate { digest } => render_validate_digest(&digest),
             CanonicalCommand::WorkStateDigest {
                 entity,
@@ -8161,6 +8165,7 @@ fn render_content_digest(
     content: Option<String>,
     content_hex: Option<String>,
     content_file: Option<PathBuf>,
+    expected_digest: Option<String>,
 ) -> Result<String> {
     let bytes = match (content, content_hex, content_file) {
         (Some(content), None, None) => content.into_bytes(),
@@ -8175,10 +8180,22 @@ fn render_content_digest(
             ));
         }
     };
+    let digest = content_object_digest(&bytes);
+    let matches_expected = if let Some(expected_digest) = expected_digest {
+        let expected_digest = Digest::from_hex(&expected_digest)?;
+        if digest != expected_digest {
+            return Err(WorkVcsError::DigestInvalid(format!(
+                "content digest {digest} does not match expected {expected_digest}"
+            )));
+        }
+        "\nmatches_expected=true"
+    } else {
+        ""
+    };
     Ok(format!(
-        "content_digest={}\nsize_bytes={}\n",
-        content_object_digest(&bytes),
-        bytes.len()
+        "content_digest={digest}\nsize_bytes={}{}\n",
+        bytes.len(),
+        matches_expected
     ))
 }
 
@@ -15464,6 +15481,35 @@ mod tests {
             value(&hex_digest, "content_digest")
         );
         assert_eq!(value(&file_content_digest, "size_bytes"), "2");
+
+        let expected_content_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "content-digest",
+            "--content-hex",
+            "00ff",
+            "--expected-digest",
+            &value(&file_content_digest, "content_digest"),
+        ])
+        .expect("parse expected content digest"))
+        .expect("expected content digest");
+        assert_eq!(
+            value(&expected_content_digest, "content_digest"),
+            value(&file_content_digest, "content_digest")
+        );
+        assert_eq!(value(&expected_content_digest, "matches_expected"), "true");
+
+        let mismatched_content_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "content-digest",
+            "--content-hex",
+            "00ff",
+            "--expected-digest",
+            &value(&raw_digest, "content_digest"),
+        ])
+        .expect("parse mismatched content digest"));
+        assert!(mismatched_content_digest.is_err());
 
         let validated_digest = run(Cli::try_parse_from([
             "workvcs",

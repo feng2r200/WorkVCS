@@ -1016,6 +1016,9 @@ enum WorkspaceCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_workspaces: Option<usize>,
     },
 }
 
@@ -5474,6 +5477,7 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     display_name,
                     limit,
+                    expected_workspaces,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5491,7 +5495,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.workspaces.truncate(limit);
             }
-            Ok(render_workspace_list(&result))
+            let mut output = render_workspace_list(&result);
+            if let Some(expected_workspaces) = expected_workspaces {
+                let actual_workspaces = result.workspaces.len();
+                if actual_workspaces != expected_workspaces {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "workspaces {actual_workspaces} does not match expected {expected_workspaces}"
+                    )));
+                }
+                output.push_str("workspaces_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Branch {
             command:
@@ -16929,6 +16943,19 @@ mod tests {
         .expect("list empty workspaces");
         assert_eq!(value(&empty, "workspaces"), "0");
 
+        let expected_empty = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "list",
+            store,
+            "--expected-workspaces",
+            "0",
+        ])
+        .expect("parse expected empty workspace list"))
+        .expect("expected empty workspace list");
+        assert_eq!(value(&expected_empty, "workspaces"), "0");
+        assert_eq!(value(&expected_empty, "workspaces_match_expected"), "true");
+
         let created = run(Cli::try_parse_from([
             "workvcs",
             "workspace",
@@ -17016,6 +17043,30 @@ mod tests {
         );
         assert_eq!(value(&listed, "workspace.0.branch_name"), "trunk");
 
+        let expected_listed = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "list",
+            store,
+            "--expected-workspaces",
+            "1",
+        ])
+        .expect("parse expected workspace list"))
+        .expect("expected workspace list");
+        assert_eq!(value(&expected_listed, "workspaces"), "1");
+        assert_eq!(value(&expected_listed, "workspaces_match_expected"), "true");
+
+        let mismatched_workspaces = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "list",
+            store,
+            "--expected-workspaces",
+            "0",
+        ])
+        .expect("parse mismatched workspace list"));
+        assert!(mismatched_workspaces.is_err());
+
         let beta = run(Cli::try_parse_from([
             "workvcs",
             "workspace",
@@ -17087,6 +17138,24 @@ mod tests {
         .expect("parse missing workspace list"))
         .expect("list missing workspace");
         assert_eq!(value(&missing_filtered, "workspaces"), "0");
+
+        let expected_missing = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "list",
+            store,
+            "--display-name",
+            "workspace missing",
+            "--expected-workspaces",
+            "0",
+        ])
+        .expect("parse expected missing workspace list"))
+        .expect("expected missing workspace list");
+        assert_eq!(value(&expected_missing, "workspaces"), "0");
+        assert_eq!(
+            value(&expected_missing, "workspaces_match_expected"),
+            "true"
+        );
     }
 
     #[test]

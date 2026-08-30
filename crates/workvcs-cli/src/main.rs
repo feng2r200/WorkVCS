@@ -24,8 +24,8 @@ use workvcs_core::{
     ClaimTaskOptions, ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview,
     ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
     Engine, EntityId, EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot,
-    EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceId,
-    EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
+    EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceId, EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
     ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
     ExternalRefId, ExternalVersionId, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
@@ -1768,6 +1768,24 @@ enum EvidenceCommand {
 
         #[arg(long)]
         source_session: Option<String>,
+
+        #[arg(long)]
+        content_role: Option<String>,
+
+        #[arg(long)]
+        content: Option<String>,
+
+        #[arg(long)]
+        content_digest: Option<String>,
+
+        #[arg(long)]
+        content_size_bytes: Option<i64>,
+
+        #[arg(long)]
+        media_type: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        format_metadata_json: String,
     },
     Show {
         #[arg(value_name = "STORE")]
@@ -4366,6 +4384,12 @@ fn run(cli: Cli) -> Result<String> {
                     kind,
                     metadata_json,
                     source_session,
+                    content_role,
+                    content,
+                    content_digest,
+                    content_size_bytes,
+                    media_type,
+                    format_metadata_json,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -4376,6 +4400,16 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(source_session) = source_session {
                 options =
                     options.with_source_session_id(SessionId::parse_canonical(&source_session)?);
+            }
+            if let Some(content) = evidence_content_from_cli(EvidenceContentArgs {
+                role: content_role,
+                content,
+                content_digest,
+                content_size_bytes,
+                media_type,
+                format_metadata_json,
+            })? {
+                options = options.with_contents(vec![content])?;
             }
             render_evidence_create(&engine.create_evidence(options)?)
         }
@@ -5984,6 +6018,55 @@ fn parse_cli_object(label: &str, json: &str) -> Result<CanonicalValue> {
             "{label} must be an object"
         )))
     }
+}
+
+struct EvidenceContentArgs {
+    role: Option<String>,
+    content: Option<String>,
+    content_digest: Option<String>,
+    content_size_bytes: Option<i64>,
+    media_type: Option<String>,
+    format_metadata_json: String,
+}
+
+fn evidence_content_from_cli(args: EvidenceContentArgs) -> Result<Option<EvidenceContentInput>> {
+    let has_content_args = args.role.is_some()
+        || args.content.is_some()
+        || args.content_digest.is_some()
+        || args.content_size_bytes.is_some()
+        || args.media_type.is_some()
+        || args.format_metadata_json != "{}";
+    if !has_content_args {
+        return Ok(None);
+    }
+
+    let role = required_arg("--content-role", args.role)?;
+    let mut content = match (args.content, args.content_digest, args.content_size_bytes) {
+        (Some(content), None, None) => {
+            EvidenceContentInput::from_raw_bytes(role, content.as_bytes())?
+        }
+        (None, Some(content_digest), Some(content_size_bytes)) => {
+            EvidenceContentInput::from_digest(
+                role,
+                Digest::from_hex(&content_digest)?,
+                content_size_bytes,
+            )?
+        }
+        _ => {
+            return Err(WorkVcsError::EvidenceInvalid(
+                "evidence content requires exactly one of --content or --content-digest with --content-size-bytes"
+                    .to_owned(),
+            ));
+        }
+    };
+    if let Some(media_type) = args.media_type {
+        content = content.with_media_type(media_type)?;
+    }
+    content = content.with_format_metadata(parse_cli_object(
+        "evidence content format metadata",
+        &args.format_metadata_json,
+    )?)?;
+    Ok(Some(content))
 }
 
 fn fingerprint_from_cli(fingerprint: Option<String>, content: Option<String>) -> Result<Digest> {
@@ -14970,6 +15053,73 @@ mod tests {
         assert_eq!(
             value(&current_requirement, "statement_json"),
             "\"New verification requirement statement.\""
+        );
+    }
+
+    #[test]
+    fn cli_creates_evidence_with_content_metadata() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+
+        let evidence = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "create",
+            store,
+            "--kind",
+            "terminal-log",
+            "--metadata-json",
+            r#"{"summary":"captured output"}"#,
+            "--content-role",
+            "stdout",
+            "--content",
+            "evidence bytes",
+            "--media-type",
+            "text/plain",
+            "--format-metadata-json",
+            r#"{"encoding":"utf-8"}"#,
+        ])
+        .expect("parse evidence create"))
+        .expect("create evidence");
+        let evidence_id = value(&evidence, "evidence_id");
+        assert_eq!(value(&evidence, "evidence_kind"), "terminal-log");
+        assert_eq!(value(&evidence, "contents"), "1");
+        assert_eq!(value(&evidence, "content.0.role"), "stdout");
+        assert_eq!(value(&evidence, "content.0.size_bytes"), "14");
+        assert_eq!(value(&evidence, "content.0.media_type"), "text/plain");
+        assert_eq!(
+            value(&evidence, "content.0.format_metadata_json"),
+            r#"{"encoding":"utf-8"}"#
+        );
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "show",
+            store,
+            "--evidence",
+            &evidence_id,
+        ])
+        .expect("parse evidence show"))
+        .expect("show evidence");
+        assert_eq!(value(&shown, "evidence_id"), evidence_id);
+        assert_eq!(
+            value(&shown, "content.0.content_digest"),
+            value(&evidence, "content.0.content_digest")
+        );
+        assert_eq!(value(&shown, "content.0.role"), "stdout");
+        assert_eq!(value(&shown, "content.0.size_bytes"), "14");
+        assert_eq!(value(&shown, "content.0.media_type"), "text/plain");
+        assert_eq!(
+            value(&shown, "content.0.format_metadata_json"),
+            r#"{"encoding":"utf-8"}"#
         );
     }
 

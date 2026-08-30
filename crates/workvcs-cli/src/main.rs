@@ -577,6 +577,9 @@ enum StoreCommand {
 
         #[arg(long)]
         source_bundle_digest: Option<String>,
+
+        #[arg(long)]
+        expected_lineages: Option<usize>,
     },
     #[command(name = "migration-record")]
     MigrationRecord {
@@ -631,6 +634,9 @@ enum StoreCommand {
 
         #[arg(long)]
         outcome: Option<String>,
+
+        #[arg(long)]
+        expected_migrations: Option<usize>,
     },
     #[command(name = "external-ref-record")]
     ExternalRefRecord {
@@ -682,6 +688,9 @@ enum StoreCommand {
 
         #[arg(long)]
         scope: Option<String>,
+
+        #[arg(long)]
+        expected_external_refs: Option<usize>,
     },
     #[command(name = "knowledge-space-create")]
     KnowledgeSpaceCreate {
@@ -3881,6 +3890,7 @@ fn run(cli: Cli) -> Result<String> {
                 source_store,
                 derivation_kind,
                 source_bundle_digest,
+                expected_lineages,
             } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
@@ -3904,7 +3914,17 @@ fn run(cli: Cli) -> Result<String> {
                         options.with_source_bundle_digest(Digest::from_hex(&source_bundle_digest)?);
                 }
                 let result = engine.store_lineages(options)?;
-                render_store_lineage_list(&result)
+                let mut output = render_store_lineage_list(&result)?;
+                if let Some(expected_lineages) = expected_lineages {
+                    let actual_lineages = result.lineages.len();
+                    if actual_lineages != expected_lineages {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "lineages {actual_lineages} does not match expected {expected_lineages}"
+                        )));
+                    }
+                    output.push_str("lineages_match_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::MigrationRecord {
                 store,
@@ -3973,6 +3993,7 @@ fn run(cli: Cli) -> Result<String> {
                 limit,
                 tool_version,
                 outcome,
+                expected_migrations,
             } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
@@ -3991,7 +4012,17 @@ fn run(cli: Cli) -> Result<String> {
                     options = options.with_outcome(outcome)?;
                 }
                 let result = engine.store_migrations(options)?;
-                render_store_migration_list(&result)
+                let mut output = render_store_migration_list(&result)?;
+                if let Some(expected_migrations) = expected_migrations {
+                    let actual_migrations = result.migrations.len();
+                    if actual_migrations != expected_migrations {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "migrations {actual_migrations} does not match expected {expected_migrations}"
+                        )));
+                    }
+                    output.push_str("migrations_match_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::ExternalRefRecord {
                 store,
@@ -4069,6 +4100,7 @@ fn run(cli: Cli) -> Result<String> {
                 external_store,
                 object_kind,
                 scope,
+                expected_external_refs,
             } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
@@ -4092,7 +4124,17 @@ fn run(cli: Cli) -> Result<String> {
                         options.with_reference_scope(ExternalObjectReferenceScope::parse(&scope)?);
                 }
                 let result = engine.external_object_refs(options)?;
-                render_external_object_ref_list(&result)
+                let mut output = render_external_object_ref_list(&result)?;
+                if let Some(expected_external_refs) = expected_external_refs {
+                    let actual_external_refs = result.external_refs.len();
+                    if actual_external_refs != expected_external_refs {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "external refs {actual_external_refs} does not match expected {expected_external_refs}"
+                        )));
+                    }
+                    output.push_str("external_refs_match_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::KnowledgeSpaceCreate { store, name } => {
                 let mut engine = Engine::open(store)?;
@@ -18367,15 +18409,35 @@ mod tests {
             "explicit_fork",
             "--source-bundle-digest",
             &source_bundle_digest,
+            "--expected-lineages",
+            "1",
         ])
         .expect("parse store lineage-list"))
         .expect("list store lineages");
         assert_eq!(value(&listed, "lineages"), "1");
+        assert_eq!(value(&listed, "lineages_match_expected"), "true");
         assert_eq!(value(&listed, "lineage[0].lineage_id"), lineage_id);
         assert_eq!(
             value(&listed, "lineage[0].source_bundle_digest"),
             source_bundle_digest
         );
+
+        let mismatched_list = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "lineage-list",
+            target,
+            "--source-store",
+            &source_store_id,
+            "--derivation-kind",
+            "explicit_fork",
+            "--source-bundle-digest",
+            &source_bundle_digest,
+            "--expected-lineages",
+            "0",
+        ])
+        .expect("parse mismatched store lineage-list"));
+        assert!(mismatched_list.is_err());
     }
 
     #[test]
@@ -18490,15 +18552,35 @@ mod tests {
         .expect("parse mismatched store migration outcome show"));
         assert!(mismatched_outcome.is_err());
 
-        let listed =
-            run(
-                Cli::try_parse_from(["workvcs", "store", "migration-list", store, "--limit", "1"])
-                    .expect("parse store migration-list"),
-            )
-            .expect("list store migrations");
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-list",
+            store,
+            "--limit",
+            "1",
+            "--expected-migrations",
+            "1",
+        ])
+        .expect("parse store migration-list"))
+        .expect("list store migrations");
         assert_eq!(value(&listed, "migrations"), "1");
+        assert_eq!(value(&listed, "migrations_match_expected"), "true");
         assert_eq!(value(&listed, "migration[0].migration_id"), migration_id);
         assert_eq!(value(&listed, "migration[0].outcome"), "completed");
+
+        let mismatched_list = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-list",
+            store,
+            "--limit",
+            "1",
+            "--expected-migrations",
+            "0",
+        ])
+        .expect("parse mismatched store migration-list"));
+        assert!(mismatched_list.is_err());
 
         let failed_recorded = run(Cli::try_parse_from([
             "workvcs",
@@ -18725,14 +18807,34 @@ mod tests {
             "knowledge",
             "--scope",
             "version",
+            "--expected-external-refs",
+            "1",
         ])
         .expect("parse external-ref-list"))
         .expect("list external refs");
         assert_eq!(value(&listed, "external_refs"), "1");
+        assert_eq!(value(&listed, "external_refs_match_expected"), "true");
         assert_eq!(
             value(&listed, "external_ref[0].external_ref_id"),
             external_ref_id
         );
+
+        let mismatched_list = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "external-ref-list",
+            store,
+            "--external-store",
+            &external_store_id,
+            "--object-kind",
+            "knowledge",
+            "--scope",
+            "version",
+            "--expected-external-refs",
+            "0",
+        ])
+        .expect("parse mismatched external-ref-list"));
+        assert!(mismatched_list.is_err());
     }
 
     #[test]

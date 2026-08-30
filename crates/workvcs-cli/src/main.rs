@@ -1279,6 +1279,9 @@ enum BundleCommand {
 
         #[arg(long)]
         input_dir: PathBuf,
+
+        #[arg(long)]
+        require_applied: bool,
     },
     ImportDir {
         #[arg(value_name = "STORE")]
@@ -4719,7 +4722,11 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 Ok(output)
             }
-            BundleCommand::ApplyDir { store, input_dir } => {
+            BundleCommand::ApplyDir {
+                store,
+                input_dir,
+                require_applied,
+            } => {
                 let mut engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
                 let payload_index_bytes = read_bundle_file(&input_dir.join("payload-index.json"))?;
@@ -4729,7 +4736,17 @@ fn run(cli: Cli) -> Result<String> {
                     payload_index_bytes,
                     payloads,
                 )?)?;
-                Ok(render_bundle_import_apply(&result))
+                let mut output = render_bundle_import_apply(&result);
+                if require_applied {
+                    if !result.applied {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle apply did not apply: outcome={}",
+                            result.outcome
+                        )));
+                    }
+                    output.push_str("applied_required=true\n");
+                }
+                Ok(output)
             }
             BundleCommand::ImportDir { store, input_dir } => {
                 let mut engine = Engine::open(store)?;
@@ -20137,10 +20154,12 @@ mod tests {
             old_store,
             "--input-dir",
             export_dir.to_str().expect("export dir path"),
+            "--require-applied",
         ])
         .expect("parse bundle apply-dir"))
         .expect("apply bundle directory");
         assert_eq!(value(&applied, "applied"), "true");
+        assert_eq!(value(&applied, "applied_required"), "true");
         assert_ne!(value(&applied, "import_id"), "none");
         assert_eq!(
             value(&applied, "outcome"),
@@ -20172,6 +20191,18 @@ mod tests {
             value(&shown_import, "outcome"),
             "same_store_fast_forward_applied"
         );
+
+        let duplicate_required_apply = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "apply-dir",
+            old_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-applied",
+        ])
+        .expect("parse duplicate required bundle apply-dir"));
+        assert!(duplicate_required_apply.is_err());
     }
 
     #[test]

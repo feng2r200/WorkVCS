@@ -1277,6 +1277,9 @@ enum MergeCommand {
 
         #[arg(long)]
         outcome: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -7124,6 +7127,7 @@ fn run(cli: Cli) -> Result<String> {
                     include_closed,
                     runtime_state,
                     outcome,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -7150,6 +7154,14 @@ fn run(cli: Cli) -> Result<String> {
                         .unwrap_or("none")
                         == outcome
                 });
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "merge list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                result.merges.truncate(limit);
             }
             Ok(render_merge_list(&result)?)
         }
@@ -28076,6 +28088,34 @@ mod tests {
         assert_eq!(value(&active, "merge.0.merge_id"), merge_id);
         assert_eq!(value(&active, "merge.0.runtime_state"), "active");
         assert_eq!(value(&active, "merge.0.items"), "1");
+
+        let limited_active = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited merge list"))
+        .expect("list limited merges");
+        assert_eq!(value(&limited_active, "merges"), "1");
+        assert_eq!(value(&limited_active, "merge.0.merge_id"), merge_id);
+
+        let zero_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit merge list"));
+        assert!(zero_limit.is_err());
 
         let active_by_runtime = run(Cli::try_parse_from([
             "workvcs",

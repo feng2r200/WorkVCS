@@ -3294,6 +3294,9 @@ enum VerificationCommand {
         evidence: Option<String>,
 
         #[arg(long)]
+        resource: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
     CacheRecord {
@@ -5958,6 +5961,7 @@ fn run(cli: Cli) -> Result<String> {
                     target,
                     result,
                     evidence,
+                    resource,
                     limit,
                 },
         } => {
@@ -5986,6 +5990,16 @@ fn run(cli: Cli) -> Result<String> {
                         .evidence
                         .iter()
                         .any(|evidence| evidence.evidence_id == evidence_id)
+                });
+            }
+            if let Some(resource) = resource {
+                let resource_id = ResourceId::parse_canonical(&resource)?;
+                verifications.retain(|verification| {
+                    verification
+                        .state
+                        .resource_basis
+                        .iter()
+                        .any(|basis| basis.resource_id == resource_id)
                 });
             }
             if matches!(limit, Some(0)) {
@@ -22904,6 +22918,41 @@ mod tests {
         .expect("record verification");
         let verification_id = value(&verification, "verification_entity_id");
         head = value(&verification, "commit_id");
+
+        let resource_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--resource",
+            &resource_id,
+        ])
+        .expect("parse resource-filtered verification list"))
+        .expect("list resource-filtered verifications");
+        assert_eq!(value(&resource_verifications, "verifications"), "1");
+        assert_eq!(
+            value(
+                &resource_verifications,
+                "verification.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
+        let missing_resource_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--resource",
+            &ResourceId::new_v7().to_string(),
+        ])
+        .expect("parse missing resource verification list"))
+        .expect("list missing resource verifications");
+        assert_eq!(value(&missing_resource_verifications, "verifications"), "0");
 
         let missing_cache = run(Cli::try_parse_from([
             "workvcs",

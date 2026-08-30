@@ -561,6 +561,33 @@ enum StoreCommand {
     Info {
         #[arg(value_name = "STORE")]
         store: PathBuf,
+
+        #[arg(long)]
+        expected_store_id: Option<String>,
+
+        #[arg(long)]
+        expected_display_name: Option<String>,
+
+        #[arg(long)]
+        expected_created_at_us: Option<i64>,
+
+        #[arg(long)]
+        expected_store_format_version: Option<i64>,
+
+        #[arg(long)]
+        expected_schema_version: Option<i64>,
+
+        #[arg(long)]
+        expected_object_store_format_version: Option<i64>,
+
+        #[arg(long)]
+        expected_id_scheme: Option<String>,
+
+        #[arg(long)]
+        expected_digest_algorithm: Option<String>,
+
+        #[arg(long)]
+        expected_canonical_json_profile: Option<String>,
     },
     Integrity {
         #[arg(value_name = "STORE")]
@@ -4083,9 +4110,88 @@ fn run(cli: Cli) -> Result<String> {
             IdCommand::Validate { kind, id } => render_validate_id(&kind, &id),
         },
         Command::Store { command } => match command {
-            StoreCommand::Info { store } => {
+            StoreCommand::Info {
+                store,
+                expected_store_id,
+                expected_display_name,
+                expected_created_at_us,
+                expected_store_format_version,
+                expected_schema_version,
+                expected_object_store_format_version,
+                expected_id_scheme,
+                expected_digest_algorithm,
+                expected_canonical_json_profile,
+            } => {
                 let engine = Engine::open(store)?;
-                render_store_info(&engine.store_info()?)
+                let info = engine.store_info()?;
+                let mut output = render_store_info(&info)?;
+                if let Some(expected_store_id) = expected_store_id {
+                    let expected_store_id = StoreId::parse_canonical(&expected_store_id)?;
+                    if info.store_id != expected_store_id {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "store info store id {} does not match expected {}",
+                            info.store_id, expected_store_id
+                        )));
+                    }
+                    output.push_str("store_id_match_expected=true\n");
+                }
+                append_expected_text_match(
+                    &mut output,
+                    "store info display name",
+                    &info.display_name,
+                    expected_display_name.as_deref(),
+                    "display_name_match_expected",
+                )?;
+                append_expected_i64_match(
+                    &mut output,
+                    "store info created at us",
+                    info.created_at_us,
+                    expected_created_at_us,
+                    "created_at_us_match_expected",
+                )?;
+                append_expected_i64_match(
+                    &mut output,
+                    "store info store format version",
+                    info.manifest.store_format_version,
+                    expected_store_format_version,
+                    "store_format_version_match_expected",
+                )?;
+                append_expected_i64_match(
+                    &mut output,
+                    "store info schema version",
+                    info.manifest.schema_version,
+                    expected_schema_version,
+                    "schema_version_match_expected",
+                )?;
+                append_expected_i64_match(
+                    &mut output,
+                    "store info object store format version",
+                    info.manifest.object_store_format_version,
+                    expected_object_store_format_version,
+                    "object_store_format_version_match_expected",
+                )?;
+                append_expected_text_match(
+                    &mut output,
+                    "store info id scheme",
+                    &info.manifest.id_scheme,
+                    expected_id_scheme.as_deref(),
+                    "id_scheme_match_expected",
+                )?;
+                append_expected_text_match(
+                    &mut output,
+                    "store info digest algorithm",
+                    &info.manifest.digest_algorithm,
+                    expected_digest_algorithm.as_deref(),
+                    "digest_algorithm_match_expected",
+                )?;
+                append_expected_text_match(
+                    &mut output,
+                    "store info canonical JSON profile",
+                    &info.manifest.canonical_json_profile,
+                    expected_canonical_json_profile.as_deref(),
+                    "canonical_json_profile_match_expected",
+                )?;
+                Ok(output)
             }
             StoreCommand::Integrity {
                 store,
@@ -14970,6 +15076,44 @@ fn append_expected_count_match(
     Ok(())
 }
 
+fn append_expected_i64_match(
+    output: &mut String,
+    label: &str,
+    actual: i64,
+    expected: Option<i64>,
+    marker: &str,
+) -> Result<()> {
+    if let Some(expected) = expected {
+        if actual != expected {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {actual} does not match expected {expected}"
+            )));
+        }
+        output.push_str(marker);
+        output.push_str("=true\n");
+    }
+    Ok(())
+}
+
+fn append_expected_text_match(
+    output: &mut String,
+    label: &str,
+    actual: &str,
+    expected: Option<&str>,
+    marker: &str,
+) -> Result<()> {
+    if let Some(expected) = expected {
+        if actual != expected {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {actual:?} does not match expected {expected:?}"
+            )));
+        }
+        output.push_str(marker);
+        output.push_str("=true\n");
+    }
+    Ok(())
+}
+
 fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> String {
     format!(
         "valid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\naction={}\nmanifest_digest={}\npayload_index_digest={}\npayload_files={}\npayload_references={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nproblem={}\n",
@@ -16863,6 +17007,71 @@ mod tests {
         assert_eq!(value(&info, "digest_algorithm"), "blake3-256");
         assert_eq!(value(&info, "canonical_json_profile"), "workvcs-jcs-v1");
         parse_canonical_json(value(&info, "manifest_json").as_bytes()).expect("manifest JSON");
+
+        let expected_info = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "info",
+            store,
+            "--expected-store-id",
+            &value(&info, "store_id"),
+            "--expected-display-name",
+            "info-store",
+            "--expected-created-at-us",
+            &value(&info, "created_at_us"),
+            "--expected-store-format-version",
+            "1",
+            "--expected-schema-version",
+            "1",
+            "--expected-object-store-format-version",
+            "1",
+            "--expected-id-scheme",
+            "uuidv7-blob16",
+            "--expected-digest-algorithm",
+            "blake3-256",
+            "--expected-canonical-json-profile",
+            "workvcs-jcs-v1",
+        ])
+        .expect("parse expected store info"))
+        .expect("store info with expected values");
+        assert_eq!(value(&expected_info, "store_id_match_expected"), "true");
+        assert_eq!(value(&expected_info, "display_name_match_expected"), "true");
+        assert_eq!(
+            value(&expected_info, "created_at_us_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_info, "store_format_version_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_info, "schema_version_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_info, "object_store_format_version_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&expected_info, "id_scheme_match_expected"), "true");
+        assert_eq!(
+            value(&expected_info, "digest_algorithm_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_info, "canonical_json_profile_match_expected"),
+            "true"
+        );
+
+        let mismatched_info = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "info",
+            store,
+            "--expected-schema-version",
+            "2",
+        ])
+        .expect("parse mismatched store info"));
+        assert!(mismatched_info.is_err());
     }
 
     #[test]

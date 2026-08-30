@@ -4631,6 +4631,36 @@ fn run(cli: Cli) -> Result<String> {
                     "why relation limit must be greater than zero".to_owned(),
                 ));
             }
+            validate_why_filter_value(
+                "why relation-kind",
+                relation_kind.as_deref(),
+                is_supported_why_relation_kind_filter,
+            )?;
+            validate_why_filter_value(
+                "why direction",
+                direction.as_deref(),
+                is_supported_why_direction_filter,
+            )?;
+            validate_why_filter_value(
+                "why source-kind",
+                source_kind.as_deref(),
+                is_supported_why_endpoint_kind_filter,
+            )?;
+            validate_why_filter_value(
+                "why target-kind",
+                target_kind.as_deref(),
+                is_supported_why_endpoint_kind_filter,
+            )?;
+            validate_why_filter_value(
+                "why source-entity-kind",
+                source_entity_kind.as_deref(),
+                is_supported_why_entity_kind_filter,
+            )?;
+            validate_why_filter_value(
+                "why target-entity-kind",
+                target_entity_kind.as_deref(),
+                is_supported_why_entity_kind_filter,
+            )?;
             let engine = Engine::open(store)?;
             let target = match (branch, commit) {
                 (Some(branch_id), None) => {
@@ -13587,6 +13617,62 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
     }
 }
 
+fn validate_why_filter_value(
+    label: &str,
+    value: Option<&str>,
+    is_supported: fn(&str) -> bool,
+) -> Result<()> {
+    if let Some(value) = value
+        && !is_supported(value)
+    {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} filter {value:?} is not supported"
+        )));
+    }
+    Ok(())
+}
+
+fn is_supported_why_relation_kind_filter(value: &str) -> bool {
+    matches!(
+        value,
+        "primary_containment"
+            | "structural_reference"
+            | "verifies"
+            | "evidenced_by"
+            | "record_contradicts"
+            | "record_derived_from"
+            | "record_invalidates"
+            | "record_related_to"
+            | "record_supports"
+            | "record_supersedes"
+            | "record_validates"
+            | "knowledge_exposure_derived_from"
+            | "knowledge_supersedes"
+    )
+}
+
+fn is_supported_why_direction_filter(value: &str) -> bool {
+    matches!(value, "incoming" | "outgoing")
+}
+
+fn is_supported_why_endpoint_kind_filter(value: &str) -> bool {
+    matches!(value, "entity" | "evidence" | "knowledge_exposure")
+}
+
+fn is_supported_why_entity_kind_filter(value: &str) -> bool {
+    matches!(
+        value,
+        "goal"
+            | "plan"
+            | "task"
+            | "acceptance_criterion"
+            | "verification_requirement"
+            | "verification"
+            | "record"
+            | "knowledge"
+    )
+}
+
 fn why_relation_direction(direction: WhyRelationDirection) -> &'static str {
     match direction {
         WhyRelationDirection::Incoming => "incoming",
@@ -13957,6 +14043,68 @@ mod tests {
             Err(WorkVcsError::QueryInvalid(message))
                 if message == "history limit must be greater than zero"
         ));
+    }
+
+    #[test]
+    fn why_rejects_invalid_filters_before_store_open() {
+        let commit = CommitId::new_v7().to_string();
+        let entity = EntityId::new_v7().to_string();
+        let commands = vec![
+            (
+                "--relation-kind",
+                "unknown_relation",
+                r#"why relation-kind filter "unknown_relation" is not supported"#,
+            ),
+            (
+                "--direction",
+                "sideways",
+                r#"why direction filter "sideways" is not supported"#,
+            ),
+            (
+                "--source-kind",
+                "task",
+                r#"why source-kind filter "task" is not supported"#,
+            ),
+            (
+                "--target-kind",
+                "record",
+                r#"why target-kind filter "record" is not supported"#,
+            ),
+            (
+                "--source-entity-kind",
+                "evidence",
+                r#"why source-entity-kind filter "evidence" is not supported"#,
+            ),
+            (
+                "--target-entity-kind",
+                "knowledge_exposure",
+                r#"why target-entity-kind filter "knowledge_exposure" is not supported"#,
+            ),
+            (
+                "--relation-limit",
+                "0",
+                "why relation limit must be greater than zero",
+            ),
+        ];
+
+        for (flag, value, expected_message) in commands {
+            let result = run(Cli::try_parse_from([
+                "workvcs",
+                "why",
+                "missing.sqlite",
+                "--commit",
+                &commit,
+                "--entity",
+                &entity,
+                flag,
+                value,
+            ])
+            .expect("parse why invalid filter"));
+            assert!(matches!(
+                result,
+                Err(WorkVcsError::QueryInvalid(message)) if message == expected_message
+            ));
+        }
     }
 
     #[test]

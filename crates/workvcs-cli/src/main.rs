@@ -67,9 +67,10 @@ use workvcs_core::{
     RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
     RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
     RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
-    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    ResolvedWhyQuerySubject, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationId, ResourceSnapshot, Result,
+    RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
     SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
     SessionSwitchResult, StoreId, StoreInitOptions, StoreLineageListOptions,
@@ -86,7 +87,8 @@ use workvcs_core::{
     VerificationSnapshot, VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind,
     WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
     WhyRelationKind, WorkState, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
-    WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, content_object_digest,
+    WorkspaceInfo, WorkspaceInitOptions, WorkspaceResourceAssociationOptions,
+    WorkspaceResourceAssociationResult, canonical_bytes, content_object_digest,
     parse_canonical_json,
 };
 
@@ -1754,6 +1756,42 @@ enum ResourceCommand {
 
         #[arg(long)]
         kind: String,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        resource: String,
+    },
+    Bind {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        resource: String,
+
+        #[arg(long)]
+        adapter_kind: String,
+
+        #[arg(long)]
+        locator: String,
+
+        #[arg(long, default_value = "{}")]
+        binding_config_json: String,
+    },
+    AssociateWorkspace {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        workspace: String,
+
+        #[arg(long)]
+        resource: String,
+
+        #[arg(long, default_value = "{}")]
+        metadata_json: String,
     },
     #[command(group(
         ArgGroup::new("resource-observation-fingerprint")
@@ -4287,6 +4325,54 @@ fn run(cli: Cli) -> Result<String> {
             let mut engine = Engine::open(store)?;
             let resource = engine.create_resource(ResourceCreateOptions::new(kind)?)?;
             Ok(render_resource_create(&resource))
+        }
+        Command::Resource {
+            command: ResourceCommand::Show { store, resource },
+        } => {
+            let engine = Engine::open(store)?;
+            render_resource_snapshot(&engine.resource(ResourceId::parse_canonical(&resource)?)?)
+        }
+        Command::Resource {
+            command:
+                ResourceCommand::Bind {
+                    store,
+                    resource,
+                    adapter_kind,
+                    locator,
+                    binding_config_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let options = ResourceBindOptions::new(
+                ResourceId::parse_canonical(&resource)?,
+                adapter_kind,
+                locator,
+            )?
+            .with_binding_config(parse_cli_object(
+                "resource binding config",
+                &binding_config_json,
+            )?)?;
+            render_resource_bind(&engine.bind_resource(options)?)
+        }
+        Command::Resource {
+            command:
+                ResourceCommand::AssociateWorkspace {
+                    store,
+                    workspace,
+                    resource,
+                    metadata_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let options = WorkspaceResourceAssociationOptions::new(
+                workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
+                ResourceId::parse_canonical(&resource)?,
+            )?
+            .with_association_metadata(parse_cli_object(
+                "workspace resource association metadata",
+                &metadata_json,
+            )?)?;
+            render_workspace_resource_association(&engine.associate_workspace_resource(options)?)
         }
         Command::Resource {
             command:
@@ -7308,6 +7394,78 @@ fn render_resource_create(resource: &ResourceCreateResult) -> String {
         "resource_id={}\nresource_kind={}\ncreated_at_us={}\n",
         resource.resource_id, resource.resource_kind, resource.created_at_us
     )
+}
+
+fn render_resource_snapshot(resource: &ResourceSnapshot) -> Result<String> {
+    let mut output = format!(
+        "resource_id={}\nresource_kind={}\ncreated_at_us={}\nbinding_present={}\nworkspace_associations={}\n",
+        resource.resource_id,
+        resource.resource_kind,
+        resource.created_at_us,
+        resource.binding.is_some(),
+        resource.workspace_associations.len()
+    );
+    if let Some(binding) = &resource.binding {
+        writeln!(output, "binding.resource_id={}", binding.resource_id).expect("write to String");
+        writeln!(output, "binding.adapter_kind={}", binding.adapter_kind).expect("write to String");
+        writeln!(output, "binding.locator={}", binding.locator).expect("write to String");
+        writeln!(
+            output,
+            "binding.binding_config_json={}",
+            canonical_cli_json("resource binding config", &binding.binding_config)?
+        )
+        .expect("write to String");
+        writeln!(output, "binding.bound_at_us={}", binding.bound_at_us).expect("write to String");
+    }
+    for (index, association) in resource.workspace_associations.iter().enumerate() {
+        writeln!(
+            output,
+            "workspace_association.{index}.workspace_id={}",
+            association.workspace_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "workspace_association.{index}.resource_id={}",
+            association.resource_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "workspace_association.{index}.metadata_json={}",
+            canonical_cli_json(
+                "workspace resource association metadata",
+                &association.association_metadata
+            )?
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
+fn render_resource_bind(result: &ResourceBindResult) -> Result<String> {
+    Ok(format!(
+        "resource_id={}\nbound_at_us={}\nadapter_kind={}\nlocator={}\nbinding_config_json={}\n",
+        result.resource_id,
+        result.bound_at_us,
+        result.state.adapter_kind,
+        result.state.locator,
+        canonical_cli_json("resource binding config", &result.state.binding_config)?
+    ))
+}
+
+fn render_workspace_resource_association(
+    result: &WorkspaceResourceAssociationResult,
+) -> Result<String> {
+    Ok(format!(
+        "workspace_id={}\nresource_id={}\nmetadata_json={}\n",
+        result.workspace_id,
+        result.resource_id,
+        canonical_cli_json(
+            "workspace resource association metadata",
+            &result.state.association_metadata
+        )?
+    ))
 }
 
 fn render_resource_observation_create(observation: &ResourceObservationCreateResult) -> String {
@@ -15707,6 +15865,145 @@ mod tests {
         assert_eq!(
             value(&plans_at_branch, "plan.0.completion_rationale_json"),
             "\"list sees completed plan\""
+        );
+    }
+
+    #[test]
+    fn cli_shows_binds_and_associates_resources() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+
+        let resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "git-worktree",
+        ])
+        .expect("parse resource create"))
+        .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let resource_before_bind = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "show",
+            store,
+            "--resource",
+            &resource_id,
+        ])
+        .expect("parse resource show before bind"))
+        .expect("show resource before bind");
+        assert_eq!(
+            value(&resource_before_bind, "resource_kind"),
+            "git-worktree"
+        );
+        assert_eq!(value(&resource_before_bind, "binding_present"), "false");
+        assert_eq!(value(&resource_before_bind, "workspace_associations"), "0");
+
+        let binding = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "bind",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "git",
+            "--locator",
+            "file:///repo",
+            "--binding-config-json",
+            r#"{"branch":"main"}"#,
+        ])
+        .expect("parse resource bind"))
+        .expect("bind resource");
+        assert_eq!(value(&binding, "resource_id"), resource_id);
+        assert_eq!(value(&binding, "adapter_kind"), "git");
+        assert_eq!(value(&binding, "locator"), "file:///repo");
+        assert_eq!(
+            value(&binding, "binding_config_json"),
+            r#"{"branch":"main"}"#
+        );
+
+        let association = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "associate-workspace",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--resource",
+            &resource_id,
+            "--metadata-json",
+            r#"{"role":"primary"}"#,
+        ])
+        .expect("parse workspace resource association"))
+        .expect("associate resource");
+        assert_eq!(value(&association, "workspace_id"), workspace_id);
+        assert_eq!(value(&association, "resource_id"), resource_id);
+        assert_eq!(
+            value(&association, "metadata_json"),
+            r#"{"role":"primary"}"#
+        );
+
+        let resource_after_association = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "show",
+            store,
+            "--resource",
+            &resource_id,
+        ])
+        .expect("parse resource show after association"))
+        .expect("show resource after association");
+        assert_eq!(
+            value(&resource_after_association, "binding_present"),
+            "true"
+        );
+        assert_eq!(
+            value(&resource_after_association, "binding.adapter_kind"),
+            "git"
+        );
+        assert_eq!(
+            value(&resource_after_association, "binding.binding_config_json"),
+            r#"{"branch":"main"}"#
+        );
+        assert_eq!(
+            value(&resource_after_association, "workspace_associations"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &resource_after_association,
+                "workspace_association.0.workspace_id"
+            ),
+            workspace_id
+        );
+        assert_eq!(
+            value(
+                &resource_after_association,
+                "workspace_association.0.metadata_json"
+            ),
+            r#"{"role":"primary"}"#
         );
     }
 

@@ -7029,7 +7029,7 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
 
 fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
     format!(
-        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nimported_content_objects={}\nimported_sessions={}\nimported_session_diffs={}\nimported_evidences={}\nimported_resources={}\nimported_resource_observations={}\nimported_verification_bases={}\nimported_events={}\nimported_knowledge_spaces={}\nimported_knowledge_exposures={}\nimported_knowledge_exposure_local_sources={}\nimported_knowledge_exposure_transitions={}\nimported_knowledge_exposure_source_statuses={}\nimported_relation_versions={}\nimported_checkpoints={}\nimported_checkpoint_statuses={}\nupdated_branch_heads={}\nproblem={}\n",
+        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nimported_content_objects={}\nimported_sessions={}\nimported_session_diffs={}\nimported_evidences={}\nimported_resources={}\nimported_resource_observations={}\nimported_verification_bases={}\nimported_events={}\nimported_knowledge_spaces={}\nimported_knowledge_exposures={}\nimported_knowledge_exposure_local_sources={}\nimported_knowledge_exposure_transitions={}\nimported_knowledge_exposure_source_statuses={}\nimported_relation_versions={}\nimported_changeset_causal_anchors={}\nimported_checkpoints={}\nimported_checkpoint_statuses={}\nupdated_branch_heads={}\nproblem={}\n",
         result.applied,
         render_optional_display_or_none(result.import_id.as_ref()),
         result.bundle_digest,
@@ -7070,6 +7070,7 @@ fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
         result.imported_knowledge_exposure_transitions,
         result.imported_knowledge_exposure_source_statuses,
         result.imported_relation_versions,
+        result.imported_changeset_causal_anchors,
         result.imported_checkpoints,
         result.imported_checkpoint_statuses,
         result.updated_branch_heads,

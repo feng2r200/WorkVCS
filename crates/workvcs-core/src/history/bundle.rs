@@ -453,6 +453,7 @@ pub struct BundleImportApplyResult {
     pub imported_knowledge_exposure_transitions: usize,
     pub imported_knowledge_exposure_source_statuses: usize,
     pub imported_relation_versions: usize,
+    pub imported_changeset_causal_anchors: usize,
     pub imported_checkpoints: usize,
     pub imported_checkpoint_statuses: usize,
     pub updated_branch_heads: usize,
@@ -967,6 +968,7 @@ struct BundleImportApplyCounts {
     imported_knowledge_exposure_transitions: usize,
     imported_knowledge_exposure_source_statuses: usize,
     imported_relation_versions: usize,
+    imported_changeset_causal_anchors: usize,
     imported_checkpoints: usize,
     imported_checkpoint_statuses: usize,
     updated_branch_heads: usize,
@@ -1582,6 +1584,7 @@ pub(crate) fn apply_bundle_import(
             imported_knowledge_exposure_transitions: 0,
             imported_knowledge_exposure_source_statuses: 0,
             imported_relation_versions: 0,
+            imported_changeset_causal_anchors: 0,
             imported_checkpoints: 0,
             imported_checkpoint_statuses: 0,
             updated_branch_heads: 0,
@@ -1638,6 +1641,8 @@ pub(crate) fn apply_bundle_import(
     let imported_relation_versions =
         apply_relation_versions(&transaction, &document, &payload_lookup, now_us)?;
     let imported_commits = apply_commit_closure(&transaction, &document, &payload_lookup)?;
+    let imported_changeset_causal_anchors =
+        apply_changeset_causal_anchors(&transaction, &document)?;
     let imported_events = apply_events(&transaction, &document, &payload_lookup)?;
     let imported_checkpoints =
         apply_checkpoint_candidates(&transaction, &document, &payload_lookup)?;
@@ -1667,6 +1672,7 @@ pub(crate) fn apply_bundle_import(
         imported_knowledge_exposure_source_statuses: imported_knowledge_exposures
             .imported_knowledge_exposure_source_statuses,
         imported_relation_versions,
+        imported_changeset_causal_anchors,
         imported_checkpoints: imported_checkpoints.imported_checkpoints,
         imported_checkpoint_statuses: imported_checkpoints.imported_checkpoint_statuses,
         updated_branch_heads,
@@ -1716,6 +1722,7 @@ pub(crate) fn apply_bundle_import(
         imported_knowledge_exposure_source_statuses: counts
             .imported_knowledge_exposure_source_statuses,
         imported_relation_versions: counts.imported_relation_versions,
+        imported_changeset_causal_anchors: counts.imported_changeset_causal_anchors,
         imported_checkpoints: counts.imported_checkpoints,
         imported_checkpoint_statuses: counts.imported_checkpoint_statuses,
         updated_branch_heads: counts.updated_branch_heads,
@@ -6108,6 +6115,13 @@ fn bundle_import_apply_detail_json(
             )?,
         )?,
         integer_field(
+            "imported_changeset_causal_anchors",
+            usize_to_i64(
+                "imported_changeset_causal_anchors",
+                counts.imported_changeset_causal_anchors,
+            )?,
+        )?,
+        integer_field(
             "imported_checkpoints",
             usize_to_i64("imported_checkpoints", counts.imported_checkpoints)?,
         )?,
@@ -6852,6 +6866,30 @@ fn apply_commit_closure(
     Ok(imported)
 }
 
+fn apply_changeset_causal_anchors(
+    transaction: &Transaction<'_>,
+    document: &BundleSameStoreApplyDocument,
+) -> Result<usize> {
+    let mut imported = 0;
+    for anchor in &document.changeset_causal_anchors {
+        require_changeset_row(transaction, anchor.changeset_id)?;
+        let anchor_object_id_bytes = parse_object_id_bytes(
+            "bundle changeset_causal_anchor.anchor_object_id",
+            &anchor.anchor_object_id,
+        )?;
+        require_object_identity_kind(
+            transaction,
+            "bundle changeset_causal_anchor.anchor_object_id",
+            &anchor_object_id_bytes,
+            &anchor.anchor_object_kind,
+        )?;
+        if ensure_changeset_causal_anchor_row(transaction, anchor, &anchor_object_id_bytes)? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
 fn apply_events(
     transaction: &Transaction<'_>,
     document: &BundleSameStoreApplyDocument,
@@ -7154,6 +7192,100 @@ fn require_changeset_row(transaction: &Transaction<'_>, changeset_id: ChangeSetI
         .ok_or_else(|| {
             WorkVcsError::ImmutableImportInvalid(format!("ChangeSet {changeset_id} is missing"))
         })
+}
+
+fn require_object_identity_kind(
+    transaction: &Transaction<'_>,
+    label: &str,
+    object_id_bytes: &[u8; 16],
+    expected_kind: &str,
+) -> Result<()> {
+    validate_object_identity_kind(label, expected_kind)?;
+    let existing_object_kind = transaction
+        .query_row(
+            "SELECT object_kind
+             FROM object_identity
+             WHERE object_id = ?1",
+            params![&object_id_bytes[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    match existing_object_kind {
+        Some(object_kind) if object_kind == expected_kind => Ok(()),
+        Some(object_kind) => Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "{label} object exists with kind {object_kind}, not {expected_kind}"
+        ))),
+        None => Err(WorkVcsError::ImmutableImportInvalid(format!(
+            "{label} is missing from object_identity"
+        ))),
+    }
+}
+
+fn ensure_changeset_causal_anchor_row(
+    transaction: &Transaction<'_>,
+    anchor: &BundleChangeSetCausalAnchorRef,
+    anchor_object_id_bytes: &[u8; 16],
+) -> Result<bool> {
+    let changeset_id_bytes = anchor.changeset_id.raw_bytes();
+    let existing_by_ordinal = transaction
+        .query_row(
+            "SELECT anchor_object_id
+             FROM changeset_causal_anchor
+             WHERE changeset_id = ?1
+               AND ordinal = ?2",
+            params![&changeset_id_bytes[..], anchor.ordinal],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(existing_anchor_object_id) = existing_by_ordinal {
+        let existing_anchor_object_id = decode_16(
+            "changeset_causal_anchor.anchor_object_id",
+            existing_anchor_object_id,
+        )?;
+        if &existing_anchor_object_id != anchor_object_id_bytes {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "ChangeSet {} causal anchor ordinal {} exists with different object",
+                anchor.changeset_id, anchor.ordinal
+            )));
+        }
+        return Ok(false);
+    }
+
+    let existing_by_object = transaction
+        .query_row(
+            "SELECT ordinal
+             FROM changeset_causal_anchor
+             WHERE changeset_id = ?1
+               AND anchor_object_id = ?2",
+            params![&changeset_id_bytes[..], &anchor_object_id_bytes[..]],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(existing_ordinal) = existing_by_object {
+        if existing_ordinal != anchor.ordinal {
+            return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                "ChangeSet {} causal anchor object {} exists at ordinal {}, not {}",
+                anchor.changeset_id, anchor.anchor_object_id, existing_ordinal, anchor.ordinal
+            )));
+        }
+        return Ok(false);
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO changeset_causal_anchor(changeset_id, ordinal, anchor_object_id)
+             VALUES (?1, ?2, ?3)",
+            params![
+                &changeset_id_bytes[..],
+                anchor.ordinal,
+                &anchor_object_id_bytes[..]
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(true)
 }
 
 fn ensure_acceptance_criterion_identity_row(
@@ -9592,9 +9724,6 @@ fn bundle_manifest_supports_same_store_apply(
     value: &CanonicalValue,
     changeset_causal_anchors: &[BundleChangeSetCausalAnchorRef],
 ) -> std::result::Result<bool, String> {
-    if !changeset_causal_anchors.is_empty() {
-        return Ok(false);
-    }
     for checkpoint in optional_array_field_ref(value, "bundle manifest", "checkpoint_candidates")? {
         if parse_bundle_checkpoint_candidate_ref(checkpoint).is_err() {
             return Ok(false);
@@ -9637,6 +9766,12 @@ fn bundle_manifest_supports_same_store_apply(
             _ => return Ok(false),
         }
     }
+    let relation_versions = array_field_ref(value, "bundle manifest", "relation_versions")?
+        .iter()
+        .map(|relation_version| {
+            parse_bundle_relation_version_ref(relation_version).map_err(|error| error.to_string())
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let acceptance_criterion_identities =
         optional_array_field_ref(value, "bundle manifest", "acceptance_criterion_identities")?
             .iter()
@@ -9682,6 +9817,10 @@ fn bundle_manifest_supports_same_store_apply(
     let evidences = optional_array_field_ref(value, "bundle manifest", "evidences")?
         .iter()
         .map(|evidence| parse_bundle_evidence_ref(evidence).map_err(|error| error.to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let resources = optional_array_field_ref(value, "bundle manifest", "resources")?
+        .iter()
+        .map(|resource| parse_bundle_resource_ref(resource).map_err(|error| error.to_string()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let resource_observations =
         optional_array_field_ref(value, "bundle manifest", "resource_observations")?
@@ -9771,6 +9910,21 @@ fn bundle_manifest_supports_same_store_apply(
         &knowledge_exposure_transitions,
         &knowledge_exposure_source_statuses,
     )?;
+    let changeset_anchor_supported = bundle_manifest_changeset_anchor_apply_supported(
+        changeset_causal_anchors,
+        &commits,
+        BundleApplyObjectIdentityRefs {
+            entity_versions: &entity_versions,
+            relation_versions: &relation_versions,
+            sessions: &sessions,
+            session_diffs: &session_diffs,
+            evidences: &evidences,
+            resources: &resources,
+            resource_observations: &resource_observations,
+            knowledge_spaces: &knowledge_spaces,
+            knowledge_exposures: &knowledge_exposures,
+        },
+    )?;
     Ok(
         acceptance_criterion_ids == expected_acceptance_criterion_ids
             && verification_requirement_ids == expected_verification_requirement_ids
@@ -9778,7 +9932,8 @@ fn bundle_manifest_supports_same_store_apply(
             && session_ids == source_session_ids
             && session_diff_session_ids == source_session_ids
             && event_supported
-            && knowledge_exposure_supported,
+            && knowledge_exposure_supported
+            && changeset_anchor_supported,
     )
 }
 
@@ -9872,6 +10027,121 @@ fn bundle_manifest_knowledge_exposure_apply_supported(
     Ok(!knowledge_exposure_transitions
         .iter()
         .any(|transition| transition.event_id.is_some()))
+}
+
+fn bundle_manifest_changeset_anchor_apply_supported(
+    anchors: &[BundleChangeSetCausalAnchorRef],
+    commits: &[BundleCommitRef],
+    refs: BundleApplyObjectIdentityRefs<'_>,
+) -> std::result::Result<bool, String> {
+    validate_changeset_causal_anchor_keys_for_manifest(anchors)?;
+    let changeset_ids = commits
+        .iter()
+        .map(|commit| commit.changeset_id)
+        .collect::<BTreeSet<_>>();
+    let object_refs = bundle_apply_object_identity_ref_keys(refs);
+    Ok(anchors.iter().all(|anchor| {
+        changeset_ids.contains(&anchor.changeset_id)
+            && object_refs.contains(&(
+                anchor.anchor_object_id.clone(),
+                anchor.anchor_object_kind.clone(),
+            ))
+    }))
+}
+
+struct BundleApplyObjectIdentityRefs<'a> {
+    entity_versions: &'a [BundleEntityVersionRef],
+    relation_versions: &'a [BundleRelationVersionRef],
+    sessions: &'a [BundleSessionRef],
+    session_diffs: &'a [BundleSessionDiffRef],
+    evidences: &'a [BundleEvidenceRef],
+    resources: &'a [BundleResourceRef],
+    resource_observations: &'a [BundleResourceObservationRef],
+    knowledge_spaces: &'a [BundleKnowledgeSpaceRef],
+    knowledge_exposures: &'a [BundleKnowledgeExposureRef],
+}
+
+fn bundle_apply_object_identity_ref_keys(
+    input: BundleApplyObjectIdentityRefs<'_>,
+) -> BTreeSet<(String, String)> {
+    let mut refs = BTreeSet::new();
+    refs.extend(
+        input
+            .entity_versions
+            .iter()
+            .map(|entity_version| (entity_version.entity_id.to_string(), "entity".to_owned())),
+    );
+    refs.extend(input.relation_versions.iter().map(|relation_version| {
+        (
+            relation_version.relation_id.to_string(),
+            "relation".to_owned(),
+        )
+    }));
+    refs.extend(
+        input
+            .sessions
+            .iter()
+            .map(|session| (session.session_id.to_string(), "session".to_owned())),
+    );
+    refs.extend(input.session_diffs.iter().map(|session_diff| {
+        (
+            session_diff.session_diff_id.to_string(),
+            "session_diff".to_owned(),
+        )
+    }));
+    refs.extend(
+        input
+            .evidences
+            .iter()
+            .map(|evidence| (evidence.evidence_id.to_string(), "evidence".to_owned())),
+    );
+    refs.extend(
+        input
+            .resources
+            .iter()
+            .map(|resource| (resource.resource_id.to_string(), "resource".to_owned())),
+    );
+    refs.extend(input.resource_observations.iter().map(|observation| {
+        (
+            observation.observation_id.to_string(),
+            "resource_observation".to_owned(),
+        )
+    }));
+    refs.extend(input.knowledge_spaces.iter().map(|space| {
+        (
+            space.knowledge_space_id.to_string(),
+            "knowledge_space".to_owned(),
+        )
+    }));
+    refs.extend(input.knowledge_exposures.iter().map(|exposure| {
+        (
+            exposure.exposure_id.to_string(),
+            "knowledge_exposure".to_owned(),
+        )
+    }));
+    refs
+}
+
+fn validate_changeset_causal_anchor_keys_for_manifest(
+    anchors: &[BundleChangeSetCausalAnchorRef],
+) -> std::result::Result<(), String> {
+    let mut by_ordinal = BTreeSet::new();
+    let mut by_object = BTreeSet::new();
+    for anchor in anchors {
+        if !by_ordinal.insert((anchor.changeset_id, anchor.ordinal)) {
+            return Err(format!(
+                "bundle manifest ChangeSet {} causal anchor ordinal {} appears more than once",
+                anchor.changeset_id, anchor.ordinal
+            ));
+        }
+        if !by_object.insert((anchor.changeset_id, anchor.anchor_object_id.clone())) {
+            return Err(format!(
+                "bundle manifest ChangeSet {} causal anchor object {} appears more than once",
+                anchor.changeset_id, anchor.anchor_object_id
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn unique_knowledge_space_ids_for_manifest(
@@ -10557,6 +10827,7 @@ fn parse_bundle_same_store_apply_document(
     validate_same_store_apply_event_coverage(&document)?;
     validate_same_store_apply_knowledge_exposure_coverage(&document)?;
     validate_same_store_apply_relation_coverage(&document)?;
+    validate_same_store_apply_changeset_anchor_coverage(&document)?;
     validate_same_store_apply_checkpoint_coverage(&document)?;
     Ok(document)
 }
@@ -11259,6 +11530,47 @@ fn validate_same_store_apply_checkpoint_coverage(
             return Err(WorkVcsError::QueryInvalid(format!(
                 "bundle checkpoint candidate {} content object metadata does not match checkpoint metadata",
                 checkpoint.checkpoint_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_same_store_apply_changeset_anchor_coverage(
+    document: &BundleSameStoreApplyDocument,
+) -> Result<()> {
+    validate_changeset_causal_anchor_keys_for_manifest(&document.changeset_causal_anchors)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    let changeset_ids = document
+        .commits
+        .iter()
+        .map(|commit| commit.changeset_id)
+        .collect::<BTreeSet<_>>();
+    let object_refs = bundle_apply_object_identity_ref_keys(BundleApplyObjectIdentityRefs {
+        entity_versions: &document.entity_versions,
+        relation_versions: &document.relation_versions,
+        sessions: &document.sessions,
+        session_diffs: &document.session_diffs,
+        evidences: &document.evidences,
+        resources: &document.resources,
+        resource_observations: &document.resource_observations,
+        knowledge_spaces: &document.knowledge_spaces,
+        knowledge_exposures: &document.knowledge_exposures,
+    });
+    for anchor in &document.changeset_causal_anchors {
+        if !changeset_ids.contains(&anchor.changeset_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle ChangeSet causal anchor references missing ChangeSet {}",
+                anchor.changeset_id
+            )));
+        }
+        if !object_refs.contains(&(
+            anchor.anchor_object_id.clone(),
+            anchor.anchor_object_kind.clone(),
+        )) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle ChangeSet {} causal anchor object {} kind {} is outside same-Store apply object closure",
+                anchor.changeset_id, anchor.anchor_object_id, anchor.anchor_object_kind
             )));
         }
     }

@@ -1,11 +1,14 @@
+use rusqlite::{Connection, params};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    BundleImportPreflightOptions, BundleManifestValidationOptions, BundlePayloadExport,
-    BundlePayloadExportOptions, BundlePayloadInput, BundlePayloadValidationOptions, CanonicalValue,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Engine, RecordCreateOptions,
-    StoreInitOptions, WorkspaceInfo, WorkspaceInitOptions, parse_canonical_json,
+    BundleImportApplyOptions, BundleImportPreflightOptions, BundleManifestValidationOptions,
+    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
+    BundlePayloadValidationOptions, CanonicalValue, ChangeSetId, CommitId,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Engine, EntityId,
+    RecordCreateOptions, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, WorkspaceInfo,
+    WorkspaceInitOptions, parse_canonical_json,
 };
 
 fn store_paths() -> (TempDir, PathBuf, PathBuf) {
@@ -26,6 +29,45 @@ fn create_workspace(path: &Path) -> (Engine, WorkspaceInfo) {
         .create_workspace(WorkspaceInitOptions::new("workspace").expect("workspace options"))
         .expect("create workspace");
     (engine, workspace)
+}
+
+fn create_task(
+    engine: &mut Engine,
+    workspace: &WorkspaceInfo,
+    head: CommitId,
+    description: &str,
+) -> TaskCreateCommit {
+    engine
+        .create_task(
+            TaskCreateOptions::new(workspace.initial_branch_id, head, description)
+                .expect("task options"),
+        )
+        .expect("create task")
+}
+
+fn raw_connection(path: &Path) -> Connection {
+    let connection = Connection::open(path).expect("raw connection");
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .expect("enable raw foreign keys");
+    connection
+}
+
+fn insert_changeset_causal_anchor(
+    path: &Path,
+    changeset_id: ChangeSetId,
+    anchor_entity_id: EntityId,
+) {
+    raw_connection(path)
+        .execute(
+            "INSERT INTO changeset_causal_anchor(changeset_id, ordinal, anchor_object_id)
+             VALUES(?1, 0, ?2)",
+            params![
+                &changeset_id.raw_bytes()[..],
+                &anchor_entity_id.raw_bytes()[..],
+            ],
+        )
+        .expect("insert changeset causal anchor");
 }
 
 fn create_supersede_with_causal_anchor(
@@ -101,6 +143,15 @@ fn preflight_options(export: &BundlePayloadExport) -> BundleImportPreflightOptio
     .expect("preflight options")
 }
 
+fn apply_options(export: &BundlePayloadExport) -> BundleImportApplyOptions {
+    BundleImportApplyOptions::from_parts(
+        export.manifest_bytes.clone(),
+        export.payload_index_bytes.clone(),
+        payload_inputs(export),
+    )
+    .expect("apply options")
+}
+
 fn validation_options(export: &BundlePayloadExport) -> BundlePayloadValidationOptions {
     BundlePayloadValidationOptions::from_parts(
         export.manifest.commit_id,
@@ -167,62 +218,47 @@ fn bundle_export_includes_changeset_causal_anchors() {
 }
 
 #[test]
-fn bundle_preflight_defers_anchor_bundle_until_apply_preserves_anchors() {
+fn bundle_apply_restores_changeset_causal_anchors() {
     let (_tempdir, source_path, old_path) = store_paths();
     let (mut engine, workspace) = create_workspace(&source_path);
-    let prior = engine
-        .create_record(
-            RecordCreateOptions::decision(
-                workspace.initial_branch_id,
-                workspace.genesis_commit_id,
-                "Use optimistic writes",
-            )
-            .expect("prior decision options"),
-        )
-        .expect("create prior decision");
-    let finding = engine
-        .create_record(
-            RecordCreateOptions::finding(
-                workspace.initial_branch_id,
-                prior.commit_id,
-                "Concurrent write tests fail without serialization",
-            )
-            .expect("finding options"),
-        )
-        .expect("create finding");
-    let replacement = engine
-        .create_record(
-            RecordCreateOptions::decision(
-                workspace.initial_branch_id,
-                finding.commit_id,
-                "Use serialized writes",
-            )
-            .expect("replacement decision options"),
-        )
-        .expect("create replacement decision");
+    let first = create_task(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "old branch head task",
+    );
     drop(engine);
     fs::copy(&source_path, &old_path).expect("copy old store");
 
     let mut source_engine = Engine::open(&source_path).expect("open source store");
-    let superseded = source_engine
-        .supersede_decision_record(
-            DecisionRecordSupersedeOptions::new(
-                workspace.initial_branch_id,
-                replacement.commit_id,
-                replacement.record_entity_id,
-                prior.record_entity_id,
-                prior.record_entity_version_id,
-                "Finding caused the replacement decision",
-            )
-            .expect("supersede options")
-            .with_causal_record(finding.record_entity_id),
-        )
-        .expect("supersede decision");
-    let export = source_engine
-        .export_bundle_payloads(BundlePayloadExportOptions::for_commit(superseded.commit_id))
-        .expect("export payloads");
+    let second = create_task(
+        &mut source_engine,
+        &workspace,
+        first.commit_id,
+        "exported branch head task with causal anchor",
+    );
+    drop(source_engine);
+    insert_changeset_causal_anchor(&source_path, second.changeset_id, second.task_entity_id);
 
-    let old_engine = Engine::open(&old_path).expect("open old store");
+    let source_engine = Engine::open(&source_path).expect("reopen source store");
+    let export = source_engine
+        .export_bundle_payloads(BundlePayloadExportOptions::for_commit(second.commit_id))
+        .expect("export payloads");
+    assert_eq!(export.manifest.changeset_causal_anchors.len(), 1);
+    assert_eq!(
+        export.manifest.changeset_causal_anchors[0].changeset_id,
+        second.changeset_id
+    );
+    assert_eq!(
+        export.manifest.changeset_causal_anchors[0].anchor_object_id,
+        second.task_entity_id.to_string()
+    );
+    assert_eq!(
+        export.manifest.changeset_causal_anchors[0].anchor_object_kind,
+        "entity"
+    );
+
+    let mut old_engine = Engine::open(&old_path).expect("open old store");
     let preflight = old_engine
         .preflight_bundle_import(preflight_options(&export))
         .expect("preflight bundle import");
@@ -230,8 +266,28 @@ fn bundle_preflight_defers_anchor_bundle_until_apply_preserves_anchors() {
     assert!(preflight.valid, "{:?}", preflight.problem);
     assert_eq!(preflight.source_store_relation, "same_store");
     assert!(preflight.import_required);
-    assert!(!preflight.can_apply);
-    assert_eq!(preflight.action, "same_store_import_not_implemented");
+    assert!(preflight.can_apply, "{preflight:#?}");
+    assert_eq!(preflight.action, "same_store_fast_forward_ready");
     assert_eq!(preflight.exported_branch_heads, 1);
     assert_eq!(preflight.branch_heads_fast_forward, 1);
+
+    let applied = old_engine
+        .apply_bundle_import(apply_options(&export))
+        .expect("apply bundle import");
+    assert!(applied.applied, "{:?}", applied.preflight.problem);
+    assert_eq!(applied.outcome, "same_store_fast_forward_applied");
+    assert_eq!(applied.imported_commits, 1);
+    assert_eq!(applied.imported_changeset_causal_anchors, 1);
+    assert_eq!(applied.updated_branch_heads, 1);
+
+    let anchors = old_engine
+        .changeset_causal_anchors(second.changeset_id)
+        .expect("changeset causal anchors");
+    assert_eq!(anchors.anchors.len(), 1);
+    assert_eq!(anchors.anchors[0].ordinal, 0);
+    assert_eq!(
+        anchors.anchors[0].anchor_object_id,
+        second.task_entity_id.to_string()
+    );
+    assert_eq!(anchors.anchors[0].anchor_object_kind, "entity");
 }

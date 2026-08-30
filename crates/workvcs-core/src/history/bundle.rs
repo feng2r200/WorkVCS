@@ -459,11 +459,12 @@ pub struct BundleImportApplyResult {
     pub updated_branch_heads: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleImportAttemptListOptions {
     limit: usize,
     source_store_id: Option<StoreId>,
     bundle_digest: Option<Digest>,
+    outcome: Option<String>,
 }
 
 impl BundleImportAttemptListOptions {
@@ -472,6 +473,7 @@ impl BundleImportAttemptListOptions {
             limit: 50,
             source_store_id: None,
             bundle_digest: None,
+            outcome: None,
         }
     }
 
@@ -495,16 +497,27 @@ impl BundleImportAttemptListOptions {
         self
     }
 
-    fn limit(self) -> usize {
+    pub fn with_outcome(mut self, outcome: impl Into<String>) -> Result<Self> {
+        let outcome = outcome.into();
+        validate_stored_text("bundle import attempt outcome filter", &outcome)?;
+        self.outcome = Some(outcome);
+        Ok(self)
+    }
+
+    fn limit(&self) -> usize {
         self.limit
     }
 
-    fn source_store_id(self) -> Option<StoreId> {
+    fn source_store_id(&self) -> Option<StoreId> {
         self.source_store_id
     }
 
-    fn bundle_digest(self) -> Option<Digest> {
+    fn bundle_digest(&self) -> Option<Digest> {
         self.bundle_digest
+    }
+
+    fn outcome(&self) -> Option<&str> {
+        self.outcome.as_deref()
     }
 }
 
@@ -1746,14 +1759,18 @@ pub(crate) fn bundle_import_attempts(
     let limit = usize_to_i64("bundle import attempt list limit", options.limit())?;
     let source_store_id_bytes = options.source_store_id().map(|id| id.raw_bytes());
     let bundle_digest_bytes = options.bundle_digest().map(|digest| *digest.as_bytes());
+    let outcome = options.outcome();
     let mut statement = connection
         .inner()
         .prepare(
-            "SELECT import_id
-             FROM import_attempt
-             WHERE (?2 IS NULL OR source_store_id = ?2)
-               AND (?3 IS NULL OR bundle_digest = ?3)
-             ORDER BY started_at_us DESC, import_id DESC
+            "SELECT attempt.import_id
+             FROM import_attempt attempt
+             LEFT JOIN import_attempt_outcome outcome
+                    ON outcome.import_id = attempt.import_id
+             WHERE (?2 IS NULL OR attempt.source_store_id = ?2)
+               AND (?3 IS NULL OR attempt.bundle_digest = ?3)
+               AND (?4 IS NULL OR outcome.outcome = ?4)
+             ORDER BY attempt.started_at_us DESC, attempt.import_id DESC
              LIMIT ?1",
         )
         .map_err(storage_error)?;
@@ -1762,7 +1779,8 @@ pub(crate) fn bundle_import_attempts(
             params![
                 limit,
                 source_store_id_bytes.as_ref().map(|bytes| &bytes[..]),
-                bundle_digest_bytes.as_ref().map(|bytes| &bytes[..])
+                bundle_digest_bytes.as_ref().map(|bytes| &bytes[..]),
+                outcome
             ],
             |row| row.get::<_, Vec<u8>>(0),
         )

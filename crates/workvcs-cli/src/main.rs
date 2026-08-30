@@ -1515,6 +1515,9 @@ enum BundleCommand {
         bundle_digest: Option<String>,
 
         #[arg(long)]
+        outcome: Option<String>,
+
+        #[arg(long)]
         expected_imports: Option<usize>,
     },
     ValidateManifest {
@@ -5745,6 +5748,7 @@ fn run(cli: Cli) -> Result<String> {
                 limit,
                 source_store,
                 bundle_digest,
+                outcome,
                 expected_imports,
             } => {
                 if matches!(limit, Some(0)) {
@@ -5763,6 +5767,9 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 if let Some(bundle_digest) = bundle_digest {
                     options = options.with_bundle_digest(Digest::from_hex(&bundle_digest)?);
+                }
+                if let Some(outcome) = outcome {
+                    options = options.with_outcome(outcome)?;
                 }
                 let result = engine.bundle_import_attempts(options)?;
                 let mut output = render_bundle_import_attempt_list(&result);
@@ -22864,6 +22871,46 @@ mod tests {
         assert_eq!(
             value(&listed_imports, "import[0].outcome"),
             "already_present"
+        );
+
+        let outcome_filtered_imports = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-list",
+            store,
+            "--outcome",
+            "already_present",
+            "--expected-imports",
+            "1",
+        ])
+        .expect("parse bundle import-list outcome filter"))
+        .expect("list bundle import attempts by outcome");
+        assert_eq!(value(&outcome_filtered_imports, "imports"), "1");
+        assert_eq!(
+            value(&outcome_filtered_imports, "imports_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&outcome_filtered_imports, "import[0].import_id"),
+            import_id
+        );
+
+        let empty_outcome_filtered_imports = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-list",
+            store,
+            "--outcome",
+            "same_store_fast_forward_applied",
+            "--expected-imports",
+            "0",
+        ])
+        .expect("parse empty bundle import-list outcome filter"))
+        .expect("list no bundle import attempts by outcome");
+        assert_eq!(value(&empty_outcome_filtered_imports, "imports"), "0");
+        assert_eq!(
+            value(&empty_outcome_filtered_imports, "imports_match_expected"),
+            "true"
         );
 
         let mismatched_imports = run(Cli::try_parse_from([

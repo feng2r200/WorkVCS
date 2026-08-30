@@ -1463,6 +1463,30 @@ enum BundleCommand {
 
         #[arg(long)]
         require_valid: bool,
+
+        #[arg(long)]
+        expected_outcome: Option<String>,
+
+        #[arg(long)]
+        expected_payload_files: Option<usize>,
+
+        #[arg(long)]
+        expected_payload_references: Option<usize>,
+
+        #[arg(long)]
+        expected_exported_branch_heads: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_heads_already_present: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_heads_missing: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_heads_fast_forward: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_heads_diverged: Option<usize>,
     },
     ImportShow {
         #[arg(value_name = "STORE")]
@@ -5589,6 +5613,14 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 input_dir,
                 require_valid,
+                expected_outcome,
+                expected_payload_files,
+                expected_payload_references,
+                expected_exported_branch_heads,
+                expected_branch_heads_already_present,
+                expected_branch_heads_missing,
+                expected_branch_heads_fast_forward,
+                expected_branch_heads_diverged,
             } => {
                 let mut engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
@@ -5614,6 +5646,64 @@ fn run(cli: Cli) -> Result<String> {
                     }
                     output.push_str("valid_required=true\n");
                 }
+                if let Some(expected_outcome) = expected_outcome {
+                    let actual_outcome = &result.outcome;
+                    if actual_outcome != &expected_outcome {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle import outcome {actual_outcome} does not match expected {expected_outcome}"
+                        )));
+                    }
+                    output.push_str("outcome_matches_expected=true\n");
+                }
+                append_expected_count_match(
+                    &mut output,
+                    "bundle import payload files",
+                    result.preflight.payload_files,
+                    expected_payload_files,
+                    "payload_files_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle import payload references",
+                    result.preflight.payload_references,
+                    expected_payload_references,
+                    "payload_references_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle import exported branch heads",
+                    result.preflight.exported_branch_heads,
+                    expected_exported_branch_heads,
+                    "exported_branch_heads_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle import branch heads already present",
+                    result.preflight.branch_heads_already_present,
+                    expected_branch_heads_already_present,
+                    "branch_heads_already_present_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle import branch heads missing",
+                    result.preflight.branch_heads_missing,
+                    expected_branch_heads_missing,
+                    "branch_heads_missing_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle import branch heads fast forward",
+                    result.preflight.branch_heads_fast_forward,
+                    expected_branch_heads_fast_forward,
+                    "branch_heads_fast_forward_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle import branch heads diverged",
+                    result.preflight.branch_heads_diverged,
+                    expected_branch_heads_diverged,
+                    "branch_heads_diverged_match_expected",
+                )?;
                 Ok(output)
             }
             BundleCommand::ImportShow {
@@ -22595,6 +22685,24 @@ mod tests {
         .expect("parse required apply bundle preflight-dir"));
         assert!(required_apply_preflight.is_err());
 
+        let mismatch_import_path = tempdir.path().join("mismatch-import.sqlite");
+        fs::copy(&path, &mismatch_import_path).expect("copy mismatch import store");
+        let mismatch_import_store = mismatch_import_path
+            .to_str()
+            .expect("mismatch import store path text");
+        let mismatched_import_attempt = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-dir",
+            mismatch_import_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--expected-branch-heads-missing",
+            "1",
+        ])
+        .expect("parse mismatched bundle import-dir"));
+        assert!(mismatched_import_attempt.is_err());
+
         let import_attempt = run(Cli::try_parse_from([
             "workvcs",
             "bundle",
@@ -22603,6 +22711,22 @@ mod tests {
             "--input-dir",
             export_dir.to_str().expect("export dir path"),
             "--require-valid",
+            "--expected-outcome",
+            "already_present",
+            "--expected-payload-files",
+            "3",
+            "--expected-payload-references",
+            "5",
+            "--expected-exported-branch-heads",
+            "1",
+            "--expected-branch-heads-already-present",
+            "1",
+            "--expected-branch-heads-missing",
+            "0",
+            "--expected-branch-heads-fast-forward",
+            "0",
+            "--expected-branch-heads-diverged",
+            "0",
         ])
         .expect("parse bundle import-dir"))
         .expect("record bundle import attempt");
@@ -22624,6 +22748,41 @@ mod tests {
         assert_eq!(value(&import_attempt, "can_apply"), "false");
         assert_eq!(value(&import_attempt, "exported_branch_heads"), "1");
         assert_eq!(value(&import_attempt, "branch_heads_already_present"), "1");
+        assert_eq!(value(&import_attempt, "branch_heads_missing"), "0");
+        assert_eq!(value(&import_attempt, "branch_heads_fast_forward"), "0");
+        assert_eq!(value(&import_attempt, "branch_heads_diverged"), "0");
+        assert_eq!(value(&import_attempt, "outcome_matches_expected"), "true");
+        assert_eq!(
+            value(&import_attempt, "payload_files_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&import_attempt, "payload_references_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&import_attempt, "exported_branch_heads_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &import_attempt,
+                "branch_heads_already_present_match_expected"
+            ),
+            "true"
+        );
+        assert_eq!(
+            value(&import_attempt, "branch_heads_missing_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&import_attempt, "branch_heads_fast_forward_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&import_attempt, "branch_heads_diverged_match_expected"),
+            "true"
+        );
         assert_eq!(value(&import_attempt, "problem"), "none");
         let import_id = value(&import_attempt, "import_id");
 

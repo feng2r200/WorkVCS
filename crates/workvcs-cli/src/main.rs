@@ -2112,6 +2112,9 @@ enum VerificationRequirementCommand {
 
         #[arg(long)]
         local_key: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -5291,6 +5294,7 @@ fn run(cli: Cli) -> Result<String> {
                     commit,
                     criterion,
                     local_key,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5304,6 +5308,14 @@ fn run(cli: Cli) -> Result<String> {
             }
             if let Some(local_key) = local_key {
                 requirements.retain(|requirement| requirement.local_key == local_key);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "vr list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                requirements.truncate(limit);
             }
             render_verification_requirement_list(commit_id, &requirements)
         }
@@ -18752,6 +18764,38 @@ mod tests {
             ),
             requirement_id
         );
+
+        let limited_requirements_for_criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited vr list by criterion"))
+        .expect("list limited vr by criterion");
+        assert_eq!(
+            value(&limited_requirements_for_criterion, "requirements"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &limited_requirements_for_criterion,
+                "requirement.0.verification_requirement_entity_id"
+            ),
+            requirement_id
+        );
+
+        let zero_limit_requirements = run(Cli::try_parse_from([
+            "workvcs", "vr", "list", store, "--branch", &branch, "--limit", "0",
+        ])
+        .expect("parse zero-limit vr list"));
+        assert!(zero_limit_requirements.is_err());
 
         let requirements_for_local_key = run(Cli::try_parse_from([
             "workvcs",

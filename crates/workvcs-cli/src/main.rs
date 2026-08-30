@@ -435,6 +435,9 @@ enum CanonicalCommand {
 
         #[arg(long, value_name = "PATH")]
         json_file: Option<PathBuf>,
+
+        #[arg(long)]
+        expected_canonical_json: Option<String>,
     },
     #[command(group(
         ArgGroup::new("canonical-digest-source")
@@ -3514,9 +3517,13 @@ fn run(cli: Cli) -> Result<String> {
             ))
         }
         Command::Canonical { command } => match command {
-            CanonicalCommand::Encode { json, json_file } => {
+            CanonicalCommand::Encode {
+                json,
+                json_file,
+                expected_canonical_json,
+            } => {
                 let bytes = canonical_json_input_bytes("canonical encode JSON", json, json_file)?;
-                render_canonical_encode(&bytes)
+                render_canonical_encode(&bytes, expected_canonical_json)
             }
             CanonicalCommand::Digest {
                 domain,
@@ -8088,12 +8095,23 @@ fn canonical_json_input_bytes(
     }
 }
 
-fn render_canonical_encode(json: &[u8]) -> Result<String> {
+fn render_canonical_encode(json: &[u8], expected_canonical_json: Option<String>) -> Result<String> {
     let value = parse_canonical_json(json)?;
     let canonical_json = canonical_cli_json("canonical JSON", &value)?;
+    let matches_expected = if let Some(expected_canonical_json) = expected_canonical_json {
+        if canonical_json != expected_canonical_json {
+            return Err(WorkVcsError::CanonicalEncodingInvalid(format!(
+                "canonical JSON {canonical_json:?} does not match expected {expected_canonical_json:?}"
+            )));
+        }
+        "\nmatches_expected=true"
+    } else {
+        ""
+    };
     Ok(format!(
-        "canonical_json={canonical_json}\nsize_bytes={}\n",
-        canonical_json.len()
+        "canonical_json={canonical_json}\nsize_bytes={}{}\n",
+        canonical_json.len(),
+        matches_expected
     ))
 }
 
@@ -15320,6 +15338,35 @@ mod tests {
             value(&encoded_from_file, "canonical_json"),
             value(&encoded, "canonical_json")
         );
+
+        let expected_encoded = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "encode",
+            "--json",
+            r#"{"b":2,"a":1}"#,
+            "--expected-canonical-json",
+            r#"{"a":1,"b":2}"#,
+        ])
+        .expect("parse expected canonical encode"))
+        .expect("expected canonical encode");
+        assert_eq!(
+            value(&expected_encoded, "canonical_json"),
+            r#"{"a":1,"b":2}"#
+        );
+        assert_eq!(value(&expected_encoded, "matches_expected"), "true");
+
+        let mismatched_encoded = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "encode",
+            "--json",
+            r#"{"b":2,"a":1}"#,
+            "--expected-canonical-json",
+            r#"{"b":2,"a":1}"#,
+        ])
+        .expect("parse mismatched canonical encode"));
+        assert!(mismatched_encoded.is_err());
 
         let digest_domains = run(
             Cli::try_parse_from(["workvcs", "canonical", "digest-domains"])

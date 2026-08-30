@@ -52,7 +52,8 @@ use workvcs_core::{
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
     MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
-    NextWorkOptions, NextWorkResult, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    NextWorkOptions, NextWorkResult, PrimaryContainmentCreateCommit,
+    PrimaryContainmentCreateOptions, RecordCreateCommit, RecordCreateOptions, RecordKind,
     RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
@@ -71,7 +72,8 @@ use workvcs_core::{
     StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
     StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions, TaskStatus,
     TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
@@ -1194,6 +1196,63 @@ enum TaskCommand {
 
         #[arg(long)]
         outcome: Option<String>,
+
+        #[arg(long)]
+        session: Option<String>,
+    },
+    DependsOn {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        task: String,
+
+        #[arg(long)]
+        depends_on: String,
+
+        #[arg(long)]
+        session: Option<String>,
+    },
+    OrderedBefore {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        earlier: String,
+
+        #[arg(long)]
+        later: String,
+
+        #[arg(long)]
+        session: Option<String>,
+    },
+    Contain {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        parent: String,
+
+        #[arg(long)]
+        child: String,
 
         #[arg(long)]
         session: Option<String>,
@@ -3248,6 +3307,78 @@ fn run(cli: Cli) -> Result<String> {
             let transition = engine.transition_task(options)?;
             Ok(render_task_transition(&transition))
         }
+        Command::Task {
+            command:
+                TaskCommand::DependsOn {
+                    store,
+                    branch,
+                    head,
+                    task,
+                    depends_on,
+                    session,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = TaskSchedulingRelationCreateOptions::depends_on(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&task)?,
+                EntityId::parse_canonical(&depends_on)?,
+            )?;
+            if let Some(session) = session {
+                options = options.with_actor_session(SessionId::parse_canonical(&session)?);
+            }
+            let relation = engine.create_task_scheduling_relation(options)?;
+            Ok(render_task_scheduling_relation_create(&relation))
+        }
+        Command::Task {
+            command:
+                TaskCommand::OrderedBefore {
+                    store,
+                    branch,
+                    head,
+                    earlier,
+                    later,
+                    session,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = TaskSchedulingRelationCreateOptions::ordered_before(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&earlier)?,
+                EntityId::parse_canonical(&later)?,
+            )?;
+            if let Some(session) = session {
+                options = options.with_actor_session(SessionId::parse_canonical(&session)?);
+            }
+            let relation = engine.create_task_scheduling_relation(options)?;
+            Ok(render_task_scheduling_relation_create(&relation))
+        }
+        Command::Task {
+            command:
+                TaskCommand::Contain {
+                    store,
+                    branch,
+                    head,
+                    parent,
+                    child,
+                    session,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = PrimaryContainmentCreateOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&parent)?,
+                EntityId::parse_canonical(&child)?,
+            )?;
+            if let Some(session) = session {
+                options = options.with_actor_session(SessionId::parse_canonical(&session)?);
+            }
+            let relation = engine.create_primary_containment(options)?;
+            Ok(render_primary_containment_create(&relation))
+        }
         Command::Ac {
             command:
                 AcceptanceCriterionCommand::Create {
@@ -5261,6 +5392,45 @@ fn render_task_transition(transition: &TaskTransitionCommit) -> String {
         transition.task_state_digest,
         transition.work_state_digest,
         transition.state.status
+    )
+}
+
+fn render_task_scheduling_relation_create(relation: &TaskSchedulingRelationCreateCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nsource_task_entity_id={}\ntarget_task_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.relation_type,
+        relation.source_task_entity_id,
+        relation.target_task_entity_id,
+        relation.relation_state_digest,
+        relation.work_state_digest
+    )
+}
+
+fn render_primary_containment_create(relation: &PrimaryContainmentCreateCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nparent_entity_id={}\nparent_kind={}\nchild_entity_id={}\nchild_kind={}\nrelation_state_digest={}\nwork_state_digest={}\n",
+        relation.workspace_id,
+        relation.branch_id,
+        relation.previous_head_commit_id,
+        relation.commit_id,
+        relation.changeset_id,
+        relation.operation_id,
+        relation.relation_id,
+        relation.relation_version_id,
+        relation.parent_entity_id,
+        relation.parent_kind,
+        relation.child_entity_id,
+        relation.child_kind,
+        relation.relation_state_digest,
+        relation.work_state_digest
     )
 }
 
@@ -11851,6 +12021,143 @@ mod tests {
         .expect("parse transition"))
         .expect("transition task");
         assert!(transition.contains("status=done"));
+    }
+
+    #[test]
+    fn cli_creates_structural_task_relations_with_actor_session() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+
+        let first = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "First structural CLI task",
+        ])
+        .expect("parse first task"))
+        .expect("create first task");
+        let second = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&first, "commit_id"),
+            "--description",
+            "Second structural CLI task",
+        ])
+        .expect("parse second task"))
+        .expect("create second task");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+        let first_task = value(&first, "task_entity_id");
+        let second_task = value(&second, "task_entity_id");
+
+        let dependency = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "depends-on",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&second, "commit_id"),
+            "--task",
+            &second_task,
+            "--depends-on",
+            &first_task,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse depends-on"))
+        .expect("create dependency");
+        assert_eq!(value(&dependency, "relation_type"), "depends_on");
+        assert_eq!(value(&dependency, "source_task_entity_id"), second_task);
+        assert_eq!(value(&dependency, "target_task_entity_id"), first_task);
+
+        let order = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "ordered-before",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&dependency, "commit_id"),
+            "--earlier",
+            &first_task,
+            "--later",
+            &second_task,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse ordered-before"))
+        .expect("create order");
+        assert_eq!(value(&order, "relation_type"), "ordered_before");
+        assert_eq!(value(&order, "source_task_entity_id"), first_task);
+        assert_eq!(value(&order, "target_task_entity_id"), second_task);
+
+        let containment = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&order, "commit_id"),
+            "--parent",
+            &first_task,
+            "--child",
+            &second_task,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse containment"))
+        .expect("create containment");
+        assert_eq!(value(&containment, "parent_entity_id"), first_task);
+        assert_eq!(value(&containment, "parent_kind"), "task");
+        assert_eq!(value(&containment, "child_entity_id"), second_task);
+        assert_eq!(value(&containment, "child_kind"), "task");
     }
 
     #[test]

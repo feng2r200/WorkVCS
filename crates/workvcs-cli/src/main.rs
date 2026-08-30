@@ -76,7 +76,7 @@ use workvcs_core::{
     StoreLineageSnapshot, StoreMigrationAttemptSnapshot, StoreMigrationListOptions,
     StoreMigrationListResult, StoreMigrationRecordOptions, StoreMigrationRecordResult,
     TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskStatus,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus,
     TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
@@ -1185,6 +1185,41 @@ enum TaskCommand {
 
         #[arg(long)]
         priority: Option<i64>,
+    },
+    #[command(group(
+        ArgGroup::new("task-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        task: String,
+    },
+    #[command(group(
+        ArgGroup::new("task-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
     },
     Transition {
         #[arg(value_name = "STORE")]
@@ -3734,6 +3769,31 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Task {
             command:
+                TaskCommand::Show {
+                    store,
+                    branch,
+                    commit,
+                    task,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            render_task_snapshot(&engine.task_at(commit_id, EntityId::parse_canonical(&task)?)?)
+        }
+        Command::Task {
+            command:
+                TaskCommand::List {
+                    store,
+                    branch,
+                    commit,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            render_task_list(commit_id, &engine.tasks_at(commit_id)?)
+        }
+        Command::Task {
+            command:
                 TaskCommand::Transition {
                     store,
                     branch,
@@ -6149,6 +6209,71 @@ fn render_task_create(task: &TaskCreateCommit) -> String {
         task.work_state_digest,
         task.state.status
     )
+}
+
+fn render_task_snapshot(task: &TaskSnapshot) -> Result<String> {
+    let description_json = canonical_text_json("task description", &task.state.description)?;
+    let outcome_json = canonical_optional_text_json("task outcome", task.state.outcome.as_deref())?;
+    Ok(format!(
+        "workspace_id={}\ncommit_id={}\ntask_entity_id={}\ntask_entity_version_id={}\ntask_state_digest={}\nstatus={}\ndescription_json={}\noutcome_json={}\npriority={}\nacceptance_criteria={}\n",
+        task.workspace_id,
+        task.commit_id,
+        task.task_entity_id,
+        task.task_entity_version_id,
+        task.state_digest,
+        task.state.status,
+        description_json,
+        outcome_json,
+        task.state.priority,
+        task.state.acceptance_criteria.len()
+    ))
+}
+
+fn render_task_list(commit_id: CommitId, tasks: &[TaskSnapshot]) -> Result<String> {
+    let mut output = format!("commit_id={commit_id}\ntasks={}\n", tasks.len());
+    for (index, task) in tasks.iter().enumerate() {
+        writeln!(output, "task.{index}.workspace_id={}", task.workspace_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.task_entity_id={}",
+            task.task_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.task_entity_version_id={}",
+            task.task_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.task_state_digest={}",
+            task.state_digest
+        )
+        .expect("write to String");
+        writeln!(output, "task.{index}.status={}", task.state.status).expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.description_json={}",
+            canonical_text_json("task description", &task.state.description)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.outcome_json={}",
+            canonical_optional_text_json("task outcome", task.state.outcome.as_deref())?
+        )
+        .expect("write to String");
+        writeln!(output, "task.{index}.priority={}", task.state.priority).expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.acceptance_criteria={}",
+            task.state.acceptance_criteria.len()
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_task_transition(transition: &TaskTransitionCommit) -> String {
@@ -12910,6 +13035,143 @@ mod tests {
         .expect("parse transition"))
         .expect("transition task");
         assert!(transition.contains("status=done"));
+    }
+
+    #[test]
+    fn cli_shows_and_lists_task_snapshots_at_branch_or_commit() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let empty_tasks =
+            run(
+                Cli::try_parse_from(["workvcs", "task", "list", store, "--commit", &genesis])
+                    .expect("parse empty task list"),
+            )
+            .expect("list empty tasks");
+        assert_eq!(value(&empty_tasks, "tasks"), "0");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Inspect task snapshots",
+            "--priority",
+            "7",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+
+        let task_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "show",
+            store,
+            "--commit",
+            &value(&task, "commit_id"),
+            "--task",
+            &task_id,
+        ])
+        .expect("parse task show at commit"))
+        .expect("show task at commit");
+        assert_eq!(value(&task_at_create, "status"), "pending");
+        assert_eq!(
+            value(&task_at_create, "task_entity_version_id"),
+            value(&task, "task_entity_version_id")
+        );
+        assert_eq!(
+            value(&task_at_create, "description_json"),
+            "\"Inspect task snapshots\""
+        );
+        assert_eq!(value(&task_at_create, "outcome_json"), "null");
+        assert_eq!(value(&task_at_create, "priority"), "7");
+
+        let tasks_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "list",
+            store,
+            "--commit",
+            &value(&task, "commit_id"),
+        ])
+        .expect("parse task list at commit"))
+        .expect("list tasks at commit");
+        assert_eq!(value(&tasks_at_create, "tasks"), "1");
+        assert_eq!(value(&tasks_at_create, "task.0.task_entity_id"), task_id);
+        assert_eq!(value(&tasks_at_create, "task.0.status"), "pending");
+
+        let blocked_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "transition",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &task_id,
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--status",
+            "blocked",
+        ])
+        .expect("parse task transition"))
+        .expect("block task");
+
+        let task_at_branch = run(Cli::try_parse_from([
+            "workvcs", "task", "show", store, "--branch", &branch, "--task", &task_id,
+        ])
+        .expect("parse task show at branch"))
+        .expect("show task at branch");
+        assert_eq!(
+            value(&task_at_branch, "commit_id"),
+            value(&blocked_task, "commit_id")
+        );
+        assert_eq!(value(&task_at_branch, "status"), "blocked");
+        assert_eq!(
+            value(&task_at_branch, "task_entity_version_id"),
+            value(&blocked_task, "task_entity_version_id")
+        );
+
+        let tasks_at_branch =
+            run(
+                Cli::try_parse_from(["workvcs", "task", "list", store, "--branch", &branch])
+                    .expect("parse task list at branch"),
+            )
+            .expect("list tasks at branch");
+        assert_eq!(
+            value(&tasks_at_branch, "commit_id"),
+            value(&blocked_task, "commit_id")
+        );
+        assert_eq!(value(&tasks_at_branch, "tasks"), "1");
+        assert_eq!(value(&tasks_at_branch, "task.0.status"), "blocked");
+        assert_eq!(value(&tasks_at_branch, "task.0.priority"), "7");
     }
 
     #[test]

@@ -711,6 +711,10 @@ impl Engine {
         self.store.task_at(commit_id, task_entity_id)
     }
 
+    pub fn tasks_at(&self, commit_id: CommitId) -> Result<Vec<TaskSnapshot>> {
+        self.store.tasks_at(commit_id)
+    }
+
     pub fn plan_at(&self, commit_id: CommitId, plan_entity_id: EntityId) -> Result<PlanSnapshot> {
         self.store.plan_at(commit_id, plan_entity_id)
     }

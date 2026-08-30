@@ -1243,6 +1243,12 @@ impl Store {
         history::task_at(&self.connection, commit_id, task_entity_id)
     }
 
+    pub(crate) fn tasks_at(&self, commit_id: CommitId) -> Result<Vec<TaskSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::tasks_at(&self.connection, commit_id)
+    }
+
     pub(crate) fn plan_at(
         &self,
         commit_id: CommitId,

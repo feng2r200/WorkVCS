@@ -30,9 +30,9 @@ use workvcs_core::{
     ExternalObjectId, ExternalObjectRefListOptions, ExternalObjectRefListResult,
     ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
     ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, GoalCreateCommit,
-    GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry,
-    HistoryQueryOptions, ImportId, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    GoalCreateOptions, GoalSnapshot, GoalStatus, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryEntry, HistoryQueryOptions, ImportId, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
     KnowledgeExposureDerivedFromRelationCreateCommit,
@@ -58,9 +58,9 @@ use workvcs_core::{
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
     MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
     NextWorkOptions, NextWorkResult, OperationId, PlanCreateCommit, PlanCreateOptions,
-    PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
-    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    PlanSnapshot, PlanStatus, PlanTransitionCommit, PlanTransitionOptions,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
     RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
@@ -1629,6 +1629,9 @@ enum GoalCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        status: Option<String>,
     },
     Achieve {
         #[arg(value_name = "STORE")]
@@ -1744,6 +1747,9 @@ enum PlanCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        status: Option<String>,
     },
     Complete {
         #[arg(value_name = "STORE")]
@@ -4361,10 +4367,16 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 branch,
                 commit,
+                status,
             } => {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_goal_query_commit(&engine, branch, commit)?;
-                render_goal_list(commit_id, &engine.goals_at(commit_id)?)
+                let mut goals = engine.goals_at(commit_id)?;
+                if let Some(status) = status {
+                    let status = parse_goal_list_status(&status)?;
+                    goals.retain(|goal| goal.state.status == status);
+                }
+                render_goal_list(commit_id, &goals)
             }
             GoalCommand::Achieve {
                 store,
@@ -4457,10 +4469,16 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 branch,
                 commit,
+                status,
             } => {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_plan_query_commit(&engine, branch, commit)?;
-                render_plan_list(commit_id, &engine.plans_at(commit_id)?)
+                let mut plans = engine.plans_at(commit_id)?;
+                if let Some(status) = status {
+                    let status = parse_plan_list_status(&status)?;
+                    plans.retain(|plan| plan.state.status == status);
+                }
+                render_plan_list(commit_id, &plans)
             }
             PlanCommand::Complete {
                 store,
@@ -6439,6 +6457,29 @@ fn parse_task_list_status(value: &str) -> Result<TaskStatus> {
     match value {
         "superseded" => Ok(TaskStatus::Superseded),
         _ => parse_task_status(value),
+    }
+}
+
+fn parse_goal_list_status(value: &str) -> Result<GoalStatus> {
+    match value {
+        "active" => Ok(GoalStatus::Active),
+        "achieved" => Ok(GoalStatus::Achieved),
+        "abandoned" => Ok(GoalStatus::Abandoned),
+        other => Err(WorkVcsError::GoalInvalid(format!(
+            "goal status {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_plan_list_status(value: &str) -> Result<PlanStatus> {
+    match value {
+        "active" => Ok(PlanStatus::Active),
+        "completed" => Ok(PlanStatus::Completed),
+        "abandoned" => Ok(PlanStatus::Abandoned),
+        "superseded" => Ok(PlanStatus::Superseded),
+        other => Err(WorkVcsError::PlanInvalid(format!(
+            "plan status {other:?} is not in the CLI vocabulary"
+        ))),
     }
 }
 
@@ -18910,6 +18951,38 @@ mod tests {
         assert_eq!(value(&goals_at_create, "goal.0.goal_entity_id"), goal_id);
         assert_eq!(value(&goals_at_create, "goal.0.status"), "active");
 
+        let active_goals_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--status",
+            "active",
+        ])
+        .expect("parse active goal list at commit"))
+        .expect("list active goals at commit");
+        assert_eq!(value(&active_goals_at_create, "goals"), "1");
+        assert_eq!(
+            value(&active_goals_at_create, "goal.0.goal_entity_id"),
+            goal_id
+        );
+
+        let achieved_goals_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--status",
+            "achieved",
+        ])
+        .expect("parse achieved goal list at commit"))
+        .expect("list achieved goals at commit");
+        assert_eq!(value(&achieved_goals_at_create, "goals"), "0");
+
         let achieved_goal = run(Cli::try_parse_from([
             "workvcs",
             "goal",
@@ -18946,6 +19019,24 @@ mod tests {
             "\"list sees terminal goal\""
         );
 
+        let achieved_goals_at_branch = run(Cli::try_parse_from([
+            "workvcs", "goal", "list", store, "--branch", &branch, "--status", "achieved",
+        ])
+        .expect("parse achieved goal list at branch"))
+        .expect("list achieved goals at branch");
+        assert_eq!(value(&achieved_goals_at_branch, "goals"), "1");
+        assert_eq!(
+            value(&achieved_goals_at_branch, "goal.0.goal_entity_id"),
+            goal_id
+        );
+
+        let active_goals_at_branch = run(Cli::try_parse_from([
+            "workvcs", "goal", "list", store, "--branch", &branch, "--status", "active",
+        ])
+        .expect("parse active goal list at branch"))
+        .expect("list active goals at branch");
+        assert_eq!(value(&active_goals_at_branch, "goals"), "0");
+
         let plan = run(Cli::try_parse_from([
             "workvcs",
             "plan",
@@ -18980,6 +19071,38 @@ mod tests {
         assert_eq!(value(&plans_at_create, "plan.0.plan_entity_id"), plan_id);
         assert_eq!(value(&plans_at_create, "plan.0.status"), "active");
         assert_eq!(value(&plans_at_create, "plan.0.constraints"), "1");
+
+        let active_plans_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--status",
+            "active",
+        ])
+        .expect("parse active plan list at commit"))
+        .expect("list active plans at commit");
+        assert_eq!(value(&active_plans_at_create, "plans"), "1");
+        assert_eq!(
+            value(&active_plans_at_create, "plan.0.plan_entity_id"),
+            plan_id
+        );
+
+        let completed_plans_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--status",
+            "completed",
+        ])
+        .expect("parse completed plan list at commit"))
+        .expect("list completed plans at commit");
+        assert_eq!(value(&completed_plans_at_create, "plans"), "0");
 
         let completed_plan = run(Cli::try_parse_from([
             "workvcs",
@@ -19016,6 +19139,45 @@ mod tests {
             value(&plans_at_branch, "plan.0.completion_rationale_json"),
             "\"list sees completed plan\""
         );
+
+        let completed_plans_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "completed",
+        ])
+        .expect("parse completed plan list at branch"))
+        .expect("list completed plans at branch");
+        assert_eq!(value(&completed_plans_at_branch, "plans"), "1");
+        assert_eq!(
+            value(&completed_plans_at_branch, "plan.0.plan_entity_id"),
+            plan_id
+        );
+
+        let active_plans_at_branch = run(Cli::try_parse_from([
+            "workvcs", "plan", "list", store, "--branch", &branch, "--status", "active",
+        ])
+        .expect("parse active plan list at branch"))
+        .expect("list active plans at branch");
+        assert_eq!(value(&active_plans_at_branch, "plans"), "0");
+
+        let superseded_plans_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "superseded",
+        ])
+        .expect("parse superseded plan list at branch"))
+        .expect("list superseded plans at branch");
+        assert_eq!(value(&superseded_plans_at_branch, "plans"), "0");
     }
 
     #[test]

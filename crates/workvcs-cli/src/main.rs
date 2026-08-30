@@ -1288,6 +1288,9 @@ enum CheckpointCommand {
 
         #[arg(long)]
         checkpoint: String,
+
+        #[arg(long)]
+        require_valid: bool,
     },
     List {
         #[arg(value_name = "STORE")]
@@ -5508,11 +5511,25 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 Ok(output)
             }
-            CheckpointCommand::Validate { store, checkpoint } => {
+            CheckpointCommand::Validate {
+                store,
+                checkpoint,
+                require_valid,
+            } => {
                 let mut engine = Engine::open(store)?;
                 let result =
                     engine.validate_checkpoint(CheckpointId::parse_canonical(&checkpoint)?)?;
-                Ok(render_checkpoint_validation(&result))
+                let mut output = render_checkpoint_validation(&result);
+                if require_valid {
+                    if !result.valid {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "checkpoint validation failed: {}",
+                            result.problem.as_deref().unwrap_or("unknown problem")
+                        )));
+                    }
+                    output.push_str("valid_required=true\n");
+                }
+                Ok(output)
             }
             CheckpointCommand::List {
                 store,
@@ -21709,12 +21726,14 @@ mod tests {
             store,
             "--checkpoint",
             &checkpoint,
+            "--require-valid",
         ])
         .expect("parse checkpoint validate"))
         .expect("validate checkpoint");
         assert_eq!(value(&validated, "checkpoint_id"), checkpoint);
         assert_eq!(value(&validated, "valid"), "true");
         assert_eq!(value(&validated, "problem"), "none");
+        assert_eq!(value(&validated, "valid_required"), "true");
         assert_eq!(
             value(&validated, "expected_content_digest"),
             value(&created, "content_digest")

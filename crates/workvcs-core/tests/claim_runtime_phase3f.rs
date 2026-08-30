@@ -83,6 +83,16 @@ fn claim_created_payload(
     workspace: &WorkspaceInfo,
     task_entity_id: EntityId,
 ) -> String {
+    claim_created_payload_with_mode(claim_id, session_id, workspace, task_entity_id, "exclusive")
+}
+
+fn claim_created_payload_with_mode(
+    claim_id: ClaimId,
+    session_id: workvcs_core::SessionId,
+    workspace: &WorkspaceInfo,
+    task_entity_id: EntityId,
+    mode: &str,
+) -> String {
     canonical_json(
         &CanonicalValue::object(vec![
             (
@@ -97,10 +107,7 @@ fn claim_created_payload(
                 "lifecycle_state".to_owned(),
                 CanonicalValue::String("active".to_owned()),
             ),
-            (
-                "mode".to_owned(),
-                CanonicalValue::String("exclusive".to_owned()),
-            ),
+            ("mode".to_owned(), CanonicalValue::String(mode.to_owned())),
             (
                 "session_id".to_owned(),
                 CanonicalValue::String(session_id.to_string()),
@@ -438,6 +445,139 @@ fn claim_task_rejects_conflicting_active_exclusive_claim_without_partial_rows() 
             task_snapshot.task_entity_id,
         ))
         .expect_err("second active exclusive claim should fail");
+    assert_eq!(error.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(error.category(), ErrorCategory::Runtime);
+    assert_eq!(runtime_counts(&connection), before_conflict);
+}
+
+#[test]
+fn shared_claims_coexist_and_block_exclusive_or_duplicate_shared_claims() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task_snapshot = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Shared claim target",
+    );
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("second session");
+    let third_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("third session options"),
+        )
+        .expect("third session");
+
+    let first_shared = engine
+        .claim_task(
+            ClaimTaskOptions::new(first_session.session_id, task_snapshot.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect("first shared claim");
+    let second_shared = engine
+        .claim_task(
+            ClaimTaskOptions::new(second_session.session_id, task_snapshot.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect("second shared claim");
+
+    assert_eq!(first_shared.mode, ClaimMode::Shared);
+    assert_eq!(first_shared.state.mode, ClaimMode::Shared);
+    assert_eq!(second_shared.mode, ClaimMode::Shared);
+    assert_eq!(second_shared.state.mode, ClaimMode::Shared);
+    assert_ne!(first_shared.claim_id, second_shared.claim_id);
+
+    let connection = raw_connection(&path);
+    assert_eq!(
+        event_count(&connection, first_session.session_id, "claim.created"),
+        1
+    );
+    assert_eq!(
+        latest_event_payload(&connection, first_session.session_id, "claim.created"),
+        claim_created_payload_with_mode(
+            first_shared.claim_id,
+            first_session.session_id,
+            &workspace,
+            task_snapshot.task_entity_id,
+            "shared",
+        )
+    );
+    assert_eq!(
+        event_count(&connection, second_session.session_id, "claim.created"),
+        1
+    );
+    assert_eq!(
+        latest_event_payload(&connection, second_session.session_id, "claim.created"),
+        claim_created_payload_with_mode(
+            second_shared.claim_id,
+            second_session.session_id,
+            &workspace,
+            task_snapshot.task_entity_id,
+            "shared",
+        )
+    );
+
+    let before_duplicate = runtime_counts(&connection);
+    let duplicate_shared = engine
+        .claim_task(
+            ClaimTaskOptions::new(first_session.session_id, task_snapshot.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect_err("same session duplicate shared claim should fail");
+    assert_eq!(duplicate_shared.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(duplicate_shared.category(), ErrorCategory::Runtime);
+    assert_eq!(runtime_counts(&connection), before_duplicate);
+
+    let exclusive_conflict = engine
+        .claim_task(ClaimTaskOptions::new(
+            third_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect_err("exclusive claim should not join active shared set");
+    assert_eq!(exclusive_conflict.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(exclusive_conflict.category(), ErrorCategory::Runtime);
+    assert_eq!(runtime_counts(&connection), before_duplicate);
+}
+
+#[test]
+fn active_exclusive_claim_blocks_shared_claim_without_partial_rows() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (task_snapshot, first_session_id) =
+        create_task_and_session(&mut engine, &workspace, "Exclusive blocks shared claim");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("second session");
+
+    engine
+        .claim_task(ClaimTaskOptions::new(
+            first_session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("exclusive claim");
+    let connection = raw_connection(&path);
+    let before_conflict = runtime_counts(&connection);
+
+    let error = engine
+        .claim_task(
+            ClaimTaskOptions::new(second_session.session_id, task_snapshot.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect_err("shared claim should fail behind active exclusive claim");
     assert_eq!(error.code(), ErrorCode::ClaimInvalid);
     assert_eq!(error.category(), ErrorCategory::Runtime);
     assert_eq!(runtime_counts(&connection), before_conflict);

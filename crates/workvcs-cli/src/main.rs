@@ -1972,6 +1972,9 @@ enum ClaimCommand {
 
         #[arg(long)]
         task: String,
+
+        #[arg(long, default_value = "exclusive")]
+        mode: String,
     },
     Release {
         #[arg(value_name = "STORE")]
@@ -4246,13 +4249,17 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     session,
                     task,
+                    mode,
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let claim = engine.claim_task(ClaimTaskOptions::new(
-                SessionId::parse_canonical(&session)?,
-                EntityId::parse_canonical(&task)?,
-            ))?;
+            let claim = engine.claim_task(
+                ClaimTaskOptions::new(
+                    SessionId::parse_canonical(&session)?,
+                    EntityId::parse_canonical(&task)?,
+                )
+                .with_mode(parse_claim_mode(&mode)?),
+            )?;
             Ok(render_claim_task(&claim))
         }
         Command::Claim {
@@ -4628,6 +4635,16 @@ fn parse_observation_status(value: &str) -> Result<ApplicabilityResourceObservat
         "error" => Ok(ApplicabilityResourceObservationStatus::Error),
         other => Err(WorkVcsError::TaskInvalid(format!(
             "resource observation status {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_claim_mode(value: &str) -> Result<ClaimMode> {
+    match value {
+        "exclusive" => Ok(ClaimMode::Exclusive),
+        "shared" => Ok(ClaimMode::Shared),
+        other => Err(WorkVcsError::ClaimInvalid(format!(
+            "claim mode {other:?} is not supported"
         ))),
     }
 }
@@ -6445,6 +6462,7 @@ fn claim_lifecycle_state(state: ClaimLifecycleState) -> &'static str {
 fn claim_mode(mode: ClaimMode) -> &'static str {
     match mode {
         ClaimMode::Exclusive => "exclusive",
+        ClaimMode::Shared => "shared",
     }
 }
 
@@ -6458,6 +6476,23 @@ fn runnable_claim_coordination(claim: &RunnableTaskClaimCoordination) -> String 
             claim_id,
             session_id,
         } => format!("claimed_by_other_session:{claim_id}:{session_id}"),
+        RunnableTaskClaimCoordination::Shared {
+            claim_ids,
+            session_ids,
+            claimed_by_session,
+        } => {
+            let claim_ids = claim_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let session_ids = session_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("shared:{claimed_by_session}:{claim_ids}:{session_ids}")
+        }
     }
 }
 
@@ -11965,6 +12000,118 @@ mod tests {
         .expect("parse session end"))
         .expect("end session");
         assert!(ended.contains("lifecycle_state=ended"));
+    }
+
+    #[test]
+    fn cli_claim_task_accepts_explicit_shared_mode() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Shared CLI claim task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+
+        let first_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse first session"))
+        .expect("start first session");
+        let first_session_id = value(&first_session, "session_id");
+        let second_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse second session"))
+        .expect("start second session");
+        let second_session_id = value(&second_session, "session_id");
+
+        let first_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &first_session_id,
+            "--task",
+            &task_id,
+            "--mode",
+            "shared",
+        ])
+        .expect("parse first shared claim"))
+        .expect("first shared claim");
+        assert!(first_claim.contains("mode=shared"));
+        assert!(first_claim.contains("lifecycle_state=active"));
+        let second_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &second_session_id,
+            "--task",
+            &task_id,
+            "--mode",
+            "shared",
+        ])
+        .expect("parse second shared claim"))
+        .expect("second shared claim");
+        assert!(second_claim.contains("mode=shared"));
+
+        let runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &first_session_id,
+        ])
+        .expect("parse runnable"))
+        .expect("runnable with shared claim");
+        assert!(runnable.contains("candidate.0.claim=shared:true:"));
     }
 
     #[test]

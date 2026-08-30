@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const CLAIM_OBJECT_KIND: &str = "claim";
 const EXCLUSIVE_CLAIM_MODE: &str = "exclusive";
+const SHARED_CLAIM_MODE: &str = "shared";
 const ACTIVE_CLAIM_LIFECYCLE_STATE: &str = "active";
 const RELEASED_CLAIM_LIFECYCLE_STATE: &str = "released";
 const CLAIM_CREATED_EVENT_KIND: &str = "claim.created";
@@ -24,12 +25,14 @@ pub enum ClaimLifecycleState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClaimMode {
     Exclusive,
+    Shared,
 }
 
 impl ClaimMode {
     fn as_str(self) -> &'static str {
         match self {
             Self::Exclusive => EXCLUSIVE_CLAIM_MODE,
+            Self::Shared => SHARED_CLAIM_MODE,
         }
     }
 }
@@ -38,6 +41,7 @@ impl ClaimMode {
 pub struct ClaimTaskOptions {
     session_id: SessionId,
     task_entity_id: EntityId,
+    mode: ClaimMode,
 }
 
 impl ClaimTaskOptions {
@@ -45,7 +49,13 @@ impl ClaimTaskOptions {
         Self {
             session_id,
             task_entity_id,
+            mode: ClaimMode::Exclusive,
         }
+    }
+
+    pub fn with_mode(mut self, mode: ClaimMode) -> Self {
+        self.mode = mode;
+        self
     }
 
     pub fn session_id(&self) -> SessionId {
@@ -54,6 +64,10 @@ impl ClaimTaskOptions {
 
     pub fn task_entity_id(&self) -> EntityId {
         self.task_entity_id
+    }
+
+    pub fn mode(&self) -> ClaimMode {
+        self.mode
     }
 }
 
@@ -176,6 +190,7 @@ pub(crate) fn claim_next_task(
         projection.workspace_id,
         projection.branch_id,
         selected_candidate.task.task_entity_id,
+        ClaimMode::Exclusive,
     )?;
 
     let claim_id_bytes = claim_id.raw_bytes();
@@ -215,11 +230,13 @@ pub(crate) fn claim_next_task(
             projection.branch_id, claim_id
         )));
     }
-    ensure_no_active_claim_conflict(
+    ensure_active_claim_mode_allowed(
         &transaction,
         projection.workspace_id,
         projection.branch_id,
         selected_candidate.task.task_entity_id,
+        options.session_id(),
+        ClaimMode::Exclusive,
     )?;
 
     transaction
@@ -389,6 +406,7 @@ pub(crate) fn claim_task(
         active.active_workspace_id,
         active.active_branch_id,
         options.task_entity_id(),
+        options.mode(),
     )?;
 
     let claim_id_bytes = claim_id.raw_bytes();
@@ -428,11 +446,13 @@ pub(crate) fn claim_task(
             active.active_branch_id, claim_id
         )));
     }
-    ensure_no_active_claim_conflict(
+    ensure_active_claim_mode_allowed(
         &transaction,
         active.active_workspace_id,
         active.active_branch_id,
         options.task_entity_id(),
+        options.session_id(),
+        options.mode(),
     )?;
 
     transaction
@@ -460,7 +480,7 @@ pub(crate) fn claim_task(
                 &workspace_id_bytes[..],
                 &branch_id_bytes[..],
                 &task_entity_id_bytes[..],
-                EXCLUSIVE_CLAIM_MODE,
+                options.mode().as_str(),
                 now_us
             ],
         )
@@ -505,7 +525,7 @@ pub(crate) fn claim_task(
         workspace_id: active.active_workspace_id,
         branch_id: active.active_branch_id,
         task_entity_id: options.task_entity_id(),
-        mode: ClaimMode::Exclusive,
+        mode: options.mode(),
         claimed_at_us: now_us,
         state,
     })
@@ -683,36 +703,78 @@ fn load_active_branch(
     })
 }
 
-fn ensure_no_active_claim_conflict(
+fn ensure_active_claim_mode_allowed(
     transaction: &Transaction<'_>,
     workspace_id: WorkspaceId,
     branch_id: BranchId,
     task_entity_id: EntityId,
+    session_id: SessionId,
+    requested_mode: ClaimMode,
 ) -> Result<()> {
-    let row = transaction
-        .query_row(
-            "SELECT claim.claim_id, claim.mode
+    let mut statement = transaction
+        .prepare(
+            "SELECT claim.claim_id, claim.session_id, claim.mode
              FROM claim_runtime
              INNER JOIN claim ON claim.claim_id = claim_runtime.claim_id
              WHERE claim.workspace_id = ?1
                AND claim.branch_id = ?2
                AND claim.task_entity_id = ?3
-             LIMIT 1",
+             ORDER BY claim.claim_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(
             params![
                 &workspace_id.raw_bytes()[..],
                 &branch_id.raw_bytes()[..],
                 &task_entity_id.raw_bytes()[..]
             ],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
-        .optional()
         .map_err(storage_error)?;
 
-    if let Some((claim_id, mode)) = row {
-        let claim_id = decode_claim_id("claim.claim_id", claim_id)?;
-        return Err(WorkVcsError::ClaimInvalid(format!(
-            "task {task_entity_id} already has active {mode:?} claim {claim_id} on branch {branch_id}"
-        )));
+    let mut active_claims = Vec::new();
+    for row in rows {
+        let (claim_id, claim_session_id, mode) = row.map_err(storage_error)?;
+        active_claims.push((
+            decode_claim_id("claim.claim_id", claim_id)?,
+            decode_session_id("claim.session_id", claim_session_id)?,
+            decode_claim_mode(&mode)?,
+        ));
+    }
+
+    match requested_mode {
+        ClaimMode::Exclusive => {
+            if let Some((claim_id, _, mode)) = active_claims.first() {
+                return Err(WorkVcsError::ClaimInvalid(format!(
+                    "task {task_entity_id} already has active {} claim {claim_id} on branch {branch_id}",
+                    mode.as_str()
+                )));
+            }
+        }
+        ClaimMode::Shared => {
+            for (claim_id, claim_session_id, mode) in &active_claims {
+                match mode {
+                    ClaimMode::Exclusive => {
+                        return Err(WorkVcsError::ClaimInvalid(format!(
+                            "task {task_entity_id} already has active exclusive claim {claim_id} on branch {branch_id}"
+                        )));
+                    }
+                    ClaimMode::Shared if *claim_session_id == session_id => {
+                        return Err(WorkVcsError::ClaimInvalid(format!(
+                            "session {session_id} already has active shared claim {claim_id} for task {task_entity_id} on branch {branch_id}"
+                        )));
+                    }
+                    ClaimMode::Shared => {}
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -838,6 +900,7 @@ fn claim_created_payload_json(
     workspace_id: WorkspaceId,
     branch_id: BranchId,
     task_entity_id: EntityId,
+    mode: ClaimMode,
 ) -> Result<String> {
     canonical_json_string(&CanonicalValue::object(vec![
         (
@@ -854,7 +917,7 @@ fn claim_created_payload_json(
         ),
         (
             "mode".to_owned(),
-            CanonicalValue::String(ClaimMode::Exclusive.as_str().to_owned()),
+            CanonicalValue::String(mode.as_str().to_owned()),
         ),
         (
             "session_id".to_owned(),
@@ -913,9 +976,7 @@ fn canonical_json_string(value: &CanonicalValue) -> Result<String> {
 fn decode_claim_mode(value: &str) -> Result<ClaimMode> {
     match value {
         EXCLUSIVE_CLAIM_MODE => Ok(ClaimMode::Exclusive),
-        "shared" => Err(WorkVcsError::ClaimInvalid(
-            "shared claim mode is not supported by Phase 3F APIs".to_owned(),
-        )),
+        SHARED_CLAIM_MODE => Ok(ClaimMode::Shared),
         other => Err(WorkVcsError::ClaimInvalid(format!(
             "claim mode {other:?} is not supported"
         ))),

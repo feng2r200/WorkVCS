@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, CanonicalValue,
+    AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, CanonicalValue, ClaimMode,
     ClaimReleaseOptions, ClaimTaskOptions, CommitId, Engine, EntityId, ErrorCategory, ErrorCode,
     RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
     RunnableTaskProjectionDimension, RunnableTasksOptions, SessionEndOptions, SessionId,
@@ -585,4 +585,94 @@ fn runnable_projection_coordinates_active_and_released_claims_without_mutation()
         RunnableTaskClaimCoordination::Unclaimed
     );
     assert!(released_candidate.blocked_reasons.is_empty());
+}
+
+#[test]
+fn runnable_projection_reports_shared_claim_coordination_without_mutation() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Shared runnable target",
+        0,
+    );
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("second session");
+    let outside_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("outside session options"),
+        )
+        .expect("outside session");
+    let first_claim = engine
+        .claim_task(
+            ClaimTaskOptions::new(first_session.session_id, task.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect("first shared claim");
+    let second_claim = engine
+        .claim_task(
+            ClaimTaskOptions::new(second_session.session_id, task.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect("second shared claim");
+    let mut claim_ids = vec![first_claim.claim_id, second_claim.claim_id];
+    claim_ids.sort();
+    let mut session_ids = vec![first_session.session_id, second_session.session_id];
+    session_ids.sort();
+    let connection = raw_connection(&path);
+    let before_projection = runtime_counts(&connection);
+
+    let first_projection = engine
+        .runnable_tasks(RunnableTasksOptions::new(first_session.session_id))
+        .expect("first projection");
+    let outside_projection = engine
+        .runnable_tasks(RunnableTasksOptions::new(outside_session.session_id))
+        .expect("outside projection");
+
+    assert_eq!(runtime_counts(&connection), before_projection);
+    let first_candidates = candidates_by_entity_id(&first_projection.candidates);
+    let first_candidate = first_candidates
+        .get(&task.task_entity_id)
+        .expect("first shared candidate");
+    assert!(first_candidate.runnable);
+    assert_eq!(
+        first_candidate.claim_coordination,
+        RunnableTaskClaimCoordination::Shared {
+            claim_ids: claim_ids.clone(),
+            session_ids: session_ids.clone(),
+            claimed_by_session: true,
+        }
+    );
+    assert!(first_candidate.blocked_reasons.is_empty());
+
+    let outside_candidates = candidates_by_entity_id(&outside_projection.candidates);
+    let outside_candidate = outside_candidates
+        .get(&task.task_entity_id)
+        .expect("outside shared candidate");
+    assert!(!outside_candidate.runnable);
+    assert_eq!(
+        outside_candidate.claim_coordination,
+        RunnableTaskClaimCoordination::Shared {
+            claim_ids,
+            session_ids,
+            claimed_by_session: false,
+        }
+    );
+    assert_eq!(
+        outside_candidate.blocked_reasons,
+        vec![RunnableTaskBlockedReason::ClaimBlocked]
+    );
 }

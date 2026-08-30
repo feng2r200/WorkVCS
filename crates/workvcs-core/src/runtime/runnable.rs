@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const EXCLUSIVE_CLAIM_MODE: &str = "exclusive";
+const SHARED_CLAIM_MODE: &str = "shared";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunnableTasksOptions {
@@ -66,6 +67,11 @@ pub enum RunnableTaskClaimCoordination {
     ClaimedByOtherSession {
         claim_id: ClaimId,
         session_id: SessionId,
+    },
+    Shared {
+        claim_ids: Vec<ClaimId>,
+        session_ids: Vec<SessionId>,
+        claimed_by_session: bool,
     },
 }
 
@@ -183,10 +189,14 @@ fn candidate_with_claims(
 ) -> RunnableTaskCandidate {
     let lifecycle_eligible = lifecycle_eligible(task.state.status);
     let dependency_ready = dependency_readiness.is_ready();
-    let claim_blocked = matches!(
-        claim_coordination,
-        RunnableTaskClaimCoordination::ClaimedByOtherSession { .. }
-    );
+    let claim_blocked = match &claim_coordination {
+        RunnableTaskClaimCoordination::ClaimedByOtherSession { .. } => true,
+        RunnableTaskClaimCoordination::Shared {
+            claimed_by_session, ..
+        } => !claimed_by_session,
+        RunnableTaskClaimCoordination::Unclaimed
+        | RunnableTaskClaimCoordination::ClaimedBySession { .. } => false,
+    };
     let mut blocked_reasons = Vec::new();
     if !lifecycle_eligible {
         blocked_reasons.push(RunnableTaskBlockedReason::LifecycleIneligible);
@@ -705,36 +715,114 @@ fn load_active_claim_coordination(
         )
         .map_err(storage_error)?;
 
-    let mut claims = BTreeMap::new();
+    let mut claims_by_task = BTreeMap::<EntityId, Vec<ActiveClaimRow>>::new();
     for row in rows {
         let (claim_id, session_id, task_entity_id, mode) = row.map_err(storage_error)?;
         let claim_id = decode_claim_id("claim.claim_id", claim_id)?;
         let session_id = decode_session_id("claim.session_id", session_id)?;
         let task_entity_id = decode_entity_id("claim.task_entity_id", task_entity_id)?;
-        validate_claim_mode(&mode)?;
-        let coordination = if session_id == requesting_session_id {
-            RunnableTaskClaimCoordination::ClaimedBySession { claim_id }
-        } else {
-            RunnableTaskClaimCoordination::ClaimedByOtherSession {
+        let mode = parse_active_claim_mode(&mode)?;
+        claims_by_task
+            .entry(task_entity_id)
+            .or_default()
+            .push(ActiveClaimRow {
                 claim_id,
                 session_id,
-            }
-        };
-        if claims.insert(task_entity_id, coordination).is_some() {
-            return Err(WorkVcsError::ClaimInvalid(format!(
-                "task {task_entity_id} has more than one active claim on branch {branch_id}"
-            )));
-        }
+                mode,
+            });
+    }
+    let mut claims = BTreeMap::new();
+    for (task_entity_id, mut active_claims) in claims_by_task {
+        active_claims.sort_by_key(|claim| claim.claim_id);
+        let coordination = active_claim_coordination(
+            task_entity_id,
+            branch_id,
+            requesting_session_id,
+            &active_claims,
+        )?;
+        claims.insert(task_entity_id, coordination);
     }
     Ok(claims)
 }
 
-fn validate_claim_mode(value: &str) -> Result<()> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActiveClaimMode {
+    Exclusive,
+    Shared,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActiveClaimRow {
+    claim_id: ClaimId,
+    session_id: SessionId,
+    mode: ActiveClaimMode,
+}
+
+fn active_claim_coordination(
+    task_entity_id: EntityId,
+    branch_id: BranchId,
+    requesting_session_id: SessionId,
+    active_claims: &[ActiveClaimRow],
+) -> Result<RunnableTaskClaimCoordination> {
+    let mut exclusive_claim = None;
+    let mut shared_claim_ids = Vec::new();
+    let mut shared_session_ids = Vec::new();
+    let mut seen_shared_sessions = BTreeSet::new();
+
+    for active_claim in active_claims {
+        match active_claim.mode {
+            ActiveClaimMode::Exclusive => {
+                if exclusive_claim.replace(active_claim).is_some() {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "task {task_entity_id} has more than one active exclusive claim on branch {branch_id}"
+                    )));
+                }
+            }
+            ActiveClaimMode::Shared => {
+                if !seen_shared_sessions.insert(active_claim.session_id) {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "task {task_entity_id} has multiple active shared claims for session {} on branch {branch_id}",
+                        active_claim.session_id
+                    )));
+                }
+                shared_claim_ids.push(active_claim.claim_id);
+                shared_session_ids.push(active_claim.session_id);
+            }
+        }
+    }
+
+    if let Some(exclusive_claim) = exclusive_claim {
+        if !shared_claim_ids.is_empty() {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "task {task_entity_id} has mixed active exclusive and shared claims on branch {branch_id}"
+            )));
+        }
+        return Ok(if exclusive_claim.session_id == requesting_session_id {
+            RunnableTaskClaimCoordination::ClaimedBySession {
+                claim_id: exclusive_claim.claim_id,
+            }
+        } else {
+            RunnableTaskClaimCoordination::ClaimedByOtherSession {
+                claim_id: exclusive_claim.claim_id,
+                session_id: exclusive_claim.session_id,
+            }
+        });
+    }
+
+    if shared_claim_ids.is_empty() {
+        return Ok(RunnableTaskClaimCoordination::Unclaimed);
+    }
+    Ok(RunnableTaskClaimCoordination::Shared {
+        claimed_by_session: shared_session_ids.contains(&requesting_session_id),
+        claim_ids: shared_claim_ids,
+        session_ids: shared_session_ids,
+    })
+}
+
+fn parse_active_claim_mode(value: &str) -> Result<ActiveClaimMode> {
     match value {
-        EXCLUSIVE_CLAIM_MODE => Ok(()),
-        "shared" => Err(WorkVcsError::ClaimInvalid(
-            "shared claim mode is not supported by Phase 3G runnable projection".to_owned(),
-        )),
+        EXCLUSIVE_CLAIM_MODE => Ok(ActiveClaimMode::Exclusive),
+        SHARED_CLAIM_MODE => Ok(ActiveClaimMode::Shared),
         other => Err(WorkVcsError::ClaimInvalid(format!(
             "claim mode {other:?} is not supported"
         ))),

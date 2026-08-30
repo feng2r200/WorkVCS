@@ -2142,6 +2142,12 @@ enum ResourceCommand {
 
         #[arg(long)]
         kind: Option<String>,
+
+        #[arg(long)]
+        bound: Option<bool>,
+
+        #[arg(long)]
+        workspace: Option<String>,
     },
     Bind {
         #[arg(value_name = "STORE")]
@@ -5190,14 +5196,35 @@ fn run(cli: Cli) -> Result<String> {
             render_resource_snapshot(&engine.resource(ResourceId::parse_canonical(&resource)?)?)
         }
         Command::Resource {
-            command: ResourceCommand::List { store, kind },
+            command:
+                ResourceCommand::List {
+                    store,
+                    kind,
+                    bound,
+                    workspace,
+                },
         } => {
             let engine = Engine::open(store)?;
             let options = match kind {
                 Some(kind) => ResourceListOptions::for_kind(kind)?,
                 None => ResourceListOptions::all(),
             };
-            Ok(render_resource_list(&engine.resources(options)?))
+            let mut result = engine.resources(options)?;
+            if let Some(bound) = bound {
+                result
+                    .resources
+                    .retain(|resource| resource.binding.is_some() == bound);
+            }
+            if let Some(workspace) = workspace {
+                let workspace_id = workvcs_core::WorkspaceId::parse_canonical(&workspace)?;
+                result.resources.retain(|resource| {
+                    resource
+                        .workspace_associations
+                        .iter()
+                        .any(|association| association.workspace_id == workspace_id)
+                });
+            }
+            Ok(render_resource_list(&result))
         }
         Command::Resource {
             command:
@@ -20450,6 +20477,54 @@ mod tests {
         assert!(listed_ids.contains(&resource_id));
         assert!(listed_ids.contains(&second_resource_id));
 
+        let bound_resources =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "list", store, "--bound", "true"])
+                    .expect("parse bound resource list"),
+            )
+            .expect("list bound resources");
+        assert_eq!(value(&bound_resources, "resources"), "1");
+        assert_eq!(
+            value(&bound_resources, "resource.0.resource_id"),
+            resource_id
+        );
+
+        let unbound_resources =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "list", store, "--bound", "false"])
+                    .expect("parse unbound resource list"),
+            )
+            .expect("list unbound resources");
+        assert_eq!(value(&unbound_resources, "resources"), "1");
+        assert_eq!(
+            value(&unbound_resources, "resource.0.resource_id"),
+            second_resource_id
+        );
+
+        let workspace_resources = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+        ])
+        .expect("parse workspace resource list"))
+        .expect("list workspace resources");
+        assert_eq!(value(&workspace_resources, "resources"), "2");
+
+        let missing_workspace_resources = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "list",
+            store,
+            "--workspace",
+            "018b4ed6-0e2f-7000-8000-000000000002",
+        ])
+        .expect("parse missing workspace resource list"))
+        .expect("list missing workspace resources");
+        assert_eq!(value(&missing_workspace_resources, "resources"), "0");
+
         let filtered_resources = run(Cli::try_parse_from([
             "workvcs",
             "resource",
@@ -20457,6 +20532,8 @@ mod tests {
             store,
             "--kind",
             "git-worktree",
+            "--bound",
+            "true",
         ])
         .expect("parse filtered resource list"))
         .expect("list filtered resources");

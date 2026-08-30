@@ -127,6 +127,30 @@ enum Command {
 
         #[arg(long)]
         require_valid: bool,
+
+        #[arg(long)]
+        expected_checked_branches: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_commits: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_changesets: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_change_operations: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_changeset_causal_anchors: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_events: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_checkpoints: Option<usize>,
+
+        #[arg(long)]
+        expected_invalid_checkpoints: Option<usize>,
     },
     Canonical {
         #[command(subcommand)]
@@ -3932,6 +3956,14 @@ fn run(cli: Cli) -> Result<String> {
         Command::Doctor {
             store,
             require_valid,
+            expected_checked_branches,
+            expected_checked_commits,
+            expected_checked_changesets,
+            expected_checked_change_operations,
+            expected_checked_changeset_causal_anchors,
+            expected_checked_events,
+            expected_checked_checkpoints,
+            expected_invalid_checkpoints,
         } => {
             let engine = Engine::open(store)?;
             let info = engine.store_info()?;
@@ -3954,6 +3986,62 @@ fn run(cli: Cli) -> Result<String> {
                 require_integrity_report_valid(&integrity)?;
                 output.push_str("valid_required=true\n");
             }
+            append_expected_count_match(
+                &mut output,
+                "doctor checked branches",
+                integrity.checked_branches,
+                expected_checked_branches,
+                "checked_branches_match_expected",
+            )?;
+            append_expected_count_match(
+                &mut output,
+                "doctor checked commits",
+                integrity.checked_commits,
+                expected_checked_commits,
+                "checked_commits_match_expected",
+            )?;
+            append_expected_count_match(
+                &mut output,
+                "doctor checked changesets",
+                integrity.checked_changesets,
+                expected_checked_changesets,
+                "checked_changesets_match_expected",
+            )?;
+            append_expected_count_match(
+                &mut output,
+                "doctor checked change operations",
+                integrity.checked_change_operations,
+                expected_checked_change_operations,
+                "checked_change_operations_match_expected",
+            )?;
+            append_expected_count_match(
+                &mut output,
+                "doctor checked changeset causal anchors",
+                integrity.checked_changeset_causal_anchors,
+                expected_checked_changeset_causal_anchors,
+                "checked_changeset_causal_anchors_match_expected",
+            )?;
+            append_expected_count_match(
+                &mut output,
+                "doctor checked events",
+                integrity.checked_events,
+                expected_checked_events,
+                "checked_events_match_expected",
+            )?;
+            append_expected_count_match(
+                &mut output,
+                "doctor checked checkpoints",
+                integrity.checked_checkpoints,
+                expected_checked_checkpoints,
+                "checked_checkpoints_match_expected",
+            )?;
+            append_expected_count_match(
+                &mut output,
+                "doctor invalid checkpoints",
+                integrity.invalid_checkpoints,
+                expected_invalid_checkpoints,
+                "invalid_checkpoints_match_expected",
+            )?;
             Ok(output)
         }
         Command::Canonical { command } => match command {
@@ -18134,6 +18222,22 @@ mod tests {
             "doctor",
             path.to_str().expect("path text"),
             "--require-valid",
+            "--expected-checked-branches",
+            "0",
+            "--expected-checked-commits",
+            "0",
+            "--expected-checked-changesets",
+            "0",
+            "--expected-checked-change-operations",
+            "0",
+            "--expected-checked-changeset-causal-anchors",
+            "0",
+            "--expected-checked-events",
+            "0",
+            "--expected-checked-checkpoints",
+            "0",
+            "--expected-invalid-checkpoints",
+            "0",
         ])
         .expect("parse doctor"))
         .expect("run doctor");
@@ -18148,6 +18252,30 @@ mod tests {
         assert!(doctor.contains("checked_checkpoints=0"));
         assert!(doctor.contains("invalid_checkpoints=0"));
         assert!(doctor.contains("valid_required=true"));
+        assert_eq!(value(&doctor, "checked_branches_match_expected"), "true");
+        assert_eq!(value(&doctor, "checked_commits_match_expected"), "true");
+        assert_eq!(value(&doctor, "checked_changesets_match_expected"), "true");
+        assert_eq!(
+            value(&doctor, "checked_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&doctor, "checked_changeset_causal_anchors_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&doctor, "checked_events_match_expected"), "true");
+        assert_eq!(value(&doctor, "checked_checkpoints_match_expected"), "true");
+        assert_eq!(value(&doctor, "invalid_checkpoints_match_expected"), "true");
+
+        let mismatched_doctor = run(Cli::try_parse_from([
+            "workvcs",
+            "doctor",
+            path.to_str().expect("path text"),
+            "--expected-checked-events",
+            "1",
+        ])
+        .expect("parse mismatched doctor"));
+        assert!(mismatched_doctor.is_err());
     }
 
     #[test]

@@ -26,11 +26,11 @@ use workvcs_core::{
     EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
     ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
     ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
-    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
-    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureDerivedFromRelationCreateCommit,
+    GoalCreateCommit, GoalCreateOptions, HistoryEntry, HistoryQueryOptions, ImportId,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
+    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -52,9 +52,9 @@ use workvcs_core::{
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
     MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
-    NextWorkOptions, NextWorkResult, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
-    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    NextWorkOptions, NextWorkResult, PlanCreateCommit, PlanCreateOptions,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
     RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
@@ -206,6 +206,14 @@ enum Command {
     Knowledge {
         #[command(subcommand)]
         command: KnowledgeCommand,
+    },
+    Goal {
+        #[command(subcommand)]
+        command: GoalCommand,
+    },
+    Plan {
+        #[command(subcommand)]
+        command: PlanCommand,
     },
     Task {
         #[command(subcommand)]
@@ -1289,6 +1297,46 @@ enum TaskCommand {
 
         #[arg(long)]
         commit: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GoalCommand {
+    Create {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        description: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PlanCommand {
+    Create {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        description: String,
+
+        #[arg(long)]
+        strategy: String,
+
+        #[arg(long = "constraint")]
+        constraints: Vec<String>,
     },
 }
 
@@ -3287,6 +3335,47 @@ fn run(cli: Cli) -> Result<String> {
                     rationale,
                 )?)?;
             Ok(render_knowledge_relation_restore(&restored))
+        }
+        Command::Goal {
+            command:
+                GoalCommand::Create {
+                    store,
+                    branch,
+                    head,
+                    description,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let goal = engine.create_goal(GoalCreateOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                description,
+            )?)?;
+            Ok(render_goal_create(&goal))
+        }
+        Command::Plan {
+            command:
+                PlanCommand::Create {
+                    store,
+                    branch,
+                    head,
+                    description,
+                    strategy,
+                    constraints,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = PlanCreateOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                description,
+                strategy,
+            )?;
+            if !constraints.is_empty() {
+                options = options.with_constraints(constraints)?;
+            }
+            let plan = engine.create_plan(options)?;
+            Ok(render_plan_create(&plan))
         }
         Command::Task {
             command:
@@ -5435,6 +5524,41 @@ fn knowledge_value_json(label: &str, value: &CanonicalValue) -> Result<String> {
     String::from_utf8(canonical_bytes(value)?).map_err(|error| {
         WorkVcsError::KnowledgeInvalid(format!("{label} encode produced non-UTF-8: {error}"))
     })
+}
+
+fn render_goal_create(goal: &GoalCreateCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\ngoal_entity_id={}\ngoal_entity_version_id={}\ngoal_state_digest={}\nwork_state_digest={}\nstatus={}\n",
+        goal.workspace_id,
+        goal.branch_id,
+        goal.previous_head_commit_id,
+        goal.commit_id,
+        goal.changeset_id,
+        goal.operation_id,
+        goal.goal_entity_id,
+        goal.goal_entity_version_id,
+        goal.goal_state_digest,
+        goal.work_state_digest,
+        goal.state.status
+    )
+}
+
+fn render_plan_create(plan: &PlanCreateCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nplan_entity_id={}\nplan_entity_version_id={}\nplan_state_digest={}\nwork_state_digest={}\nstatus={}\nconstraints={}\n",
+        plan.workspace_id,
+        plan.branch_id,
+        plan.previous_head_commit_id,
+        plan.commit_id,
+        plan.changeset_id,
+        plan.operation_id,
+        plan.plan_entity_id,
+        plan.plan_entity_version_id,
+        plan.plan_state_digest,
+        plan.work_state_digest,
+        plan.state.status,
+        plan.state.constraints.len()
+    )
 }
 
 fn render_task_create(task: &TaskCreateCommit) -> String {
@@ -8781,6 +8905,8 @@ mod tests {
                 "workspace",
                 "branch",
                 "knowledge",
+                "goal",
+                "plan",
                 "task",
                 "ac",
                 "vr",
@@ -12411,6 +12537,153 @@ mod tests {
         .expect("parse historical containment list"))
         .expect("list historical containment relations");
         assert_eq!(value(&historical_containment_list, "relations"), "0");
+    }
+
+    #[test]
+    fn cli_creates_goal_plan_and_task_containment_hierarchy() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+        let workspace_id = value(&workspace, "workspace_id");
+
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Deliver the CLI hierarchy",
+        ])
+        .expect("parse goal create"))
+        .expect("create goal");
+        assert_eq!(value(&goal, "status"), "active");
+
+        let plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal, "commit_id"),
+            "--description",
+            "Implement the hierarchy",
+            "--strategy",
+            "Use existing Engine APIs",
+            "--constraint",
+            "stay within v0.1",
+        ])
+        .expect("parse plan create"))
+        .expect("create plan");
+        assert_eq!(value(&plan, "status"), "active");
+        assert_eq!(value(&plan, "constraints"), "1");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&plan, "commit_id"),
+            "--description",
+            "Wire containment",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let goal_contains_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--parent",
+            &value(&goal, "goal_entity_id"),
+            "--child",
+            &value(&plan, "plan_entity_id"),
+            "--session",
+            &session_id,
+        ])
+        .expect("parse goal contains plan"))
+        .expect("create goal-plan containment");
+        assert_eq!(value(&goal_contains_plan, "parent_kind"), "goal");
+        assert_eq!(value(&goal_contains_plan, "child_kind"), "plan");
+
+        let plan_contains_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal_contains_plan, "commit_id"),
+            "--parent",
+            &value(&plan, "plan_entity_id"),
+            "--child",
+            &value(&task, "task_entity_id"),
+            "--session",
+            &session_id,
+        ])
+        .expect("parse plan contains task"))
+        .expect("create plan-task containment");
+        assert_eq!(value(&plan_contains_task, "parent_kind"), "plan");
+        assert_eq!(value(&plan_contains_task, "child_kind"), "task");
+
+        let containment = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse containment list"))
+        .expect("list containment");
+        assert_eq!(value(&containment, "relations"), "2");
+        assert!(containment.contains("relation.0.parent_kind=goal"));
+        assert!(containment.contains("relation.1.parent_kind=plan"));
     }
 
     #[test]

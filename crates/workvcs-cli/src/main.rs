@@ -1256,6 +1256,9 @@ enum BundleCommand {
 
         #[arg(long)]
         input_dir: PathBuf,
+
+        #[arg(long)]
+        require_valid: bool,
     },
     PreflightDir {
         #[arg(value_name = "STORE")]
@@ -4648,6 +4651,7 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 commit,
                 input_dir,
+                require_valid,
             } => {
                 let engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
@@ -4660,7 +4664,17 @@ fn run(cli: Cli) -> Result<String> {
                         payload_index_bytes,
                         payloads,
                     )?)?;
-                Ok(render_bundle_payload_validation(&validation))
+                let mut output = render_bundle_payload_validation(&validation);
+                if require_valid {
+                    if !validation.valid {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle directory validation failed: {}",
+                            validation.problem.as_deref().unwrap_or("unknown problem")
+                        )));
+                    }
+                    output.push_str("valid_required=true\n");
+                }
+                Ok(output)
             }
             BundleCommand::PreflightDir { store, input_dir } => {
                 let engine = Engine::open(store)?;
@@ -19820,6 +19834,21 @@ mod tests {
         assert_eq!(value(&validated_dir, "actual_payload_files"), "3");
         assert_eq!(value(&validated_dir, "expected_payload_references"), "5");
         assert_eq!(value(&validated_dir, "problem"), "none");
+        let required_validated_dir = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-dir",
+            store,
+            "--commit",
+            &genesis,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-valid",
+        ])
+        .expect("parse required bundle validate-dir"))
+        .expect("require valid bundle directory");
+        assert_eq!(value(&required_validated_dir, "valid"), "true");
+        assert_eq!(value(&required_validated_dir, "valid_required"), "true");
 
         let preflight = run(Cli::try_parse_from([
             "workvcs",
@@ -19914,6 +19943,34 @@ mod tests {
         .expect("list bundle import attempts by bundle digest");
         assert_eq!(value(&listed_by_bundle, "imports"), "1");
         assert_eq!(value(&listed_by_bundle, "import[0].import_id"), import_id);
+
+        fs::write(export_dir.join("manifest.json"), b"{}").expect("replace invalid manifest");
+        let invalid_validated_dir = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-dir",
+            store,
+            "--commit",
+            &genesis,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse invalid bundle validate-dir"))
+        .expect("report invalid bundle directory");
+        assert_eq!(value(&invalid_validated_dir, "valid"), "false");
+        let required_invalid_validated_dir = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "validate-dir",
+            store,
+            "--commit",
+            &genesis,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-valid",
+        ])
+        .expect("parse required invalid bundle validate-dir"));
+        assert!(required_invalid_validated_dir.is_err());
     }
 
     #[test]

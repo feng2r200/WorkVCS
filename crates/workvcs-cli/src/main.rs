@@ -1340,6 +1340,21 @@ enum BundleCommand {
 
         #[arg(long)]
         expected_manifest_digest: Option<String>,
+
+        #[arg(long)]
+        expected_commits: Option<usize>,
+
+        #[arg(long)]
+        expected_exported_branch_heads: Option<usize>,
+
+        #[arg(long)]
+        expected_entities: Option<usize>,
+
+        #[arg(long)]
+        expected_relations: Option<usize>,
+
+        #[arg(long)]
+        expected_checkpoint_candidates: Option<usize>,
     },
     ExportJson {
         #[arg(value_name = "STORE")]
@@ -5205,6 +5220,11 @@ fn run(cli: Cli) -> Result<String> {
                 commit,
                 expected_state_digest,
                 expected_manifest_digest,
+                expected_commits,
+                expected_exported_branch_heads,
+                expected_entities,
+                expected_relations,
+                expected_checkpoint_candidates,
             } => {
                 let engine = Engine::open(store)?;
                 let manifest = engine.export_bundle_manifest(BundleExportOptions::for_commit(
@@ -5230,6 +5250,51 @@ fn run(cli: Cli) -> Result<String> {
                         )));
                     }
                     output.push_str("manifest_matches_expected=true\n");
+                }
+                if let Some(expected_commits) = expected_commits {
+                    let actual_commits = manifest.commit_count;
+                    if actual_commits != expected_commits {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle export commits {actual_commits} does not match expected {expected_commits}"
+                        )));
+                    }
+                    output.push_str("commits_match_expected=true\n");
+                }
+                if let Some(expected_exported_branch_heads) = expected_exported_branch_heads {
+                    let actual_exported_branch_heads = manifest.exported_branch_heads.len();
+                    if actual_exported_branch_heads != expected_exported_branch_heads {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle export branch heads {actual_exported_branch_heads} does not match expected {expected_exported_branch_heads}"
+                        )));
+                    }
+                    output.push_str("exported_branch_heads_match_expected=true\n");
+                }
+                if let Some(expected_entities) = expected_entities {
+                    let actual_entities = manifest.entity_count;
+                    if actual_entities != expected_entities {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle export entities {actual_entities} does not match expected {expected_entities}"
+                        )));
+                    }
+                    output.push_str("entities_match_expected=true\n");
+                }
+                if let Some(expected_relations) = expected_relations {
+                    let actual_relations = manifest.relation_count;
+                    if actual_relations != expected_relations {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle export relations {actual_relations} does not match expected {expected_relations}"
+                        )));
+                    }
+                    output.push_str("relations_match_expected=true\n");
+                }
+                if let Some(expected_checkpoint_candidates) = expected_checkpoint_candidates {
+                    let actual_checkpoint_candidates = manifest.checkpoint_candidates.len();
+                    if actual_checkpoint_candidates != expected_checkpoint_candidates {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle export checkpoint candidates {actual_checkpoint_candidates} does not match expected {expected_checkpoint_candidates}"
+                        )));
+                    }
+                    output.push_str("checkpoint_candidates_match_expected=true\n");
                 }
                 Ok(output)
             }
@@ -21925,12 +21990,26 @@ mod tests {
         .expect("parse mismatched checkpoint latest"));
         assert!(mismatched_latest.is_err());
 
-        let exported =
-            run(
-                Cli::try_parse_from(["workvcs", "bundle", "export", store, "--commit", &genesis])
-                    .expect("parse bundle export"),
-            )
-            .expect("export bundle manifest");
+        let exported = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-commits",
+            "1",
+            "--expected-exported-branch-heads",
+            "1",
+            "--expected-entities",
+            "0",
+            "--expected-relations",
+            "0",
+            "--expected-checkpoint-candidates",
+            "1",
+        ])
+        .expect("parse bundle export"))
+        .expect("export bundle manifest");
         assert_eq!(
             value(&exported, "bundle_manifest_profile"),
             "workvcs-local-export-manifest-v1"
@@ -21945,6 +22024,17 @@ mod tests {
         assert_eq!(value(&exported, "entity_membership_changes"), "0");
         assert_eq!(value(&exported, "relation_membership_changes"), "0");
         assert_eq!(value(&exported, "checkpoint_candidates"), "1");
+        assert_eq!(value(&exported, "commits_match_expected"), "true");
+        assert_eq!(
+            value(&exported, "exported_branch_heads_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&exported, "entities_match_expected"), "true");
+        assert_eq!(value(&exported, "relations_match_expected"), "true");
+        assert_eq!(
+            value(&exported, "checkpoint_candidates_match_expected"),
+            "true"
+        );
         assert_eq!(value(&exported, "checkpoint_candidate[0].id"), checkpoint);
         assert_eq!(
             value(&exported, "checkpoint_candidate[0].commit_id"),
@@ -22002,6 +22092,18 @@ mod tests {
         ])
         .expect("parse mismatched bundle export manifest"));
         assert!(mismatched_export_manifest.is_err());
+        let mismatched_export_count = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-checkpoint-candidates",
+            "0",
+        ])
+        .expect("parse mismatched bundle export count"));
+        assert!(mismatched_export_count.is_err());
 
         let manifest_json = run(Cli::try_parse_from([
             "workvcs",

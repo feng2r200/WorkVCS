@@ -451,6 +451,9 @@ enum CanonicalCommand {
 
         #[arg(long, value_name = "PATH")]
         json_file: Option<PathBuf>,
+
+        #[arg(long)]
+        expected_digest: Option<String>,
     },
     DigestDomains,
     InputModes,
@@ -3516,9 +3519,10 @@ fn run(cli: Cli) -> Result<String> {
                 domain,
                 json,
                 json_file,
+                expected_digest,
             } => {
                 let bytes = canonical_json_input_bytes("canonical digest JSON", json, json_file)?;
-                render_canonical_digest(&domain, &bytes)
+                render_canonical_digest(&domain, &bytes, expected_digest)
             }
             CanonicalCommand::DigestDomains => Ok(render_canonical_digest_domains()),
             CanonicalCommand::InputModes => Ok(render_canonical_input_modes()),
@@ -8089,7 +8093,11 @@ fn render_canonical_encode(json: &[u8]) -> Result<String> {
     ))
 }
 
-fn render_canonical_digest(domain: &str, json: &[u8]) -> Result<String> {
+fn render_canonical_digest(
+    domain: &str,
+    json: &[u8],
+    expected_digest: Option<String>,
+) -> Result<String> {
     let value = parse_canonical_json(json)?;
     let canonical_json = canonical_cli_json("canonical JSON", &value)?;
     let digest = match domain {
@@ -8101,9 +8109,21 @@ fn render_canonical_digest(domain: &str, json: &[u8]) -> Result<String> {
             )));
         }
     };
+    let matches_expected = if let Some(expected_digest) = expected_digest {
+        let expected_digest = Digest::from_hex(&expected_digest)?;
+        if digest != expected_digest {
+            return Err(WorkVcsError::DigestInvalid(format!(
+                "canonical {domain} digest {digest} does not match expected {expected_digest}"
+            )));
+        }
+        "\nmatches_expected=true"
+    } else {
+        ""
+    };
     Ok(format!(
-        "domain={domain}\ndigest={digest}\ncanonical_json={canonical_json}\nsize_bytes={}\n",
-        canonical_json.len()
+        "domain={domain}\ndigest={digest}\ncanonical_json={canonical_json}\nsize_bytes={}{}\n",
+        canonical_json.len(),
+        matches_expected
     ))
 }
 
@@ -15362,6 +15382,39 @@ mod tests {
             value(&entity_digest, "digest"),
             value(&relation_digest, "digest")
         );
+
+        let expected_entity_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "digest",
+            "--domain",
+            "entity-version",
+            "--json",
+            r#"{"a":1,"b":2}"#,
+            "--expected-digest",
+            &value(&entity_digest, "digest"),
+        ])
+        .expect("parse expected entity digest"))
+        .expect("expected entity digest");
+        assert_eq!(
+            value(&expected_entity_digest, "digest"),
+            value(&entity_digest, "digest")
+        );
+        assert_eq!(value(&expected_entity_digest, "matches_expected"), "true");
+
+        let mismatched_entity_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "digest",
+            "--domain",
+            "entity-version",
+            "--json",
+            r#"{"a":1,"b":2}"#,
+            "--expected-digest",
+            &value(&relation_digest, "digest"),
+        ])
+        .expect("parse mismatched entity digest"));
+        assert!(mismatched_entity_digest.is_err());
 
         let raw_digest = run(Cli::try_parse_from([
             "workvcs",

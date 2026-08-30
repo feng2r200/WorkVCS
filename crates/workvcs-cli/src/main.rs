@@ -544,6 +544,30 @@ enum StoreCommand {
 
         #[arg(long)]
         require_valid: bool,
+
+        #[arg(long)]
+        expected_checked_branches: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_commits: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_changesets: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_change_operations: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_changeset_causal_anchors: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_events: Option<usize>,
+
+        #[arg(long)]
+        expected_checked_checkpoints: Option<usize>,
+
+        #[arg(long)]
+        expected_invalid_checkpoints: Option<usize>,
     },
     #[command(name = "lineage-record")]
     Record {
@@ -3978,6 +4002,14 @@ fn run(cli: Cli) -> Result<String> {
             StoreCommand::Integrity {
                 store,
                 require_valid,
+                expected_checked_branches,
+                expected_checked_commits,
+                expected_checked_changesets,
+                expected_checked_change_operations,
+                expected_checked_changeset_causal_anchors,
+                expected_checked_events,
+                expected_checked_checkpoints,
+                expected_invalid_checkpoints,
             } => {
                 let engine = Engine::open(store)?;
                 let report = engine.validate_integrity()?;
@@ -3986,6 +4018,62 @@ fn run(cli: Cli) -> Result<String> {
                     require_integrity_report_valid(&report)?;
                     output.push_str("valid_required=true\n");
                 }
+                append_expected_count_match(
+                    &mut output,
+                    "integrity checked branches",
+                    report.checked_branches,
+                    expected_checked_branches,
+                    "checked_branches_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "integrity checked commits",
+                    report.checked_commits,
+                    expected_checked_commits,
+                    "checked_commits_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "integrity checked changesets",
+                    report.checked_changesets,
+                    expected_checked_changesets,
+                    "checked_changesets_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "integrity checked change operations",
+                    report.checked_change_operations,
+                    expected_checked_change_operations,
+                    "checked_change_operations_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "integrity checked changeset causal anchors",
+                    report.checked_changeset_causal_anchors,
+                    expected_checked_changeset_causal_anchors,
+                    "checked_changeset_causal_anchors_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "integrity checked events",
+                    report.checked_events,
+                    expected_checked_events,
+                    "checked_events_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "integrity checked checkpoints",
+                    report.checked_checkpoints,
+                    expected_checked_checkpoints,
+                    "checked_checkpoints_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "integrity invalid checkpoints",
+                    report.invalid_checkpoints,
+                    expected_invalid_checkpoints,
+                    "invalid_checkpoints_match_expected",
+                )?;
                 Ok(output)
             }
             StoreCommand::Record {
@@ -16704,17 +16792,50 @@ mod tests {
         .expect("parse init"))
         .expect("init store");
 
-        let empty =
-            run(
-                Cli::try_parse_from(["workvcs", "store", "integrity", store, "--require-valid"])
-                    .expect("parse empty integrity"),
-            )
-            .expect("empty store integrity");
+        let empty = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "integrity",
+            store,
+            "--require-valid",
+            "--expected-checked-branches",
+            "0",
+            "--expected-checked-commits",
+            "0",
+            "--expected-checked-changesets",
+            "0",
+            "--expected-checked-change-operations",
+            "0",
+            "--expected-checked-changeset-causal-anchors",
+            "0",
+            "--expected-checked-events",
+            "0",
+            "--expected-checked-checkpoints",
+            "0",
+            "--expected-invalid-checkpoints",
+            "0",
+        ])
+        .expect("parse empty integrity"))
+        .expect("empty store integrity");
         assert_eq!(value(&empty, "checked_branches"), "0");
         assert_eq!(value(&empty, "checked_commits"), "0");
         assert_eq!(value(&empty, "checked_changesets"), "0");
         assert_eq!(value(&empty, "invalid_checkpoints"), "0");
         assert_eq!(value(&empty, "valid_required"), "true");
+        assert_eq!(value(&empty, "checked_branches_match_expected"), "true");
+        assert_eq!(value(&empty, "checked_commits_match_expected"), "true");
+        assert_eq!(value(&empty, "checked_changesets_match_expected"), "true");
+        assert_eq!(
+            value(&empty, "checked_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&empty, "checked_changeset_causal_anchors_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&empty, "checked_events_match_expected"), "true");
+        assert_eq!(value(&empty, "checked_checkpoints_match_expected"), "true");
+        assert_eq!(value(&empty, "invalid_checkpoints_match_expected"), "true");
 
         let workspace = run(Cli::try_parse_from([
             "workvcs",
@@ -16727,12 +16848,31 @@ mod tests {
         .expect("parse workspace"))
         .expect("create workspace");
 
-        let report =
-            run(
-                Cli::try_parse_from(["workvcs", "store", "integrity", store, "--require-valid"])
-                    .expect("parse integrity"),
-            )
-            .expect("store integrity");
+        let report = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "integrity",
+            store,
+            "--require-valid",
+            "--expected-checked-branches",
+            "1",
+            "--expected-checked-commits",
+            "1",
+            "--expected-checked-changesets",
+            "1",
+            "--expected-checked-change-operations",
+            "0",
+            "--expected-checked-changeset-causal-anchors",
+            "0",
+            "--expected-checked-events",
+            "1",
+            "--expected-checked-checkpoints",
+            "0",
+            "--expected-invalid-checkpoints",
+            "0",
+        ])
+        .expect("parse integrity"))
+        .expect("store integrity");
         assert_eq!(value(&report, "checked_branches"), "1");
         assert_eq!(value(&report, "checked_commits"), "1");
         assert_eq!(value(&report, "checked_changesets"), "1");
@@ -16742,6 +16882,30 @@ mod tests {
         assert_eq!(value(&report, "checked_checkpoints"), "0");
         assert_eq!(value(&report, "invalid_checkpoints"), "0");
         assert_eq!(value(&report, "valid_required"), "true");
+        assert_eq!(value(&report, "checked_branches_match_expected"), "true");
+        assert_eq!(value(&report, "checked_commits_match_expected"), "true");
+        assert_eq!(value(&report, "checked_changesets_match_expected"), "true");
+        assert_eq!(
+            value(&report, "checked_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&report, "checked_changeset_causal_anchors_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&report, "checked_events_match_expected"), "true");
+        assert_eq!(value(&report, "checked_checkpoints_match_expected"), "true");
+        assert_eq!(value(&report, "invalid_checkpoints_match_expected"), "true");
+        let mismatched = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "integrity",
+            store,
+            "--expected-checked-events",
+            "0",
+        ])
+        .expect("parse mismatched integrity"));
+        assert!(mismatched.is_err());
         assert!(
             !value(&workspace, "genesis_commit_id").is_empty(),
             "workspace creation should produce a replayable genesis commit"

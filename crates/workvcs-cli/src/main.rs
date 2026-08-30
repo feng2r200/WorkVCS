@@ -1006,6 +1006,9 @@ enum ChangeSetCommand {
 
         #[arg(long)]
         payload_digest: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Anchors {
         #[arg(value_name = "STORE")]
@@ -1019,6 +1022,9 @@ enum ChangeSetCommand {
 
         #[arg(long)]
         object_kind: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -4000,6 +4006,7 @@ fn run(cli: Cli) -> Result<String> {
                 subject_family,
                 subject_object,
                 payload_digest,
+                limit,
             } => {
                 let engine = Engine::open(store)?;
                 let mut result =
@@ -4026,6 +4033,14 @@ fn run(cli: Cli) -> Result<String> {
                         .operations
                         .retain(|operation| operation.operation_payload_digest == payload_digest);
                 }
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "changeset operations limit must be greater than zero".to_owned(),
+                    ));
+                }
+                if let Some(limit) = limit {
+                    result.operations.truncate(limit);
+                }
                 Ok(render_change_operations(&result))
             }
             ChangeSetCommand::Anchors {
@@ -4033,6 +4048,7 @@ fn run(cli: Cli) -> Result<String> {
                 changeset,
                 object,
                 object_kind,
+                limit,
             } => {
                 let engine = Engine::open(store)?;
                 let mut result =
@@ -4046,6 +4062,14 @@ fn run(cli: Cli) -> Result<String> {
                     result
                         .anchors
                         .retain(|anchor| anchor.anchor_object_kind == object_kind);
+                }
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "changeset anchors limit must be greater than zero".to_owned(),
+                    ));
+                }
+                if let Some(limit) = limit {
+                    result.anchors.truncate(limit);
                 }
                 Ok(render_changeset_causal_anchors(&result))
             }
@@ -15350,6 +15374,33 @@ mod tests {
         .expect("list combined-filtered changeset operations");
         assert_eq!(value(&operations_by_combined_filters, "operations"), "1");
 
+        let limited_operations = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited changeset operations"))
+        .expect("list limited changeset operations");
+        assert_eq!(value(&limited_operations, "operations"), "1");
+
+        let zero_limit_operations = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit changeset operations"));
+        assert!(zero_limit_operations.is_err());
+
         let operations_by_missing_operation = run(Cli::try_parse_from([
             "workvcs",
             "changeset",
@@ -25803,6 +25854,33 @@ mod tests {
         .expect("parse combined-filtered changeset anchors"))
         .expect("list combined-filtered changeset anchors");
         assert_eq!(value(&anchors_by_combined_filters, "causal_anchors"), "1");
+
+        let limited_anchors = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited changeset anchors"))
+        .expect("list limited changeset anchors");
+        assert_eq!(value(&limited_anchors, "causal_anchors"), "1");
+
+        let zero_limit_anchors = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit changeset anchors"));
+        assert!(zero_limit_anchors.is_err());
 
         let anchors_by_missing_object = run(Cli::try_parse_from([
             "workvcs",

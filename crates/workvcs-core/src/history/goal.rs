@@ -394,9 +394,61 @@ pub(crate) fn goal_at(
     })
 }
 
+pub(crate) fn goals_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<GoalSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut goals = Vec::new();
+
+    for (entity_id, entity_version_id) in replayed.state.entities() {
+        match load_entity_kind(connection, *entity_id)? {
+            Some(entity_kind) if entity_kind == GOAL_ENTITY_KIND => {
+                let loaded = load_goal_version(
+                    connection,
+                    replayed.workspace_id,
+                    *entity_id,
+                    *entity_version_id,
+                )?;
+                goals.push(GoalSnapshot {
+                    workspace_id: replayed.workspace_id,
+                    commit_id,
+                    goal_entity_id: *entity_id,
+                    goal_entity_version_id: *entity_version_id,
+                    state_digest: loaded.state_digest,
+                    state: loaded.state,
+                });
+            }
+            Some(_) => {}
+            None => {
+                return Err(WorkVcsError::GoalInvalid(format!(
+                    "WorkState at commit {commit_id} references missing entity {entity_id}"
+                )));
+            }
+        }
+    }
+
+    goals.sort_by_key(|goal| goal.goal_entity_id);
+    Ok(goals)
+}
+
 struct LoadedGoalVersion {
     state_digest: Digest,
     state: GoalState,
+}
+
+fn load_entity_kind(connection: &StoreConnection, entity_id: EntityId) -> Result<Option<String>> {
+    connection
+        .inner()
+        .query_row(
+            "SELECT entity_kind
+             FROM entity
+             WHERE object_id = ?1",
+            params![&entity_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)
 }
 
 fn load_goal_version(

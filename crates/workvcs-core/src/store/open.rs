@@ -1253,6 +1253,12 @@ impl Store {
         history::plan_at(&self.connection, commit_id, plan_entity_id)
     }
 
+    pub(crate) fn plans_at(&self, commit_id: CommitId) -> Result<Vec<PlanSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::plans_at(&self.connection, commit_id)
+    }
+
     pub(crate) fn goal_at(
         &self,
         commit_id: CommitId,
@@ -1261,6 +1267,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::goal_at(&self.connection, commit_id, goal_entity_id)
+    }
+
+    pub(crate) fn goals_at(&self, commit_id: CommitId) -> Result<Vec<GoalSnapshot>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::goals_at(&self.connection, commit_id)
     }
 
     pub(crate) fn acceptance_criterion_at(

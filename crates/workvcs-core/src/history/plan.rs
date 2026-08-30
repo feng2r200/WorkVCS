@@ -461,9 +461,61 @@ pub(crate) fn plan_at(
     })
 }
 
+pub(crate) fn plans_at(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<PlanSnapshot>> {
+    let replayed = state_at(connection, commit_id)?;
+    let mut plans = Vec::new();
+
+    for (entity_id, entity_version_id) in replayed.state.entities() {
+        match load_entity_kind(connection, *entity_id)? {
+            Some(entity_kind) if entity_kind == PLAN_ENTITY_KIND => {
+                let loaded = load_plan_version(
+                    connection,
+                    replayed.workspace_id,
+                    *entity_id,
+                    *entity_version_id,
+                )?;
+                plans.push(PlanSnapshot {
+                    workspace_id: replayed.workspace_id,
+                    commit_id,
+                    plan_entity_id: *entity_id,
+                    plan_entity_version_id: *entity_version_id,
+                    state_digest: loaded.state_digest,
+                    state: loaded.state,
+                });
+            }
+            Some(_) => {}
+            None => {
+                return Err(WorkVcsError::PlanInvalid(format!(
+                    "WorkState at commit {commit_id} references missing entity {entity_id}"
+                )));
+            }
+        }
+    }
+
+    plans.sort_by_key(|plan| plan.plan_entity_id);
+    Ok(plans)
+}
+
 struct LoadedPlanVersion {
     state_digest: Digest,
     state: PlanState,
+}
+
+fn load_entity_kind(connection: &StoreConnection, entity_id: EntityId) -> Result<Option<String>> {
+    connection
+        .inner()
+        .query_row(
+            "SELECT entity_kind
+             FROM entity
+             WHERE object_id = ?1",
+            params![&entity_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage_error)
 }
 
 fn load_plan_version(

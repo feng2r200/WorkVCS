@@ -187,7 +187,7 @@ pub(crate) use entity::commit_entity_transition;
 pub(crate) use evidence::{create_evidence, evidence};
 pub(crate) use external::{external_object_ref, external_object_refs, record_external_object_ref};
 pub(crate) use genesis::{create_workspace, load_workspace_info};
-pub(crate) use goal::{create_goal, goal_at, transition_goal};
+pub(crate) use goal::{create_goal, goal_at, goals_at, transition_goal};
 pub(crate) use integrity::validate_integrity;
 pub(crate) use knowledge::{
     create_knowledge, knowledge_at, knowledge_version_state, knowledge_version_state_digest,
@@ -203,7 +203,7 @@ pub(crate) use knowledge_exposure::{
 pub(crate) use knowledge_space::{create_knowledge_space, knowledge_space, knowledge_spaces};
 pub(crate) use lineage::{record_store_lineage, store_lineage, store_lineages};
 pub(crate) use migration::{record_store_migration, store_migration, store_migrations};
-pub(crate) use plan::{create_plan, plan_at, transition_plan};
+pub(crate) use plan::{create_plan, plan_at, plans_at, transition_plan};
 pub(crate) use projection::{
     branch_projection, mark_branch_projection_not_materialized, refresh_branch_projection,
 };

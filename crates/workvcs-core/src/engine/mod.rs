@@ -715,8 +715,16 @@ impl Engine {
         self.store.plan_at(commit_id, plan_entity_id)
     }
 
+    pub fn plans_at(&self, commit_id: CommitId) -> Result<Vec<PlanSnapshot>> {
+        self.store.plans_at(commit_id)
+    }
+
     pub fn goal_at(&self, commit_id: CommitId, goal_entity_id: EntityId) -> Result<GoalSnapshot> {
         self.store.goal_at(commit_id, goal_entity_id)
+    }
+
+    pub fn goals_at(&self, commit_id: CommitId) -> Result<Vec<GoalSnapshot>> {
+        self.store.goals_at(commit_id)
     }
 
     pub fn record_at(

@@ -1336,6 +1336,22 @@ enum GoalCommand {
         #[arg(long)]
         goal: String,
     },
+    #[command(group(
+        ArgGroup::new("goal-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+    },
     Achieve {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -1434,6 +1450,22 @@ enum PlanCommand {
 
         #[arg(long)]
         plan: String,
+    },
+    #[command(group(
+        ArgGroup::new("plan-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
     },
     Complete {
         #[arg(value_name = "STORE")]
@@ -3515,6 +3547,15 @@ fn run(cli: Cli) -> Result<String> {
                 let commit_id = resolve_goal_query_commit(&engine, branch, commit)?;
                 render_goal_snapshot(&engine.goal_at(commit_id, EntityId::parse_canonical(&goal)?)?)
             }
+            GoalCommand::List {
+                store,
+                branch,
+                commit,
+            } => {
+                let engine = Engine::open(store)?;
+                let commit_id = resolve_goal_query_commit(&engine, branch, commit)?;
+                render_goal_list(commit_id, &engine.goals_at(commit_id)?)
+            }
             GoalCommand::Achieve {
                 store,
                 branch,
@@ -3601,6 +3642,15 @@ fn run(cli: Cli) -> Result<String> {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_plan_query_commit(&engine, branch, commit)?;
                 render_plan_snapshot(&engine.plan_at(commit_id, EntityId::parse_canonical(&plan)?)?)
+            }
+            PlanCommand::List {
+                store,
+                branch,
+                commit,
+            } => {
+                let engine = Engine::open(store)?;
+                let commit_id = resolve_plan_query_commit(&engine, branch, commit)?;
+                render_plan_list(commit_id, &engine.plans_at(commit_id)?)
             }
             PlanCommand::Complete {
                 store,
@@ -5898,6 +5948,49 @@ fn render_goal_snapshot(goal: &GoalSnapshot) -> Result<String> {
     ))
 }
 
+fn render_goal_list(commit_id: CommitId, goals: &[GoalSnapshot]) -> Result<String> {
+    let mut output = format!("commit_id={commit_id}\ngoals={}\n", goals.len());
+    for (index, goal) in goals.iter().enumerate() {
+        writeln!(output, "goal.{index}.workspace_id={}", goal.workspace_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "goal.{index}.goal_entity_id={}",
+            goal.goal_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "goal.{index}.goal_entity_version_id={}",
+            goal.goal_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "goal.{index}.goal_state_digest={}",
+            goal.state_digest
+        )
+        .expect("write to String");
+        writeln!(output, "goal.{index}.status={}", goal.state.status).expect("write to String");
+        writeln!(
+            output,
+            "goal.{index}.description_json={}",
+            canonical_text_json("goal description", &goal.state.description)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "goal.{index}.terminal_rationale_json={}",
+            canonical_optional_text_json(
+                "goal terminal_rationale",
+                goal.state.terminal_rationale.as_deref()
+            )?
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
 fn render_goal_transition(goal: &GoalTransitionCommit) -> String {
     format!(
         "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\ngoal_entity_id={}\nprevious_goal_entity_version_id={}\ngoal_entity_version_id={}\ngoal_state_digest={}\nwork_state_digest={}\nprevious_status={}\nstatus={}\n",
@@ -5958,6 +6051,67 @@ fn render_plan_snapshot(plan: &PlanSnapshot) -> Result<String> {
         constraints_json,
         completion_rationale_json
     ))
+}
+
+fn render_plan_list(commit_id: CommitId, plans: &[PlanSnapshot]) -> Result<String> {
+    let mut output = format!("commit_id={commit_id}\nplans={}\n", plans.len());
+    for (index, plan) in plans.iter().enumerate() {
+        writeln!(output, "plan.{index}.workspace_id={}", plan.workspace_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "plan.{index}.plan_entity_id={}",
+            plan.plan_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "plan.{index}.plan_entity_version_id={}",
+            plan.plan_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "plan.{index}.plan_state_digest={}",
+            plan.state_digest
+        )
+        .expect("write to String");
+        writeln!(output, "plan.{index}.status={}", plan.state.status).expect("write to String");
+        writeln!(
+            output,
+            "plan.{index}.description_json={}",
+            canonical_text_json("plan description", &plan.state.description)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "plan.{index}.strategy_json={}",
+            canonical_text_json("plan strategy", &plan.state.strategy)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "plan.{index}.constraints={}",
+            plan.state.constraints.len()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "plan.{index}.constraints_json={}",
+            canonical_string_array_json("plan constraints", &plan.state.constraints)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "plan.{index}.completion_rationale_json={}",
+            canonical_optional_text_json(
+                "plan completion_rationale",
+                plan.state.completion_rationale.as_deref()
+            )?
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_plan_transition(plan: &PlanTransitionCommit) -> String {
@@ -13469,6 +13623,184 @@ mod tests {
         assert_eq!(
             value(&plan_at_branch, "completion_rationale_json"),
             "\"snapshot confirms completion\""
+        );
+    }
+
+    #[test]
+    fn cli_lists_goal_and_plan_snapshots_at_branch_or_commit() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let empty_goals =
+            run(
+                Cli::try_parse_from(["workvcs", "goal", "list", store, "--commit", &genesis])
+                    .expect("parse empty goal list"),
+            )
+            .expect("list empty goals");
+        assert_eq!(value(&empty_goals, "goals"), "0");
+
+        let empty_plans =
+            run(
+                Cli::try_parse_from(["workvcs", "plan", "list", store, "--commit", &genesis])
+                    .expect("parse empty plan list"),
+            )
+            .expect("list empty plans");
+        assert_eq!(value(&empty_plans, "plans"), "0");
+
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "List goal snapshots",
+        ])
+        .expect("parse goal create"))
+        .expect("create goal");
+        let goal_id = value(&goal, "goal_entity_id");
+
+        let goals_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+        ])
+        .expect("parse goal list at commit"))
+        .expect("list goals at commit");
+        assert_eq!(value(&goals_at_create, "goals"), "1");
+        assert_eq!(value(&goals_at_create, "goal.0.goal_entity_id"), goal_id);
+        assert_eq!(value(&goals_at_create, "goal.0.status"), "active");
+
+        let achieved_goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "achieve",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal, "commit_id"),
+            "--goal",
+            &goal_id,
+            "--goal-version",
+            &value(&goal, "goal_entity_version_id"),
+            "--rationale",
+            "list sees terminal goal",
+        ])
+        .expect("parse goal achieve"))
+        .expect("achieve goal");
+
+        let goals_at_branch =
+            run(
+                Cli::try_parse_from(["workvcs", "goal", "list", store, "--branch", &branch])
+                    .expect("parse goal list at branch"),
+            )
+            .expect("list goals at branch");
+        assert_eq!(
+            value(&goals_at_branch, "commit_id"),
+            value(&achieved_goal, "commit_id")
+        );
+        assert_eq!(value(&goals_at_branch, "goals"), "1");
+        assert_eq!(value(&goals_at_branch, "goal.0.status"), "achieved");
+        assert_eq!(
+            value(&goals_at_branch, "goal.0.terminal_rationale_json"),
+            "\"list sees terminal goal\""
+        );
+
+        let plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&achieved_goal, "commit_id"),
+            "--description",
+            "List plan snapshots",
+            "--strategy",
+            "Use list commands",
+            "--constraint",
+            "current branch",
+        ])
+        .expect("parse plan create"))
+        .expect("create plan");
+        let plan_id = value(&plan, "plan_entity_id");
+
+        let plans_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+        ])
+        .expect("parse plan list at commit"))
+        .expect("list plans at commit");
+        assert_eq!(value(&plans_at_create, "plans"), "1");
+        assert_eq!(value(&plans_at_create, "plan.0.plan_entity_id"), plan_id);
+        assert_eq!(value(&plans_at_create, "plan.0.status"), "active");
+        assert_eq!(value(&plans_at_create, "plan.0.constraints"), "1");
+
+        let completed_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "complete",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&plan, "commit_id"),
+            "--plan",
+            &plan_id,
+            "--plan-version",
+            &value(&plan, "plan_entity_version_id"),
+            "--completion-rationale",
+            "list sees completed plan",
+        ])
+        .expect("parse plan complete"))
+        .expect("complete plan");
+
+        let plans_at_branch =
+            run(
+                Cli::try_parse_from(["workvcs", "plan", "list", store, "--branch", &branch])
+                    .expect("parse plan list at branch"),
+            )
+            .expect("list plans at branch");
+        assert_eq!(
+            value(&plans_at_branch, "commit_id"),
+            value(&completed_plan, "commit_id")
+        );
+        assert_eq!(value(&plans_at_branch, "plans"), "1");
+        assert_eq!(value(&plans_at_branch, "plan.0.status"), "completed");
+        assert_eq!(
+            value(&plans_at_branch, "plan.0.completion_rationale_json"),
+            "\"list sees completed plan\""
         );
     }
 

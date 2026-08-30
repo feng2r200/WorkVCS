@@ -1039,6 +1039,9 @@ enum BranchCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_branches: Option<usize>,
     },
     Head {
         #[arg(value_name = "STORE")]
@@ -5515,6 +5518,7 @@ fn run(cli: Cli) -> Result<String> {
                     name,
                     lifecycle_state,
                     limit,
+                    expected_branches,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5534,7 +5538,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 branches.truncate(limit);
             }
-            Ok(render_branch_list(&branches))
+            let mut output = render_branch_list(&branches);
+            if let Some(expected_branches) = expected_branches {
+                let actual_branches = branches.len();
+                if actual_branches != expected_branches {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "branches {actual_branches} does not match expected {expected_branches}"
+                    )));
+                }
+                output.push_str("branches_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Branch {
             command:
@@ -21817,6 +21831,34 @@ mod tests {
             source_changeset
         );
 
+        let expected_branches = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--expected-branches",
+            "2",
+        ])
+        .expect("parse expected branch list"))
+        .expect("expected branch list");
+        assert_eq!(value(&expected_branches, "branches"), "2");
+        assert_eq!(value(&expected_branches, "branches_match_expected"), "true");
+
+        let mismatched_branches = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--expected-branches",
+            "1",
+        ])
+        .expect("parse mismatched branch list"));
+        assert!(mismatched_branches.is_err());
+
         let branches_by_name = run(Cli::try_parse_from([
             "workvcs",
             "branch",
@@ -21904,6 +21946,26 @@ mod tests {
         .expect("parse branch list by missing name"))
         .expect("list branches by missing name");
         assert!(missing_branch_name.contains("branches=0"));
+
+        let expected_missing_branches = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "list",
+            store,
+            "--workspace",
+            &value(&workspace, "workspace_id"),
+            "--name",
+            "missing",
+            "--expected-branches",
+            "0",
+        ])
+        .expect("parse expected missing branch list"))
+        .expect("expected missing branch list");
+        assert_eq!(value(&expected_missing_branches, "branches"), "0");
+        assert_eq!(
+            value(&expected_missing_branches, "branches_match_expected"),
+            "true"
+        );
 
         let later_source = run(Cli::try_parse_from([
             "workvcs",

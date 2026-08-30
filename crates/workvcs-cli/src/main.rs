@@ -3076,6 +3076,15 @@ enum VerificationCommand {
 
         #[arg(long)]
         commit: Option<String>,
+
+        #[arg(long)]
+        target_kind: Option<String>,
+
+        #[arg(long)]
+        target: Option<String>,
+
+        #[arg(long)]
+        result: Option<String>,
     },
     CacheRecord {
         #[arg(value_name = "STORE")]
@@ -5284,11 +5293,29 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     branch,
                     commit,
+                    target_kind,
+                    target,
+                    result,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            render_verification_list(commit_id, &engine.verifications_at(commit_id)?)
+            let mut verifications = engine.verifications_at(commit_id)?;
+            if let Some(target_kind) = target_kind {
+                let target_kind = parse_verification_target_kind(&target_kind)?;
+                verifications.retain(|verification| {
+                    verification_target_kind(verification.target) == target_kind
+                });
+            }
+            if let Some(target) = target {
+                let target_id = EntityId::parse_canonical(&target)?;
+                verifications.retain(|verification| verification.target.entity_id() == target_id);
+            }
+            if let Some(result) = result {
+                let result = parse_verification_result(&result)?;
+                verifications.retain(|verification| verification.state.result == result);
+            }
+            render_verification_list(commit_id, &verifications)
         }
         Command::Verification {
             command:
@@ -6554,6 +6581,16 @@ fn parse_verification_result(value: &str) -> Result<VerificationResult> {
         "inconclusive" => Ok(VerificationResult::Inconclusive),
         other => Err(WorkVcsError::TaskInvalid(format!(
             "verification result {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_verification_target_kind(value: &str) -> Result<&'static str> {
+    match value {
+        "acceptance_criterion" => Ok("acceptance_criterion"),
+        "verification_requirement" => Ok("verification_requirement"),
+        other => Err(WorkVcsError::TaskInvalid(format!(
+            "verification target kind {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -18383,6 +18420,121 @@ mod tests {
             value(&verifications_at_branch, "verification.0.evidence"),
             "1"
         );
+
+        let passed_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--result",
+            "passed",
+        ])
+        .expect("parse verification list by passed result"))
+        .expect("list verification by passed result");
+        assert_eq!(value(&passed_verifications, "verifications"), "1");
+        assert_eq!(
+            value(
+                &passed_verifications,
+                "verification.0.verification_entity_id"
+            ),
+            verification_id
+        );
+
+        let failed_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--result",
+            "failed",
+        ])
+        .expect("parse verification list by failed result"))
+        .expect("list verification by failed result");
+        assert_eq!(value(&failed_verifications, "verifications"), "0");
+
+        let acceptance_target_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--target-kind",
+            "acceptance_criterion",
+        ])
+        .expect("parse verification list by acceptance target kind"))
+        .expect("list verification by acceptance target kind");
+        assert_eq!(
+            value(&acceptance_target_verifications, "verifications"),
+            "1"
+        );
+
+        let requirement_target_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--target-kind",
+            "verification_requirement",
+        ])
+        .expect("parse verification list by requirement target kind"))
+        .expect("list verification by requirement target kind");
+        assert_eq!(
+            value(&requirement_target_verifications, "verifications"),
+            "0"
+        );
+
+        let target_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--target",
+            &criterion_id,
+        ])
+        .expect("parse verification list by target"))
+        .expect("list verification by target");
+        assert_eq!(value(&target_verifications, "verifications"), "1");
+
+        let wrong_target_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--target",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse verification list by wrong target"))
+        .expect("list verification by wrong target");
+        assert_eq!(value(&wrong_target_verifications, "verifications"), "0");
+
+        let combined_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--target-kind",
+            "acceptance_criterion",
+            "--target",
+            &criterion_id,
+            "--result",
+            "passed",
+        ])
+        .expect("parse verification list by combined filters"))
+        .expect("list verification by combined filters");
+        assert_eq!(value(&combined_verifications, "verifications"), "1");
     }
 
     #[test]

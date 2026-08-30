@@ -1882,6 +1882,9 @@ enum GoalCommand {
 
         #[arg(long)]
         goal: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("goal-list-target")
@@ -5488,10 +5491,23 @@ fn run(cli: Cli) -> Result<String> {
                 branch,
                 commit,
                 goal,
+                expected_state_digest,
             } => {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_goal_query_commit(&engine, branch, commit)?;
-                render_goal_snapshot(&engine.goal_at(commit_id, EntityId::parse_canonical(&goal)?)?)
+                let snapshot = engine.goal_at(commit_id, EntityId::parse_canonical(&goal)?)?;
+                let mut output = render_goal_snapshot(&snapshot)?;
+                if let Some(expected_state_digest) = expected_state_digest {
+                    let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                    if snapshot.state_digest != expected_state_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "goal state digest {} does not match expected {}",
+                            snapshot.state_digest, expected_state_digest
+                        )));
+                    }
+                    output.push_str("matches_expected=true\n");
+                }
+                Ok(output)
             }
             GoalCommand::List {
                 store,
@@ -23896,6 +23912,41 @@ mod tests {
             "\"Inspect goal snapshots\""
         );
         assert_eq!(value(&goal_at_create, "terminal_rationale_json"), "null");
+
+        let expected_goal_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "show",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--goal",
+            &goal_id,
+            "--expected-state-digest",
+            &value(&goal_at_create, "goal_state_digest"),
+        ])
+        .expect("parse expected goal show at commit"))
+        .expect("show expected goal at commit");
+        assert_eq!(
+            value(&expected_goal_at_create, "goal_state_digest"),
+            value(&goal_at_create, "goal_state_digest")
+        );
+        assert_eq!(value(&expected_goal_at_create, "matches_expected"), "true");
+
+        let mismatched_goal_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "show",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--goal",
+            &goal_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched goal show at commit"));
+        assert!(mismatched_goal_at_create.is_err());
 
         let achieved_goal = run(Cli::try_parse_from([
             "workvcs",

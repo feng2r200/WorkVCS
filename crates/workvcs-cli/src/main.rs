@@ -1232,6 +1232,12 @@ enum MergeCommand {
 
         #[arg(long)]
         include_closed: bool,
+
+        #[arg(long)]
+        runtime_state: Option<String>,
+
+        #[arg(long)]
+        outcome: Option<String>,
     },
 }
 
@@ -6701,6 +6707,8 @@ fn run(cli: Cli) -> Result<String> {
                     workspace,
                     target_branch,
                     include_closed,
+                    runtime_state,
+                    outcome,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6712,7 +6720,23 @@ fn run(cli: Cli) -> Result<String> {
             if include_closed {
                 options = options.include_closed();
             }
-            Ok(render_merge_list(&engine.merge_attempts(options)?)?)
+            let mut result = engine.merge_attempts(options)?;
+            if let Some(runtime_state) = runtime_state {
+                result
+                    .merges
+                    .retain(|merge| merge.runtime_state.as_str() == runtime_state);
+            }
+            if let Some(outcome) = outcome {
+                result.merges.retain(|merge| {
+                    merge
+                        .outcome
+                        .as_ref()
+                        .map(|outcome| outcome.outcome.as_str())
+                        .unwrap_or("none")
+                        == outcome
+                });
+            }
+            Ok(render_merge_list(&result)?)
         }
     }
 }
@@ -26466,6 +26490,36 @@ mod tests {
         assert_eq!(value(&active, "merge.0.runtime_state"), "active");
         assert_eq!(value(&active, "merge.0.items"), "1");
 
+        let active_by_runtime = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--runtime-state",
+            "active",
+        ])
+        .expect("parse active merge list by runtime"))
+        .expect("list active merges by runtime");
+        assert_eq!(value(&active_by_runtime, "merges"), "1");
+        assert_eq!(value(&active_by_runtime, "merge.0.merge_id"), merge_id);
+
+        let active_by_outcome = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--outcome",
+            "none",
+        ])
+        .expect("parse active merge list by outcome"))
+        .expect("list active merges by outcome");
+        assert_eq!(value(&active_by_outcome, "merges"), "1");
+        assert_eq!(value(&active_by_outcome, "merge.0.merge_id"), merge_id);
+
         let continued = run(Cli::try_parse_from([
             "workvcs",
             "merge",
@@ -26544,6 +26598,53 @@ mod tests {
         assert_eq!(value(&all, "merge.0.runtime_state"), "completed");
         assert_eq!(value(&all, "merge.0.items"), "1");
         assert_eq!(value(&all, "merge.0.outcome"), "completed");
+
+        let completed_by_runtime = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--include-closed",
+            "--runtime-state",
+            "completed",
+        ])
+        .expect("parse completed merge list by runtime"))
+        .expect("list completed merges by runtime");
+        assert_eq!(value(&completed_by_runtime, "merges"), "1");
+        assert_eq!(value(&completed_by_runtime, "merge.0.merge_id"), merge_id);
+
+        let completed_by_outcome = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--include-closed",
+            "--outcome",
+            "completed",
+        ])
+        .expect("parse completed merge list by outcome"))
+        .expect("list completed merges by outcome");
+        assert_eq!(value(&completed_by_outcome, "merges"), "1");
+        assert_eq!(value(&completed_by_outcome, "merge.0.merge_id"), merge_id);
+
+        let missing_by_runtime = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--include-closed",
+            "--runtime-state",
+            "aborted",
+        ])
+        .expect("parse missing merge list by runtime"))
+        .expect("list missing merges by runtime");
+        assert_eq!(value(&missing_by_runtime, "merges"), "0");
     }
 
     fn value(output: &str, key: &str) -> String {

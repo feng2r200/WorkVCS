@@ -104,14 +104,20 @@ pub struct StoreMigrationOutcomeSnapshot {
     pub detail_size_bytes: i64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreMigrationListOptions {
     limit: usize,
+    tool_version: Option<String>,
+    outcome: Option<String>,
 }
 
 impl StoreMigrationListOptions {
     pub fn new() -> Self {
-        Self { limit: 50 }
+        Self {
+            limit: 50,
+            tool_version: None,
+            outcome: None,
+        }
     }
 
     pub fn with_limit(mut self, limit: usize) -> Result<Self> {
@@ -124,8 +130,29 @@ impl StoreMigrationListOptions {
         Ok(self)
     }
 
-    fn limit(self) -> usize {
+    pub fn with_tool_version(mut self, tool_version: impl Into<String>) -> Result<Self> {
+        self.tool_version = Some(validate_text(
+            "store migration tool_version filter",
+            tool_version,
+        )?);
+        Ok(self)
+    }
+
+    pub fn with_outcome(mut self, outcome: impl Into<String>) -> Result<Self> {
+        self.outcome = Some(validate_text("store migration outcome filter", outcome)?);
+        Ok(self)
+    }
+
+    fn limit(&self) -> usize {
         self.limit
+    }
+
+    fn tool_version(&self) -> Option<&str> {
+        self.tool_version.as_deref()
+    }
+
+    fn outcome(&self) -> Option<&str> {
+        self.outcome.as_deref()
     }
 }
 
@@ -233,18 +260,16 @@ pub(crate) fn store_migrations(
     options: StoreMigrationListOptions,
 ) -> Result<StoreMigrationListResult> {
     connection.verify_foreign_keys()?;
-    let limit = usize_to_i64("store migration list limit", options.limit())?;
     let mut statement = connection
         .inner()
         .prepare(
             "SELECT migration_id
              FROM store_migration_attempt
-             ORDER BY started_at_us DESC, migration_id DESC
-             LIMIT ?1",
+             ORDER BY started_at_us DESC, migration_id DESC",
         )
         .map_err(storage_error)?;
     let rows = statement
-        .query_map(params![limit], |row| row.get::<_, Vec<u8>>(0))
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
         .map_err(storage_error)?;
 
     let mut migrations = Vec::new();
@@ -253,7 +278,22 @@ pub(crate) fn store_migrations(
             "store_migration_attempt.migration_id",
             row.map_err(storage_error)?,
         )?;
-        migrations.push(store_migration(connection, migration_id)?);
+        let migration = store_migration(connection, migration_id)?;
+        let include_tool_version = options
+            .tool_version()
+            .is_none_or(|tool_version| migration.tool_version == tool_version);
+        let include_outcome = options.outcome().is_none_or(|outcome| {
+            migration
+                .outcome
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.outcome == outcome)
+        });
+        if include_tool_version && include_outcome {
+            migrations.push(migration);
+            if migrations.len() == options.limit() {
+                break;
+            }
+        }
     }
     Ok(StoreMigrationListResult { migrations })
 }

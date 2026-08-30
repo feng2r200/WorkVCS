@@ -509,6 +509,12 @@ enum StoreCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        tool_version: Option<String>,
+
+        #[arg(long)]
+        outcome: Option<String>,
     },
     #[command(name = "external-ref-record")]
     ExternalRefRecord {
@@ -3254,11 +3260,22 @@ fn run(cli: Cli) -> Result<String> {
                 let snapshot = engine.store_migration(MigrationId::parse_canonical(&migration)?)?;
                 render_store_migration_snapshot(&snapshot)
             }
-            StoreCommand::MigrationList { store, limit } => {
+            StoreCommand::MigrationList {
+                store,
+                limit,
+                tool_version,
+                outcome,
+            } => {
                 let engine = Engine::open(store)?;
                 let mut options = StoreMigrationListOptions::new();
                 if let Some(limit) = limit {
                     options = options.with_limit(limit)?;
+                }
+                if let Some(tool_version) = tool_version {
+                    options = options.with_tool_version(tool_version)?;
+                }
+                if let Some(outcome) = outcome {
+                    options = options.with_outcome(outcome)?;
                 }
                 let result = engine.store_migrations(options)?;
                 render_store_migration_list(&result)
@@ -13494,6 +13511,94 @@ mod tests {
         assert_eq!(value(&listed, "migrations"), "1");
         assert_eq!(value(&listed, "migration[0].migration_id"), migration_id);
         assert_eq!(value(&listed, "migration[0].outcome"), "completed");
+
+        let failed_recorded = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-record",
+            store,
+            "--from-store-format-version",
+            "2",
+            "--to-store-format-version",
+            "3",
+            "--from-schema-version",
+            "2",
+            "--to-schema-version",
+            "3",
+            "--tool-version",
+            "external-migrator/9.0",
+            "--outcome",
+            "failed",
+            "--detail-json",
+            "{\"error\":\"incompatible source\"}",
+        ])
+        .expect("parse failed store migration-record"))
+        .expect("record failed store migration");
+        let failed_migration_id = value(&failed_recorded, "migration_id");
+
+        let tool_version_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-list",
+            store,
+            "--tool-version",
+            "workvcs-cli-test/0.1",
+            "--limit",
+            "1",
+        ])
+        .expect("parse tool-version store migration-list"))
+        .expect("list tool-version store migrations");
+        assert_eq!(value(&tool_version_filtered, "migrations"), "1");
+        assert_eq!(
+            value(&tool_version_filtered, "migration[0].migration_id"),
+            migration_id
+        );
+
+        let outcome_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-list",
+            store,
+            "--outcome",
+            "failed",
+        ])
+        .expect("parse outcome store migration-list"))
+        .expect("list outcome store migrations");
+        assert_eq!(value(&outcome_filtered, "migrations"), "1");
+        assert_eq!(
+            value(&outcome_filtered, "migration[0].migration_id"),
+            failed_migration_id
+        );
+
+        let combined_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-list",
+            store,
+            "--tool-version",
+            "external-migrator/9.0",
+            "--outcome",
+            "failed",
+        ])
+        .expect("parse combined store migration-list"))
+        .expect("list combined store migrations");
+        assert_eq!(value(&combined_filtered, "migrations"), "1");
+        assert_eq!(
+            value(&combined_filtered, "migration[0].migration_id"),
+            failed_migration_id
+        );
+
+        let missing_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migration-list",
+            store,
+            "--outcome",
+            "skipped",
+        ])
+        .expect("parse missing store migration-list"))
+        .expect("list missing store migrations");
+        assert_eq!(value(&missing_filtered, "migrations"), "0");
     }
 
     #[test]

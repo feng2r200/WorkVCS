@@ -1058,6 +1058,12 @@ enum ChangeSetCommand {
 
         #[arg(long)]
         changeset: String,
+
+        #[arg(long)]
+        expected_operation_payload_digest: Option<String>,
+
+        #[arg(long)]
+        expected_rationale_digest: Option<String>,
     },
     Operations {
         #[arg(value_name = "STORE")]
@@ -4118,10 +4124,37 @@ fn run(cli: Cli) -> Result<String> {
             Ok(output)
         }
         Command::Changeset { command } => match command {
-            ChangeSetCommand::Show { store, changeset } => {
+            ChangeSetCommand::Show {
+                store,
+                changeset,
+                expected_operation_payload_digest,
+                expected_rationale_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.changeset(ChangeSetId::parse_canonical(&changeset)?)?;
-                Ok(render_changeset_snapshot(&snapshot))
+                let mut output = render_changeset_snapshot(&snapshot);
+                if let Some(expected_operation_payload_digest) = expected_operation_payload_digest {
+                    let expected_operation_payload_digest =
+                        Digest::from_hex(&expected_operation_payload_digest)?;
+                    if snapshot.operation_payload_digest != expected_operation_payload_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "changeset operation payload digest {} does not match expected {}",
+                            snapshot.operation_payload_digest, expected_operation_payload_digest
+                        )));
+                    }
+                    output.push_str("operation_payload_matches_expected=true\n");
+                }
+                if let Some(expected_rationale_digest) = expected_rationale_digest {
+                    let expected_rationale_digest = Digest::from_hex(&expected_rationale_digest)?;
+                    if snapshot.rationale_digest != expected_rationale_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "changeset rationale digest {} does not match expected {}",
+                            snapshot.rationale_digest, expected_rationale_digest
+                        )));
+                    }
+                    output.push_str("rationale_matches_expected=true\n");
+                }
+                Ok(output)
             }
             ChangeSetCommand::Operations {
                 store,
@@ -16121,6 +16154,60 @@ mod tests {
         assert_eq!(value(&shown_changeset, "commit[0].commit_kind"), "normal");
         assert_ne!(value(&shown_changeset, "operation_payload_json"), "");
         assert_ne!(value(&shown_changeset, "rationale_json"), "");
+        let expected_changeset = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "show",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--expected-operation-payload-digest",
+            &value(&shown_changeset, "operation_payload_digest"),
+            "--expected-rationale-digest",
+            &value(&shown_changeset, "rationale_digest"),
+        ])
+        .expect("parse expected changeset show"))
+        .expect("show expected changeset");
+        assert_eq!(
+            value(&expected_changeset, "operation_payload_digest"),
+            value(&shown_changeset, "operation_payload_digest")
+        );
+        assert_eq!(
+            value(&expected_changeset, "rationale_digest"),
+            value(&shown_changeset, "rationale_digest")
+        );
+        assert_eq!(
+            value(&expected_changeset, "operation_payload_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_changeset, "rationale_matches_expected"),
+            "true"
+        );
+        let mismatched_changeset_payload = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "show",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--expected-operation-payload-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched changeset payload show"));
+        assert!(mismatched_changeset_payload.is_err());
+        let mismatched_changeset_rationale = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "show",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--expected-rationale-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched changeset rationale show"));
+        assert!(mismatched_changeset_rationale.is_err());
 
         let operations = run(Cli::try_parse_from([
             "workvcs",

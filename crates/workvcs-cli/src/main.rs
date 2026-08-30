@@ -1568,6 +1568,9 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_knowledge: Option<usize>,
     },
     Invalidate {
         #[arg(value_name = "STORE")]
@@ -1650,6 +1653,9 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_relations: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("knowledge-relation-show-target")
@@ -5707,6 +5713,7 @@ fn run(cli: Cli) -> Result<String> {
                     scope_json,
                     statement_contains,
                     limit,
+                    expected_knowledge,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5730,7 +5737,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.knowledge.truncate(limit);
             }
-            Ok(render_knowledge_list(&result)?)
+            let mut output = render_knowledge_list(&result)?;
+            if let Some(expected_knowledge) = expected_knowledge {
+                let actual_knowledge = result.knowledge.len();
+                if actual_knowledge != expected_knowledge {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "knowledge {actual_knowledge} does not match expected {expected_knowledge}"
+                    )));
+                }
+                output.push_str("knowledge_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Knowledge {
             command:
@@ -5809,6 +5826,7 @@ fn run(cli: Cli) -> Result<String> {
                     replacement_knowledge,
                     prior_knowledge,
                     limit,
+                    expected_relations,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5832,7 +5850,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.relations.truncate(limit);
             }
-            Ok(render_knowledge_relation_list(&result))
+            let mut output = render_knowledge_relation_list(&result);
+            if let Some(expected_relations) = expected_relations {
+                let actual_relations = result.relations.len();
+                if actual_relations != expected_relations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "knowledge relations {actual_relations} does not match expected {expected_relations}"
+                    )));
+                }
+                output.push_str("relations_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Knowledge {
             command:
@@ -32739,14 +32767,36 @@ mod tests {
             "{\"kind\":\"workspace\",\"local_ref\":\"root\"}",
             "--statement-contains",
             "serialized",
+            "--expected-knowledge",
+            "1",
         ])
         .expect("parse knowledge list"))
         .expect("list knowledge");
         assert_eq!(value(&listed, "knowledge"), "1");
+        assert_eq!(value(&listed, "knowledge_match_expected"), "true");
         assert_eq!(
             value(&listed, "knowledge.0.knowledge_entity_id"),
             value(&knowledge, "knowledge_entity_id")
         );
+
+        let mismatched_list = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "active",
+            "--scope-json",
+            "{\"kind\":\"workspace\",\"local_ref\":\"root\"}",
+            "--statement-contains",
+            "serialized",
+            "--expected-knowledge",
+            "0",
+        ])
+        .expect("parse mismatched knowledge list"));
+        assert!(mismatched_list.is_err());
 
         let limited_list = run(Cli::try_parse_from([
             "workvcs",
@@ -32757,10 +32807,13 @@ mod tests {
             &branch,
             "--limit",
             "1",
+            "--expected-knowledge",
+            "1",
         ])
         .expect("parse limited knowledge list"))
         .expect("list limited knowledge");
         assert_eq!(value(&limited_list, "knowledge"), "1");
+        assert_eq!(value(&limited_list, "knowledge_match_expected"), "true");
         assert_ne!(value(&limited_list, "knowledge.0.knowledge_entity_id"), "");
 
         let zero_limit_list = run(Cli::try_parse_from([
@@ -32860,13 +32913,20 @@ mod tests {
         .expect("list invalidated knowledge");
         assert_eq!(value(&invalidated_list, "knowledge"), "1");
 
-        let empty =
-            run(
-                Cli::try_parse_from(["workvcs", "knowledge", "list", store, "--commit", &head])
-                    .expect("parse historical knowledge list"),
-            )
-            .expect("list historical knowledge");
+        let empty = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "list",
+            store,
+            "--commit",
+            &head,
+            "--expected-knowledge",
+            "0",
+        ])
+        .expect("parse historical knowledge list"))
+        .expect("list historical knowledge");
         assert_eq!(value(&empty, "knowledge"), "0");
+        assert_eq!(value(&empty, "knowledge_match_expected"), "true");
     }
 
     #[test]
@@ -33068,10 +33128,13 @@ mod tests {
             &value(&relation, "commit_id"),
             "--prior-knowledge",
             &value(&prior, "knowledge_entity_id"),
+            "--expected-relations",
+            "1",
         ])
         .expect("parse knowledge relation list"))
         .expect("list knowledge relations");
         assert_eq!(value(&listed, "relations"), "1");
+        assert_eq!(value(&listed, "relations_match_expected"), "true");
         assert_eq!(
             value(&listed, "relation.0.relation_id"),
             value(&relation, "relation_id")
@@ -33086,6 +33149,21 @@ mod tests {
             value(&prior, "knowledge_entity_id")
         );
 
+        let mismatched = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--prior-knowledge",
+            &value(&prior, "knowledge_entity_id"),
+            "--expected-relations",
+            "0",
+        ])
+        .expect("parse mismatched knowledge relation list"));
+        assert!(mismatched.is_err());
+
         let limited = run(Cli::try_parse_from([
             "workvcs",
             "knowledge",
@@ -33095,10 +33173,13 @@ mod tests {
             &value(&relation, "commit_id"),
             "--limit",
             "1",
+            "--expected-relations",
+            "1",
         ])
         .expect("parse limited knowledge relation list"))
         .expect("list limited knowledge relations");
         assert_eq!(value(&limited, "relations"), "1");
+        assert_eq!(value(&limited, "relations_match_expected"), "true");
         assert_eq!(
             value(&limited, "relation.0.relation_id"),
             value(&relation, "relation_id")

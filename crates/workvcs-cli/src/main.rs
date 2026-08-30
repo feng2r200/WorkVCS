@@ -1846,6 +1846,9 @@ enum PlanCommand {
 
         #[arg(long)]
         status: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Complete {
         #[arg(value_name = "STORE")]
@@ -4761,6 +4764,7 @@ fn run(cli: Cli) -> Result<String> {
                 branch,
                 commit,
                 status,
+                limit,
             } => {
                 let engine = Engine::open(store)?;
                 let commit_id = resolve_plan_query_commit(&engine, branch, commit)?;
@@ -4768,6 +4772,14 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(status) = status {
                     let status = parse_plan_list_status(&status)?;
                     plans.retain(|plan| plan.state.status == status);
+                }
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "plan list limit must be greater than zero".to_owned(),
+                    ));
+                }
+                if let Some(limit) = limit {
+                    plans.truncate(limit);
                 }
                 render_plan_list(commit_id, &plans)
             }
@@ -20852,6 +20864,39 @@ mod tests {
             value(&active_plans_at_create, "plan.0.plan_entity_id"),
             plan_id
         );
+
+        let limited_active_plans_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--status",
+            "active",
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited active plan list at commit"))
+        .expect("list limited active plans at commit");
+        assert_eq!(value(&limited_active_plans_at_create, "plans"), "1");
+        assert_eq!(
+            value(&limited_active_plans_at_create, "plan.0.plan_entity_id"),
+            plan_id
+        );
+
+        let zero_limit_plans_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "list",
+            store,
+            "--commit",
+            &value(&plan, "commit_id"),
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit plan list at commit"));
+        assert!(zero_limit_plans_at_create.is_err());
 
         let completed_plans_at_create = run(Cli::try_parse_from([
             "workvcs",

@@ -483,6 +483,13 @@ enum IdCommand {
         #[arg(long)]
         kind: String,
     },
+    Validate {
+        #[arg(long)]
+        kind: String,
+
+        #[arg(long)]
+        id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -3514,6 +3521,7 @@ fn run(cli: Cli) -> Result<String> {
         },
         Command::Id { command } => match command {
             IdCommand::New { kind } => render_new_id(&kind),
+            IdCommand::Validate { kind, id } => render_validate_id(&kind, &id),
         },
         Command::Store { command } => match command {
             StoreCommand::Info { store } => {
@@ -8155,6 +8163,46 @@ fn render_new_id(kind: &str) -> Result<String> {
         }
     };
     Ok(format!("kind={kind}\nid={id}\n"))
+}
+
+fn render_validate_id(kind: &str, id: &str) -> Result<String> {
+    let canonical = match kind {
+        "store" => StoreId::parse_canonical(id)?.to_string(),
+        "workspace" => WorkspaceId::parse_canonical(id)?.to_string(),
+        "entity" => EntityId::parse_canonical(id)?.to_string(),
+        "entity-version" => EntityVersionId::parse_canonical(id)?.to_string(),
+        "exposure" => ExposureId::parse_canonical(id)?.to_string(),
+        "exposure-transition" => ExposureTransitionId::parse_canonical(id)?.to_string(),
+        "external-object" => ExternalObjectId::parse_canonical(id)?.to_string(),
+        "external-ref" => ExternalRefId::parse_canonical(id)?.to_string(),
+        "external-version" => ExternalVersionId::parse_canonical(id)?.to_string(),
+        "evidence" => EvidenceId::parse_canonical(id)?.to_string(),
+        "resource" => ResourceId::parse_canonical(id)?.to_string(),
+        "resource-observation" => ResourceObservationId::parse_canonical(id)?.to_string(),
+        "knowledge-space" => KnowledgeSpaceId::parse_canonical(id)?.to_string(),
+        "relation" => RelationId::parse_canonical(id)?.to_string(),
+        "relation-version" => RelationVersionId::parse_canonical(id)?.to_string(),
+        "branch" => BranchId::parse_canonical(id)?.to_string(),
+        "commit" => CommitId::parse_canonical(id)?.to_string(),
+        "changeset" => ChangeSetId::parse_canonical(id)?.to_string(),
+        "checkpoint" => CheckpointId::parse_canonical(id)?.to_string(),
+        "import" => ImportId::parse_canonical(id)?.to_string(),
+        "lineage" => LineageId::parse_canonical(id)?.to_string(),
+        "migration" => MigrationId::parse_canonical(id)?.to_string(),
+        "operation" => OperationId::parse_canonical(id)?.to_string(),
+        "event" => EventId::parse_canonical(id)?.to_string(),
+        "session" => SessionId::parse_canonical(id)?.to_string(),
+        "session-diff" => SessionDiffId::parse_canonical(id)?.to_string(),
+        "claim" => ClaimId::parse_canonical(id)?.to_string(),
+        "merge" => MergeId::parse_canonical(id)?.to_string(),
+        "merge-item" => MergeItemId::parse_canonical(id)?.to_string(),
+        other => {
+            return Err(WorkVcsError::IdentityInvalid(format!(
+                "id kind {other:?} is not supported"
+            )));
+        }
+    };
+    Ok(format!("kind={kind}\nid={canonical}\nvalid=true\n"))
 }
 
 fn render_store_info(info: &StoreInfo) -> Result<String> {
@@ -14275,29 +14323,87 @@ mod tests {
 
     #[test]
     fn id_cli_generates_typed_uuidv7_values() {
-        let entity = run(
-            Cli::try_parse_from(["workvcs", "id", "new", "--kind", "entity"])
-                .expect("parse entity id"),
-        )
-        .expect("generate entity id");
-        assert_eq!(value(&entity, "kind"), "entity");
-        EntityId::parse_canonical(&value(&entity, "id")).expect("entity UUIDv7");
-
-        let relation_version =
-            run(
-                Cli::try_parse_from(["workvcs", "id", "new", "--kind", "relation-version"])
-                    .expect("parse relation version id"),
+        let supported_kinds = [
+            "store",
+            "workspace",
+            "entity",
+            "entity-version",
+            "exposure",
+            "exposure-transition",
+            "external-object",
+            "external-ref",
+            "external-version",
+            "evidence",
+            "resource",
+            "resource-observation",
+            "knowledge-space",
+            "relation",
+            "relation-version",
+            "branch",
+            "commit",
+            "changeset",
+            "checkpoint",
+            "import",
+            "lineage",
+            "migration",
+            "operation",
+            "event",
+            "session",
+            "session-diff",
+            "claim",
+            "merge",
+            "merge-item",
+        ];
+        let mut generated_entity_id = None;
+        for kind in supported_kinds {
+            let generated = run(
+                Cli::try_parse_from(["workvcs", "id", "new", "--kind", kind])
+                    .expect("parse id new"),
             )
-            .expect("generate relation version id");
-        assert_eq!(value(&relation_version, "kind"), "relation-version");
-        RelationVersionId::parse_canonical(&value(&relation_version, "id"))
-            .expect("relation version UUIDv7");
+            .expect("generate id");
+            assert_eq!(value(&generated, "kind"), kind);
+
+            let id = value(&generated, "id");
+            let validated = run(Cli::try_parse_from([
+                "workvcs", "id", "validate", "--kind", kind, "--id", &id,
+            ])
+            .expect("parse id validate"))
+            .expect("validate id");
+            assert_eq!(value(&validated, "kind"), kind);
+            assert_eq!(value(&validated, "id"), id);
+            assert_eq!(value(&validated, "valid"), "true");
+
+            if kind == "entity" {
+                generated_entity_id = Some(id);
+            }
+        }
+
+        let entity_id = generated_entity_id.expect("generated entity id");
+        EntityId::parse_canonical(&entity_id).expect("entity UUIDv7");
+        let invalid_entity = format!("{entity_id}0");
+        let invalid = run(Cli::try_parse_from([
+            "workvcs",
+            "id",
+            "validate",
+            "--kind",
+            "entity",
+            "--id",
+            &invalid_entity,
+        ])
+        .expect("parse invalid entity id"));
+        assert!(invalid.is_err());
 
         let unsupported = run(
             Cli::try_parse_from(["workvcs", "id", "new", "--kind", "unknown"])
                 .expect("parse unsupported id kind"),
         );
         assert!(unsupported.is_err());
+
+        let unsupported_validate = run(Cli::try_parse_from([
+            "workvcs", "id", "validate", "--kind", "unknown", "--id", &entity_id,
+        ])
+        .expect("parse unsupported validate id kind"));
+        assert!(unsupported_validate.is_err());
     }
 
     #[test]

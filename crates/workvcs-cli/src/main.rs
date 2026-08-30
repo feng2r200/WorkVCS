@@ -468,6 +468,10 @@ enum CanonicalCommand {
         #[arg(long, value_name = "PATH")]
         content_file: Option<PathBuf>,
     },
+    DigestValidate {
+        #[arg(long)]
+        digest: String,
+    },
     WorkStateDigest {
         #[arg(long, value_name = "ENTITY_ID=ENTITY_VERSION_ID")]
         entity: Vec<String>,
@@ -3515,6 +3519,7 @@ fn run(cli: Cli) -> Result<String> {
                 content_hex,
                 content_file,
             } => render_content_digest(content, content_hex, content_file),
+            CanonicalCommand::DigestValidate { digest } => render_validate_digest(&digest),
             CanonicalCommand::WorkStateDigest { entity, relation } => {
                 render_work_state_mapping_digest(entity, relation)
             }
@@ -8114,6 +8119,11 @@ fn render_content_digest(
         content_object_digest(&bytes),
         bytes.len()
     ))
+}
+
+fn render_validate_digest(digest: &str) -> Result<String> {
+    let digest = Digest::from_hex(digest)?;
+    Ok(format!("digest={digest}\nvalid=true\n"))
 }
 
 fn read_cli_file(label: &str, path: &Path) -> Result<Vec<u8>> {
@@ -15300,6 +15310,31 @@ mod tests {
             value(&hex_digest, "content_digest")
         );
         assert_eq!(value(&file_content_digest, "size_bytes"), "2");
+
+        let validated_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "digest-validate",
+            "--digest",
+            &value(&file_content_digest, "content_digest"),
+        ])
+        .expect("parse digest validate"))
+        .expect("validate digest");
+        assert_eq!(
+            value(&validated_digest, "digest"),
+            value(&file_content_digest, "content_digest")
+        );
+        assert_eq!(value(&validated_digest, "valid"), "true");
+
+        let invalid_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "canonical",
+            "digest-validate",
+            "--digest",
+            "not-a-digest",
+        ])
+        .expect("parse invalid digest validate"));
+        assert!(invalid_digest.is_err());
 
         let both_json_sources = Cli::try_parse_from([
             "workvcs",

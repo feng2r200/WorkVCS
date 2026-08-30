@@ -17,9 +17,10 @@ use workvcs_core::{
     ChangeOperationListResult, ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot,
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, ClaimId, ClaimLifecycleState, ClaimListOptions, ClaimListResult,
-    ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
-    ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview,
+    CheckpointValidationResult, ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason,
+    ClaimGuardResult, ClaimId, ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode,
+    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
+    ClaimTaskOptions, ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview,
     ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
     Engine, EntityId, EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot,
     EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
@@ -1972,6 +1973,19 @@ enum ClaimCommand {
 
         #[arg(long)]
         session: String,
+    },
+    Guard {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        task: String,
+
+        #[arg(long, default_value = "terminal-task")]
+        action: String,
     },
     Next {
         #[arg(value_name = "STORE")]
@@ -4273,6 +4287,23 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Claim {
             command:
+                ClaimCommand::Guard {
+                    store,
+                    session,
+                    task,
+                    action,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let guard = engine.task_claim_guard(ClaimGuardOptions::new(
+                SessionId::parse_canonical(&session)?,
+                EntityId::parse_canonical(&task)?,
+                parse_claim_guard_action(&action)?,
+            ))?;
+            Ok(render_claim_guard(&guard))
+        }
+        Command::Claim {
+            command:
                 ClaimCommand::Next {
                     store,
                     session,
@@ -4694,6 +4725,16 @@ fn parse_claim_mode(value: &str) -> Result<ClaimMode> {
         "shared" => Ok(ClaimMode::Shared),
         other => Err(WorkVcsError::ClaimInvalid(format!(
             "claim mode {other:?} is not supported"
+        ))),
+    }
+}
+
+fn parse_claim_guard_action(value: &str) -> Result<ClaimGuardAction> {
+    match value {
+        "terminal-task" | "terminal_task" => Ok(ClaimGuardAction::TerminalTaskMutation),
+        "structural-task" | "structural_task" => Ok(ClaimGuardAction::StructuralTaskMutation),
+        other => Err(WorkVcsError::ClaimInvalid(format!(
+            "claim guard action {other:?} is not supported"
         ))),
     }
 }
@@ -6103,6 +6144,40 @@ fn render_claim_list(result: &ClaimListResult) -> String {
     output
 }
 
+fn render_claim_guard(result: &ClaimGuardResult) -> String {
+    let mut output = format!(
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ntask_entity_id={}\naction={}\nallowed={}\nreason={}\nactive_claims={}\n",
+        result.session_id,
+        result.workspace_id,
+        result.branch_id,
+        result.head_commit_id,
+        result.task_entity_id,
+        claim_guard_action(result.action),
+        result.allowed,
+        claim_guard_reason(result.reason),
+        result.active_claims.len()
+    );
+    for (index, claim) in result.active_claims.iter().enumerate() {
+        let _ = writeln!(output, "active_claim.{index}.claim_id={}", claim.claim_id);
+        let _ = writeln!(
+            output,
+            "active_claim.{index}.session_id={}",
+            claim.session_id
+        );
+        let _ = writeln!(
+            output,
+            "active_claim.{index}.mode={}",
+            claim_mode(claim.mode)
+        );
+        let _ = writeln!(
+            output,
+            "active_claim.{index}.last_activity_at_us={}",
+            render_optional_display(claim.last_activity_at_us.as_ref())
+        );
+    }
+    output
+}
+
 fn render_claim_next(result: &ClaimNextResult) -> String {
     let mut output = format!(
         "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ninspected_candidates={}\nselected={}\n",
@@ -6562,6 +6637,28 @@ fn claim_mode(mode: ClaimMode) -> &'static str {
     match mode {
         ClaimMode::Exclusive => "exclusive",
         ClaimMode::Shared => "shared",
+    }
+}
+
+fn claim_guard_action(action: ClaimGuardAction) -> &'static str {
+    match action {
+        ClaimGuardAction::TerminalTaskMutation => "terminal_task",
+        ClaimGuardAction::StructuralTaskMutation => "structural_task",
+    }
+}
+
+fn claim_guard_reason(reason: ClaimGuardReason) -> &'static str {
+    match reason {
+        ClaimGuardReason::Unclaimed => "unclaimed",
+        ClaimGuardReason::OwnedExclusiveClaim => "owned_exclusive_claim",
+        ClaimGuardReason::UniqueSharedClaimant => "unique_shared_claimant",
+        ClaimGuardReason::ExclusiveClaimOwnedByOtherSession => {
+            "exclusive_claim_owned_by_other_session"
+        }
+        ClaimGuardReason::SharedClaimSetDoesNotIncludeSession => {
+            "shared_claim_set_does_not_include_session"
+        }
+        ClaimGuardReason::NonUniqueSharedClaimSet => "non_unique_shared_claim_set",
     }
 }
 
@@ -12190,6 +12287,22 @@ mod tests {
         assert_eq!(value(&listed, "claim.0.claim_id"), claim_id);
         assert_eq!(value(&listed, "claim.0.task_entity_id"), task_id);
         assert_eq!(value(&listed, "claim.0.lifecycle_state"), "active");
+        let guard = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "guard",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+        ])
+        .expect("parse claim guard"))
+        .expect("claim guard");
+        assert_eq!(value(&guard, "allowed"), "true");
+        assert_eq!(value(&guard, "reason"), "owned_exclusive_claim");
+        assert_eq!(value(&guard, "active_claims"), "1");
+        assert_eq!(value(&guard, "active_claim.0.claim_id"), claim_id);
 
         run(Cli::try_parse_from([
             "workvcs",

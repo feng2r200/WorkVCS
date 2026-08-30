@@ -2,10 +2,10 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    CanonicalValue, ClaimId, ClaimLifecycleState, ClaimListOptions, ClaimMode, ClaimReleaseOptions,
-    ClaimTaskOptions, Engine, EntityId, ErrorCategory, ErrorCode, SessionEndOptions,
-    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSnapshot, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes,
+    CanonicalValue, ClaimGuardOptions, ClaimGuardReason, ClaimId, ClaimLifecycleState,
+    ClaimListOptions, ClaimMode, ClaimReleaseOptions, ClaimTaskOptions, Engine, EntityId,
+    ErrorCategory, ErrorCode, SessionEndOptions, SessionStartOptions, StoreInitOptions,
+    TaskCreateOptions, TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -404,6 +404,137 @@ fn active_claims_for_session_lists_only_current_claim_runtime() {
             .expect("released claim snapshot"),
         released.state
     );
+}
+
+#[test]
+fn task_claim_guard_allows_unclaimed_or_owned_exclusive_and_rejects_other_exclusive() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task_snapshot = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Guard exclusive claim target",
+    );
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("start first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("start second session");
+
+    let unclaimed = engine
+        .task_claim_guard(ClaimGuardOptions::terminal_task_mutation(
+            first_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("unclaimed guard");
+    assert!(unclaimed.allowed);
+    assert_eq!(unclaimed.reason, ClaimGuardReason::Unclaimed);
+    assert!(unclaimed.active_claims.is_empty());
+
+    let claimed = engine
+        .claim_task(ClaimTaskOptions::new(
+            first_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("exclusive claim");
+    let owner = engine
+        .task_claim_guard(ClaimGuardOptions::terminal_task_mutation(
+            first_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("owner guard");
+    assert!(owner.allowed);
+    assert_eq!(owner.reason, ClaimGuardReason::OwnedExclusiveClaim);
+    assert_eq!(owner.active_claims, vec![claimed.state.clone()]);
+
+    let other = engine
+        .task_claim_guard(ClaimGuardOptions::terminal_task_mutation(
+            second_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("other guard");
+    assert!(!other.allowed);
+    assert_eq!(
+        other.reason,
+        ClaimGuardReason::ExclusiveClaimOwnedByOtherSession
+    );
+    assert_eq!(other.active_claims, vec![claimed.state]);
+}
+
+#[test]
+fn task_claim_guard_requires_unique_shared_claimant_for_protected_action() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task_snapshot = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Guard shared claim target",
+    );
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("start first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("start second session");
+
+    engine
+        .claim_task(
+            ClaimTaskOptions::new(first_session.session_id, task_snapshot.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect("first shared claim");
+    let unique = engine
+        .task_claim_guard(ClaimGuardOptions::structural_task_mutation(
+            first_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("unique shared guard");
+    assert!(unique.allowed);
+    assert_eq!(unique.reason, ClaimGuardReason::UniqueSharedClaimant);
+    assert_eq!(unique.active_claims.len(), 1);
+
+    let outsider = engine
+        .task_claim_guard(ClaimGuardOptions::structural_task_mutation(
+            second_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("outsider shared guard");
+    assert!(!outsider.allowed);
+    assert_eq!(
+        outsider.reason,
+        ClaimGuardReason::SharedClaimSetDoesNotIncludeSession
+    );
+
+    engine
+        .claim_task(
+            ClaimTaskOptions::new(second_session.session_id, task_snapshot.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect("second shared claim");
+    let non_unique = engine
+        .task_claim_guard(ClaimGuardOptions::structural_task_mutation(
+            first_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("non-unique shared guard");
+    assert!(!non_unique.allowed);
+    assert_eq!(non_unique.reason, ClaimGuardReason::NonUniqueSharedClaimSet);
+    assert_eq!(non_unique.active_claims.len(), 2);
 }
 
 #[test]

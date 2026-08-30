@@ -117,9 +117,9 @@ pub use identity::{
     SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
-    ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
-    ClaimTaskResult,
+    ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason, ClaimGuardResult, ClaimLifecycleState,
+    ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions, ClaimNextResult,
+    ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
 };
 pub use runtime::{ContextOverview, ContextOverviewOptions};
 pub use runtime::{

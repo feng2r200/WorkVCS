@@ -82,10 +82,10 @@ use crate::identity::{
     RelationId,
 };
 use crate::runtime::{
-    ClaimListOptions, ClaimListResult, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
-    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ContextOverview,
-    ContextOverviewOptions, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
-    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    ClaimGuardOptions, ClaimGuardResult, ClaimListOptions, ClaimListResult, ClaimNextOptions,
+    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
+    ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions, MergeAbortResult,
+    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
     MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
@@ -1289,6 +1289,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::active_claims_for_session(&self.connection, options)
+    }
+
+    pub(crate) fn task_claim_guard(&self, options: &ClaimGuardOptions) -> Result<ClaimGuardResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::task_claim_guard(&self.connection, options)
     }
 
     pub(crate) fn release_claim(

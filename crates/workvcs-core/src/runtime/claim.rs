@@ -6,6 +6,7 @@ use crate::history;
 use crate::identity::{BranchId, ClaimId, CommitId, EntityId, EventId, SessionId, WorkspaceId};
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use std::collections::BTreeSet;
 
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const CLAIM_OBJECT_KIND: &str = "claim";
@@ -34,6 +35,31 @@ impl ClaimMode {
             Self::Exclusive => EXCLUSIVE_CLAIM_MODE,
             Self::Shared => SHARED_CLAIM_MODE,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimGuardAction {
+    TerminalTaskMutation,
+    StructuralTaskMutation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimGuardReason {
+    Unclaimed,
+    OwnedExclusiveClaim,
+    UniqueSharedClaimant,
+    ExclusiveClaimOwnedByOtherSession,
+    SharedClaimSetDoesNotIncludeSession,
+    NonUniqueSharedClaimSet,
+}
+
+impl ClaimGuardReason {
+    fn allows_protected_task_action(self) -> bool {
+        matches!(
+            self,
+            Self::Unclaimed | Self::OwnedExclusiveClaim | Self::UniqueSharedClaimant
+        )
     }
 }
 
@@ -138,6 +164,51 @@ impl ClaimListOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimGuardOptions {
+    session_id: SessionId,
+    task_entity_id: EntityId,
+    action: ClaimGuardAction,
+}
+
+impl ClaimGuardOptions {
+    pub fn new(session_id: SessionId, task_entity_id: EntityId, action: ClaimGuardAction) -> Self {
+        Self {
+            session_id,
+            task_entity_id,
+            action,
+        }
+    }
+
+    pub fn terminal_task_mutation(session_id: SessionId, task_entity_id: EntityId) -> Self {
+        Self::new(
+            session_id,
+            task_entity_id,
+            ClaimGuardAction::TerminalTaskMutation,
+        )
+    }
+
+    pub fn structural_task_mutation(session_id: SessionId, task_entity_id: EntityId) -> Self {
+        Self::new(
+            session_id,
+            task_entity_id,
+            ClaimGuardAction::StructuralTaskMutation,
+        )
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn task_entity_id(&self) -> EntityId {
+        self.task_entity_id
+    }
+
+    pub fn action(&self) -> ClaimGuardAction {
+        self.action
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimTaskResult {
     pub claim_id: ClaimId,
     pub session_id: SessionId,
@@ -171,6 +242,19 @@ pub struct ClaimNextResult {
 pub struct ClaimListResult {
     pub session_id: SessionId,
     pub claims: Vec<ClaimSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimGuardResult {
+    pub session_id: SessionId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub head_commit_id: CommitId,
+    pub task_entity_id: EntityId,
+    pub action: ClaimGuardAction,
+    pub allowed: bool,
+    pub reason: ClaimGuardReason,
+    pub active_claims: Vec<ClaimSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -631,6 +715,67 @@ pub(crate) fn active_claims_for_session(
     })
 }
 
+pub(crate) fn task_claim_guard(
+    connection: &StoreConnection,
+    options: &ClaimGuardOptions,
+) -> Result<ClaimGuardResult> {
+    connection.verify_foreign_keys()?;
+    let active = session::active_session_projection(connection, options.session_id())?;
+    let branch_head = history::branch_head(connection, active.active_branch_id)?;
+    if branch_head.workspace_id != active.active_workspace_id {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} active branch {} belongs to workspace {}, not active workspace {}",
+            options.session_id(),
+            active.active_branch_id,
+            branch_head.workspace_id,
+            active.active_workspace_id
+        )));
+    }
+    if branch_head.lifecycle_state != ACTIVE_BRANCH_LIFECYCLE_STATE {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} active branch {} has lifecycle state {:?}",
+            options.session_id(),
+            active.active_branch_id,
+            branch_head.lifecycle_state
+        )));
+    }
+    history::task_at(
+        connection,
+        branch_head.head_commit_id,
+        options.task_entity_id(),
+    )?;
+
+    let transaction = connection
+        .inner()
+        .unchecked_transaction()
+        .map_err(storage_error)?;
+    let active_claims = load_active_claim_snapshots_for_task(
+        &transaction,
+        active.active_workspace_id,
+        active.active_branch_id,
+        options.task_entity_id(),
+    )?;
+    let reason = protected_task_action_guard_reason(
+        options.session_id(),
+        active.active_branch_id,
+        options.task_entity_id(),
+        &active_claims,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(ClaimGuardResult {
+        session_id: options.session_id(),
+        workspace_id: active.active_workspace_id,
+        branch_id: active.active_branch_id,
+        head_commit_id: branch_head.head_commit_id,
+        task_entity_id: options.task_entity_id(),
+        action: options.action(),
+        allowed: reason.allows_protected_task_action(),
+        reason,
+        active_claims,
+    })
+}
+
 pub(super) fn release_active_claims_for_session_end(
     transaction: &Transaction<'_>,
     session_id: SessionId,
@@ -749,6 +894,107 @@ fn load_active_claims_for_session(
         ));
     }
     Ok(claims)
+}
+
+fn load_active_claim_snapshots_for_task(
+    connection: &Connection,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    task_entity_id: EntityId,
+) -> Result<Vec<ClaimSnapshot>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT claim.claim_id
+             FROM claim_runtime
+             INNER JOIN claim ON claim.claim_id = claim_runtime.claim_id
+             WHERE claim.workspace_id = ?1
+               AND claim.branch_id = ?2
+               AND claim.task_entity_id = ?3
+             ORDER BY claim.claim_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(
+            params![
+                &workspace_id.raw_bytes()[..],
+                &branch_id.raw_bytes()[..],
+                &task_entity_id.raw_bytes()[..]
+            ],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .map_err(storage_error)?;
+
+    let mut claims = Vec::new();
+    for row in rows {
+        let claim_id = decode_claim_id("claim.claim_id", row.map_err(storage_error)?)?;
+        claims.push(claim_snapshot_from_connection(connection, claim_id)?);
+    }
+    Ok(claims)
+}
+
+fn protected_task_action_guard_reason(
+    session_id: SessionId,
+    branch_id: BranchId,
+    task_entity_id: EntityId,
+    active_claims: &[ClaimSnapshot],
+) -> Result<ClaimGuardReason> {
+    let mut exclusive_claim = None;
+    let mut shared_claims = Vec::new();
+    let mut shared_session_ids = BTreeSet::new();
+    for claim in active_claims {
+        if claim.lifecycle_state != ClaimLifecycleState::Active {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim {} for task {task_entity_id} on branch {branch_id} is not active",
+                claim.claim_id
+            )));
+        }
+        match claim.mode {
+            ClaimMode::Exclusive => {
+                if exclusive_claim.replace(claim).is_some() {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "task {task_entity_id} has more than one active exclusive claim on branch {branch_id}"
+                    )));
+                }
+            }
+            ClaimMode::Shared => {
+                if !shared_session_ids.insert(claim.session_id) {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "task {task_entity_id} has multiple active shared claims for session {} on branch {branch_id}",
+                        claim.session_id
+                    )));
+                }
+                shared_claims.push(claim);
+            }
+        }
+    }
+
+    if let Some(exclusive_claim) = exclusive_claim {
+        if !shared_claims.is_empty() {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "task {task_entity_id} has mixed active exclusive and shared claims on branch {branch_id}"
+            )));
+        }
+        return Ok(if exclusive_claim.session_id == session_id {
+            ClaimGuardReason::OwnedExclusiveClaim
+        } else {
+            ClaimGuardReason::ExclusiveClaimOwnedByOtherSession
+        });
+    }
+
+    if shared_claims.is_empty() {
+        return Ok(ClaimGuardReason::Unclaimed);
+    }
+    if !shared_claims
+        .iter()
+        .any(|claim| claim.session_id == session_id)
+    {
+        return Ok(ClaimGuardReason::SharedClaimSetDoesNotIncludeSession);
+    }
+    if shared_claims.len() == 1 {
+        Ok(ClaimGuardReason::UniqueSharedClaimant)
+    } else {
+        Ok(ClaimGuardReason::NonUniqueSharedClaimSet)
+    }
 }
 
 fn load_active_branch(

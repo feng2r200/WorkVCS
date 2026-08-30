@@ -2178,6 +2178,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         workspace: String,
+
+        #[arg(long)]
+        resource: Option<String>,
     },
     #[command(group(
         ArgGroup::new("resource-observation-fingerprint")
@@ -5239,15 +5242,25 @@ fn run(cli: Cli) -> Result<String> {
             render_workspace_resource_association(&engine.associate_workspace_resource(options)?)
         }
         Command::Resource {
-            command: ResourceCommand::WorkspaceAssociationList { store, workspace },
+            command:
+                ResourceCommand::WorkspaceAssociationList {
+                    store,
+                    workspace,
+                    resource,
+                },
         } => {
             let engine = Engine::open(store)?;
             let options = WorkspaceResourceAssociationListOptions::for_workspace(
                 workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
             );
-            render_workspace_resource_association_list(
-                &engine.workspace_resource_associations(options)?,
-            )
+            let mut result = engine.workspace_resource_associations(options)?;
+            if let Some(resource) = resource {
+                let resource_id = ResourceId::parse_canonical(&resource)?;
+                result
+                    .associations
+                    .retain(|association| association.resource_id == resource_id);
+            }
+            render_workspace_resource_association_list(&result)
         }
         Command::Resource {
             command:
@@ -20353,6 +20366,78 @@ mod tests {
         .expect("parse second resource create"))
         .expect("create second resource");
         let second_resource_id = value(&second_resource, "resource_id");
+
+        let second_association = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "associate-workspace",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--resource",
+            &second_resource_id,
+            "--metadata-json",
+            r#"{"role":"reference"}"#,
+        ])
+        .expect("parse second workspace resource association"))
+        .expect("associate second resource");
+        assert_eq!(value(&second_association, "workspace_id"), workspace_id);
+        assert_eq!(
+            value(&second_association, "resource_id"),
+            second_resource_id
+        );
+
+        let filtered_workspace_associations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "workspace-association-list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--resource",
+            &second_resource_id,
+        ])
+        .expect("parse filtered workspace association list"))
+        .expect("list filtered workspace associations");
+        assert_eq!(
+            value(&filtered_workspace_associations, "workspace_id"),
+            workspace_id
+        );
+        assert_eq!(
+            value(&filtered_workspace_associations, "workspace_associations"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &filtered_workspace_associations,
+                "workspace_association.0.resource_id"
+            ),
+            second_resource_id
+        );
+        assert_eq!(
+            value(
+                &filtered_workspace_associations,
+                "workspace_association.0.metadata_json"
+            ),
+            r#"{"role":"reference"}"#
+        );
+
+        let missing_workspace_associations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "workspace-association-list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--resource",
+            "018b4ed6-0e2f-7000-8000-000000000001",
+        ])
+        .expect("parse missing workspace association list"))
+        .expect("list missing workspace associations");
+        assert_eq!(
+            value(&missing_workspace_associations, "workspace_associations"),
+            "0"
+        );
 
         let resources = run(Cli::try_parse_from(["workvcs", "resource", "list", store])
             .expect("parse resource list"))

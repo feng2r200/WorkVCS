@@ -75,9 +75,9 @@ use workvcs_core::{
     ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
     ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
     RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInitOptions,
-    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
+    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
     StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
     StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
@@ -2532,6 +2532,13 @@ enum SessionCommand {
 
         #[arg(long, default_value = "{}")]
         metadata_json: String,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
     },
     Switch {
         #[arg(value_name = "STORE")]
@@ -5521,6 +5528,14 @@ fn run(cli: Cli) -> Result<String> {
             Ok(render_session_start(&session))
         }
         Command::Session {
+            command: SessionCommand::Show { store, session },
+        } => {
+            let engine = Engine::open(store)?;
+            render_session_snapshot(
+                &engine.session_snapshot(SessionId::parse_canonical(&session)?)?,
+            )
+        }
+        Command::Session {
             command:
                 SessionCommand::Switch {
                     store,
@@ -8441,6 +8456,56 @@ fn render_session_start(session: &SessionStartResult) -> String {
         session.started_at_us,
         session_lifecycle_state(session.state.lifecycle_state)
     )
+}
+
+fn render_session_snapshot(session: &SessionSnapshot) -> Result<String> {
+    let focus_entity_id = session
+        .focus
+        .as_ref()
+        .map(|focus| focus.focus_entity_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let mut output = format!(
+        "session_id={}\nlifecycle_state={}\nstarted_at_us={}\nlast_activity_at_us={}\nmetadata_json={}\nactive_workspace_id={}\nactive_branch_id={}\ncontext_workspaces={}\nfocus_entity_id={}\nfocus_path_entries={}\nsession_diff_id={}\n",
+        session.session_id,
+        session_lifecycle_state(session.lifecycle_state),
+        session.started_at_us,
+        render_optional_display_or_none(session.last_activity_at_us.as_ref()),
+        canonical_cli_json("session metadata", &session.metadata)?,
+        render_optional_display_or_none(session.active_workspace_id.as_ref()),
+        render_optional_display_or_none(session.active_branch_id.as_ref()),
+        session.context_workspaces.len(),
+        focus_entity_id,
+        session
+            .focus
+            .as_ref()
+            .map(|focus| focus.path.len())
+            .unwrap_or(0),
+        render_optional_display_or_none(session.session_diff_id.as_ref())
+    );
+    for (index, workspace_id) in session.context_workspaces.iter().enumerate() {
+        writeln!(
+            output,
+            "context_workspace.{index}.workspace_id={workspace_id}"
+        )
+        .expect("write to String");
+    }
+    if let Some(focus) = &session.focus {
+        for (index, path) in focus.path.iter().enumerate() {
+            writeln!(
+                output,
+                "focus_path.{index}.path_entity_id={}",
+                path.path_entity_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "focus_path.{index}.incoming_relation_id={}",
+                render_optional_display_or_none(path.incoming_relation_id.as_ref())
+            )
+            .expect("write to String");
+        }
+    }
+    Ok(output)
 }
 
 fn render_session_switch(session: &SessionSwitchResult) -> String {
@@ -14253,6 +14318,25 @@ mod tests {
         .expect("start session");
         let session_id = value(&session, "session_id");
 
+        let shown_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse session show"))
+        .expect("show session");
+        assert_eq!(value(&shown_session, "session_id"), session_id);
+        assert_eq!(value(&shown_session, "lifecycle_state"), "active");
+        assert_eq!(value(&shown_session, "metadata_json"), "{}");
+        assert_eq!(value(&shown_session, "active_workspace_id"), workspace_id);
+        assert_eq!(value(&shown_session, "active_branch_id"), source_branch);
+        assert_eq!(value(&shown_session, "context_workspaces"), "1");
+        assert_eq!(value(&shown_session, "focus_entity_id"), "none");
+        assert_eq!(value(&shown_session, "session_diff_id"), "none");
+
         let claim = run(Cli::try_parse_from([
             "workvcs",
             "claim",
@@ -14288,6 +14372,24 @@ mod tests {
         assert_eq!(value(&switched, "released_claims"), "1");
         assert_eq!(value(&switched, "focus_entity_id"), task_id);
         assert!(switched.contains("lifecycle_state=active"));
+
+        let shown_switched_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse switched session show"))
+        .expect("show switched session");
+        assert_eq!(value(&shown_switched_session, "session_id"), session_id);
+        assert_eq!(
+            value(&shown_switched_session, "active_branch_id"),
+            fork_branch
+        );
+        assert_eq!(value(&shown_switched_session, "focus_entity_id"), task_id);
+        assert_eq!(value(&shown_switched_session, "focus_path_entries"), "0");
 
         let runnable = run(Cli::try_parse_from([
             "workvcs",

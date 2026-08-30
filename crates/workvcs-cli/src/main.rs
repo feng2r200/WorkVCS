@@ -1013,6 +1013,12 @@ enum ChangeSetCommand {
 
         #[arg(long)]
         changeset: String,
+
+        #[arg(long)]
+        object: Option<String>,
+
+        #[arg(long)]
+        object_kind: Option<String>,
     },
 }
 
@@ -4022,10 +4028,25 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 Ok(render_change_operations(&result))
             }
-            ChangeSetCommand::Anchors { store, changeset } => {
+            ChangeSetCommand::Anchors {
+                store,
+                changeset,
+                object,
+                object_kind,
+            } => {
                 let engine = Engine::open(store)?;
-                let result =
+                let mut result =
                     engine.changeset_causal_anchors(ChangeSetId::parse_canonical(&changeset)?)?;
+                if let Some(object) = object {
+                    result
+                        .anchors
+                        .retain(|anchor| anchor.anchor_object_id == object);
+                }
+                if let Some(object_kind) = object_kind {
+                    result
+                        .anchors
+                        .retain(|anchor| anchor.anchor_object_kind == object_kind);
+                }
                 Ok(render_changeset_causal_anchors(&result))
             }
         },
@@ -25734,6 +25755,85 @@ mod tests {
             value(&finding, "record_entity_id")
         );
         assert_eq!(value(&anchors, "anchor[0].object_kind"), "entity");
+
+        let anchors_by_object = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--object",
+            &value(&finding, "record_entity_id"),
+        ])
+        .expect("parse object-filtered changeset anchors"))
+        .expect("list object-filtered changeset anchors");
+        assert_eq!(value(&anchors_by_object, "causal_anchors"), "1");
+        assert_eq!(
+            value(&anchors_by_object, "anchor[0].object_id"),
+            value(&finding, "record_entity_id")
+        );
+
+        let anchors_by_object_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--object-kind",
+            "entity",
+        ])
+        .expect("parse object-kind-filtered changeset anchors"))
+        .expect("list object-kind-filtered changeset anchors");
+        assert_eq!(value(&anchors_by_object_kind, "causal_anchors"), "1");
+
+        let anchors_by_combined_filters = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--object",
+            &value(&finding, "record_entity_id"),
+            "--object-kind",
+            "entity",
+        ])
+        .expect("parse combined-filtered changeset anchors"))
+        .expect("list combined-filtered changeset anchors");
+        assert_eq!(value(&anchors_by_combined_filters, "causal_anchors"), "1");
+
+        let anchors_by_missing_object = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--object",
+            &EntityId::new_v7().to_string(),
+        ])
+        .expect("parse missing object changeset anchors"))
+        .expect("list missing object changeset anchors");
+        assert_eq!(value(&anchors_by_missing_object, "causal_anchors"), "0");
+
+        let anchors_by_missing_object_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--object-kind",
+            "relation",
+        ])
+        .expect("parse missing object-kind changeset anchors"))
+        .expect("list missing object-kind changeset anchors");
+        assert_eq!(
+            value(&anchors_by_missing_object_kind, "causal_anchors"),
+            "0"
+        );
 
         let doctor = run(Cli::try_parse_from(["workvcs", "doctor", store]).expect("parse doctor"))
             .expect("run doctor");

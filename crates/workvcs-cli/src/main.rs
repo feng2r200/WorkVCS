@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
+    AcceptanceCriterionRevisionCommit, AcceptanceCriterionRevisionOptions,
     AcceptanceCriterionSnapshot, ApplicabilityResourceObservationStatus,
     ApplicabilityResourceStampInput, BranchForkOptions, BranchForkResult, BranchHead, BranchId,
     BranchProjectionRefreshOptions, BranchProjectionRefreshResult, BranchProjectionSnapshot,
@@ -80,6 +81,7 @@ use workvcs_core::{
     TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
     VerificationRequirementSnapshot, VerificationResourceBasis, VerificationResult,
     VerificationSnapshot, VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind,
     WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
@@ -1589,6 +1591,31 @@ enum AcceptanceCriterionCommand {
         #[arg(long, default_value = "required")]
         classification: String,
     },
+    Revise {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        criterion: String,
+
+        #[arg(long)]
+        criterion_version: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long)]
+        classification: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        rationale_json: String,
+    },
     #[command(group(
         ArgGroup::new("acceptance-criterion-show-target")
             .required(true)
@@ -1659,6 +1686,28 @@ enum VerificationRequirementCommand {
 
         #[arg(long)]
         statement: String,
+    },
+    Revise {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        requirement: String,
+
+        #[arg(long)]
+        requirement_version: String,
+
+        #[arg(long)]
+        statement: String,
+
+        #[arg(long, default_value = "{}")]
+        rationale_json: String,
     },
     #[command(group(
         ArgGroup::new("verification-requirement-show-target")
@@ -4054,6 +4103,48 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Ac {
             command:
+                AcceptanceCriterionCommand::Revise {
+                    store,
+                    branch,
+                    head,
+                    criterion,
+                    criterion_version,
+                    statement,
+                    classification,
+                    rationale_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let criterion_id = EntityId::parse_canonical(&criterion)?;
+            let criterion_version_id = EntityVersionId::parse_canonical(&criterion_version)?;
+            let classification = match classification {
+                Some(classification) => parse_acceptance_criterion_classification(&classification)?,
+                None => {
+                    engine
+                        .acceptance_criterion_at(head_id, criterion_id)?
+                        .state
+                        .classification
+                }
+            };
+            let options = AcceptanceCriterionRevisionOptions::new(
+                branch_id,
+                head_id,
+                criterion_id,
+                criterion_version_id,
+                statement,
+                classification,
+            )?
+            .with_rationale(parse_cli_object(
+                "acceptance criterion revision rationale",
+                &rationale_json,
+            )?);
+            let revision = engine.revise_acceptance_criterion(options)?;
+            render_acceptance_criterion_revision(&revision)
+        }
+        Command::Ac {
+            command:
                 AcceptanceCriterionCommand::Show {
                     store,
                     branch,
@@ -4119,6 +4210,33 @@ fn run(cli: Cli) -> Result<String> {
                 )?,
             )?;
             Ok(render_verification_requirement_create(&requirement))
+        }
+        Command::Vr {
+            command:
+                VerificationRequirementCommand::Revise {
+                    store,
+                    branch,
+                    head,
+                    requirement,
+                    requirement_version,
+                    statement,
+                    rationale_json,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let options = VerificationRequirementRevisionOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&requirement)?,
+                EntityVersionId::parse_canonical(&requirement_version)?,
+                statement,
+            )?
+            .with_rationale(parse_cli_object(
+                "verification requirement revision rationale",
+                &rationale_json,
+            )?);
+            let revision = engine.revise_verification_requirement(options)?;
+            render_verification_requirement_revision(&revision)
         }
         Command::Vr {
             command:
@@ -6659,6 +6777,38 @@ fn render_acceptance_criterion_create(criterion: &AcceptanceCriterionCreateCommi
     )
 }
 
+fn render_acceptance_criterion_revision(
+    criterion: &AcceptanceCriterionRevisionCommit,
+) -> Result<String> {
+    let previous_statement_json = canonical_text_json(
+        "previous acceptance criterion statement",
+        &criterion.previous_state.statement,
+    )?;
+    let statement_json =
+        canonical_text_json("acceptance criterion statement", &criterion.state.statement)?;
+    Ok(format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\ntask_entity_id={}\nacceptance_criterion_entity_id={}\nprevious_acceptance_criterion_entity_version_id={}\nacceptance_criterion_entity_version_id={}\nacceptance_criterion_state_digest={}\nwork_state_digest={}\nlocal_key={}\nprevious_classification={}\nclassification={}\nprevious_statement_json={}\nstatement_json={}\nverification_requirements={}\n",
+        criterion.workspace_id,
+        criterion.branch_id,
+        criterion.previous_head_commit_id,
+        criterion.commit_id,
+        criterion.changeset_id,
+        criterion.operation_id,
+        criterion.task_entity_id,
+        criterion.acceptance_criterion_entity_id,
+        criterion.previous_acceptance_criterion_entity_version_id,
+        criterion.acceptance_criterion_entity_version_id,
+        criterion.acceptance_criterion_state_digest,
+        criterion.work_state_digest,
+        criterion.local_key,
+        criterion.previous_state.classification,
+        criterion.state.classification,
+        previous_statement_json,
+        statement_json,
+        criterion.state.verification_requirements.len()
+    ))
+}
+
 fn render_acceptance_criterion_snapshot(criterion: &AcceptanceCriterionSnapshot) -> Result<String> {
     let statement_json =
         canonical_text_json("acceptance criterion statement", &criterion.state.statement)?;
@@ -6778,6 +6928,37 @@ fn render_verification_requirement_create(
         requirement.work_state_digest,
         requirement.local_key
     )
+}
+
+fn render_verification_requirement_revision(
+    requirement: &VerificationRequirementRevisionCommit,
+) -> Result<String> {
+    let previous_statement_json = canonical_text_json(
+        "previous verification requirement statement",
+        &requirement.previous_state.statement,
+    )?;
+    let statement_json = canonical_text_json(
+        "verification requirement statement",
+        &requirement.state.statement,
+    )?;
+    Ok(format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nacceptance_criterion_entity_id={}\nlocal_key={}\nverification_requirement_entity_id={}\nprevious_verification_requirement_entity_version_id={}\nverification_requirement_entity_version_id={}\nverification_requirement_state_digest={}\nwork_state_digest={}\nprevious_statement_json={}\nstatement_json={}\n",
+        requirement.workspace_id,
+        requirement.branch_id,
+        requirement.previous_head_commit_id,
+        requirement.commit_id,
+        requirement.changeset_id,
+        requirement.operation_id,
+        requirement.acceptance_criterion_entity_id,
+        requirement.local_key,
+        requirement.verification_requirement_entity_id,
+        requirement.previous_verification_requirement_entity_version_id,
+        requirement.verification_requirement_entity_version_id,
+        requirement.verification_requirement_state_digest,
+        requirement.work_state_digest,
+        previous_statement_json,
+        statement_json
+    ))
 }
 
 fn render_verification_requirement_snapshot(
@@ -14107,6 +14288,244 @@ mod tests {
         assert_eq!(
             value(&criteria_at_branch, "criterion.0.statement_json"),
             "\"The AC list is visible.\""
+        );
+    }
+
+    #[test]
+    fn cli_revises_acceptance_criteria_and_verification_requirements() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Revise AC and VR snapshots",
+        ])
+        .expect("parse task create"))
+        .expect("create task");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "Old acceptance criterion statement.",
+            "--classification",
+            "optional",
+        ])
+        .expect("parse ac create"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+
+        let revised_criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "revise",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &criterion_id,
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--statement",
+            "New acceptance criterion statement.",
+        ])
+        .expect("parse ac revise"))
+        .expect("revise ac");
+        assert_eq!(
+            value(
+                &revised_criterion,
+                "previous_acceptance_criterion_entity_version_id"
+            ),
+            value(&criterion, "acceptance_criterion_entity_version_id")
+        );
+        assert_ne!(
+            value(&revised_criterion, "acceptance_criterion_entity_version_id"),
+            value(&criterion, "acceptance_criterion_entity_version_id")
+        );
+        assert_eq!(
+            value(&revised_criterion, "previous_classification"),
+            "optional"
+        );
+        assert_eq!(value(&revised_criterion, "classification"), "optional");
+        assert_eq!(
+            value(&revised_criterion, "previous_statement_json"),
+            "\"Old acceptance criterion statement.\""
+        );
+        assert_eq!(
+            value(&revised_criterion, "statement_json"),
+            "\"New acceptance criterion statement.\""
+        );
+
+        let old_criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "show",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse old ac show"))
+        .expect("show old ac");
+        assert_eq!(
+            value(&old_criterion, "statement_json"),
+            "\"Old acceptance criterion statement.\""
+        );
+
+        let current_criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse current ac show"))
+        .expect("show current ac");
+        assert_eq!(
+            value(&current_criterion, "statement_json"),
+            "\"New acceptance criterion statement.\""
+        );
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&revised_criterion, "commit_id"),
+            "--criterion",
+            &criterion_id,
+            "--criterion-version",
+            &value(&revised_criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-1",
+            "--statement",
+            "Old verification requirement statement.",
+        ])
+        .expect("parse vr create"))
+        .expect("create vr");
+        let requirement_id = value(&requirement, "verification_requirement_entity_id");
+
+        let revised_requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "revise",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&requirement, "commit_id"),
+            "--requirement",
+            &requirement_id,
+            "--requirement-version",
+            &value(&requirement, "verification_requirement_entity_version_id"),
+            "--statement",
+            "New verification requirement statement.",
+        ])
+        .expect("parse vr revise"))
+        .expect("revise vr");
+        assert_eq!(
+            value(
+                &revised_requirement,
+                "previous_verification_requirement_entity_version_id"
+            ),
+            value(&requirement, "verification_requirement_entity_version_id")
+        );
+        assert_ne!(
+            value(
+                &revised_requirement,
+                "verification_requirement_entity_version_id"
+            ),
+            value(&requirement, "verification_requirement_entity_version_id")
+        );
+        assert_eq!(
+            value(&revised_requirement, "previous_statement_json"),
+            "\"Old verification requirement statement.\""
+        );
+        assert_eq!(
+            value(&revised_requirement, "statement_json"),
+            "\"New verification requirement statement.\""
+        );
+
+        let old_requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "show",
+            store,
+            "--commit",
+            &value(&requirement, "commit_id"),
+            "--requirement",
+            &requirement_id,
+        ])
+        .expect("parse old vr show"))
+        .expect("show old vr");
+        assert_eq!(
+            value(&old_requirement, "statement_json"),
+            "\"Old verification requirement statement.\""
+        );
+
+        let current_requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--requirement",
+            &requirement_id,
+        ])
+        .expect("parse current vr show"))
+        .expect("show current vr");
+        assert_eq!(
+            value(&current_requirement, "statement_json"),
+            "\"New verification requirement statement.\""
         );
     }
 

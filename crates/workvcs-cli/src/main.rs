@@ -1289,6 +1289,9 @@ enum BundleCommand {
 
         #[arg(long)]
         input_dir: PathBuf,
+
+        #[arg(long)]
+        require_valid: bool,
     },
     ImportShow {
         #[arg(value_name = "STORE")]
@@ -4748,7 +4751,11 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 Ok(output)
             }
-            BundleCommand::ImportDir { store, input_dir } => {
+            BundleCommand::ImportDir {
+                store,
+                input_dir,
+                require_valid,
+            } => {
                 let mut engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
                 let payload_index_bytes = read_bundle_file(&input_dir.join("payload-index.json"))?;
@@ -4759,7 +4766,21 @@ fn run(cli: Cli) -> Result<String> {
                         payload_index_bytes,
                         payloads,
                     )?)?;
-                Ok(render_bundle_import_attempt(&result))
+                let mut output = render_bundle_import_attempt(&result);
+                if require_valid {
+                    if !result.preflight.valid {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "bundle import validation failed: {}",
+                            result
+                                .preflight
+                                .problem
+                                .as_deref()
+                                .unwrap_or("unknown problem")
+                        )));
+                    }
+                    output.push_str("valid_required=true\n");
+                }
+                Ok(output)
             }
             BundleCommand::ImportShow { store, import } => {
                 let engine = Engine::open(store)?;
@@ -19951,10 +19972,12 @@ mod tests {
             store,
             "--input-dir",
             export_dir.to_str().expect("export dir path"),
+            "--require-valid",
         ])
         .expect("parse bundle import-dir"))
         .expect("record bundle import attempt");
         assert_eq!(value(&import_attempt, "recorded"), "true");
+        assert_eq!(value(&import_attempt, "valid_required"), "true");
         assert_ne!(value(&import_attempt, "import_id"), "none");
         assert_eq!(
             value(&import_attempt, "import_profile"),
@@ -20042,6 +20065,17 @@ mod tests {
         ])
         .expect("parse required invalid bundle validate-dir"));
         assert!(required_invalid_validated_dir.is_err());
+        let required_invalid_import = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-dir",
+            store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-valid",
+        ])
+        .expect("parse required invalid bundle import-dir"));
+        assert!(required_invalid_import.is_err());
     }
 
     #[test]

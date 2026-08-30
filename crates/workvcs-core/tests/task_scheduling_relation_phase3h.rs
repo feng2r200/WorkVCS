@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions,
-    AcceptanceCriterionEffectiveStatus, BranchId, CanonicalValue, CommitId, Digest, Engine,
-    ErrorCode, RelationId, RelationVersionId, StoreInitOptions, TaskCreateOptions,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot,
-    TaskSchedulingRelationType, TaskSnapshot, VerificationCreateOptions, VerificationResult,
-    VerificationTarget, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
-    relation_version_digest,
+    AcceptanceCriterionEffectiveStatus, BranchId, CanonicalValue, ClaimTaskOptions, CommitId,
+    Digest, Engine, ErrorCategory, ErrorCode, RelationId, RelationVersionId, SessionStartOptions,
+    StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSchedulingRelationType, TaskSnapshot,
+    VerificationCreateOptions, VerificationResult, VerificationTarget, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes, relation_version_digest,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -432,6 +432,99 @@ fn ordered_before_is_independent_from_depends_on() {
     );
     assert_eq!(relations[0].relation_id, dependency.relation_id);
     assert_eq!(relations[1].relation_id, order.relation_id);
+}
+
+#[test]
+fn actor_session_claim_guard_protects_task_scheduling_relation_without_partial_rows() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("start first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("start second session");
+
+    let prerequisite = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Owned prerequisite",
+    );
+    let dependent = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        prerequisite.commit_id,
+        "Owned dependent",
+    );
+    engine
+        .claim_task(ClaimTaskOptions::new(
+            first_session.session_id,
+            dependent.task_entity_id,
+        ))
+        .expect("claim owned dependent");
+    let allowed = engine
+        .create_task_scheduling_relation(
+            TaskSchedulingRelationCreateOptions::depends_on(
+                workspace.initial_branch_id,
+                dependent.commit_id,
+                dependent.task_entity_id,
+                prerequisite.task_entity_id,
+            )
+            .expect("allowed relation options")
+            .with_actor_session(first_session.session_id),
+        )
+        .expect("owner creates scheduling relation");
+    assert_eq!(allowed.relation_type, TaskSchedulingRelationType::DependsOn);
+
+    let blocked_source =
+        create_task_snapshot(&mut engine, &workspace, allowed.commit_id, "Blocked source");
+    let blocked_target = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        blocked_source.commit_id,
+        "Blocked target",
+    );
+    engine
+        .claim_task(ClaimTaskOptions::new(
+            first_session.session_id,
+            blocked_source.task_entity_id,
+        ))
+        .expect("claim blocked source");
+    let connection = raw_connection(&path);
+    let before_blocked = history_counts(&connection);
+    let before_head = branch_head(&connection, workspace.initial_branch_id);
+
+    let blocked = engine
+        .create_task_scheduling_relation(
+            TaskSchedulingRelationCreateOptions::ordered_before(
+                workspace.initial_branch_id,
+                blocked_target.commit_id,
+                blocked_source.task_entity_id,
+                blocked_target.task_entity_id,
+            )
+            .expect("blocked relation options")
+            .with_actor_session(second_session.session_id),
+        )
+        .expect_err("other session scheduling relation rejected");
+    assert_eq!(blocked.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(blocked.category(), ErrorCategory::Runtime);
+    assert!(
+        blocked
+            .to_string()
+            .contains("exclusive_claim_owned_by_other_session")
+    );
+    assert_eq!(history_counts(&connection), before_blocked);
+    assert_eq!(
+        branch_head(&connection, workspace.initial_branch_id),
+        before_head
+    );
 }
 
 #[test]

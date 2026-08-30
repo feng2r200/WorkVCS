@@ -89,8 +89,8 @@ use crate::runtime::{
     MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionLifecycleState, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -951,32 +951,20 @@ impl Store {
                     options.task_entity_id(),
                 ),
             )?;
-            if guard.branch_id != options.branch_id() {
-                return Err(WorkVcsError::ClaimInvalid(format!(
-                    "terminal task transition for task {} targets branch {}, but actor session {} is active on branch {}",
-                    options.task_entity_id(),
-                    options.branch_id(),
-                    actor_session_id,
-                    guard.branch_id
-                )));
-            }
-            if guard.head_commit_id != options.expected_head_commit_id() {
-                return Err(WorkVcsError::BranchHeadConflict(format!(
-                    "branch {} expected head {}, found active session head {} before terminal task transition for task {}",
-                    options.branch_id(),
-                    options.expected_head_commit_id(),
-                    guard.head_commit_id,
-                    options.task_entity_id()
-                )));
-            }
-            if !guard.allowed {
-                return Err(WorkVcsError::ClaimInvalid(format!(
-                    "terminal task transition for task {} by session {} is blocked by claim guard reason {}",
-                    options.task_entity_id(),
-                    actor_session_id,
-                    guard.reason.as_str()
-                )));
-            }
+            self.ensure_claim_guard_targets_operation_head(
+                "terminal task transition",
+                actor_session_id,
+                options.branch_id(),
+                options.expected_head_commit_id(),
+                options.task_entity_id(),
+                &guard,
+            )?;
+            self.ensure_claim_guard_allows_operation(
+                "terminal task transition",
+                actor_session_id,
+                options.task_entity_id(),
+                &guard,
+            )?;
         }
         history::transition_task(&mut self.connection, options)
     }
@@ -987,6 +975,28 @@ impl Store {
     ) -> Result<TaskSchedulingRelationCreateCommit> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
+        if let Some(actor_session_id) = options.actor_session_id() {
+            self.ensure_actor_session_targets_operation_head(
+                "task scheduling relation create",
+                actor_session_id,
+                options.branch_id(),
+                options.expected_head_commit_id(),
+            )?;
+            self.ensure_structural_task_claim_guard_allows(
+                "task scheduling relation create",
+                actor_session_id,
+                options.branch_id(),
+                options.expected_head_commit_id(),
+                options.source_task_entity_id(),
+            )?;
+            self.ensure_structural_task_claim_guard_allows(
+                "task scheduling relation create",
+                actor_session_id,
+                options.branch_id(),
+                options.expected_head_commit_id(),
+                options.target_task_entity_id(),
+            )?;
+        }
         history::create_task_scheduling_relation(&mut self.connection, options)
     }
 
@@ -996,7 +1006,168 @@ impl Store {
     ) -> Result<PrimaryContainmentCreateCommit> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
+        if let Some(actor_session_id) = options.actor_session_id() {
+            self.ensure_actor_session_targets_operation_head(
+                "primary containment create",
+                actor_session_id,
+                options.branch_id(),
+                options.expected_head_commit_id(),
+            )?;
+            for task_entity_id in self.primary_containment_task_endpoint_ids(options)? {
+                self.ensure_structural_task_claim_guard_allows(
+                    "primary containment create",
+                    actor_session_id,
+                    options.branch_id(),
+                    options.expected_head_commit_id(),
+                    task_entity_id,
+                )?;
+            }
+        }
         history::create_primary_containment(&mut self.connection, options)
+    }
+
+    fn ensure_actor_session_targets_operation_head(
+        &self,
+        operation_label: &str,
+        actor_session_id: SessionId,
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+    ) -> Result<()> {
+        let session = runtime::session_snapshot(&self.connection, actor_session_id)?;
+        if session.lifecycle_state != SessionLifecycleState::Active {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session {actor_session_id} is not active"
+            )));
+        }
+        let active_workspace_id = session.active_workspace_id.ok_or_else(|| {
+            WorkVcsError::SessionInvalid(format!(
+                "active session {actor_session_id} has no active workspace"
+            ))
+        })?;
+        let active_branch_id = session.active_branch_id.ok_or_else(|| {
+            WorkVcsError::SessionInvalid(format!(
+                "active session {actor_session_id} has no active branch"
+            ))
+        })?;
+        if active_branch_id != branch_id {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "{operation_label} targets branch {branch_id}, but actor session {actor_session_id} is active on branch {active_branch_id}"
+            )));
+        }
+        let branch = history::branch_head(&self.connection, active_branch_id)?;
+        if branch.workspace_id != active_workspace_id {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "session {actor_session_id} active branch {active_branch_id} belongs to workspace {}, not active workspace {active_workspace_id}",
+                branch.workspace_id
+            )));
+        }
+        if branch.lifecycle_state != "active" {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "session {actor_session_id} active branch {active_branch_id} has lifecycle state {:?}",
+                branch.lifecycle_state
+            )));
+        }
+        if branch.head_commit_id != expected_head_commit_id {
+            return Err(WorkVcsError::BranchHeadConflict(format!(
+                "branch {branch_id} expected head {expected_head_commit_id}, found active session head {} before {operation_label}",
+                branch.head_commit_id
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_structural_task_claim_guard_allows(
+        &self,
+        operation_label: &str,
+        actor_session_id: SessionId,
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        task_entity_id: EntityId,
+    ) -> Result<()> {
+        let guard = runtime::task_claim_guard(
+            &self.connection,
+            &ClaimGuardOptions::structural_task_mutation(actor_session_id, task_entity_id),
+        )?;
+        self.ensure_claim_guard_targets_operation_head(
+            operation_label,
+            actor_session_id,
+            branch_id,
+            expected_head_commit_id,
+            task_entity_id,
+            &guard,
+        )?;
+        self.ensure_claim_guard_allows_operation(
+            operation_label,
+            actor_session_id,
+            task_entity_id,
+            &guard,
+        )
+    }
+
+    fn ensure_claim_guard_targets_operation_head(
+        &self,
+        operation_label: &str,
+        actor_session_id: SessionId,
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        task_entity_id: EntityId,
+        guard: &ClaimGuardResult,
+    ) -> Result<()> {
+        if guard.branch_id != branch_id {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "{operation_label} for task {task_entity_id} targets branch {branch_id}, but actor session {actor_session_id} is active on branch {}",
+                guard.branch_id
+            )));
+        }
+        if guard.head_commit_id != expected_head_commit_id {
+            return Err(WorkVcsError::BranchHeadConflict(format!(
+                "branch {branch_id} expected head {expected_head_commit_id}, found active session head {} before {operation_label} for task {task_entity_id}",
+                guard.head_commit_id
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_claim_guard_allows_operation(
+        &self,
+        operation_label: &str,
+        actor_session_id: SessionId,
+        task_entity_id: EntityId,
+        guard: &ClaimGuardResult,
+    ) -> Result<()> {
+        if guard.allowed {
+            return Ok(());
+        }
+        Err(WorkVcsError::ClaimInvalid(format!(
+            "{operation_label} for task {task_entity_id} by session {actor_session_id} is blocked by claim guard reason {}",
+            guard.reason.as_str()
+        )))
+    }
+
+    fn primary_containment_task_endpoint_ids(
+        &self,
+        options: &PrimaryContainmentCreateOptions,
+    ) -> Result<Vec<EntityId>> {
+        let mut task_entity_ids = Vec::new();
+        for endpoint_id in [options.parent_entity_id(), options.child_entity_id()] {
+            if self.entity_is_task_at(options.expected_head_commit_id(), endpoint_id)? {
+                task_entity_ids.push(endpoint_id);
+            }
+        }
+        task_entity_ids.sort();
+        task_entity_ids.dedup();
+        Ok(task_entity_ids)
+    }
+
+    fn entity_is_task_at(&self, commit_id: CommitId, entity_id: EntityId) -> Result<bool> {
+        match history::task_at(&self.connection, commit_id, entity_id) {
+            Ok(_) => Ok(true),
+            Err(WorkVcsError::TaskNotFound(_)) => Ok(false),
+            Err(WorkVcsError::TaskInvalid(message)) if message.contains("not \"task\"") => {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub(crate) fn create_structural_reference(

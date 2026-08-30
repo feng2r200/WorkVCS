@@ -2,11 +2,11 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    BranchId, CanonicalValue, CommitId, Digest, Engine, EntityTransitionOptions, ErrorCategory,
-    ErrorCode, PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateOptions,
+    BranchId, CanonicalValue, ClaimTaskOptions, CommitId, Digest, Engine, EntityTransitionOptions,
+    ErrorCategory, ErrorCode, PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateOptions,
     PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot, RelationId, RelationVersionId,
-    StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions, TaskSnapshot,
-    WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, relation_version_digest,
+    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
+    TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, relation_version_digest,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,6 +375,98 @@ fn plan_to_task_primary_containment_persists_and_replays_after_reopen() {
             .primary_containment_relations_at(commit.commit_id)
             .expect("reopened relations"),
         relations
+    );
+}
+
+#[test]
+fn actor_session_claim_guard_protects_task_primary_containment_without_partial_rows() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("start first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("start second session");
+
+    let plan = create_plan_snapshot(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Owned containment plan",
+    );
+    let task = create_task_snapshot(&mut engine, &workspace, plan.commit_id, "Owned child task");
+    engine
+        .claim_task(ClaimTaskOptions::new(
+            first_session.session_id,
+            task.task_entity_id,
+        ))
+        .expect("claim owned task");
+    let allowed = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                workspace.initial_branch_id,
+                task.commit_id,
+                plan.plan_entity_id,
+                task.task_entity_id,
+            )
+            .expect("allowed containment options")
+            .with_actor_session(first_session.session_id),
+        )
+        .expect("owner creates primary containment");
+    assert_eq!(allowed.child_entity_id, task.task_entity_id);
+
+    let blocked_plan = create_plan_snapshot(
+        &mut engine,
+        &workspace,
+        allowed.commit_id,
+        "Blocked containment plan",
+    );
+    let blocked_task = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        blocked_plan.commit_id,
+        "Blocked child task",
+    );
+    engine
+        .claim_task(ClaimTaskOptions::new(
+            first_session.session_id,
+            blocked_task.task_entity_id,
+        ))
+        .expect("claim blocked task");
+    let connection = raw_connection(&path);
+    let before_blocked = history_counts(&connection);
+    let before_head = branch_head(&connection, workspace.initial_branch_id);
+
+    let blocked = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                workspace.initial_branch_id,
+                blocked_task.commit_id,
+                blocked_plan.plan_entity_id,
+                blocked_task.task_entity_id,
+            )
+            .expect("blocked containment options")
+            .with_actor_session(second_session.session_id),
+        )
+        .expect_err("other session containment rejected");
+    assert_eq!(blocked.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(blocked.category(), ErrorCategory::Runtime);
+    assert!(
+        blocked
+            .to_string()
+            .contains("exclusive_claim_owned_by_other_session")
+    );
+    assert_eq!(history_counts(&connection), before_blocked);
+    assert_eq!(
+        branch_head(&connection, workspace.initial_branch_id),
+        before_head
     );
 }
 

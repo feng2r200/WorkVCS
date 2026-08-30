@@ -10,7 +10,7 @@ use crate::canonical::{
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EventId, OperationId, RelationId,
-    RelationVersionId, WorkspaceId,
+    RelationVersionId, SessionId, WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -68,6 +68,7 @@ pub struct PrimaryContainmentCreateOptions {
     parent_entity_id: EntityId,
     child_entity_id: EntityId,
     rationale: CanonicalValue,
+    actor_session_id: Option<SessionId>,
 }
 
 impl PrimaryContainmentCreateOptions {
@@ -88,12 +89,38 @@ impl PrimaryContainmentCreateOptions {
             parent_entity_id,
             child_entity_id,
             rationale: CanonicalValue::object(Vec::new())?,
+            actor_session_id: None,
         })
     }
 
     pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
         self.rationale = rationale;
         self
+    }
+
+    pub fn with_actor_session(mut self, actor_session_id: SessionId) -> Self {
+        self.actor_session_id = Some(actor_session_id);
+        self
+    }
+
+    pub fn actor_session_id(&self) -> Option<SessionId> {
+        self.actor_session_id
+    }
+
+    pub fn branch_id(&self) -> BranchId {
+        self.branch_id
+    }
+
+    pub fn expected_head_commit_id(&self) -> CommitId {
+        self.expected_head_commit_id
+    }
+
+    pub fn parent_entity_id(&self) -> EntityId {
+        self.parent_entity_id
+    }
+
+    pub fn child_entity_id(&self) -> EntityId {
+        self.child_entity_id
     }
 }
 

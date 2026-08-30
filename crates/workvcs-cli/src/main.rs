@@ -72,11 +72,12 @@ use workvcs_core::{
     ResolvedWhyQuerySubject, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
     ResourceCreateResult, ResourceId, ResourceListOptions, ResourceListResult,
     ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    ResourceObservationSnapshot, ResourceSnapshot, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
+    ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInitOptions,
+    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
     StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
     StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
     StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
@@ -1890,6 +1891,16 @@ enum ResourceCommand {
 
         #[arg(long)]
         observation: String,
+    },
+    ObservationList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        resource: Option<String>,
+
+        #[arg(long)]
+        adapter_kind: Option<String>,
     },
 }
 
@@ -4541,6 +4552,26 @@ fn run(cli: Cli) -> Result<String> {
                 &engine
                     .resource_observation(ResourceObservationId::parse_canonical(&observation)?)?,
             )
+        }
+        Command::Resource {
+            command:
+                ResourceCommand::ObservationList {
+                    store,
+                    resource,
+                    adapter_kind,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options = match resource {
+                Some(resource) => ResourceObservationListOptions::for_resource(
+                    ResourceId::parse_canonical(&resource)?,
+                ),
+                None => ResourceObservationListOptions::all(),
+            };
+            if let Some(adapter_kind) = adapter_kind {
+                options = options.with_adapter_kind(adapter_kind)?;
+            }
+            render_resource_observation_list(&engine.resource_observations(options)?)
         }
         Command::Verification {
             command:
@@ -7853,6 +7884,67 @@ fn render_resource_observation_snapshot(
                 "resource observation detail format metadata",
                 &detail.format_metadata
             )?
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
+fn render_resource_observation_list(result: &ResourceObservationListResult) -> Result<String> {
+    let mut output = format!("observations={}\n", result.observations.len());
+    for (index, observation) in result.observations.iter().enumerate() {
+        writeln!(
+            output,
+            "observation.{index}.observation_id={}",
+            observation.observation_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "observation.{index}.resource_id={}",
+            observation.resource_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "observation.{index}.adapter_kind={}",
+            observation.adapter_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "observation.{index}.adapter_schema_version={}",
+            observation.adapter_schema_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "observation.{index}.captured_at_us={}",
+            observation.captured_at_us
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "observation.{index}.fingerprint={}",
+            observation.fingerprint
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "observation.{index}.summary_json={}",
+            canonical_cli_json("resource observation summary", &observation.summary)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "observation.{index}.detail_content_present={}",
+            observation.detail_content.is_some()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "observation.{index}.source_session_id={}",
+            render_optional_display_or_none(observation.source_session_id.as_ref())
         )
         .expect("write to String");
     }
@@ -16708,6 +16800,71 @@ mod tests {
         assert_eq!(value(&shown_observation, "summary_json"), "{}");
         assert_eq!(value(&shown_observation, "detail_content_present"), "false");
         assert_eq!(value(&shown_observation, "source_session_id"), "none");
+
+        let observations =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "observation-list", store])
+                    .expect("parse observation list"),
+            )
+            .expect("list observations");
+        assert_eq!(value(&observations, "observations"), "1");
+        assert_eq!(
+            value(&observations, "observation.0.observation_id"),
+            observation_id
+        );
+        assert_eq!(
+            value(&observations, "observation.0.resource_id"),
+            resource_id
+        );
+        assert_eq!(value(&observations, "observation.0.adapter_kind"), "git");
+        assert_eq!(
+            value(&observations, "observation.0.fingerprint"),
+            fingerprint
+        );
+
+        let resource_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--resource",
+            &resource_id,
+        ])
+        .expect("parse resource-filtered observation list"))
+        .expect("list resource-filtered observations");
+        assert_eq!(value(&resource_observations, "observations"), "1");
+        assert_eq!(
+            value(&resource_observations, "observation.0.observation_id"),
+            observation_id
+        );
+
+        let adapter_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--adapter-kind",
+            "git",
+        ])
+        .expect("parse adapter-filtered observation list"))
+        .expect("list adapter-filtered observations");
+        assert_eq!(value(&adapter_observations, "observations"), "1");
+        assert_eq!(
+            value(&adapter_observations, "observation.0.observation_id"),
+            observation_id
+        );
+
+        let missing_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--adapter-kind",
+            "http",
+        ])
+        .expect("parse missing observation list"))
+        .expect("list missing observations");
+        assert_eq!(value(&missing_observations, "observations"), "0");
 
         let verification = run(Cli::try_parse_from([
             "workvcs",

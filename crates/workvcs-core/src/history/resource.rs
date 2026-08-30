@@ -341,6 +341,48 @@ pub struct ResourceObservationSnapshot {
     pub source_session_id: Option<SessionId>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResourceObservationListOptions {
+    resource_id: Option<ResourceId>,
+    adapter_kind: Option<String>,
+}
+
+impl ResourceObservationListOptions {
+    pub fn all() -> Self {
+        Self {
+            resource_id: None,
+            adapter_kind: None,
+        }
+    }
+
+    pub fn for_resource(resource_id: ResourceId) -> Self {
+        Self {
+            resource_id: Some(resource_id),
+            adapter_kind: None,
+        }
+    }
+
+    pub fn with_adapter_kind(mut self, adapter_kind: impl Into<String>) -> Result<Self> {
+        let adapter_kind = adapter_kind.into();
+        validate_stored_text("resource observation adapter kind", &adapter_kind)?;
+        self.adapter_kind = Some(adapter_kind);
+        Ok(self)
+    }
+
+    pub fn resource_id(&self) -> Option<ResourceId> {
+        self.resource_id
+    }
+
+    pub fn adapter_kind(&self) -> Option<&str> {
+        self.adapter_kind.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceObservationListResult {
+    pub observations: Vec<ResourceObservationSnapshot>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourceObservationDetailSnapshot {
     pub content_digest: Digest,
@@ -783,6 +825,22 @@ pub(crate) fn resource_observation(
     })
 }
 
+pub(crate) fn resource_observations(
+    connection: &StoreConnection,
+    options: &ResourceObservationListOptions,
+) -> Result<ResourceObservationListResult> {
+    if let Some(adapter_kind) = options.adapter_kind() {
+        validate_stored_text("resource observation adapter kind", adapter_kind)?;
+    }
+
+    let observation_ids = list_resource_observation_ids(connection, options)?;
+    let mut observations = Vec::with_capacity(observation_ids.len());
+    for observation_id in observation_ids {
+        observations.push(resource_observation(connection, observation_id)?);
+    }
+    Ok(ResourceObservationListResult { observations })
+}
+
 fn load_resource_binding(
     connection: &StoreConnection,
     resource_id: ResourceId,
@@ -890,6 +948,138 @@ fn list_resource_ids(
         }
     }
     Ok(resource_ids)
+}
+
+fn list_resource_observation_ids(
+    connection: &StoreConnection,
+    options: &ResourceObservationListOptions,
+) -> Result<Vec<ResourceObservationId>> {
+    let mut observation_ids = Vec::new();
+    match (options.resource_id(), options.adapter_kind()) {
+        (Some(resource_id), Some(adapter_kind)) => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT resource_observation.observation_id
+                     FROM resource_observation
+                     JOIN object_identity
+                       ON object_identity.object_id = resource_observation.observation_id
+                     JOIN resource
+                       ON resource.resource_id = resource_observation.resource_id
+                     WHERE object_identity.object_kind = ?1
+                       AND resource_observation.resource_id = ?2
+                       AND resource_observation.adapter_kind = ?3
+                     ORDER BY resource_observation.captured_at_us,
+                              resource_observation.observation_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(
+                    params![
+                        RESOURCE_OBSERVATION_OBJECT_KIND,
+                        &resource_id.raw_bytes()[..],
+                        adapter_kind
+                    ],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .map_err(storage_error)?;
+            for row in rows {
+                observation_ids.push(decode_resource_observation_id(
+                    "resource_observation.observation_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+        (Some(resource_id), None) => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT resource_observation.observation_id
+                     FROM resource_observation
+                     JOIN object_identity
+                       ON object_identity.object_id = resource_observation.observation_id
+                     JOIN resource
+                       ON resource.resource_id = resource_observation.resource_id
+                     WHERE object_identity.object_kind = ?1
+                       AND resource_observation.resource_id = ?2
+                     ORDER BY resource_observation.captured_at_us,
+                              resource_observation.observation_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(
+                    params![
+                        RESOURCE_OBSERVATION_OBJECT_KIND,
+                        &resource_id.raw_bytes()[..]
+                    ],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .map_err(storage_error)?;
+            for row in rows {
+                observation_ids.push(decode_resource_observation_id(
+                    "resource_observation.observation_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+        (None, Some(adapter_kind)) => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT resource_observation.observation_id
+                     FROM resource_observation
+                     JOIN object_identity
+                       ON object_identity.object_id = resource_observation.observation_id
+                     JOIN resource
+                       ON resource.resource_id = resource_observation.resource_id
+                     WHERE object_identity.object_kind = ?1
+                       AND resource_observation.adapter_kind = ?2
+                     ORDER BY resource_observation.captured_at_us,
+                              resource_observation.observation_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(
+                    params![RESOURCE_OBSERVATION_OBJECT_KIND, adapter_kind],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .map_err(storage_error)?;
+            for row in rows {
+                observation_ids.push(decode_resource_observation_id(
+                    "resource_observation.observation_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+        (None, None) => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT resource_observation.observation_id
+                     FROM resource_observation
+                     JOIN object_identity
+                       ON object_identity.object_id = resource_observation.observation_id
+                     JOIN resource
+                       ON resource.resource_id = resource_observation.resource_id
+                     WHERE object_identity.object_kind = ?1
+                     ORDER BY resource_observation.captured_at_us,
+                              resource_observation.observation_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(params![RESOURCE_OBSERVATION_OBJECT_KIND], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .map_err(storage_error)?;
+            for row in rows {
+                observation_ids.push(decode_resource_observation_id(
+                    "resource_observation.observation_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+    }
+    Ok(observation_ids)
 }
 
 fn load_workspace_resource_associations(
@@ -1174,6 +1364,15 @@ fn decode_resource_id(column: &str, bytes: Vec<u8>) -> Result<ResourceId> {
         WorkVcsError::ResourceInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
     })?;
     ResourceId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::ResourceInvalid(format!("{column} is not a canonical UUIDv7: {error}"))
+    })
+}
+
+fn decode_resource_observation_id(column: &str, bytes: Vec<u8>) -> Result<ResourceObservationId> {
+    let bytes: [u8; 16] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::ResourceInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
+    })?;
+    ResourceObservationId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::ResourceInvalid(format!("{column} is not a canonical UUIDv7: {error}"))
     })
 }

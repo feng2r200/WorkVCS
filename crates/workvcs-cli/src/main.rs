@@ -1474,6 +1474,9 @@ enum MergeCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_merges: Option<usize>,
     },
 }
 
@@ -8726,6 +8729,7 @@ fn run(cli: Cli) -> Result<String> {
                     runtime_state,
                     outcome,
                     limit,
+                    expected_merges,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -8761,7 +8765,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.merges.truncate(limit);
             }
-            Ok(render_merge_list(&result)?)
+            let mut output = render_merge_list(&result)?;
+            if let Some(expected_merges) = expected_merges {
+                let actual_merges = result.merges.len();
+                if actual_merges != expected_merges {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "merges {actual_merges} does not match expected {expected_merges}"
+                    )));
+                }
+                output.push_str("merges_match_expected=true\n");
+            }
+            Ok(output)
         }
     }
 }
@@ -33474,6 +33488,37 @@ mod tests {
         assert_eq!(value(&active, "merge.0.runtime_state"), "active");
         assert_eq!(value(&active, "merge.0.items"), "1");
 
+        let expected_active_list = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--expected-merges",
+            "1",
+        ])
+        .expect("parse expected active merge list"))
+        .expect("expected active merge list");
+        assert_eq!(value(&expected_active_list, "merges"), "1");
+        assert_eq!(
+            value(&expected_active_list, "merges_match_expected"),
+            "true"
+        );
+
+        let mismatched_merge_count = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--expected-merges",
+            "0",
+        ])
+        .expect("parse mismatched active merge list"));
+        assert!(mismatched_merge_count.is_err());
+
         let limited_active = run(Cli::try_parse_from([
             "workvcs",
             "merge",
@@ -33576,6 +33621,21 @@ mod tests {
         .expect("list active merges after continue");
         assert_eq!(value(&hidden, "merges"), "0");
 
+        let expected_hidden = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--expected-merges",
+            "0",
+        ])
+        .expect("parse expected hidden merge list"))
+        .expect("expected hidden merge list");
+        assert_eq!(value(&expected_hidden, "merges"), "0");
+        assert_eq!(value(&expected_hidden, "merges_match_expected"), "true");
+
         let closed =
             run(
                 Cli::try_parse_from(["workvcs", "merge", "show", store, "--merge", &merge_id])
@@ -33632,6 +33692,24 @@ mod tests {
         assert_eq!(value(&all, "merge.0.runtime_state"), "completed");
         assert_eq!(value(&all, "merge.0.items"), "1");
         assert_eq!(value(&all, "merge.0.outcome"), "completed");
+
+        let expected_all = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--target-branch",
+            &target_branch,
+            "--include-closed",
+            "--expected-merges",
+            "1",
+        ])
+        .expect("parse expected all merge list"))
+        .expect("expected all merge list");
+        assert_eq!(value(&expected_all, "merges"), "1");
+        assert_eq!(value(&expected_all, "merges_match_expected"), "true");
 
         let completed_by_runtime = run(Cli::try_parse_from([
             "workvcs",

@@ -53,27 +53,28 @@ use workvcs_core::{
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
     MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
     NextWorkOptions, NextWorkResult, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
-    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
-    ResourceCreateOptions, ResourceCreateResult, ResourceId, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationId, Result, RunnableTaskBlockedReason,
-    RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
-    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions, TaskStatus,
+    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
+    RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
+    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
+    ResolvedWhyQuerySubject, ResourceCreateOptions, ResourceCreateResult, ResourceId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
+    Result, RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionId,
+    SessionLifecycleState, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, StoreId, StoreInitOptions, StoreLineageListOptions,
+    StoreLineageListResult, StoreLineageRecordOptions, StoreLineageRecordResult,
+    StoreLineageSnapshot, StoreMigrationAttemptSnapshot, StoreMigrationListOptions,
+    StoreMigrationListResult, StoreMigrationRecordOptions, StoreMigrationRecordResult,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskStatus,
     TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
@@ -1256,6 +1257,38 @@ enum TaskCommand {
 
         #[arg(long)]
         session: Option<String>,
+    },
+    #[command(group(
+        ArgGroup::new("task-scheduling-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    SchedulingList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+    },
+    #[command(group(
+        ArgGroup::new("task-containment-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    ContainmentList {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
     },
 }
 
@@ -3379,6 +3412,32 @@ fn run(cli: Cli) -> Result<String> {
             let relation = engine.create_primary_containment(options)?;
             Ok(render_primary_containment_create(&relation))
         }
+        Command::Task {
+            command:
+                TaskCommand::SchedulingList {
+                    store,
+                    branch,
+                    commit,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            let relations = engine.task_scheduling_relations_at(commit_id)?;
+            Ok(render_task_scheduling_relation_list(commit_id, &relations))
+        }
+        Command::Task {
+            command:
+                TaskCommand::ContainmentList {
+                    store,
+                    branch,
+                    commit,
+                },
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            let relations = engine.primary_containment_relations_at(commit_id)?;
+            Ok(render_primary_containment_list(commit_id, &relations))
+        }
         Command::Ac {
             command:
                 AcceptanceCriterionCommand::Create {
@@ -4775,6 +4834,22 @@ fn resolve_knowledge_query_commit(
     }
 }
 
+fn resolve_task_query_commit(
+    engine: &Engine,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<CommitId> {
+    match (branch, commit) {
+        (Some(branch), None) => Ok(engine
+            .branch_head(BranchId::parse_canonical(&branch)?)
+            .map(|head| head.head_commit_id)?),
+        (None, Some(commit)) => CommitId::parse_canonical(&commit),
+        _ => Err(WorkVcsError::QueryInvalid(
+            "task query target requires exactly one of --branch or --commit".to_owned(),
+        )),
+    }
+}
+
 fn parse_knowledge_status(value: &str) -> Result<KnowledgeStatus> {
     match value {
         "active" => Ok(KnowledgeStatus::Active),
@@ -5414,6 +5489,60 @@ fn render_task_scheduling_relation_create(relation: &TaskSchedulingRelationCreat
     )
 }
 
+fn render_task_scheduling_relation_list(
+    commit_id: CommitId,
+    relations: &[TaskSchedulingRelationSnapshot],
+) -> String {
+    let mut output = format!("commit_id={commit_id}\nrelations={}\n", relations.len());
+    for (index, relation) in relations.iter().enumerate() {
+        writeln!(
+            output,
+            "relation.{index}.workspace_id={}",
+            relation.workspace_id
+        )
+        .expect("write to String");
+        writeln!(output, "relation.{index}.commit_id={}", relation.commit_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_id={}",
+            relation.relation_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_version_id={}",
+            relation.relation_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_type={}",
+            relation.relation_type
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.source_task_entity_id={}",
+            relation.source_task_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.target_task_entity_id={}",
+            relation.target_task_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_state_digest={}",
+            relation.state_digest
+        )
+        .expect("write to String");
+    }
+    output
+}
+
 fn render_primary_containment_create(relation: &PrimaryContainmentCreateCommit) -> String {
     format!(
         "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nparent_entity_id={}\nparent_kind={}\nchild_entity_id={}\nchild_kind={}\nrelation_state_digest={}\nwork_state_digest={}\n",
@@ -5432,6 +5561,66 @@ fn render_primary_containment_create(relation: &PrimaryContainmentCreateCommit) 
         relation.relation_state_digest,
         relation.work_state_digest
     )
+}
+
+fn render_primary_containment_list(
+    commit_id: CommitId,
+    relations: &[PrimaryContainmentSnapshot],
+) -> String {
+    let mut output = format!("commit_id={commit_id}\nrelations={}\n", relations.len());
+    for (index, relation) in relations.iter().enumerate() {
+        writeln!(
+            output,
+            "relation.{index}.workspace_id={}",
+            relation.workspace_id
+        )
+        .expect("write to String");
+        writeln!(output, "relation.{index}.commit_id={}", relation.commit_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_id={}",
+            relation.relation_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_version_id={}",
+            relation.relation_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.parent_entity_id={}",
+            relation.parent_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.parent_kind={}",
+            relation.parent_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.child_entity_id={}",
+            relation.child_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.child_kind={}",
+            relation.child_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_state_digest={}",
+            relation.state_digest
+        )
+        .expect("write to String");
+    }
+    output
 }
 
 fn render_acceptance_criterion_create(criterion: &AcceptanceCriterionCreateCommit) -> String {
@@ -12158,6 +12347,70 @@ mod tests {
         assert_eq!(value(&containment, "parent_kind"), "task");
         assert_eq!(value(&containment, "child_entity_id"), second_task);
         assert_eq!(value(&containment, "child_kind"), "task");
+
+        let scheduling_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "scheduling-list",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse scheduling list"))
+        .expect("list scheduling relations");
+        assert_eq!(value(&scheduling_list, "relations"), "2");
+        assert_eq!(
+            value(&scheduling_list, "relation.0.relation_type"),
+            "depends_on"
+        );
+        assert_eq!(
+            value(&scheduling_list, "relation.1.relation_type"),
+            "ordered_before"
+        );
+        assert_eq!(
+            value(&scheduling_list, "relation.0.source_task_entity_id"),
+            second_task
+        );
+        assert_eq!(
+            value(&scheduling_list, "relation.0.target_task_entity_id"),
+            first_task
+        );
+
+        let containment_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse containment list"))
+        .expect("list containment relations");
+        assert_eq!(value(&containment_list, "relations"), "1");
+        assert_eq!(
+            value(&containment_list, "relation.0.relation_id"),
+            value(&containment, "relation_id")
+        );
+        assert_eq!(
+            value(&containment_list, "relation.0.parent_entity_id"),
+            first_task
+        );
+        assert_eq!(
+            value(&containment_list, "relation.0.child_entity_id"),
+            second_task
+        );
+
+        let historical_containment_list = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--commit",
+            &value(&order, "commit_id"),
+        ])
+        .expect("parse historical containment list"))
+        .expect("list historical containment relations");
+        assert_eq!(value(&historical_containment_list, "relations"), "0");
     }
 
     #[test]

@@ -1679,6 +1679,9 @@ enum TaskCommand {
 
         #[arg(long)]
         child_kind: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -5109,6 +5112,7 @@ fn run(cli: Cli) -> Result<String> {
                     child,
                     parent_kind,
                     child_kind,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5129,6 +5133,14 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(child_kind) = child_kind {
                 let child_kind = parse_goal_plan_task_endpoint_kind(&child_kind)?;
                 relations.retain(|relation| relation.child_kind.as_str() == child_kind);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "task containment-list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                relations.truncate(limit);
             }
             Ok(render_primary_containment_list(commit_id, &relations))
         }
@@ -20557,6 +20569,34 @@ mod tests {
         assert_eq!(value(&containment, "relations"), "2");
         assert!(containment.contains("relation.0.parent_kind=goal"));
         assert!(containment.contains("relation.1.parent_kind=plan"));
+
+        let limited_containment = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited containment list"))
+        .expect("list limited containment");
+        assert_eq!(value(&limited_containment, "relations"), "1");
+        assert!(limited_containment.contains("relation.0.parent_kind=goal"));
+
+        let zero_limit_containment = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "containment-list",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit containment list"));
+        assert!(zero_limit_containment.is_err());
     }
 
     #[test]

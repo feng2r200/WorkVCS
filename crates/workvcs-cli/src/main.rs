@@ -2710,6 +2710,9 @@ enum RecordCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_records: Option<usize>,
     },
     LinkInvalidates {
         #[arg(value_name = "STORE")]
@@ -2959,6 +2962,9 @@ enum RecordCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_relations: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("record-knowledge-relation-list-target")
@@ -2987,6 +2993,9 @@ enum RecordCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_relations: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("record-knowledge-relation-show-target")
@@ -7567,6 +7576,7 @@ fn run(cli: Cli) -> Result<String> {
                     scope_json,
                     statement_contains,
                     limit,
+                    expected_records,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -7593,7 +7603,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.records.truncate(limit);
             }
-            Ok(render_record_list(&result))
+            let mut output = render_record_list(&result);
+            if let Some(expected_records) = expected_records {
+                let actual_records = result.records.len();
+                if actual_records != expected_records {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "records {actual_records} does not match expected {expected_records}"
+                    )));
+                }
+                output.push_str("records_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Record {
             command:
@@ -7859,6 +7879,7 @@ fn run(cli: Cli) -> Result<String> {
                     source_record,
                     target_record,
                     limit,
+                    expected_relations,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -7886,7 +7907,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.relations.truncate(limit);
             }
-            Ok(render_record_relation_list(&result))
+            let mut output = render_record_relation_list(&result);
+            if let Some(expected_relations) = expected_relations {
+                let actual_relations = result.relations.len();
+                if actual_relations != expected_relations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "record relations {actual_relations} does not match expected {expected_relations}"
+                    )));
+                }
+                output.push_str("relations_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Record {
             command:
@@ -7898,6 +7929,7 @@ fn run(cli: Cli) -> Result<String> {
                     source_record,
                     target_knowledge,
                     limit,
+                    expected_relations,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -7924,7 +7956,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.relations.truncate(limit);
             }
-            Ok(render_record_knowledge_relation_list(&result))
+            let mut output = render_record_knowledge_relation_list(&result);
+            if let Some(expected_relations) = expected_relations {
+                let actual_relations = result.relations.len();
+                if actual_relations != expected_relations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "record knowledge relations {actual_relations} does not match expected {expected_relations}"
+                    )));
+                }
+                output.push_str("relations_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Record {
             command:
@@ -31154,14 +31196,30 @@ mod tests {
             store,
             "--commit",
             &value(&assumption, "commit_id"),
+            "--expected-records",
+            "2",
         ])
         .expect("parse record list"))
         .expect("list records");
         assert_eq!(value(&list, "records"), "2");
+        assert_eq!(value(&list, "records_match_expected"), "true");
         assert!(list.contains("record_kind=finding"));
         assert!(list.contains("record_kind=assumption"));
         assert!(list.contains("record_status=active"));
         assert!(list.contains("record_status=unverified"));
+
+        let mismatched_list = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "list",
+            store,
+            "--commit",
+            &value(&assumption, "commit_id"),
+            "--expected-records",
+            "1",
+        ])
+        .expect("parse mismatched record list"));
+        assert!(mismatched_list.is_err());
 
         let limited_list = run(Cli::try_parse_from([
             "workvcs",
@@ -31172,10 +31230,13 @@ mod tests {
             &value(&assumption, "commit_id"),
             "--limit",
             "1",
+            "--expected-records",
+            "1",
         ])
         .expect("parse limited record list"))
         .expect("list limited records");
         assert_eq!(value(&limited_list, "records"), "1");
+        assert_eq!(value(&limited_list, "records_match_expected"), "true");
         assert_ne!(value(&limited_list, "record.0.record_entity_id"), "");
 
         let zero_limit_list = run(Cli::try_parse_from([
@@ -31212,10 +31273,13 @@ mod tests {
             "assumption",
             "--scope-json",
             "{\"local_ref\":\"core\",\"kind\":\"module\"}",
+            "--expected-records",
+            "1",
         ])
         .expect("parse filtered record list"))
         .expect("list filtered records");
         assert_eq!(value(&filtered, "records"), "1");
+        assert_eq!(value(&filtered, "records_match_expected"), "true");
         assert!(filtered.contains("record_kind=assumption"));
         assert!(!filtered.contains("record_kind=finding"));
 
@@ -31679,10 +31743,13 @@ mod tests {
             &value(&finding, "record_entity_id"),
             "--target-record",
             &value(&assumption, "record_entity_id"),
+            "--expected-relations",
+            "1",
         ])
         .expect("parse relation list"))
         .expect("list record relations");
         assert!(listed.contains("relations=1"));
+        assert_eq!(value(&listed, "relations_match_expected"), "true");
         assert_eq!(
             value(&listed, "relation.0.relation_id"),
             value(&relation, "relation_id")
@@ -31696,6 +31763,25 @@ mod tests {
             value(&listed, "relation.0.target_record_entity_id"),
             value(&assumption, "record_entity_id")
         );
+
+        let mismatched_list = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--type",
+            "invalidates",
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-record",
+            &value(&assumption, "record_entity_id"),
+            "--expected-relations",
+            "0",
+        ])
+        .expect("parse mismatched relation list"));
+        assert!(mismatched_list.is_err());
 
         let why_finding = run(Cli::try_parse_from([
             "workvcs",
@@ -33709,10 +33795,13 @@ mod tests {
             &value(&finding, "record_entity_id"),
             "--target-knowledge",
             &value(&knowledge, "knowledge_entity_id"),
+            "--expected-relations",
+            "1",
         ])
         .expect("parse record knowledge relation list"))
         .expect("list record knowledge relations");
         assert_eq!(value(&listed, "relations"), "1");
+        assert_eq!(value(&listed, "relations_match_expected"), "true");
         assert_eq!(
             value(&listed, "relation.0.relation_id"),
             value(&relation, "relation_id")
@@ -33727,6 +33816,25 @@ mod tests {
             value(&knowledge, "knowledge_entity_id")
         );
 
+        let mismatched = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-list",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--type",
+            "supports",
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--expected-relations",
+            "0",
+        ])
+        .expect("parse mismatched record knowledge relation list"));
+        assert!(mismatched.is_err());
+
         let limited = run(Cli::try_parse_from([
             "workvcs",
             "record",
@@ -33736,10 +33844,13 @@ mod tests {
             &value(&relation, "commit_id"),
             "--limit",
             "1",
+            "--expected-relations",
+            "1",
         ])
         .expect("parse limited record knowledge relation list"))
         .expect("list limited record knowledge relations");
         assert_eq!(value(&limited, "relations"), "1");
+        assert_eq!(value(&limited, "relations_match_expected"), "true");
         assert_eq!(
             value(&limited, "relation.0.relation_id"),
             value(&relation, "relation_id")

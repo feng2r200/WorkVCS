@@ -298,6 +298,12 @@ enum Command {
 
         #[arg(long)]
         exposure: Option<String>,
+
+        #[arg(long)]
+        relation_kind: Option<String>,
+
+        #[arg(long)]
+        direction: Option<String>,
     },
     Workspace {
         #[command(subcommand)]
@@ -4589,6 +4595,8 @@ fn run(cli: Cli) -> Result<String> {
             entity,
             evidence,
             exposure,
+            relation_kind,
+            direction,
         } => {
             let engine = Engine::open(store)?;
             let target = match (branch, commit) {
@@ -4623,7 +4631,18 @@ fn run(cli: Cli) -> Result<String> {
                     ));
                 }
             };
-            Ok(render_why(&engine.why(options)?))
+            let mut result = engine.why(options)?;
+            if let Some(relation_kind) = relation_kind {
+                result
+                    .relation_edges
+                    .retain(|edge| why_relation_kind(edge.relation_kind) == relation_kind);
+            }
+            if let Some(direction) = direction {
+                result
+                    .relation_edges
+                    .retain(|edge| why_relation_direction(edge.direction) == direction);
+            }
+            Ok(render_why(&result))
         }
         Command::Workspace {
             command:
@@ -17737,6 +17756,83 @@ mod tests {
             value(&why, "relation.0.target_exposure_id"),
             value(&exposure, "exposure_id")
         );
+
+        let why_by_relation_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--relation-kind",
+            "knowledge_exposure_derived_from",
+        ])
+        .expect("parse why by relation kind"))
+        .expect("why by relation kind");
+        assert_eq!(value(&why_by_relation_kind, "relation_edges"), "1");
+
+        let why_by_direction = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--direction",
+            "incoming",
+        ])
+        .expect("parse why by direction"))
+        .expect("why by direction");
+        assert_eq!(value(&why_by_direction, "relation_edges"), "1");
+
+        let why_by_combined_filters = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--relation-kind",
+            "knowledge_exposure_derived_from",
+            "--direction",
+            "incoming",
+        ])
+        .expect("parse why by combined filters"))
+        .expect("why by combined filters");
+        assert_eq!(value(&why_by_combined_filters, "relation_edges"), "1");
+
+        let why_by_missing_relation_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--relation-kind",
+            "record_supports",
+        ])
+        .expect("parse why by missing relation kind"))
+        .expect("why by missing relation kind");
+        assert_eq!(value(&why_by_missing_relation_kind, "relation_edges"), "0");
+
+        let why_by_missing_direction = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&adoption, "final_head_commit_id"),
+            "--exposure",
+            &value(&exposure, "exposure_id"),
+            "--direction",
+            "outgoing",
+        ])
+        .expect("parse why by missing direction"))
+        .expect("why by missing direction");
+        assert_eq!(value(&why_by_missing_direction, "relation_edges"), "0");
     }
 
     #[test]

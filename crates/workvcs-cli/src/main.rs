@@ -656,6 +656,9 @@ enum StoreCommand {
 
         #[arg(long)]
         external_ref: String,
+
+        #[arg(long)]
+        expected_descriptor_digest: Option<String>,
     },
     #[command(name = "external-ref-list")]
     ExternalRefList {
@@ -3907,11 +3910,23 @@ fn run(cli: Cli) -> Result<String> {
             StoreCommand::ExternalRefShow {
                 store,
                 external_ref,
+                expected_descriptor_digest,
             } => {
                 let engine = Engine::open(store)?;
                 let snapshot =
                     engine.external_object_ref(ExternalRefId::parse_canonical(&external_ref)?)?;
-                render_external_object_ref_snapshot(&snapshot)
+                let mut output = render_external_object_ref_snapshot(&snapshot)?;
+                if let Some(expected_descriptor_digest) = expected_descriptor_digest {
+                    let expected_descriptor_digest = Digest::from_hex(&expected_descriptor_digest)?;
+                    if snapshot.descriptor_digest != expected_descriptor_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "external object ref descriptor digest {} does not match expected {}",
+                            snapshot.descriptor_digest, expected_descriptor_digest
+                        )));
+                    }
+                    output.push_str("descriptor_matches_expected=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::ExternalRefList {
                 store,
@@ -17710,6 +17725,40 @@ mod tests {
             value(&shown, "descriptor_digest"),
             value(&recorded, "descriptor_digest")
         );
+
+        let expected_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "external-ref-show",
+            store,
+            "--external-ref",
+            &external_ref_id,
+            "--expected-descriptor-digest",
+            &value(&shown, "descriptor_digest"),
+        ])
+        .expect("parse expected external-ref-show"))
+        .expect("show expected external ref");
+        assert_eq!(
+            value(&expected_shown, "descriptor_digest"),
+            value(&shown, "descriptor_digest")
+        );
+        assert_eq!(
+            value(&expected_shown, "descriptor_matches_expected"),
+            "true"
+        );
+
+        let mismatched_shown = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "external-ref-show",
+            store,
+            "--external-ref",
+            &external_ref_id,
+            "--expected-descriptor-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched external-ref-show"));
+        assert!(mismatched_shown.is_err());
 
         let listed = run(Cli::try_parse_from([
             "workvcs",

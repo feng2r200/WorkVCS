@@ -134,6 +134,36 @@ pub struct EvidenceSnapshot {
     pub contents: Vec<EvidenceContentSnapshot>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EvidenceListOptions {
+    evidence_kind: Option<String>,
+}
+
+impl EvidenceListOptions {
+    pub fn all() -> Self {
+        Self {
+            evidence_kind: None,
+        }
+    }
+
+    pub fn for_kind(evidence_kind: impl Into<String>) -> Result<Self> {
+        let evidence_kind = evidence_kind.into();
+        validate_stored_text("evidence kind", &evidence_kind)?;
+        Ok(Self {
+            evidence_kind: Some(evidence_kind),
+        })
+    }
+
+    pub fn evidence_kind(&self) -> Option<&str> {
+        self.evidence_kind.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvidenceListResult {
+    pub evidences: Vec<EvidenceSnapshot>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EvidenceContentSnapshot {
     pub ordinal: usize,
@@ -243,6 +273,22 @@ pub(crate) fn evidence(
     })
 }
 
+pub(crate) fn evidences(
+    connection: &StoreConnection,
+    options: &EvidenceListOptions,
+) -> Result<EvidenceListResult> {
+    if let Some(evidence_kind) = options.evidence_kind() {
+        validate_stored_text("evidence kind", evidence_kind)?;
+    }
+
+    let evidence_ids = list_evidence_ids(connection, options)?;
+    let mut evidences = Vec::with_capacity(evidence_ids.len());
+    for evidence_id in evidence_ids {
+        evidences.push(evidence(connection, evidence_id)?);
+    }
+    Ok(EvidenceListResult { evidences })
+}
+
 pub(crate) fn require_evidence_exists(
     connection: &StoreConnection,
     evidence_id: EvidenceId,
@@ -271,6 +317,65 @@ pub(crate) fn require_evidence_exists(
         )));
     }
     Ok(())
+}
+
+fn list_evidence_ids(
+    connection: &StoreConnection,
+    options: &EvidenceListOptions,
+) -> Result<Vec<EvidenceId>> {
+    let mut evidence_ids = Vec::new();
+    match options.evidence_kind() {
+        Some(evidence_kind) => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT evidence.evidence_id
+                     FROM evidence
+                     JOIN object_identity
+                       ON object_identity.object_id = evidence.evidence_id
+                     WHERE object_identity.object_kind = ?1
+                       AND evidence.evidence_kind = ?2
+                     ORDER BY evidence.captured_at_us, evidence.evidence_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(params![EVIDENCE_OBJECT_KIND, evidence_kind], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .map_err(storage_error)?;
+            for row in rows {
+                evidence_ids.push(decode_evidence_id(
+                    "evidence.evidence_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+        None => {
+            let mut statement = connection
+                .inner()
+                .prepare(
+                    "SELECT evidence.evidence_id
+                     FROM evidence
+                     JOIN object_identity
+                       ON object_identity.object_id = evidence.evidence_id
+                     WHERE object_identity.object_kind = ?1
+                     ORDER BY evidence.captured_at_us, evidence.evidence_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(params![EVIDENCE_OBJECT_KIND], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .map_err(storage_error)?;
+            for row in rows {
+                evidence_ids.push(decode_evidence_id(
+                    "evidence.evidence_id",
+                    row.map_err(storage_error)?,
+                )?);
+            }
+        }
+    }
+    Ok(evidence_ids)
 }
 
 fn write_evidence(
@@ -546,6 +651,15 @@ fn decode_session_id(column: &str, bytes: Vec<u8>) -> Result<SessionId> {
         WorkVcsError::EvidenceInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
     })?;
     SessionId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::EvidenceInvalid(format!("{column} is not a canonical UUIDv7: {error}"))
+    })
+}
+
+fn decode_evidence_id(column: &str, bytes: Vec<u8>) -> Result<EvidenceId> {
+    let bytes: [u8; 16] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::EvidenceInvalid(format!("{column} must be 16 bytes, found {}", bytes.len()))
+    })?;
+    EvidenceId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::EvidenceInvalid(format!("{column} is not a canonical UUIDv7: {error}"))
     })
 }

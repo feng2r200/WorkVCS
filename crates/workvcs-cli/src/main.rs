@@ -25,15 +25,16 @@ use workvcs_core::{
     ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
     Engine, EntityId, EntityVersionId, EventId, EventListOptions, EventListResult, EventSnapshot,
     EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceId, EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
-    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
-    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
-    ExternalRefId, ExternalVersionId, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
-    GoalTransitionCommit, GoalTransitionOptions, HistoryEntry, HistoryQueryOptions, ImportId,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
-    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
-    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    EvidenceId, EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, ExposureId,
+    ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
+    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
+    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryEntry, HistoryQueryOptions, ImportId, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -1793,6 +1794,13 @@ enum EvidenceCommand {
 
         #[arg(long)]
         evidence: String,
+    },
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        kind: Option<String>,
     },
 }
 
@@ -4418,6 +4426,16 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let engine = Engine::open(store)?;
             render_evidence_snapshot(&engine.evidence(EvidenceId::parse_canonical(&evidence)?)?)
+        }
+        Command::Evidence {
+            command: EvidenceCommand::List { store, kind },
+        } => {
+            let engine = Engine::open(store)?;
+            let options = match kind {
+                Some(kind) => EvidenceListOptions::for_kind(kind)?,
+                None => EvidenceListOptions::all(),
+            };
+            render_evidence_list(&engine.evidences(options)?)
         }
         Command::Resource {
             command: ResourceCommand::Create { store, kind },
@@ -7580,6 +7598,49 @@ fn render_evidence_snapshot(evidence: &EvidenceSnapshot) -> Result<String> {
         evidence.contents.len()
     );
     write_evidence_content_fields(&mut output, &evidence.contents)?;
+    Ok(output)
+}
+
+fn render_evidence_list(result: &EvidenceListResult) -> Result<String> {
+    let mut output = format!("evidences={}\n", result.evidences.len());
+    for (index, evidence) in result.evidences.iter().enumerate() {
+        writeln!(
+            output,
+            "evidence.{index}.evidence_id={}",
+            evidence.evidence_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidence.{index}.evidence_kind={}",
+            evidence.evidence_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidence.{index}.captured_at_us={}",
+            evidence.captured_at_us
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidence.{index}.source_session_id={}",
+            render_optional_display_or_none(evidence.source_session_id.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidence.{index}.metadata_json={}",
+            canonical_cli_json("evidence metadata", &evidence.metadata)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidence.{index}.contents={}",
+            evidence.contents.len()
+        )
+        .expect("write to String");
+    }
     Ok(output)
 }
 
@@ -15121,6 +15182,46 @@ mod tests {
             value(&shown, "content.0.format_metadata_json"),
             r#"{"encoding":"utf-8"}"#
         );
+
+        let second_evidence = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "create",
+            store,
+            "--kind",
+            "manual-review",
+            "--metadata-json",
+            r#"{"summary":"reviewed"}"#,
+        ])
+        .expect("parse second evidence create"))
+        .expect("create second evidence");
+        let second_evidence_id = value(&second_evidence, "evidence_id");
+
+        let list = run(Cli::try_parse_from(["workvcs", "evidence", "list", store])
+            .expect("parse evidence list"))
+        .expect("list evidence");
+        assert_eq!(value(&list, "evidences"), "2");
+        let listed_ids = [
+            value(&list, "evidence.0.evidence_id"),
+            value(&list, "evidence.1.evidence_id"),
+        ];
+        assert!(listed_ids.contains(&evidence_id));
+        assert!(listed_ids.contains(&second_evidence_id));
+
+        let filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--kind",
+            "terminal-log",
+        ])
+        .expect("parse filtered evidence list"))
+        .expect("list filtered evidence");
+        assert_eq!(value(&filtered, "evidences"), "1");
+        assert_eq!(value(&filtered, "evidence.0.evidence_id"), evidence_id);
+        assert_eq!(value(&filtered, "evidence.0.evidence_kind"), "terminal-log");
+        assert_eq!(value(&filtered, "evidence.0.contents"), "1");
     }
 
     #[test]

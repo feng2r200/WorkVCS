@@ -1041,6 +1041,12 @@ enum CheckpointCommand {
 
         #[arg(long)]
         commit: String,
+
+        #[arg(long)]
+        usability_state: Option<String>,
+
+        #[arg(long)]
+        content_digest: Option<String>,
     },
     Latest {
         #[arg(value_name = "STORE")]
@@ -4103,11 +4109,27 @@ fn run(cli: Cli) -> Result<String> {
                     engine.validate_checkpoint(CheckpointId::parse_canonical(&checkpoint)?)?;
                 Ok(render_checkpoint_validation(&result))
             }
-            CheckpointCommand::List { store, commit } => {
+            CheckpointCommand::List {
+                store,
+                commit,
+                usability_state,
+                content_digest,
+            } => {
                 let engine = Engine::open(store)?;
-                let result = engine.checkpoints(CheckpointListOptions::for_commit(
+                let mut result = engine.checkpoints(CheckpointListOptions::for_commit(
                     CommitId::parse_canonical(&commit)?,
                 ))?;
+                if let Some(usability_state) = usability_state {
+                    result
+                        .checkpoints
+                        .retain(|checkpoint| checkpoint.usability_state == usability_state);
+                }
+                if let Some(content_digest) = content_digest {
+                    let content_digest = Digest::from_hex(&content_digest)?;
+                    result
+                        .checkpoints
+                        .retain(|checkpoint| checkpoint.content_digest == content_digest);
+                }
                 Ok(render_checkpoint_list(&result))
             }
             CheckpointCommand::Latest { store, commit } => {
@@ -16358,6 +16380,50 @@ mod tests {
         assert_eq!(value(&listed, "commit_id"), genesis);
         assert_eq!(value(&listed, "checkpoints"), "1");
         assert_eq!(value(&listed, "checkpoint[0].id"), checkpoint);
+
+        let listed_usable = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--usability-state",
+            "usable",
+        ])
+        .expect("parse usable checkpoint list"))
+        .expect("list usable checkpoints");
+        assert_eq!(value(&listed_usable, "checkpoints"), "1");
+        assert_eq!(value(&listed_usable, "checkpoint[0].id"), checkpoint);
+
+        let listed_by_digest = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--content-digest",
+            &value(&created, "content_digest"),
+        ])
+        .expect("parse checkpoint list by digest"))
+        .expect("list checkpoints by digest");
+        assert_eq!(value(&listed_by_digest, "checkpoints"), "1");
+        assert_eq!(value(&listed_by_digest, "checkpoint[0].id"), checkpoint);
+
+        let listed_missing_state = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--usability-state",
+            "quarantined",
+        ])
+        .expect("parse missing checkpoint list by state"))
+        .expect("list missing checkpoints by state");
+        assert_eq!(value(&listed_missing_state, "checkpoints"), "0");
 
         let latest = run(Cli::try_parse_from([
             "workvcs",

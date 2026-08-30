@@ -72,11 +72,12 @@ use workvcs_core::{
     RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
     ResolvedWhyQuerySubject, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
     ResourceCreateResult, ResourceId, ResourceListOptions, ResourceListResult,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult, ResourceObservationId,
-    ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
-    ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
-    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection, SessionDiffId,
-    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationDetailInput, ResourceObservationId, ResourceObservationListOptions,
+    ResourceObservationListResult, ResourceObservationSnapshot, ResourceSnapshot, Result,
+    RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
+    RunnableTasksOptions, RunnableTasksProjection, SessionDiffId, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
     SessionLifecycleState, SessionListOptions, SessionListResult, SessionSnapshot,
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
     StoreInfo, StoreInitOptions, StoreLineageListOptions, StoreLineageListResult,
@@ -2041,6 +2042,7 @@ enum EvidenceCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum ResourceCommand {
     Create {
         #[arg(value_name = "STORE")]
@@ -2105,6 +2107,11 @@ enum ResourceCommand {
             .multiple(false)
             .args(["fingerprint", "content", "content_file"])
     ))]
+    #[command(group(
+        ArgGroup::new("resource-observation-detail-source")
+            .multiple(false)
+            .args(["detail_content", "detail_content_digest", "detail_content_file"])
+    ))]
     Observe {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -2129,6 +2136,24 @@ enum ResourceCommand {
 
         #[arg(long, default_value = "{}")]
         summary_json: String,
+
+        #[arg(long)]
+        detail_content: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        detail_content_file: Option<PathBuf>,
+
+        #[arg(long)]
+        detail_content_digest: Option<String>,
+
+        #[arg(long)]
+        detail_content_size_bytes: Option<i64>,
+
+        #[arg(long)]
+        detail_media_type: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        detail_format_metadata_json: String,
     },
     ObservationShow {
         #[arg(value_name = "STORE")]
@@ -4976,18 +5001,36 @@ fn run(cli: Cli) -> Result<String> {
                     content,
                     content_file,
                     summary_json,
+                    detail_content,
+                    detail_content_file,
+                    detail_content_digest,
+                    detail_content_size_bytes,
+                    detail_media_type,
+                    detail_format_metadata_json,
                 },
         } => {
             let mut engine = Engine::open(store)?;
             let fingerprint = fingerprint_from_cli(fingerprint, content, content_file)?;
-            let observation =
-                engine.record_resource_observation(ResourceObservationCreateOptions::new(
-                    ResourceId::parse_canonical(&resource)?,
-                    adapter_kind,
-                    adapter_schema_version,
-                    fingerprint,
-                    parse_cli_object("resource observation summary", &summary_json)?,
-                )?)?;
+            let mut options = ResourceObservationCreateOptions::new(
+                ResourceId::parse_canonical(&resource)?,
+                adapter_kind,
+                adapter_schema_version,
+                fingerprint,
+                parse_cli_object("resource observation summary", &summary_json)?,
+            )?;
+            if let Some(detail_content) =
+                resource_observation_detail_from_cli(ResourceObservationDetailArgs {
+                    content: detail_content,
+                    content_file: detail_content_file,
+                    content_digest: detail_content_digest,
+                    content_size_bytes: detail_content_size_bytes,
+                    media_type: detail_media_type,
+                    format_metadata_json: detail_format_metadata_json,
+                })?
+            {
+                options = options.with_detail_content(detail_content);
+            }
+            let observation = engine.record_resource_observation(options)?;
             Ok(render_resource_observation_create(&observation))
         }
         Command::Resource {
@@ -6844,6 +6887,64 @@ fn fingerprint_from_cli(
             "expected exactly one fingerprint source".to_owned(),
         )),
     }
+}
+
+struct ResourceObservationDetailArgs {
+    content: Option<String>,
+    content_file: Option<PathBuf>,
+    content_digest: Option<String>,
+    content_size_bytes: Option<i64>,
+    media_type: Option<String>,
+    format_metadata_json: String,
+}
+
+fn resource_observation_detail_from_cli(
+    args: ResourceObservationDetailArgs,
+) -> Result<Option<ResourceObservationDetailInput>> {
+    let has_detail_args = args.content.is_some()
+        || args.content_file.is_some()
+        || args.content_digest.is_some()
+        || args.content_size_bytes.is_some()
+        || args.media_type.is_some()
+        || args.format_metadata_json != "{}";
+    if !has_detail_args {
+        return Ok(None);
+    }
+
+    let mut detail = match (
+        args.content,
+        args.content_file,
+        args.content_digest,
+        args.content_size_bytes,
+    ) {
+        (Some(content), None, None, None) => {
+            ResourceObservationDetailInput::from_raw_bytes(content.as_bytes())?
+        }
+        (None, Some(path), None, None) => {
+            let bytes = read_cli_file("resource observation detail content", &path)?;
+            ResourceObservationDetailInput::from_raw_bytes(bytes)?
+        }
+        (None, None, Some(content_digest), Some(content_size_bytes)) => {
+            ResourceObservationDetailInput::from_digest(
+                Digest::from_hex(&content_digest)?,
+                content_size_bytes,
+            )?
+        }
+        _ => {
+            return Err(WorkVcsError::ResourceInvalid(
+                "resource observation detail requires exactly one of --detail-content, --detail-content-file, or --detail-content-digest with --detail-content-size-bytes"
+                    .to_owned(),
+            ));
+        }
+    };
+    if let Some(media_type) = args.media_type {
+        detail = detail.with_media_type(media_type)?;
+    }
+    detail = detail.with_format_metadata(parse_cli_object(
+        "resource observation detail format metadata",
+        &args.format_metadata_json,
+    )?)?;
+    Ok(Some(detail))
 }
 
 fn required_arg<T>(label: &str, value: Option<T>) -> Result<T> {
@@ -18712,6 +18813,9 @@ mod tests {
         let observation_file_path = observation_file
             .to_str()
             .expect("observation file path text");
+        let detail_file = tempdir.path().join("observation-detail.txt");
+        fs::write(&detail_file, b"detail bytes").expect("write observation detail");
+        let detail_file_path = detail_file.to_str().expect("detail file path text");
 
         run(
             Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
@@ -18792,6 +18896,12 @@ mod tests {
             "1",
             "--content-file",
             observation_file_path,
+            "--detail-content-file",
+            detail_file_path,
+            "--detail-media-type",
+            "text/plain",
+            "--detail-format-metadata-json",
+            r#"{"encoding":"utf-8"}"#,
         ])
         .expect("parse observe"))
         .expect("record observation");
@@ -18814,7 +18924,14 @@ mod tests {
         assert_eq!(value(&shown_observation, "adapter_schema_version"), "1");
         assert_eq!(value(&shown_observation, "fingerprint"), fingerprint);
         assert_eq!(value(&shown_observation, "summary_json"), "{}");
-        assert_eq!(value(&shown_observation, "detail_content_present"), "false");
+        assert_eq!(value(&shown_observation, "detail_content_present"), "true");
+        assert_ne!(value(&shown_observation, "detail.content_digest"), "");
+        assert_eq!(value(&shown_observation, "detail.size_bytes"), "12");
+        assert_eq!(value(&shown_observation, "detail.media_type"), "text/plain");
+        assert_eq!(
+            value(&shown_observation, "detail.format_metadata_json"),
+            r#"{"encoding":"utf-8"}"#
+        );
         assert_eq!(value(&shown_observation, "source_session_id"), "none");
 
         let duplicate_fingerprint_source = Cli::try_parse_from([
@@ -18834,6 +18951,26 @@ mod tests {
             observation_file_path,
         ]);
         assert!(duplicate_fingerprint_source.is_err());
+
+        let duplicate_detail_source = Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--content-file",
+            observation_file_path,
+            "--detail-content",
+            "detail bytes",
+            "--detail-content-file",
+            detail_file_path,
+        ]);
+        assert!(duplicate_detail_source.is_err());
 
         let observations =
             run(

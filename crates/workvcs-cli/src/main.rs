@@ -2205,6 +2205,12 @@ enum EvidenceCommand {
         content_digest: Option<String>,
 
         #[arg(long)]
+        content_role: Option<String>,
+
+        #[arg(long)]
+        media_type: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
 }
@@ -5554,6 +5560,8 @@ fn run(cli: Cli) -> Result<String> {
                     kind,
                     source_session,
                     content_digest,
+                    content_role,
+                    media_type,
                     limit,
                 },
         } => {
@@ -5572,13 +5580,18 @@ fn run(cli: Cli) -> Result<String> {
                 ));
             }
             let mut result = engine.evidences(options)?;
-            if let Some(content_digest) = content_digest {
-                let content_digest = Digest::from_hex(&content_digest)?;
+            let content_digest = content_digest
+                .as_deref()
+                .map(Digest::from_hex)
+                .transpose()?;
+            if content_digest.is_some() || content_role.is_some() || media_type.is_some() {
                 result.evidences.retain(|evidence| {
-                    evidence
-                        .contents
-                        .iter()
-                        .any(|content| content.content_digest == content_digest)
+                    evidence_matches_content_filters(
+                        evidence,
+                        content_digest,
+                        content_role.as_deref(),
+                        media_type.as_deref(),
+                    )
                 });
             }
             if let Some(limit) = limit {
@@ -9569,6 +9582,29 @@ fn render_evidence_list(result: &EvidenceListResult) -> Result<String> {
         .expect("write to String");
     }
     Ok(output)
+}
+
+fn evidence_matches_content_filters(
+    evidence: &EvidenceSnapshot,
+    content_digest: Option<Digest>,
+    content_role: Option<&str>,
+    media_type: Option<&str>,
+) -> bool {
+    evidence.contents.iter().any(|content| {
+        let digest_matches = match content_digest {
+            Some(content_digest) => content.content_digest == content_digest,
+            None => true,
+        };
+        let role_matches = match content_role {
+            Some(content_role) => content.role == content_role,
+            None => true,
+        };
+        let media_type_matches = match media_type {
+            Some(media_type) => content.media_type.as_deref() == Some(media_type),
+            None => true,
+        };
+        digest_matches && role_matches && media_type_matches
+    })
 }
 
 fn write_evidence_content_fields(
@@ -20066,6 +20102,49 @@ mod tests {
         .expect("parse missing content-digest evidence list"))
         .expect("list missing content-digest evidence");
         assert_eq!(value(&missing_content_filtered, "evidences"), "0");
+
+        let role_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--content-role",
+            "stdout",
+        ])
+        .expect("parse content-role evidence list"))
+        .expect("list content-role evidence");
+        assert_eq!(value(&role_filtered, "evidences"), "1");
+        assert_eq!(value(&role_filtered, "evidence.0.evidence_id"), evidence_id);
+
+        let media_type_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--media-type",
+            "text/plain",
+        ])
+        .expect("parse media-type evidence list"))
+        .expect("list media-type evidence");
+        assert_eq!(value(&media_type_filtered, "evidences"), "1");
+        assert_eq!(
+            value(&media_type_filtered, "evidence.0.evidence_id"),
+            evidence_id
+        );
+
+        let missing_content_metadata_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "list",
+            store,
+            "--content-role",
+            "stderr",
+            "--media-type",
+            "text/plain",
+        ])
+        .expect("parse missing content metadata evidence list"))
+        .expect("list missing content metadata evidence");
+        assert_eq!(value(&missing_content_metadata_filtered, "evidences"), "0");
 
         let source_session_filtered = run(Cli::try_parse_from([
             "workvcs",

@@ -1774,6 +1774,9 @@ enum TaskCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_tasks: Option<usize>,
     },
     Transition {
         #[arg(value_name = "STORE")]
@@ -2258,6 +2261,9 @@ enum AcceptanceCriterionCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_criteria: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("acceptance-criterion-status-target")
@@ -2372,6 +2378,9 @@ enum VerificationRequirementCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_requirements: Option<usize>,
     },
 }
 
@@ -3585,6 +3594,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_verifications: Option<usize>,
     },
     CacheRecord {
         #[arg(value_name = "STORE")]
@@ -6159,6 +6171,7 @@ fn run(cli: Cli) -> Result<String> {
                     commit,
                     status,
                     limit,
+                    expected_tasks,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6176,7 +6189,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 tasks.truncate(limit);
             }
-            render_task_list(commit_id, &tasks)
+            let mut output = render_task_list(commit_id, &tasks)?;
+            if let Some(expected_tasks) = expected_tasks {
+                let actual_tasks = tasks.len();
+                if actual_tasks != expected_tasks {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "tasks {actual_tasks} does not match expected {expected_tasks}"
+                    )));
+                }
+                output.push_str("tasks_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Task {
             command:
@@ -6463,6 +6486,7 @@ fn run(cli: Cli) -> Result<String> {
                     task,
                     classification,
                     limit,
+                    expected_criteria,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6484,7 +6508,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 criteria.truncate(limit);
             }
-            render_acceptance_criterion_list(commit_id, &criteria)
+            let mut output = render_acceptance_criterion_list(commit_id, &criteria)?;
+            if let Some(expected_criteria) = expected_criteria {
+                let actual_criteria = criteria.len();
+                if actual_criteria != expected_criteria {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "criteria {actual_criteria} does not match expected {expected_criteria}"
+                    )));
+                }
+                output.push_str("criteria_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Ac {
             command:
@@ -6602,6 +6636,7 @@ fn run(cli: Cli) -> Result<String> {
                     criterion,
                     local_key,
                     limit,
+                    expected_requirements,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6624,7 +6659,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 requirements.truncate(limit);
             }
-            render_verification_requirement_list(commit_id, &requirements)
+            let mut output = render_verification_requirement_list(commit_id, &requirements)?;
+            if let Some(expected_requirements) = expected_requirements {
+                let actual_requirements = requirements.len();
+                if actual_requirements != expected_requirements {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "requirements {actual_requirements} does not match expected {expected_requirements}"
+                    )));
+                }
+                output.push_str("requirements_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Evidence {
             command:
@@ -7120,6 +7165,7 @@ fn run(cli: Cli) -> Result<String> {
                     baseline_observation,
                     baseline_fingerprint,
                     limit,
+                    expected_verifications,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -7192,7 +7238,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 verifications.truncate(limit);
             }
-            render_verification_list(commit_id, &verifications)
+            let mut output = render_verification_list(commit_id, &verifications)?;
+            if let Some(expected_verifications) = expected_verifications {
+                let actual_verifications = verifications.len();
+                if actual_verifications != expected_verifications {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "verifications {actual_verifications} does not match expected {expected_verifications}"
+                    )));
+                }
+                output.push_str("verifications_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Verification {
             command:
@@ -22840,6 +22896,21 @@ mod tests {
             .expect("list empty tasks");
         assert_eq!(value(&empty_tasks, "tasks"), "0");
 
+        let expected_empty_tasks = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-tasks",
+            "0",
+        ])
+        .expect("parse expected empty task list"))
+        .expect("expected empty task list");
+        assert_eq!(value(&expected_empty_tasks, "tasks"), "0");
+        assert_eq!(value(&expected_empty_tasks, "tasks_match_expected"), "true");
+
         let task = run(Cli::try_parse_from([
             "workvcs",
             "task",
@@ -22930,6 +23001,37 @@ mod tests {
         assert_eq!(value(&tasks_at_create, "tasks"), "1");
         assert_eq!(value(&tasks_at_create, "task.0.task_entity_id"), task_id);
         assert_eq!(value(&tasks_at_create, "task.0.status"), "pending");
+
+        let expected_tasks_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "list",
+            store,
+            "--commit",
+            &value(&task, "commit_id"),
+            "--expected-tasks",
+            "1",
+        ])
+        .expect("parse expected task list at commit"))
+        .expect("expected task list at commit");
+        assert_eq!(value(&expected_tasks_at_create, "tasks"), "1");
+        assert_eq!(
+            value(&expected_tasks_at_create, "tasks_match_expected"),
+            "true"
+        );
+
+        let mismatched_tasks_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "list",
+            store,
+            "--commit",
+            &value(&task, "commit_id"),
+            "--expected-tasks",
+            "0",
+        ])
+        .expect("parse mismatched task list at commit"));
+        assert!(mismatched_tasks_at_create.is_err());
 
         let pending_tasks_at_create = run(Cli::try_parse_from([
             "workvcs",
@@ -23046,6 +23148,26 @@ mod tests {
         .expect("parse pending task list at branch"))
         .expect("list pending tasks at branch");
         assert_eq!(value(&pending_tasks_at_branch, "tasks"), "0");
+
+        let expected_pending_tasks_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--status",
+            "pending",
+            "--expected-tasks",
+            "0",
+        ])
+        .expect("parse expected pending task list at branch"))
+        .expect("expected pending task list at branch");
+        assert_eq!(value(&expected_pending_tasks_at_branch, "tasks"), "0");
+        assert_eq!(
+            value(&expected_pending_tasks_at_branch, "tasks_match_expected"),
+            "true"
+        );
 
         let superseded_tasks_at_branch = run(Cli::try_parse_from([
             "workvcs",
@@ -23352,6 +23474,24 @@ mod tests {
             .expect("list empty ac");
         assert_eq!(value(&empty_criteria, "criteria"), "0");
 
+        let expected_empty_criteria = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-criteria",
+            "0",
+        ])
+        .expect("parse expected empty ac list"))
+        .expect("expected empty ac list");
+        assert_eq!(value(&expected_empty_criteria, "criteria"), "0");
+        assert_eq!(
+            value(&expected_empty_criteria, "criteria_match_expected"),
+            "true"
+        );
+
         let empty_requirements =
             run(
                 Cli::try_parse_from(["workvcs", "vr", "list", store, "--commit", &genesis])
@@ -23359,6 +23499,24 @@ mod tests {
             )
             .expect("list empty vr");
         assert_eq!(value(&empty_requirements, "requirements"), "0");
+
+        let expected_empty_requirements = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-requirements",
+            "0",
+        ])
+        .expect("parse expected empty vr list"))
+        .expect("expected empty vr list");
+        assert_eq!(value(&expected_empty_requirements, "requirements"), "0");
+        assert_eq!(
+            value(&expected_empty_requirements, "requirements_match_expected"),
+            "true"
+        );
 
         let task = run(Cli::try_parse_from([
             "workvcs",
@@ -23421,6 +23579,37 @@ mod tests {
             "0"
         );
 
+        let expected_criteria_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+            "--expected-criteria",
+            "1",
+        ])
+        .expect("parse expected ac list at commit"))
+        .expect("expected ac list at commit");
+        assert_eq!(value(&expected_criteria_at_create, "criteria"), "1");
+        assert_eq!(
+            value(&expected_criteria_at_create, "criteria_match_expected"),
+            "true"
+        );
+
+        let mismatched_criteria_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+            "--expected-criteria",
+            "0",
+        ])
+        .expect("parse mismatched ac list at commit"));
+        assert!(mismatched_criteria_at_create.is_err());
+
         let requirement = run(Cli::try_parse_from([
             "workvcs",
             "vr",
@@ -23477,6 +23666,40 @@ mod tests {
             value(&requirements_at_branch, "requirement.0.local_key"),
             "VR-1"
         );
+
+        let expected_requirements_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-requirements",
+            "1",
+        ])
+        .expect("parse expected vr list at branch"))
+        .expect("expected vr list at branch");
+        assert_eq!(value(&expected_requirements_at_branch, "requirements"), "1");
+        assert_eq!(
+            value(
+                &expected_requirements_at_branch,
+                "requirements_match_expected"
+            ),
+            "true"
+        );
+
+        let mismatched_requirements_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-requirements",
+            "0",
+        ])
+        .expect("parse mismatched vr list at branch"));
+        assert!(mismatched_requirements_at_branch.is_err());
 
         let criteria_at_branch =
             run(
@@ -23584,6 +23807,31 @@ mod tests {
             "0"
         );
 
+        let expected_missing_requirements = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+            "--local-key",
+            "VR-404",
+            "--expected-requirements",
+            "0",
+        ])
+        .expect("parse expected missing vr list"))
+        .expect("expected missing vr list");
+        assert_eq!(value(&expected_missing_requirements, "requirements"), "0");
+        assert_eq!(
+            value(
+                &expected_missing_requirements,
+                "requirements_match_expected"
+            ),
+            "true"
+        );
+
         let task_after_requirement = run(Cli::try_parse_from([
             "workvcs",
             "task",
@@ -23675,6 +23923,26 @@ mod tests {
         .expect("parse ac list by task"))
         .expect("list ac by task");
         assert_eq!(value(&task_criteria, "criteria"), "2");
+
+        let expected_task_criteria = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--expected-criteria",
+            "2",
+        ])
+        .expect("parse expected ac list by task"))
+        .expect("expected ac list by task");
+        assert_eq!(value(&expected_task_criteria, "criteria"), "2");
+        assert_eq!(
+            value(&expected_task_criteria, "criteria_match_expected"),
+            "true"
+        );
 
         let limited_task_criteria = run(Cli::try_parse_from([
             "workvcs",
@@ -24423,6 +24691,27 @@ mod tests {
         .expect("list empty verifications");
         assert_eq!(value(&empty_verifications, "verifications"), "0");
 
+        let expected_empty_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--commit",
+            &value(&criterion, "commit_id"),
+            "--expected-verifications",
+            "0",
+        ])
+        .expect("parse expected empty verification list"))
+        .expect("expected empty verification list");
+        assert_eq!(value(&expected_empty_verifications, "verifications"), "0");
+        assert_eq!(
+            value(
+                &expected_empty_verifications,
+                "verifications_match_expected"
+            ),
+            "true"
+        );
+
         let verification = run(Cli::try_parse_from([
             "workvcs",
             "verification",
@@ -24596,6 +24885,43 @@ mod tests {
             "1"
         );
 
+        let expected_verifications_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-verifications",
+            "1",
+        ])
+        .expect("parse expected verification list at branch"))
+        .expect("expected verification list at branch");
+        assert_eq!(
+            value(&expected_verifications_at_branch, "verifications"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &expected_verifications_at_branch,
+                "verifications_match_expected"
+            ),
+            "true"
+        );
+
+        let mismatched_verifications_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-verifications",
+            "0",
+        ])
+        .expect("parse mismatched verification list at branch"));
+        assert!(mismatched_verifications_at_branch.is_err());
+
         let passed_verifications = run(Cli::try_parse_from([
             "workvcs",
             "verification",
@@ -24690,6 +25016,29 @@ mod tests {
         .expect("parse verification list by failed result"))
         .expect("list verification by failed result");
         assert_eq!(value(&failed_verifications, "verifications"), "0");
+
+        let expected_failed_verifications = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--result",
+            "failed",
+            "--expected-verifications",
+            "0",
+        ])
+        .expect("parse expected failed verification list"))
+        .expect("expected failed verification list");
+        assert_eq!(value(&expected_failed_verifications, "verifications"), "0");
+        assert_eq!(
+            value(
+                &expected_failed_verifications,
+                "verifications_match_expected"
+            ),
+            "true"
+        );
 
         let acceptance_target_verifications = run(Cli::try_parse_from([
             "workvcs",

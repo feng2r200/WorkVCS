@@ -254,6 +254,33 @@ pub struct SessionSnapshot {
     pub session_diff_id: Option<SessionDiffId>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionListOptions {
+    lifecycle_state: Option<SessionLifecycleState>,
+}
+
+impl SessionListOptions {
+    pub fn all() -> Self {
+        Self {
+            lifecycle_state: None,
+        }
+    }
+
+    pub fn with_lifecycle_state(mut self, lifecycle_state: SessionLifecycleState) -> Self {
+        self.lifecycle_state = Some(lifecycle_state);
+        self
+    }
+
+    pub fn lifecycle_state(&self) -> Option<SessionLifecycleState> {
+        self.lifecycle_state
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionListResult {
+    pub sessions: Vec<SessionSnapshot>,
+}
+
 pub(crate) fn start_session(
     connection: &mut StoreConnection,
     options: &SessionStartOptions,
@@ -771,6 +798,31 @@ pub(crate) fn session_snapshot(
     Ok(snapshot)
 }
 
+pub(crate) fn sessions(
+    connection: &StoreConnection,
+    options: &SessionListOptions,
+) -> Result<SessionListResult> {
+    connection.verify_foreign_keys()?;
+    let transaction = connection
+        .inner()
+        .unchecked_transaction()
+        .map_err(storage_error)?;
+    let session_ids = list_session_ids(&transaction)?;
+    let mut sessions = Vec::with_capacity(session_ids.len());
+    for session_id in session_ids {
+        let snapshot = session_snapshot_from_connection(&transaction, session_id)?;
+        let include = match options.lifecycle_state() {
+            Some(state) => state == snapshot.lifecycle_state,
+            None => true,
+        };
+        if include {
+            sessions.push(snapshot);
+        }
+    }
+    transaction.commit().map_err(storage_error)?;
+    Ok(SessionListResult { sessions })
+}
+
 fn session_snapshot_from_connection(
     connection: &Connection,
     session_id: SessionId,
@@ -1160,6 +1212,31 @@ fn load_context_workspaces(
         )?);
     }
     Ok(workspaces)
+}
+
+fn list_session_ids(connection: &Connection) -> Result<Vec<SessionId>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT session.session_id
+             FROM session
+             JOIN object_identity
+               ON object_identity.object_id = session.session_id
+             WHERE object_identity.object_kind = ?1
+             ORDER BY session.started_at_us, session.session_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![SESSION_OBJECT_KIND], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(storage_error)?;
+
+    let mut session_ids = Vec::new();
+    for row in rows {
+        session_ids.push(decode_session_id(
+            "session.session_id",
+            row.map_err(storage_error)?,
+        )?);
+    }
+    Ok(session_ids)
 }
 
 fn load_session_focus(
@@ -1601,6 +1678,13 @@ fn decode_branch_id(column: &str, bytes: Vec<u8>) -> Result<BranchId> {
 fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
     let bytes = decode_16(column, bytes)?;
     CommitId::from_bytes(bytes).map_err(|error| {
+        WorkVcsError::SessionInvalid(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_session_id(column: &str, bytes: Vec<u8>) -> Result<SessionId> {
+    let bytes = decode_16(column, bytes)?;
+    SessionId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::SessionInvalid(format!("{column} is not a UUIDv7 value: {error}"))
     })
 }

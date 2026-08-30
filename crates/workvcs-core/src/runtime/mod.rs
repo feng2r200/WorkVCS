@@ -26,8 +26,9 @@ pub use runnable::{
 };
 pub use session::{
     SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions, SessionFocusPathEntry,
-    SessionFocusUpdateResult, SessionLifecycleState, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions, SessionListResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult,
 };
 
 pub(crate) use claim::{
@@ -42,6 +43,6 @@ pub(crate) use merge::{
 pub(crate) use next::next_work;
 pub(crate) use runnable::runnable_tasks;
 pub(crate) use session::{
-    clear_session_focus, end_session, session_snapshot, set_session_focus, start_session,
+    clear_session_focus, end_session, session_snapshot, sessions, set_session_focus, start_session,
     switch_session,
 };

@@ -91,8 +91,9 @@ use crate::runtime::{
     MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionLifecycleState, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
+    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -1451,6 +1452,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::session_snapshot(&self.connection, session_id)
+    }
+
+    pub(crate) fn sessions(&self, options: &SessionListOptions) -> Result<SessionListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::sessions(&self.connection, options)
     }
 
     pub(crate) fn set_session_focus(

@@ -75,15 +75,15 @@ use workvcs_core::{
     ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
     ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
     RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
-    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
-    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
-    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionListOptions,
+    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInitOptions, StoreLineageListOptions,
+    StoreLineageListResult, StoreLineageRecordOptions, StoreLineageRecordResult,
+    StoreLineageSnapshot, StoreMigrationAttemptSnapshot, StoreMigrationListOptions,
+    StoreMigrationListResult, StoreMigrationRecordOptions, StoreMigrationRecordResult,
+    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
+    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus,
+    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
@@ -2539,6 +2539,13 @@ enum SessionCommand {
 
         #[arg(long)]
         session: String,
+    },
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        lifecycle: Option<String>,
     },
     Switch {
         #[arg(value_name = "STORE")]
@@ -5536,6 +5543,16 @@ fn run(cli: Cli) -> Result<String> {
             )
         }
         Command::Session {
+            command: SessionCommand::List { store, lifecycle },
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options = SessionListOptions::all();
+            if let Some(lifecycle) = lifecycle {
+                options = options.with_lifecycle_state(parse_session_lifecycle_state(&lifecycle)?);
+            }
+            render_session_list(&engine.sessions(options)?)
+        }
+        Command::Session {
             command:
                 SessionCommand::Switch {
                     store,
@@ -8508,6 +8525,67 @@ fn render_session_snapshot(session: &SessionSnapshot) -> Result<String> {
     Ok(output)
 }
 
+fn render_session_list(result: &SessionListResult) -> Result<String> {
+    let mut output = format!("sessions={}\n", result.sessions.len());
+    for (index, session) in result.sessions.iter().enumerate() {
+        writeln!(output, "session.{index}.session_id={}", session.session_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "session.{index}.lifecycle_state={}",
+            session_lifecycle_state(session.lifecycle_state)
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "session.{index}.started_at_us={}",
+            session.started_at_us
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "session.{index}.last_activity_at_us={}",
+            render_optional_display_or_none(session.last_activity_at_us.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "session.{index}.metadata_json={}",
+            canonical_cli_json("session metadata", &session.metadata)?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "session.{index}.active_workspace_id={}",
+            render_optional_display_or_none(session.active_workspace_id.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "session.{index}.active_branch_id={}",
+            render_optional_display_or_none(session.active_branch_id.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "session.{index}.focus_entity_id={}",
+            session
+                .focus
+                .as_ref()
+                .map(|focus| focus.focus_entity_id.to_string())
+                .unwrap_or_else(|| "none".to_owned())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "session.{index}.session_diff_id={}",
+            render_optional_display_or_none(session.session_diff_id.as_ref())
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
 fn render_session_switch(session: &SessionSwitchResult) -> String {
     let focus_entity_id = session
         .state
@@ -9378,6 +9456,16 @@ fn session_lifecycle_state(state: SessionLifecycleState) -> &'static str {
     match state {
         SessionLifecycleState::Active => "active",
         SessionLifecycleState::Ended => "ended",
+    }
+}
+
+fn parse_session_lifecycle_state(value: &str) -> Result<SessionLifecycleState> {
+    match value {
+        "active" => Ok(SessionLifecycleState::Active),
+        "ended" => Ok(SessionLifecycleState::Ended),
+        other => Err(WorkVcsError::SessionInvalid(format!(
+            "unknown session lifecycle state {other:?}"
+        ))),
     }
 }
 
@@ -14390,6 +14478,37 @@ mod tests {
         );
         assert_eq!(value(&shown_switched_session, "focus_entity_id"), task_id);
         assert_eq!(value(&shown_switched_session, "focus_path_entries"), "0");
+
+        let sessions =
+            run(Cli::try_parse_from(["workvcs", "session", "list", store])
+                .expect("parse session list"))
+            .expect("list sessions");
+        assert_eq!(value(&sessions, "sessions"), "1");
+        assert_eq!(value(&sessions, "session.0.session_id"), session_id);
+        assert_eq!(value(&sessions, "session.0.lifecycle_state"), "active");
+        assert_eq!(value(&sessions, "session.0.active_branch_id"), fork_branch);
+        assert_eq!(value(&sessions, "session.0.focus_entity_id"), task_id);
+
+        let active_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--lifecycle",
+            "active",
+        ])
+        .expect("parse active session list"))
+        .expect("list active sessions");
+        assert_eq!(value(&active_sessions, "sessions"), "1");
+        assert_eq!(value(&active_sessions, "session.0.session_id"), session_id);
+
+        let ended_sessions =
+            run(
+                Cli::try_parse_from(["workvcs", "session", "list", store, "--lifecycle", "ended"])
+                    .expect("parse ended session list"),
+            )
+            .expect("list ended sessions");
+        assert_eq!(value(&ended_sessions, "sessions"), "0");
 
         let runnable = run(Cli::try_parse_from([
             "workvcs",

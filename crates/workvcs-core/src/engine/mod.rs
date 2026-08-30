@@ -105,8 +105,9 @@ use crate::{
     MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionListOptions, SessionListResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -933,6 +934,10 @@ impl Engine {
 
     pub fn session_snapshot(&self, session_id: SessionId) -> Result<SessionSnapshot> {
         self.store.session_snapshot(session_id)
+    }
+
+    pub fn sessions(&self, options: SessionListOptions) -> Result<SessionListResult> {
+        self.store.sessions(&options)
     }
 
     pub fn set_session_focus(

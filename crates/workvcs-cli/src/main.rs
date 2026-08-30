@@ -2333,6 +2333,9 @@ enum ResourceCommand {
 
         #[arg(long)]
         source_session: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -5579,6 +5582,7 @@ fn run(cli: Cli) -> Result<String> {
                     adapter_kind,
                     adapter_schema_version,
                     source_session,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -5598,7 +5602,16 @@ fn run(cli: Cli) -> Result<String> {
                 options =
                     options.with_source_session_id(SessionId::parse_canonical(&source_session)?);
             }
-            render_resource_observation_list(&engine.resource_observations(options)?)
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "resource observation-list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.resource_observations(options)?;
+            if let Some(limit) = limit {
+                result.observations.truncate(limit);
+            }
+            render_resource_observation_list(&result)
         }
         Command::Verification {
             command:
@@ -21694,6 +21707,35 @@ mod tests {
             value(&resource_observations, "observation.0.observation_id"),
             observation_id
         );
+
+        let limited_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--resource",
+            &resource_id,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited observation list"))
+        .expect("list limited observations");
+        assert_eq!(value(&limited_observations, "observations"), "1");
+        assert_eq!(
+            value(&limited_observations, "observation.0.observation_id"),
+            observation_id
+        );
+
+        let zero_limit_observations = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-list",
+            store,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit observation list"));
+        assert!(zero_limit_observations.is_err());
 
         let adapter_observations = run(Cli::try_parse_from([
             "workvcs",

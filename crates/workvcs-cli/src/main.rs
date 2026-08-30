@@ -452,6 +452,7 @@ enum CanonicalCommand {
         #[arg(long, value_name = "PATH")]
         json_file: Option<PathBuf>,
     },
+    DigestDomains,
     #[command(group(
         ArgGroup::new("canonical-content-source")
             .required(true)
@@ -3515,6 +3516,7 @@ fn run(cli: Cli) -> Result<String> {
                 let bytes = canonical_json_input_bytes("canonical digest JSON", json, json_file)?;
                 render_canonical_digest(&domain, &bytes)
             }
+            CanonicalCommand::DigestDomains => Ok(render_canonical_digest_domains()),
             CanonicalCommand::ContentDigest {
                 content,
                 content_hex,
@@ -8096,6 +8098,16 @@ fn render_canonical_digest(domain: &str, json: &[u8]) -> Result<String> {
         "domain={domain}\ndigest={digest}\ncanonical_json={canonical_json}\nsize_bytes={}\n",
         canonical_json.len()
     ))
+}
+
+const SUPPORTED_CANONICAL_DIGEST_DOMAINS: &[&str] = &["entity-version", "relation-version"];
+
+fn render_canonical_digest_domains() -> String {
+    let mut output = format!("domains={}\n", SUPPORTED_CANONICAL_DIGEST_DOMAINS.len());
+    for (index, domain) in SUPPORTED_CANONICAL_DIGEST_DOMAINS.iter().enumerate() {
+        writeln!(output, "domain.{index}={domain}").expect("write to String");
+    }
+    output
 }
 
 fn render_content_digest(
@@ -15231,6 +15243,18 @@ mod tests {
             value(&encoded_from_file, "canonical_json"),
             value(&encoded, "canonical_json")
         );
+
+        let digest_domains = run(
+            Cli::try_parse_from(["workvcs", "canonical", "digest-domains"])
+                .expect("parse digest domains"),
+        )
+        .expect("list digest domains");
+        assert_eq!(
+            value(&digest_domains, "domains"),
+            SUPPORTED_CANONICAL_DIGEST_DOMAINS.len().to_string()
+        );
+        assert_eq!(value(&digest_domains, "domain.0"), "entity-version");
+        assert_eq!(value(&digest_domains, "domain.1"), "relation-version");
 
         let entity_digest = run(Cli::try_parse_from([
             "workvcs",

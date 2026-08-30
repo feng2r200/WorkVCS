@@ -2,7 +2,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    ClaimLifecycleState, ClaimNextOptions, CommitId, Engine, EntityId,
+    ClaimLifecycleState, ClaimMode, ClaimNextOptions, ClaimTaskOptions, CommitId, Engine, EntityId,
     RunnableTaskClaimCoordination, RunnableTasksOptions, SessionId, SessionLifecycleState,
     SessionStartOptions, StoreInitOptions, TaskCreateCommit, TaskCreateOptions,
     TaskSchedulingRelationCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
@@ -379,6 +379,115 @@ fn claim_next_reports_empty_projection_without_mutation() {
 
     assert!(next.selected.is_none());
     assert_eq!(next.inspected_candidates, 0);
+    let connection = raw_connection(&path);
+    assert_eq!(runtime_counts(&connection), before);
+}
+
+#[test]
+fn shared_claim_next_joins_existing_shared_claim_set() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = create_task(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Shared runnable",
+    );
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("start first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("start second session");
+    let first_claim = engine
+        .claim_task(
+            ClaimTaskOptions::new(first_session.session_id, task.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect("first shared claim");
+
+    let joined = engine
+        .claim_next_task(
+            ClaimNextOptions::new(second_session.session_id).with_mode(ClaimMode::Shared),
+        )
+        .expect("shared claim next")
+        .selected
+        .expect("shared selected");
+
+    assert_eq!(joined.task_entity_id, task.task_entity_id);
+    assert_eq!(joined.mode, ClaimMode::Shared);
+    assert_ne!(joined.claim_id, first_claim.claim_id);
+
+    let projection = engine
+        .runnable_tasks(RunnableTasksOptions::new(second_session.session_id))
+        .expect("second runnable projection");
+    let candidate = projection
+        .candidates
+        .iter()
+        .find(|candidate| candidate.task.task_entity_id == task.task_entity_id)
+        .expect("task candidate");
+    assert!(candidate.runnable);
+    match &candidate.claim_coordination {
+        RunnableTaskClaimCoordination::Shared {
+            claim_ids,
+            session_ids,
+            claimed_by_session,
+        } => {
+            assert!(*claimed_by_session);
+            assert_eq!(claim_ids.len(), 2);
+            assert!(claim_ids.contains(&first_claim.claim_id));
+            assert!(claim_ids.contains(&joined.claim_id));
+            assert!(session_ids.contains(&first_session.session_id));
+            assert!(session_ids.contains(&second_session.session_id));
+        }
+        other => panic!("expected shared coordination, got {other:?}"),
+    }
+}
+
+#[test]
+fn default_claim_next_does_not_join_shared_claim_set() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = create_task(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Shared only runnable",
+    );
+    let first_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("first session options"),
+        )
+        .expect("start first session");
+    let second_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("second session options"),
+        )
+        .expect("start second session");
+    engine
+        .claim_task(
+            ClaimTaskOptions::new(first_session.session_id, task.task_entity_id)
+                .with_mode(ClaimMode::Shared),
+        )
+        .expect("first shared claim");
+    let connection = raw_connection(&path);
+    let before = runtime_counts(&connection);
+    drop(connection);
+
+    let default_next = engine
+        .claim_next_task(ClaimNextOptions::new(second_session.session_id))
+        .expect("default claim next");
+
+    assert!(default_next.selected.is_none());
+    assert_eq!(default_next.inspected_candidates, 1);
     let connection = raw_connection(&path);
     assert_eq!(runtime_counts(&connection), before);
 }

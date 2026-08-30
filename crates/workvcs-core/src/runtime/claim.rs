@@ -97,15 +97,28 @@ impl ClaimReleaseOptions {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimNextOptions {
     session_id: SessionId,
+    mode: ClaimMode,
 }
 
 impl ClaimNextOptions {
     pub fn new(session_id: SessionId) -> Self {
-        Self { session_id }
+        Self {
+            session_id,
+            mode: ClaimMode::Exclusive,
+        }
+    }
+
+    pub fn with_mode(mut self, mode: ClaimMode) -> Self {
+        self.mode = mode;
+        self
     }
 
     pub fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub fn mode(&self) -> ClaimMode {
+        self.mode
     }
 }
 
@@ -162,13 +175,7 @@ pub(crate) fn claim_next_task(
     let selected_candidate = projection
         .candidates
         .iter()
-        .find(|candidate| {
-            candidate.runnable
-                && matches!(
-                    candidate.claim_coordination,
-                    RunnableTaskClaimCoordination::Unclaimed
-                )
-        })
+        .find(|candidate| claim_next_candidate_matches_mode(candidate, options.mode()))
         .cloned();
     let Some(selected_candidate) = selected_candidate else {
         return Ok(ClaimNextResult {
@@ -190,7 +197,7 @@ pub(crate) fn claim_next_task(
         projection.workspace_id,
         projection.branch_id,
         selected_candidate.task.task_entity_id,
-        ClaimMode::Exclusive,
+        options.mode(),
     )?;
 
     let claim_id_bytes = claim_id.raw_bytes();
@@ -236,7 +243,7 @@ pub(crate) fn claim_next_task(
         projection.branch_id,
         selected_candidate.task.task_entity_id,
         options.session_id(),
-        ClaimMode::Exclusive,
+        options.mode(),
     )?;
 
     transaction
@@ -264,7 +271,7 @@ pub(crate) fn claim_next_task(
                 &workspace_id_bytes[..],
                 &branch_id_bytes[..],
                 &task_entity_id_bytes[..],
-                EXCLUSIVE_CLAIM_MODE,
+                options.mode().as_str(),
                 now_us
             ],
         )
@@ -325,11 +332,44 @@ pub(crate) fn claim_next_task(
             workspace_id: projection.workspace_id,
             branch_id: projection.branch_id,
             task_entity_id: selected_candidate.task.task_entity_id,
-            mode: ClaimMode::Exclusive,
+            mode: options.mode(),
             claimed_at_us: now_us,
             state,
         }),
     })
+}
+
+fn claim_next_candidate_matches_mode(
+    candidate: &runnable::RunnableTaskCandidate,
+    mode: ClaimMode,
+) -> bool {
+    match mode {
+        ClaimMode::Exclusive => {
+            candidate.runnable
+                && matches!(
+                    candidate.claim_coordination,
+                    RunnableTaskClaimCoordination::Unclaimed
+                )
+        }
+        ClaimMode::Shared => {
+            if candidate.runnable
+                && matches!(
+                    candidate.claim_coordination,
+                    RunnableTaskClaimCoordination::Unclaimed
+                )
+            {
+                return true;
+            }
+            matches!(
+                &candidate.claim_coordination,
+                RunnableTaskClaimCoordination::Shared {
+                    claimed_by_session: false,
+                    ..
+                }
+            ) && candidate.blocked_reasons.as_slice()
+                == [runnable::RunnableTaskBlockedReason::ClaimBlocked]
+        }
+    }
 }
 
 pub(crate) fn release_claim(

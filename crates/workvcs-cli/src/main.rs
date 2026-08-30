@@ -249,6 +249,12 @@ enum Command {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_entity_changes: Option<usize>,
+
+        #[arg(long)]
+        expected_relation_changes: Option<usize>,
     },
     Entity {
         #[command(subcommand)]
@@ -4911,6 +4917,8 @@ fn run(cli: Cli) -> Result<String> {
             entity,
             relation,
             limit,
+            expected_entity_changes,
+            expected_relation_changes,
         } => {
             let engine = Engine::open(store)?;
             let from = work_state_diff_target_from_cli("from", from_branch, from_commit)?;
@@ -4948,7 +4956,26 @@ fn run(cli: Cli) -> Result<String> {
                 diff.entity_changes.truncate(limit);
                 diff.relation_changes.truncate(relation_limit);
             }
-            Ok(render_work_state_diff(&diff))
+            let mut output = render_work_state_diff(&diff);
+            if let Some(expected_entity_changes) = expected_entity_changes {
+                let actual_entity_changes = diff.entity_changes.len();
+                if actual_entity_changes != expected_entity_changes {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "entity changes {actual_entity_changes} does not match expected {expected_entity_changes}"
+                    )));
+                }
+                output.push_str("entity_changes_match_expected=true\n");
+            }
+            if let Some(expected_relation_changes) = expected_relation_changes {
+                let actual_relation_changes = diff.relation_changes.len();
+                if actual_relation_changes != expected_relation_changes {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "relation changes {actual_relation_changes} does not match expected {expected_relation_changes}"
+                    )));
+                }
+                output.push_str("relation_changes_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Entity { command } => match command {
             EntityCommand::Create {
@@ -16268,6 +16295,10 @@ mod tests {
             &genesis,
             "--to-branch",
             &branch,
+            "--expected-entity-changes",
+            "1",
+            "--expected-relation-changes",
+            "0",
         ])
         .expect("parse diff"))
         .expect("diff work state");
@@ -16278,6 +16309,8 @@ mod tests {
         assert_eq!(value(&diff, "to_commit_id"), value(&task, "commit_id"));
         assert_eq!(value(&diff, "entity_changes"), "1");
         assert_eq!(value(&diff, "relation_changes"), "0");
+        assert_eq!(value(&diff, "entity_changes_match_expected"), "true");
+        assert_eq!(value(&diff, "relation_changes_match_expected"), "true");
         assert_eq!(
             value(&diff, "entity[0].entity_id"),
             value(&task, "task_entity_id")
@@ -16288,6 +16321,34 @@ mod tests {
             value(&diff, "entity[0].after_entity_version_id"),
             value(&task, "task_entity_version_id")
         );
+
+        let mismatched_entity_changes = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--expected-entity-changes",
+            "0",
+        ])
+        .expect("parse mismatched entity diff"));
+        assert!(mismatched_entity_changes.is_err());
+
+        let mismatched_relation_changes = run(Cli::try_parse_from([
+            "workvcs",
+            "diff",
+            store,
+            "--from-commit",
+            &genesis,
+            "--to-branch",
+            &branch,
+            "--expected-relation-changes",
+            "1",
+        ])
+        .expect("parse mismatched relation diff"));
+        assert!(mismatched_relation_changes.is_err());
 
         let limited_diff = run(Cli::try_parse_from([
             "workvcs",

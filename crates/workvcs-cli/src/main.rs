@@ -3093,6 +3093,9 @@ enum ClaimCommand {
 
         #[arg(long)]
         mode: Option<String>,
+
+        #[arg(long)]
+        limit: Option<usize>,
     },
     Guard {
         #[arg(value_name = "STORE")]
@@ -6879,6 +6882,7 @@ fn run(cli: Cli) -> Result<String> {
                     session,
                     task,
                     mode,
+                    limit,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6894,6 +6898,14 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(mode) = mode {
                 let mode = parse_claim_mode(&mode)?;
                 claims.claims.retain(|claim| claim.mode == mode);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "claim list limit must be greater than zero".to_owned(),
+                ));
+            }
+            if let Some(limit) = limit {
+                claims.claims.truncate(limit);
             }
             Ok(render_claim_list(&claims))
         }
@@ -22857,6 +22869,34 @@ mod tests {
         assert_eq!(value(&listed, "claim.0.claim_id"), claim_id);
         assert_eq!(value(&listed, "claim.0.task_entity_id"), task_id);
         assert_eq!(value(&listed, "claim.0.lifecycle_state"), "active");
+
+        let limited = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--limit",
+            "1",
+        ])
+        .expect("parse limited claim list"))
+        .expect("limited claim list");
+        assert_eq!(value(&limited, "claims"), "1");
+        assert_eq!(value(&limited, "claim.0.claim_id"), claim_id);
+
+        let zero_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero-limit claim list"));
+        assert!(zero_limit.is_err());
 
         let listed_by_task = run(Cli::try_parse_from([
             "workvcs",

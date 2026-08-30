@@ -996,6 +996,9 @@ enum EventCommand {
         workspace: Option<String>,
 
         #[arg(long)]
+        kind: Option<String>,
+
+        #[arg(long)]
         limit: Option<usize>,
     },
 }
@@ -3735,6 +3738,7 @@ fn run(cli: Cli) -> Result<String> {
                 changeset,
                 session,
                 workspace,
+                kind,
                 limit,
             } => {
                 let engine = Engine::open(store)?;
@@ -3755,10 +3759,24 @@ fn run(cli: Cli) -> Result<String> {
                         ));
                     }
                 };
-                if let Some(limit) = limit {
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "event list limit must be greater than zero".to_owned(),
+                    ));
+                }
+                if kind.is_none()
+                    && let Some(limit) = limit
+                {
                     options = options.with_limit(limit)?;
                 }
-                Ok(render_event_list(&engine.events(options)?))
+                let mut result = engine.events(options)?;
+                if let Some(kind) = kind {
+                    result.events.retain(|event| event.event_kind == kind);
+                    if let Some(limit) = limit {
+                        result.events.truncate(limit);
+                    }
+                }
+                Ok(render_event_list(&result))
             }
         },
         Command::ShowAt { store, commit } => {
@@ -13656,6 +13674,51 @@ mod tests {
         assert_eq!(value(&listed, "event[0].event_kind"), "entity.transitioned");
         assert_ne!(value(&listed, "event[0].payload_json"), "");
         let event_id = value(&listed, "event[0].event_id");
+
+        let listed_by_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--kind",
+            "entity.transitioned",
+        ])
+        .expect("parse event list by kind"))
+        .expect("list events by kind");
+        assert_eq!(value(&listed_by_kind, "events"), "1");
+        assert_eq!(value(&listed_by_kind, "event[0].event_id"), event_id);
+
+        let listed_by_missing_kind = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--kind",
+            "workspace.created",
+        ])
+        .expect("parse event list by missing kind"))
+        .expect("list events by missing kind");
+        assert_eq!(value(&listed_by_missing_kind, "events"), "0");
+
+        let listed_by_kind_with_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--kind",
+            "entity.transitioned",
+            "--limit",
+            "1",
+        ])
+        .expect("parse event list by kind and limit"))
+        .expect("list events by kind and limit");
+        assert_eq!(value(&listed_by_kind_with_limit, "events"), "1");
 
         let history = run(Cli::try_parse_from([
             "workvcs", "history", store, "--branch", &branch_id, "--limit", "1",

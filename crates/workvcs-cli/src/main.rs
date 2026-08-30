@@ -2278,6 +2278,9 @@ enum VerificationRequirementCommand {
 
         #[arg(long)]
         requirement: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("verification-requirement-list-target")
@@ -6194,16 +6197,25 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     requirement,
+                    expected_state_digest,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            render_verification_requirement_snapshot(
-                &engine.verification_requirement_at(
-                    commit_id,
-                    EntityId::parse_canonical(&requirement)?,
-                )?,
-            )
+            let snapshot = engine
+                .verification_requirement_at(commit_id, EntityId::parse_canonical(&requirement)?)?;
+            let mut output = render_verification_requirement_snapshot(&snapshot)?;
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "verification requirement state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Vr {
             command:
@@ -21758,6 +21770,53 @@ mod tests {
             value(&requirement_at_branch, "statement_json"),
             "\"Manual review must pass.\""
         );
+
+        let expected_requirement_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--requirement",
+            &requirement_id,
+            "--expected-state-digest",
+            &value(
+                &requirement_at_branch,
+                "verification_requirement_state_digest",
+            ),
+        ])
+        .expect("parse expected vr show at branch"))
+        .expect("show expected vr at branch");
+        assert_eq!(
+            value(
+                &expected_requirement_at_branch,
+                "verification_requirement_state_digest"
+            ),
+            value(
+                &requirement_at_branch,
+                "verification_requirement_state_digest"
+            )
+        );
+        assert_eq!(
+            value(&expected_requirement_at_branch, "matches_expected"),
+            "true"
+        );
+
+        let mismatched_requirement_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--requirement",
+            &requirement_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched vr show at branch"));
+        assert!(mismatched_requirement_at_branch.is_err());
 
         let criterion_at_branch = run(Cli::try_parse_from([
             "workvcs",

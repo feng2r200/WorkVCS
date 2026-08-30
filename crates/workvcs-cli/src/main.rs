@@ -1047,6 +1047,12 @@ enum ProjectionCommand {
 
         #[arg(long)]
         branch: String,
+
+        #[arg(long)]
+        expected_head_state_digest: Option<String>,
+
+        #[arg(long)]
+        expected_projection_state_digest: Option<String>,
     },
 }
 
@@ -4535,10 +4541,45 @@ fn run(cli: Cli) -> Result<String> {
                 )?;
                 Ok(render_branch_projection_refresh(&result))
             }
-            ProjectionCommand::Show { store, branch } => {
+            ProjectionCommand::Show {
+                store,
+                branch,
+                expected_head_state_digest,
+                expected_projection_state_digest,
+            } => {
                 let engine = Engine::open(store)?;
                 let snapshot = engine.branch_projection(BranchId::parse_canonical(&branch)?)?;
-                Ok(render_branch_projection_snapshot(&snapshot))
+                let mut output = render_branch_projection_snapshot(&snapshot);
+                if let Some(expected_head_state_digest) = expected_head_state_digest {
+                    let expected_head_state_digest = Digest::from_hex(&expected_head_state_digest)?;
+                    if snapshot.head_state_digest != expected_head_state_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "projection head state digest {} does not match expected {}",
+                            snapshot.head_state_digest, expected_head_state_digest
+                        )));
+                    }
+                    output.push_str("head_state_matches_expected=true\n");
+                }
+                if let Some(expected_projection_state_digest) = expected_projection_state_digest {
+                    let expected_projection_state_digest =
+                        Digest::from_hex(&expected_projection_state_digest)?;
+                    match snapshot.projection_state_digest.as_ref() {
+                        Some(actual) if *actual == expected_projection_state_digest => {
+                            output.push_str("projection_state_matches_expected=true\n");
+                        }
+                        Some(actual) => {
+                            return Err(WorkVcsError::DigestInvalid(format!(
+                                "projection state digest {actual} does not match expected {expected_projection_state_digest}"
+                            )));
+                        }
+                        None => {
+                            return Err(WorkVcsError::DigestInvalid(format!(
+                                "projection state digest none does not match expected {expected_projection_state_digest}"
+                            )));
+                        }
+                    }
+                }
+                Ok(output)
             }
         },
         Command::Bundle { command } => match command {
@@ -19298,6 +19339,63 @@ mod tests {
             .expect("show current projection");
         assert_eq!(value(&current, "status"), "complete");
         assert_eq!(value(&current, "is_current"), "true");
+
+        let expected_current = run(Cli::try_parse_from([
+            "workvcs",
+            "projection",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--expected-head-state-digest",
+            &value(&current, "head_state_digest"),
+            "--expected-projection-state-digest",
+            &value(&current, "projection_state_digest"),
+        ])
+        .expect("parse expected current projection show"))
+        .expect("show expected current projection");
+        assert_eq!(
+            value(&expected_current, "head_state_digest"),
+            value(&current, "head_state_digest")
+        );
+        assert_eq!(
+            value(&expected_current, "projection_state_digest"),
+            value(&current, "projection_state_digest")
+        );
+        assert_eq!(
+            value(&expected_current, "head_state_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&expected_current, "projection_state_matches_expected"),
+            "true"
+        );
+
+        let mismatched_head = run(Cli::try_parse_from([
+            "workvcs",
+            "projection",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--expected-head-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched projection head show"));
+        assert!(mismatched_head.is_err());
+
+        let mismatched_projection = run(Cli::try_parse_from([
+            "workvcs",
+            "projection",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--expected-projection-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched projection state show"));
+        assert!(mismatched_projection.is_err());
     }
 
     #[test]

@@ -3431,6 +3431,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         verification: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
     },
     #[command(group(
         ArgGroup::new("verification-list-target")
@@ -6669,13 +6672,25 @@ fn run(cli: Cli) -> Result<String> {
                     branch,
                     commit,
                     verification,
+                    expected_state_digest,
                 },
         } => {
             let engine = Engine::open(store)?;
             let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            render_verification_snapshot(
-                &engine.verification_at(commit_id, EntityId::parse_canonical(&verification)?)?,
-            )
+            let snapshot =
+                engine.verification_at(commit_id, EntityId::parse_canonical(&verification)?)?;
+            let mut output = render_verification_snapshot(&snapshot)?;
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "verification state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Verification {
             command:
@@ -23010,6 +23025,47 @@ mod tests {
             evidence_id
         );
         assert_eq!(value(&verification_at_branch, "resource_basis"), "0");
+
+        let expected_verification_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--expected-state-digest",
+            &value(&verification_at_branch, "verification_state_digest"),
+        ])
+        .expect("parse expected verification show at branch"))
+        .expect("show expected verification at branch");
+        assert_eq!(
+            value(
+                &expected_verification_at_branch,
+                "verification_state_digest"
+            ),
+            value(&verification_at_branch, "verification_state_digest")
+        );
+        assert_eq!(
+            value(&expected_verification_at_branch, "matches_expected"),
+            "true"
+        );
+
+        let mismatched_verification_at_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--expected-state-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .expect("parse mismatched verification show at branch"));
+        assert!(mismatched_verification_at_branch.is_err());
 
         let verifications_at_branch = run(Cli::try_parse_from([
             "workvcs",

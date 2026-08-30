@@ -1128,6 +1128,9 @@ enum ChangeSetCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_operations: Option<usize>,
     },
     Anchors {
         #[arg(value_name = "STORE")]
@@ -1144,6 +1147,9 @@ enum ChangeSetCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_anchors: Option<usize>,
     },
 }
 
@@ -4493,6 +4499,7 @@ fn run(cli: Cli) -> Result<String> {
                 subject_object,
                 payload_digest,
                 limit,
+                expected_operations,
             } => {
                 let engine = Engine::open(store)?;
                 let mut result =
@@ -4527,7 +4534,17 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     result.operations.truncate(limit);
                 }
-                Ok(render_change_operations(&result))
+                let mut output = render_change_operations(&result);
+                if let Some(expected_operations) = expected_operations {
+                    let actual_operations = result.operations.len();
+                    if actual_operations != expected_operations {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "changeset operations {actual_operations} does not match expected {expected_operations}"
+                        )));
+                    }
+                    output.push_str("operations_match_expected=true\n");
+                }
+                Ok(output)
             }
             ChangeSetCommand::Anchors {
                 store,
@@ -4535,6 +4552,7 @@ fn run(cli: Cli) -> Result<String> {
                 object,
                 object_kind,
                 limit,
+                expected_anchors,
             } => {
                 let engine = Engine::open(store)?;
                 let mut result =
@@ -4557,7 +4575,17 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     result.anchors.truncate(limit);
                 }
-                Ok(render_changeset_causal_anchors(&result))
+                let mut output = render_changeset_causal_anchors(&result);
+                if let Some(expected_anchors) = expected_anchors {
+                    let actual_anchors = result.anchors.len();
+                    if actual_anchors != expected_anchors {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "changeset anchors {actual_anchors} does not match expected {expected_anchors}"
+                        )));
+                    }
+                    output.push_str("anchors_match_expected=true\n");
+                }
+                Ok(output)
             }
         },
         Command::Commit { command } => match command {
@@ -17249,6 +17277,37 @@ mod tests {
             ""
         );
 
+        let expected_operations = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--expected-operations",
+            "1",
+        ])
+        .expect("parse expected changeset operations"))
+        .expect("expected changeset operations");
+        assert_eq!(value(&expected_operations, "operations"), "1");
+        assert_eq!(
+            value(&expected_operations, "operations_match_expected"),
+            "true"
+        );
+
+        let mismatched_operations = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--expected-operations",
+            "0",
+        ])
+        .expect("parse mismatched changeset operations"));
+        assert!(mismatched_operations.is_err());
+
         let operations_by_operation = run(Cli::try_parse_from([
             "workvcs",
             "changeset",
@@ -17421,6 +17480,26 @@ mod tests {
             "0"
         );
 
+        let expected_missing_operations = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "operations",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--payload-digest",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--expected-operations",
+            "0",
+        ])
+        .expect("parse expected missing changeset operations"))
+        .expect("expected missing changeset operations");
+        assert_eq!(value(&expected_missing_operations, "operations"), "0");
+        assert_eq!(
+            value(&expected_missing_operations, "operations_match_expected"),
+            "true"
+        );
+
         let anchors = run(Cli::try_parse_from([
             "workvcs",
             "changeset",
@@ -17433,6 +17512,21 @@ mod tests {
         .expect("list changeset anchors");
         assert_eq!(value(&anchors, "changeset_id"), changeset_id);
         assert_eq!(value(&anchors, "causal_anchors"), "0");
+
+        let expected_anchors = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &changeset_id,
+            "--expected-anchors",
+            "0",
+        ])
+        .expect("parse expected changeset anchors"))
+        .expect("expected changeset anchors");
+        assert_eq!(value(&expected_anchors, "causal_anchors"), "0");
+        assert_eq!(value(&expected_anchors, "anchors_match_expected"), "true");
 
         let listed = run(Cli::try_parse_from([
             "workvcs",
@@ -29613,6 +29707,37 @@ mod tests {
             value(&finding, "record_entity_id")
         );
         assert_eq!(value(&anchors, "anchor[0].object_kind"), "entity");
+
+        let expected_anchor_count = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--expected-anchors",
+            "1",
+        ])
+        .expect("parse expected changeset anchors"))
+        .expect("expected changeset anchors");
+        assert_eq!(value(&expected_anchor_count, "causal_anchors"), "1");
+        assert_eq!(
+            value(&expected_anchor_count, "anchors_match_expected"),
+            "true"
+        );
+
+        let mismatched_anchor_count = run(Cli::try_parse_from([
+            "workvcs",
+            "changeset",
+            "anchors",
+            store,
+            "--changeset",
+            &value(&superseded, "changeset_id"),
+            "--expected-anchors",
+            "0",
+        ])
+        .expect("parse mismatched changeset anchors"));
+        assert!(mismatched_anchor_count.is_err());
 
         let anchors_by_object = run(Cli::try_parse_from([
             "workvcs",

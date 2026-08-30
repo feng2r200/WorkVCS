@@ -2930,6 +2930,9 @@ enum SessionCommand {
 
         #[arg(long)]
         branch: Option<String>,
+
+        #[arg(long)]
+        focus: Option<String>,
     },
     FocusSet {
         #[arg(value_name = "STORE")]
@@ -6383,6 +6386,7 @@ fn run(cli: Cli) -> Result<String> {
                     lifecycle,
                     workspace,
                     branch,
+                    focus,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -6398,7 +6402,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(branch) = branch {
                 options = options.with_active_branch_id(BranchId::parse_canonical(&branch)?);
             }
-            render_session_list(&engine.sessions(options)?)
+            let mut result = engine.sessions(options)?;
+            if let Some(focus) = focus {
+                let focus_entity_id = EntityId::parse_canonical(&focus)?;
+                result.sessions.retain(|session| {
+                    session
+                        .focus
+                        .as_ref()
+                        .is_some_and(|focus| focus.focus_entity_id == focus_entity_id)
+                });
+            }
+            render_session_list(&result)
         }
         Command::Session {
             command:
@@ -17147,6 +17161,27 @@ mod tests {
         assert_eq!(value(&sessions, "session.0.lifecycle_state"), "active");
         assert_eq!(value(&sessions, "session.0.active_branch_id"), fork_branch);
         assert_eq!(value(&sessions, "session.0.focus_entity_id"), task_id);
+
+        let focused_sessions =
+            run(
+                Cli::try_parse_from(["workvcs", "session", "list", store, "--focus", &task_id])
+                    .expect("parse focused session list"),
+            )
+            .expect("list focused sessions");
+        assert_eq!(value(&focused_sessions, "sessions"), "1");
+        assert_eq!(value(&focused_sessions, "session.0.session_id"), session_id);
+
+        let missing_focused_sessions = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--focus",
+            "018b4ed6-0e2f-7000-8000-000000000003",
+        ])
+        .expect("parse missing focused session list"))
+        .expect("list missing focused sessions");
+        assert_eq!(value(&missing_focused_sessions, "sessions"), "0");
 
         let active_sessions = run(Cli::try_parse_from([
             "workvcs",

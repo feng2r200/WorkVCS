@@ -1983,7 +1983,13 @@ enum VerificationRequirementCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum EvidenceCommand {
+    #[command(group(
+        ArgGroup::new("evidence-content-source")
+            .multiple(false)
+            .args(["content", "content_digest", "content_file"])
+    ))]
     Create {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -2005,6 +2011,9 @@ enum EvidenceCommand {
 
         #[arg(long)]
         content_digest: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        content_file: Option<PathBuf>,
 
         #[arg(long)]
         content_size_bytes: Option<i64>,
@@ -4833,6 +4842,7 @@ fn run(cli: Cli) -> Result<String> {
                     content_role,
                     content,
                     content_digest,
+                    content_file,
                     content_size_bytes,
                     media_type,
                     format_metadata_json,
@@ -4851,6 +4861,7 @@ fn run(cli: Cli) -> Result<String> {
                 role: content_role,
                 content,
                 content_digest,
+                content_file,
                 content_size_bytes,
                 media_type,
                 format_metadata_json,
@@ -6757,6 +6768,7 @@ struct EvidenceContentArgs {
     role: Option<String>,
     content: Option<String>,
     content_digest: Option<String>,
+    content_file: Option<PathBuf>,
     content_size_bytes: Option<i64>,
     media_type: Option<String>,
     format_metadata_json: String,
@@ -6766,6 +6778,7 @@ fn evidence_content_from_cli(args: EvidenceContentArgs) -> Result<Option<Evidenc
     let has_content_args = args.role.is_some()
         || args.content.is_some()
         || args.content_digest.is_some()
+        || args.content_file.is_some()
         || args.content_size_bytes.is_some()
         || args.media_type.is_some()
         || args.format_metadata_json != "{}";
@@ -6774,20 +6787,29 @@ fn evidence_content_from_cli(args: EvidenceContentArgs) -> Result<Option<Evidenc
     }
 
     let role = required_arg("--content-role", args.role)?;
-    let mut content = match (args.content, args.content_digest, args.content_size_bytes) {
-        (Some(content), None, None) => {
+    let mut content = match (
+        args.content,
+        args.content_digest,
+        args.content_file,
+        args.content_size_bytes,
+    ) {
+        (Some(content), None, None, None) => {
             EvidenceContentInput::from_raw_bytes(role, content.as_bytes())?
         }
-        (None, Some(content_digest), Some(content_size_bytes)) => {
+        (None, Some(content_digest), None, Some(content_size_bytes)) => {
             EvidenceContentInput::from_digest(
                 role,
                 Digest::from_hex(&content_digest)?,
                 content_size_bytes,
             )?
         }
+        (None, None, Some(path), None) => {
+            let bytes = read_cli_file("evidence content", &path)?;
+            EvidenceContentInput::from_raw_bytes(role, bytes)?
+        }
         _ => {
             return Err(WorkVcsError::EvidenceInvalid(
-                "evidence content requires exactly one of --content or --content-digest with --content-size-bytes"
+                "evidence content requires exactly one of --content, --content-file, or --content-digest with --content-size-bytes"
                     .to_owned(),
             ));
         }
@@ -17196,6 +17218,9 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
+        let content_file = tempdir.path().join("evidence.txt");
+        fs::write(&content_file, b"evidence bytes").expect("write evidence content");
+        let content_file_path = content_file.to_str().expect("content file path text");
 
         run(
             Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
@@ -17214,8 +17239,8 @@ mod tests {
             r#"{"summary":"captured output"}"#,
             "--content-role",
             "stdout",
-            "--content",
-            "evidence bytes",
+            "--content-file",
+            content_file_path,
             "--media-type",
             "text/plain",
             "--format-metadata-json",
@@ -17256,6 +17281,22 @@ mod tests {
             value(&shown, "content.0.format_metadata_json"),
             r#"{"encoding":"utf-8"}"#
         );
+
+        let duplicate_content_source = Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "create",
+            store,
+            "--kind",
+            "terminal-log",
+            "--content-role",
+            "stdout",
+            "--content",
+            "evidence bytes",
+            "--content-file",
+            content_file_path,
+        ]);
+        assert!(duplicate_content_source.is_err());
 
         let second_evidence = run(Cli::try_parse_from([
             "workvcs",

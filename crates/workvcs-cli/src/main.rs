@@ -1006,6 +1006,9 @@ enum ReferenceCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_references: Option<usize>,
     },
 }
 
@@ -1286,6 +1289,9 @@ enum CheckpointCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_checkpoints: Option<usize>,
     },
     Latest {
         #[arg(value_name = "STORE")]
@@ -1399,6 +1405,9 @@ enum BundleCommand {
 
         #[arg(long)]
         bundle_digest: Option<String>,
+
+        #[arg(long)]
+        expected_imports: Option<usize>,
     },
     ValidateManifest {
         #[arg(value_name = "STORE")]
@@ -3744,6 +3753,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         limit: Option<usize>,
+
+        #[arg(long)]
+        expected_caches: Option<usize>,
     },
 }
 
@@ -5015,6 +5027,7 @@ fn run(cli: Cli) -> Result<String> {
                 referrer_kind,
                 target_kind,
                 limit,
+                expected_references,
             } => {
                 let engine = Engine::open(&store)?;
                 let commit_id = resolve_reference_query_commit(&engine, branch, commit)?;
@@ -5044,7 +5057,17 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     references.truncate(limit);
                 }
-                Ok(render_structural_reference_list(&references))
+                let mut output = render_structural_reference_list(&references);
+                if let Some(expected_references) = expected_references {
+                    let actual_references = references.len();
+                    if actual_references != expected_references {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "structural references {actual_references} does not match expected {expected_references}"
+                        )));
+                    }
+                    output.push_str("references_match_expected=true\n");
+                }
+                Ok(output)
             }
         },
         Command::Restore {
@@ -5329,6 +5352,7 @@ fn run(cli: Cli) -> Result<String> {
                 limit,
                 source_store,
                 bundle_digest,
+                expected_imports,
             } => {
                 if matches!(limit, Some(0)) {
                     return Err(WorkVcsError::QueryInvalid(
@@ -5348,7 +5372,17 @@ fn run(cli: Cli) -> Result<String> {
                     options = options.with_bundle_digest(Digest::from_hex(&bundle_digest)?);
                 }
                 let result = engine.bundle_import_attempts(options)?;
-                Ok(render_bundle_import_attempt_list(&result))
+                let mut output = render_bundle_import_attempt_list(&result);
+                if let Some(expected_imports) = expected_imports {
+                    let actual_imports = result.attempts.len();
+                    if actual_imports != expected_imports {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "imports {actual_imports} does not match expected {expected_imports}"
+                        )));
+                    }
+                    output.push_str("imports_match_expected=true\n");
+                }
+                Ok(output)
             }
             BundleCommand::ValidateManifest {
                 store,
@@ -5433,6 +5467,7 @@ fn run(cli: Cli) -> Result<String> {
                 usability_state,
                 content_digest,
                 limit,
+                expected_checkpoints,
             } => {
                 let engine = Engine::open(store)?;
                 let mut result = engine.checkpoints(CheckpointListOptions::for_commit(
@@ -5457,7 +5492,17 @@ fn run(cli: Cli) -> Result<String> {
                 if let Some(limit) = limit {
                     result.checkpoints.truncate(limit);
                 }
-                Ok(render_checkpoint_list(&result))
+                let mut output = render_checkpoint_list(&result);
+                if let Some(expected_checkpoints) = expected_checkpoints {
+                    let actual_checkpoints = result.checkpoints.len();
+                    if actual_checkpoints != expected_checkpoints {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "checkpoints {actual_checkpoints} does not match expected {expected_checkpoints}"
+                        )));
+                    }
+                    output.push_str("checkpoints_match_expected=true\n");
+                }
+                Ok(output)
             }
             CheckpointCommand::Latest { store, commit } => {
                 let engine = Engine::open(store)?;
@@ -7627,6 +7672,7 @@ fn run(cli: Cli) -> Result<String> {
                     observation,
                     observed_fingerprint,
                     limit,
+                    expected_caches,
                 },
         } => {
             let engine = Engine::open(store)?;
@@ -7678,7 +7724,17 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(limit) = limit {
                 result.caches.truncate(limit);
             }
-            Ok(render_verification_applicability_cache_list(&result))
+            let mut output = render_verification_applicability_cache_list(&result);
+            if let Some(expected_caches) = expected_caches {
+                let actual_caches = result.caches.len();
+                if actual_caches != expected_caches {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "verification caches {actual_caches} does not match expected {expected_caches}"
+                    )));
+                }
+                output.push_str("caches_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Record {
             command:
@@ -16657,13 +16713,20 @@ mod tests {
         );
         assert_eq!(value(&reference, "target_kind"), "plan");
 
-        let listed =
-            run(
-                Cli::try_parse_from(["workvcs", "reference", "list", store, "--branch", &branch])
-                    .expect("parse reference list"),
-            )
-            .expect("list references");
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-references",
+            "1",
+        ])
+        .expect("parse reference list"))
+        .expect("list references");
         assert_eq!(value(&listed, "structural_references"), "1");
+        assert_eq!(value(&listed, "references_match_expected"), "true");
         assert_eq!(
             value(&listed, "reference[0].relation_id"),
             value(&reference, "relation_id")
@@ -16753,6 +16816,19 @@ mod tests {
             value(&listed_by_combined_filters, "structural_references"),
             "1"
         );
+
+        let mismatched_references = run(Cli::try_parse_from([
+            "workvcs",
+            "reference",
+            "list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-references",
+            "0",
+        ])
+        .expect("parse mismatched reference list"));
+        assert!(mismatched_references.is_err());
 
         let listed_by_missing_kind = run(Cli::try_parse_from([
             "workvcs",
@@ -21518,12 +21594,28 @@ mod tests {
             store,
             "--commit",
             &genesis,
+            "--expected-checkpoints",
+            "1",
         ])
         .expect("parse checkpoint list"))
         .expect("list checkpoints");
         assert_eq!(value(&listed, "commit_id"), genesis);
         assert_eq!(value(&listed, "checkpoints"), "1");
+        assert_eq!(value(&listed, "checkpoints_match_expected"), "true");
         assert_eq!(value(&listed, "checkpoint[0].id"), checkpoint);
+
+        let mismatched_checkpoints = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "list",
+            store,
+            "--commit",
+            &genesis,
+            "--expected-checkpoints",
+            "0",
+        ])
+        .expect("parse mismatched checkpoint list"));
+        assert!(mismatched_checkpoints.is_err());
 
         let limited = run(Cli::try_parse_from([
             "workvcs",
@@ -21968,18 +22060,36 @@ mod tests {
         .expect("parse mismatched bundle import outcome"));
         assert!(mismatched_import_outcome.is_err());
 
-        let listed_imports =
-            run(
-                Cli::try_parse_from(["workvcs", "bundle", "import-list", store, "--limit", "1"])
-                    .expect("parse bundle import-list"),
-            )
-            .expect("list bundle import attempts");
+        let listed_imports = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-list",
+            store,
+            "--limit",
+            "1",
+            "--expected-imports",
+            "1",
+        ])
+        .expect("parse bundle import-list"))
+        .expect("list bundle import attempts");
         assert_eq!(value(&listed_imports, "imports"), "1");
+        assert_eq!(value(&listed_imports, "imports_match_expected"), "true");
         assert_eq!(value(&listed_imports, "import[0].import_id"), import_id);
         assert_eq!(
             value(&listed_imports, "import[0].outcome"),
             "already_present"
         );
+
+        let mismatched_imports = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-list",
+            store,
+            "--expected-imports",
+            "0",
+        ])
+        .expect("parse mismatched bundle import-list"));
+        assert!(mismatched_imports.is_err());
 
         let listed_by_bundle = run(Cli::try_parse_from([
             "workvcs",
@@ -28556,11 +28666,14 @@ mod tests {
             store,
             "--branch",
             &branch,
+            "--expected-caches",
+            "1",
         ])
         .expect("parse cache list"))
         .expect("list caches");
         assert_eq!(value(&cache_list, "branch_id"), branch);
         assert_eq!(value(&cache_list, "caches"), "1");
+        assert_eq!(value(&cache_list, "caches_match_expected"), "true");
         assert_eq!(
             value(&cache_list, "cache.0.verification_entity_id"),
             verification_id
@@ -28575,6 +28688,19 @@ mod tests {
             "all_basis_applicable"
         );
         assert_eq!(value(&cache_list, "cache.0.resource_stamps"), "1");
+
+        let mismatched_cache_list = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-list",
+            store,
+            "--branch",
+            &branch,
+            "--expected-caches",
+            "0",
+        ])
+        .expect("parse mismatched cache list"));
+        assert!(mismatched_cache_list.is_err());
 
         let cache_list_by_verification = run(Cli::try_parse_from([
             "workvcs",

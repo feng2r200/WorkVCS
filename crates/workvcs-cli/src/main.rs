@@ -75,15 +75,16 @@ use workvcs_core::{
     ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
     ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
     RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SessionEndOptions, SessionEndResult, SessionId, SessionLifecycleState, SessionListOptions,
-    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInitOptions, StoreLineageListOptions,
-    StoreLineageListResult, StoreLineageRecordOptions, StoreLineageRecordResult,
-    StoreLineageSnapshot, StoreMigrationAttemptSnapshot, StoreMigrationListOptions,
-    StoreMigrationListResult, StoreMigrationRecordOptions, StoreMigrationRecordResult,
-    TaskCreateCommit, TaskCreateOptions, TaskSchedulingRelationCreateCommit,
-    TaskSchedulingRelationCreateOptions, TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus,
-    TaskTransitionCommit, TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
+    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
+    SessionLifecycleState, SessionListOptions, SessionListResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
+    StoreInitOptions, StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
+    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
+    StoreMigrationRecordResult, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
+    TaskTransitionOptions, VerificationApplicabilityCacheSnapshot,
     VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
@@ -2546,6 +2547,23 @@ enum SessionCommand {
 
         #[arg(long)]
         lifecycle: Option<String>,
+    },
+    FocusSet {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        focus: String,
+    },
+    FocusClear {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
     },
     Switch {
         #[arg(value_name = "STORE")]
@@ -5551,6 +5569,28 @@ fn run(cli: Cli) -> Result<String> {
                 options = options.with_lifecycle_state(parse_session_lifecycle_state(&lifecycle)?);
             }
             render_session_list(&engine.sessions(options)?)
+        }
+        Command::Session {
+            command:
+                SessionCommand::FocusSet {
+                    store,
+                    session,
+                    focus,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let updated = engine.set_session_focus(SessionFocusOptions::new(
+                SessionId::parse_canonical(&session)?,
+                EntityId::parse_canonical(&focus)?,
+            ))?;
+            Ok(render_session_focus_update(&updated))
+        }
+        Command::Session {
+            command: SessionCommand::FocusClear { store, session },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let updated = engine.clear_session_focus(SessionId::parse_canonical(&session)?)?;
+            Ok(render_session_focus_update(&updated))
         }
         Command::Session {
             command:
@@ -8584,6 +8624,29 @@ fn render_session_list(result: &SessionListResult) -> Result<String> {
         .expect("write to String");
     }
     Ok(output)
+}
+
+fn render_session_focus_update(result: &SessionFocusUpdateResult) -> String {
+    let focus_entity_id = result
+        .state
+        .focus
+        .as_ref()
+        .map(|focus| focus.focus_entity_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let focus_path_entries = result
+        .state
+        .focus
+        .as_ref()
+        .map(|focus| focus.path.len())
+        .unwrap_or(0);
+    format!(
+        "session_id={}\noccurred_at_us={}\nlifecycle_state={}\nfocus_entity_id={}\nfocus_path_entries={}\n",
+        result.session_id,
+        result.occurred_at_us,
+        session_lifecycle_state(result.state.lifecycle_state),
+        focus_entity_id,
+        focus_path_entries
+    )
 }
 
 fn render_session_switch(session: &SessionSwitchResult) -> String {
@@ -14509,6 +14572,46 @@ mod tests {
             )
             .expect("list ended sessions");
         assert_eq!(value(&ended_sessions, "sessions"), "0");
+
+        let cleared_focus = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-clear",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse focus clear"))
+        .expect("clear session focus");
+        assert_eq!(value(&cleared_focus, "session_id"), session_id);
+        assert_eq!(value(&cleared_focus, "focus_entity_id"), "none");
+
+        let shown_cleared_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse cleared session show"))
+        .expect("show cleared session");
+        assert_eq!(value(&shown_cleared_session, "focus_entity_id"), "none");
+
+        let focused_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &session_id,
+            "--focus",
+            &task_id,
+        ])
+        .expect("parse focus set"))
+        .expect("set session focus");
+        assert_eq!(value(&focused_session, "session_id"), session_id);
+        assert_eq!(value(&focused_session, "focus_entity_id"), task_id);
 
         let runnable = run(Cli::try_parse_from([
             "workvcs",

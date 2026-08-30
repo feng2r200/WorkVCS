@@ -244,6 +244,9 @@ enum Command {
 
         #[arg(long)]
         session: String,
+
+        #[arg(long, default_value = "exclusive")]
+        mode: String,
     },
     Runnable {
         #[command(subcommand)]
@@ -4294,10 +4297,16 @@ fn run(cli: Cli) -> Result<String> {
             ))?;
             Ok(render_context_overview(&context))
         }
-        Command::Next { store, session } => {
+        Command::Next {
+            store,
+            session,
+            mode,
+        } => {
             let mut engine = Engine::open(store)?;
-            let next =
-                engine.next_work(NextWorkOptions::new(SessionId::parse_canonical(&session)?))?;
+            let next = engine.next_work(
+                NextWorkOptions::new(SessionId::parse_canonical(&session)?)
+                    .with_mode(parse_claim_mode(&mode)?),
+            )?;
             Ok(render_next_work(&next))
         }
         Command::Runnable {
@@ -13014,6 +13023,105 @@ mod tests {
         .expect("parse runnable"))
         .expect("runnable after next");
         assert!(runnable.contains(&format!("candidate.0.claim=claimed_by_session:{claim_id}")));
+    }
+
+    #[test]
+    fn cli_next_accepts_explicit_shared_mode() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Shared next workflow task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+
+        let first_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse first session"))
+        .expect("start first session");
+        let first_session_id = value(&first_session, "session_id");
+        let second_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse second session"))
+        .expect("start second session");
+        let second_session_id = value(&second_session, "session_id");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &first_session_id,
+            "--task",
+            &task_id,
+            "--mode",
+            "shared",
+        ])
+        .expect("parse first shared claim"))
+        .expect("first shared claim");
+
+        let next = run(Cli::try_parse_from([
+            "workvcs",
+            "next",
+            store,
+            "--session",
+            &second_session_id,
+            "--mode",
+            "shared",
+        ])
+        .expect("parse shared next"))
+        .expect("shared next");
+        assert!(next.contains("selected=true"));
+        assert_eq!(value(&next, "task_entity_id"), task_id);
+        assert_eq!(value(&next, "mode"), "shared");
+        assert_eq!(value(&next, "context_focus_entity_id"), task_id);
     }
 
     #[test]

@@ -124,6 +124,9 @@ enum Command {
     Doctor {
         #[arg(value_name = "STORE")]
         store: PathBuf,
+
+        #[arg(long)]
+        require_valid: bool,
     },
     Canonical {
         #[command(subcommand)]
@@ -538,6 +541,9 @@ enum StoreCommand {
     Integrity {
         #[arg(value_name = "STORE")]
         store: PathBuf,
+
+        #[arg(long)]
+        require_valid: bool,
     },
     #[command(name = "lineage-record")]
     Record {
@@ -3791,11 +3797,14 @@ fn run(cli: Cli) -> Result<String> {
                 info.store_id, info.manifest.schema_version
             ))
         }
-        Command::Doctor { store } => {
+        Command::Doctor {
+            store,
+            require_valid,
+        } => {
             let engine = Engine::open(store)?;
             let info = engine.store_info()?;
             let integrity = engine.validate_integrity()?;
-            Ok(format!(
+            let mut output = format!(
                 "ok store_id={} schema_version={} canonical_json_profile={} checked_branches={} checked_commits={} checked_changesets={} checked_change_operations={} checked_changeset_causal_anchors={} checked_events={} checked_checkpoints={} invalid_checkpoints={}\n",
                 info.store_id,
                 info.manifest.schema_version,
@@ -3808,7 +3817,12 @@ fn run(cli: Cli) -> Result<String> {
                 integrity.checked_events,
                 integrity.checked_checkpoints,
                 integrity.invalid_checkpoints
-            ))
+            );
+            if require_valid {
+                require_integrity_report_valid(&integrity)?;
+                output.push_str("valid_required=true\n");
+            }
+            Ok(output)
         }
         Command::Canonical { command } => match command {
             CanonicalCommand::Encode {
@@ -3853,9 +3867,18 @@ fn run(cli: Cli) -> Result<String> {
                 let engine = Engine::open(store)?;
                 render_store_info(&engine.store_info()?)
             }
-            StoreCommand::Integrity { store } => {
+            StoreCommand::Integrity {
+                store,
+                require_valid,
+            } => {
                 let engine = Engine::open(store)?;
-                Ok(render_integrity_report(&engine.validate_integrity()?))
+                let report = engine.validate_integrity()?;
+                let mut output = render_integrity_report(&report);
+                if require_valid {
+                    require_integrity_report_valid(&report)?;
+                    output.push_str("valid_required=true\n");
+                }
+                Ok(output)
             }
             StoreCommand::Record {
                 store,
@@ -9962,6 +9985,16 @@ fn render_integrity_report(report: &IntegrityReport) -> String {
         report.checked_checkpoints,
         report.invalid_checkpoints
     )
+}
+
+fn require_integrity_report_valid(report: &IntegrityReport) -> Result<()> {
+    if report.invalid_checkpoints != 0 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "integrity report has {} invalid checkpoints",
+            report.invalid_checkpoints
+        )));
+    }
+    Ok(())
 }
 
 fn render_work_state_mapping_digest(
@@ -16172,15 +16205,17 @@ mod tests {
         .expect("parse init"))
         .expect("init store");
 
-        let empty = run(
-            Cli::try_parse_from(["workvcs", "store", "integrity", store])
-                .expect("parse empty integrity"),
-        )
-        .expect("empty store integrity");
+        let empty =
+            run(
+                Cli::try_parse_from(["workvcs", "store", "integrity", store, "--require-valid"])
+                    .expect("parse empty integrity"),
+            )
+            .expect("empty store integrity");
         assert_eq!(value(&empty, "checked_branches"), "0");
         assert_eq!(value(&empty, "checked_commits"), "0");
         assert_eq!(value(&empty, "checked_changesets"), "0");
         assert_eq!(value(&empty, "invalid_checkpoints"), "0");
+        assert_eq!(value(&empty, "valid_required"), "true");
 
         let workspace = run(Cli::try_parse_from([
             "workvcs",
@@ -16193,10 +16228,12 @@ mod tests {
         .expect("parse workspace"))
         .expect("create workspace");
 
-        let report = run(
-            Cli::try_parse_from(["workvcs", "store", "integrity", store]).expect("parse integrity"),
-        )
-        .expect("store integrity");
+        let report =
+            run(
+                Cli::try_parse_from(["workvcs", "store", "integrity", store, "--require-valid"])
+                    .expect("parse integrity"),
+            )
+            .expect("store integrity");
         assert_eq!(value(&report, "checked_branches"), "1");
         assert_eq!(value(&report, "checked_commits"), "1");
         assert_eq!(value(&report, "checked_changesets"), "1");
@@ -16205,6 +16242,7 @@ mod tests {
         assert_eq!(value(&report, "checked_events"), "1");
         assert_eq!(value(&report, "checked_checkpoints"), "0");
         assert_eq!(value(&report, "invalid_checkpoints"), "0");
+        assert_eq!(value(&report, "valid_required"), "true");
         assert!(
             !value(&workspace, "genesis_commit_id").is_empty(),
             "workspace creation should produce a replayable genesis commit"
@@ -17428,12 +17466,14 @@ mod tests {
         assert!(init.starts_with("initialized store_id="));
         assert!(init.contains("schema_version=1"));
 
-        let doctor =
-            run(
-                Cli::try_parse_from(["workvcs", "doctor", path.to_str().expect("path text")])
-                    .expect("parse doctor"),
-            )
-            .expect("run doctor");
+        let doctor = run(Cli::try_parse_from([
+            "workvcs",
+            "doctor",
+            path.to_str().expect("path text"),
+            "--require-valid",
+        ])
+        .expect("parse doctor"))
+        .expect("run doctor");
         assert!(doctor.starts_with("ok store_id="));
         assert!(doctor.contains("canonical_json_profile=workvcs-jcs-v1"));
         assert!(doctor.contains("checked_branches=0"));
@@ -17444,6 +17484,7 @@ mod tests {
         assert!(doctor.contains("checked_events=0"));
         assert!(doctor.contains("checked_checkpoints=0"));
         assert!(doctor.contains("invalid_checkpoints=0"));
+        assert!(doctor.contains("valid_required=true"));
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod merge;
 mod next;
 mod runnable;
 mod session;
+mod verify;
 
 pub use claim::{
     ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason, ClaimGuardResult, ClaimLifecycleState,
@@ -34,6 +35,7 @@ pub use session::{
     SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
     SessionSwitchResult,
 };
+pub use verify::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 
 pub(crate) use claim::{
     active_claims_for_session, claim_next_task, claim_snapshot, claim_task, release_claim,
@@ -50,3 +52,4 @@ pub(crate) use session::{
     clear_session_focus, end_session, session_snapshot, sessions, set_session_focus, start_session,
     switch_session,
 };
+pub(crate) use verify::verify;

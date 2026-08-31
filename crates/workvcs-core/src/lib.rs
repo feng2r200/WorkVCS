@@ -151,4 +151,5 @@ pub use runtime::{
     SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
     SessionSwitchResult,
 };
+pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 pub use store::{StoreInfo, StoreInitOptions, StoreManifest};

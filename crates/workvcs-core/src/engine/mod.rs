@@ -111,6 +111,7 @@ use crate::{
     RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
     SessionFocusUpdateResult, SessionListOptions, SessionListResult, SessionSnapshot,
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    VerifyOptions, VerifyResult,
 };
 use std::path::Path;
 
@@ -711,6 +712,10 @@ impl Engine {
         options: VerificationCreateOptions,
     ) -> Result<VerificationCreateCommit> {
         self.store.create_verification(&options)
+    }
+
+    pub fn verify(&mut self, options: VerifyOptions) -> Result<VerifyResult> {
+        self.store.verify(&options)
     }
 
     pub fn create_record(&mut self, options: RecordCreateOptions) -> Result<RecordCreateCommit> {

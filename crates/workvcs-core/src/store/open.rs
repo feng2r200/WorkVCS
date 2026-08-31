@@ -97,7 +97,7 @@ use crate::runtime::{
     RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
     SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions, SessionListResult,
     SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult,
+    SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -1645,5 +1645,11 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::next_work(&mut self.connection, options)
+    }
+
+    pub(crate) fn verify(&mut self, options: &VerifyOptions) -> Result<VerifyResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::verify(&mut self.connection, options)
     }
 }

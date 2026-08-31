@@ -823,70 +823,90 @@ expect_failure_contains \
     --outcome completed \
     --session "$session_id"
 
-vr_verification_output="$(run_workvcs \
-    verification record "$store" \
-    --branch "$branch_id" \
-    --head "$head_commit_id" \
-    --verification-requirement "$vr_requirement_id" \
-    --result passed \
-    --method manual-review \
-    --evidence "$evidence_id" \
-    --resource "$resource_id" \
-    --adapter-kind git \
-    --adapter-schema-version 1 \
-    --scope-kind path \
-    --scope-schema-version 1 \
-    --scope-payload-json '{"path":"src/lib.rs"}' \
-    --baseline-fingerprint "$fingerprint" \
-    --baseline-observation "$observation_id" \
-    --expected-branch "$branch_id" \
-    --expected-head "$head_commit_id" \
-    --expected-target-kind verification_requirement \
-    --expected-target "$vr_requirement_id" \
-    --expected-result passed \
-    --expected-evidence-relations 1)"
-vr_verification_id="$(value "$vr_verification_output" "verification_entity_id")"
-head_commit_id="$(value "$vr_verification_output" "commit_id")"
-expect_value "$vr_verification_output" "branch_match_expected" "true"
-expect_value "$vr_verification_output" "head_match_expected" "true"
-expect_value "$vr_verification_output" "target_kind_match_expected" "true"
-expect_value "$vr_verification_output" "target_match_expected" "true"
-expect_value "$vr_verification_output" "result_match_expected" "true"
-expect_value "$vr_verification_output" "evidence_relations_match_expected" "true"
+	vr_verification_output="$(run_workvcs \
+	    verify "$store" \
+	    --branch "$branch_id" \
+	    --head "$head_commit_id" \
+	    --verification-requirement "$vr_requirement_id" \
+	    --result passed \
+	    --method manual-review \
+	    --evidence-kind manual-review \
+	    --evidence-metadata-json '{"summary":"VR wrapper evidence"}' \
+	    --evidence-content-role log \
+	    --evidence-content "VR wrapper smoke evidence bytes" \
+	    --evidence-media-type text/plain \
+	    --source-session "$session_id" \
+	    --resource "$resource_id" \
+	    --adapter-kind git \
+	    --adapter-schema-version 1 \
+	    --scope-kind path \
+	    --scope-schema-version 1 \
+	    --scope-payload-json '{"path":"src/lib.rs"}' \
+	    --resource-content-file "$observation_file" \
+	    --resource-summary-json '{"summary":"VR wrapper observation"}' \
+	    --resource-detail-content-file "$observation_detail_file" \
+	    --resource-detail-media-type text/plain \
+	    --resource-detail-format-metadata-json '{"encoding":"utf-8"}' \
+	    --cache-detail-json '{"summary":"VR wrapper cache"}' \
+	    --expected-branch "$branch_id" \
+	    --expected-head "$head_commit_id" \
+	    --expected-target-kind verification_requirement \
+	    --expected-target "$vr_requirement_id" \
+	    --expected-result passed \
+	    --expected-evidence-kind manual-review \
+	    --expected-evidence-relations 1 \
+	    --expected-resource-basis 1 \
+	    --expected-cache-applicability applicable \
+	    --expected-cache-reason-code all_basis_applicable)"
+	vr_evidence_id="$(value "$vr_verification_output" "evidence_id")"
+	vr_observation_id="$(value "$vr_verification_output" "observation_id")"
+	vr_verification_id="$(value "$vr_verification_output" "verification_entity_id")"
+	head_commit_id="$(value "$vr_verification_output" "commit_id")"
+	expect_value "$vr_verification_output" "evidence_kind" "manual-review"
+	expect_value "$vr_verification_output" "evidence_contents" "1"
+	expect_value "$vr_verification_output" "source_session_id" "$session_id"
+	expect_value "$vr_verification_output" "resource_observation_recorded" "true"
+	expect_value "$vr_verification_output" "resource_id" "$resource_id"
+	expect_value "$vr_verification_output" "resource_fingerprint" "$fingerprint"
+	expect_value "$vr_verification_output" "branch_match_expected" "true"
+	expect_value "$vr_verification_output" "head_match_expected" "true"
+	expect_value "$vr_verification_output" "target_kind_match_expected" "true"
+	expect_value "$vr_verification_output" "target_match_expected" "true"
+	expect_value "$vr_verification_output" "result_match_expected" "true"
+	expect_value "$vr_verification_output" "evidence_kind_match_expected" "true"
+	expect_value "$vr_verification_output" "evidence_relations_match_expected" "true"
+	expect_value "$vr_verification_output" "resource_basis_match_expected" "true"
+	expect_value "$vr_verification_output" "applicability_cache_recorded" "true"
+	expect_value "$vr_verification_output" "applicability_matches_expected" "true"
+	expect_value "$vr_verification_output" "reason_code_matches_expected" "true"
 
-vr_verification_list_output="$(run_workvcs \
-    verification list "$store" \
-    --branch "$branch_id" \
-    --target-kind verification_requirement \
-    --target "$vr_requirement_id" \
-    --expected-verifications 1)"
+	vr_verification_list_output="$(run_workvcs \
+	    verification list "$store" \
+	    --branch "$branch_id" \
+	    --target-kind verification_requirement \
+	    --target "$vr_requirement_id" \
+	    --baseline-observation "$vr_observation_id" \
+	    --baseline-fingerprint "$fingerprint" \
+	    --expected-verifications 1)"
 expect_value "$vr_verification_list_output" "verifications" "1"
 expect_value "$vr_verification_list_output" "verification.0.verification_entity_id" "$vr_verification_id"
 expect_value "$vr_verification_list_output" "verification.0.target_kind" "verification_requirement"
 expect_value "$vr_verification_list_output" "verification.0.target_entity_id" "$vr_requirement_id"
 expect_value "$vr_verification_list_output" "verification.0.result" "passed"
-expect_value "$vr_verification_list_output" "verification.0.resource_basis" "1"
-expect_value "$vr_verification_list_output" "verifications_match_expected" "true"
+	expect_value "$vr_verification_list_output" "verification.0.resource_basis" "1"
+	expect_value "$vr_verification_list_output" "verifications_match_expected" "true"
 
-vr_cache_output="$(run_workvcs \
-    verification cache-record "$store" \
-    --branch "$branch_id" \
-    --head "$head_commit_id" \
-    --verification "$vr_verification_id" \
-    --adapter-kind git \
-    --adapter-schema-version 1 \
-    --scope-schema-version 1 \
-    --observation-status observed \
-    --observed-fingerprint "$fingerprint" \
-    --observation "$observation_id" \
-    --expected-evaluated-commit "$head_commit_id" \
-    --expected-applicability applicable \
-    --expected-reason-code all_basis_applicable \
-    --expected-resource-stamps 1)"
-expect_value "$vr_cache_output" "evaluated_commit_matches_expected" "true"
-expect_value "$vr_cache_output" "applicability_matches_expected" "true"
-expect_value "$vr_cache_output" "reason_code_matches_expected" "true"
-expect_value "$vr_cache_output" "resource_stamps_match_expected" "true"
+	vr_cache_output="$(run_workvcs \
+	    verification cache-show "$store" \
+	    --branch "$branch_id" \
+	    --verification "$vr_verification_id" \
+	    --expected-evaluated-commit "$head_commit_id" \
+	    --expected-applicability applicable \
+	    --expected-reason-code all_basis_applicable)"
+	expect_value "$vr_cache_output" "cache_found" "true"
+	expect_value "$vr_cache_output" "evaluated_commit_matches_expected" "true"
+	expect_value "$vr_cache_output" "applicability_matches_expected" "true"
+	expect_value "$vr_cache_output" "reason_code_matches_expected" "true"
 
 vr_status_after_output="$(run_workvcs \
     ac status "$store" \

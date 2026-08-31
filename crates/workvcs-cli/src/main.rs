@@ -1,4 +1,4 @@
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand, error::ErrorKind};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -94,11 +94,12 @@ use workvcs_core::{
     VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
     VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
     VerificationRequirementSnapshot, VerificationResourceBasis, VerificationResult,
-    VerificationSnapshot, VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind,
-    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
-    WhyRelationKind, WorkState, WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions,
-    WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
-    WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    VerificationSnapshot, VerificationTarget, VerifyOptions, VerifyResourceObservationInput,
+    VerifyResult, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
+    WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
+    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceId, WorkspaceInfo,
+    WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
     WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
     content_object_digest, entity_version_digest, parse_canonical_json, relation_version_digest,
@@ -142,6 +143,7 @@ Commands:
   context       Show the current session context
   next          Select next runnable work for a session
   runnable      Inspect runnable task projections
+  verify        Run a single-target verification wrapper
   verification  Record and inspect verifications
   projection    Refresh and inspect runtime projections
   bundle        Export, validate, import, and apply bundles
@@ -479,9 +481,10 @@ enum Command {
         #[command(subcommand)]
         command: ResourceCommand,
     },
+    #[command(disable_help_flag = true)]
     Record {
-        #[command(subcommand)]
-        command: RecordCommand,
+        #[arg(value_name = "ARGS", trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
+        args: Vec<String>,
     },
     Session {
         #[command(subcommand)]
@@ -539,9 +542,14 @@ enum Command {
         #[command(subcommand)]
         command: RunnableCommand,
     },
+    #[command(disable_help_flag = true)]
+    Verify {
+        #[arg(value_name = "ARGS", trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
+        args: Vec<String>,
+    },
     Verification {
         #[command(subcommand)]
-        command: VerificationCommand,
+        command: Box<VerificationCommand>,
     },
     Projection {
         #[command(subcommand)]
@@ -559,6 +567,164 @@ enum Command {
         #[command(subcommand)]
         command: MergeCommand,
     },
+}
+
+#[derive(Debug, Parser)]
+#[command(name = "workvcs verify")]
+#[command(about = "Run a single-target verification wrapper")]
+#[command(group(
+    ArgGroup::new("verify-target")
+        .required(true)
+        .multiple(false)
+        .args(["acceptance_criterion", "verification_requirement"])
+))]
+#[command(group(
+    ArgGroup::new("verify-evidence-content-source")
+        .multiple(false)
+        .args(["evidence_content", "evidence_content_digest", "evidence_content_file"])
+))]
+#[command(group(
+    ArgGroup::new("verify-resource-fingerprint")
+        .multiple(false)
+        .args(["resource_fingerprint", "resource_content", "resource_content_file"])
+))]
+#[command(group(
+    ArgGroup::new("verify-resource-detail-source")
+        .multiple(false)
+        .args(["resource_detail_content", "resource_detail_content_digest", "resource_detail_content_file"])
+))]
+struct VerifyArgs {
+    #[arg(value_name = "STORE")]
+    store: PathBuf,
+
+    #[arg(long)]
+    branch: String,
+
+    #[arg(long)]
+    head: String,
+
+    #[arg(long)]
+    result: String,
+
+    #[arg(long)]
+    method: Option<String>,
+
+    #[arg(long)]
+    source_session: Option<String>,
+
+    #[arg(long)]
+    evidence_kind: String,
+
+    #[arg(long, default_value = "{}")]
+    evidence_metadata_json: String,
+
+    #[arg(long)]
+    evidence_content_role: Option<String>,
+
+    #[arg(long)]
+    evidence_content: Option<String>,
+
+    #[arg(long)]
+    evidence_content_digest: Option<String>,
+
+    #[arg(long, value_name = "PATH")]
+    evidence_content_file: Option<PathBuf>,
+
+    #[arg(long)]
+    evidence_content_size_bytes: Option<i64>,
+
+    #[arg(long)]
+    evidence_media_type: Option<String>,
+
+    #[arg(long, default_value = "{}")]
+    evidence_format_metadata_json: String,
+
+    #[arg(long)]
+    acceptance_criterion: Option<String>,
+
+    #[arg(long)]
+    verification_requirement: Option<String>,
+
+    #[arg(long)]
+    resource: Option<String>,
+
+    #[arg(long)]
+    adapter_kind: Option<String>,
+
+    #[arg(long)]
+    adapter_schema_version: Option<i64>,
+
+    #[arg(long)]
+    scope_kind: Option<String>,
+
+    #[arg(long)]
+    scope_schema_version: Option<i64>,
+
+    #[arg(long)]
+    scope_payload_json: Option<String>,
+
+    #[arg(long)]
+    resource_fingerprint: Option<String>,
+
+    #[arg(long)]
+    resource_content: Option<String>,
+
+    #[arg(long, value_name = "PATH")]
+    resource_content_file: Option<PathBuf>,
+
+    #[arg(long, default_value = "{}")]
+    resource_summary_json: String,
+
+    #[arg(long)]
+    resource_detail_content: Option<String>,
+
+    #[arg(long, value_name = "PATH")]
+    resource_detail_content_file: Option<PathBuf>,
+
+    #[arg(long)]
+    resource_detail_content_digest: Option<String>,
+
+    #[arg(long)]
+    resource_detail_content_size_bytes: Option<i64>,
+
+    #[arg(long)]
+    resource_detail_media_type: Option<String>,
+
+    #[arg(long, default_value = "{}")]
+    resource_detail_format_metadata_json: String,
+
+    #[arg(long, default_value = "{}")]
+    cache_detail_json: String,
+
+    #[arg(long)]
+    expected_branch: Option<String>,
+
+    #[arg(long)]
+    expected_head: Option<String>,
+
+    #[arg(long)]
+    expected_target_kind: Option<String>,
+
+    #[arg(long)]
+    expected_target: Option<String>,
+
+    #[arg(long)]
+    expected_result: Option<String>,
+
+    #[arg(long)]
+    expected_evidence_kind: Option<String>,
+
+    #[arg(long)]
+    expected_evidence_relations: Option<usize>,
+
+    #[arg(long)]
+    expected_resource_basis: Option<usize>,
+
+    #[arg(long)]
+    expected_cache_applicability: Option<String>,
+
+    #[arg(long)]
+    expected_cache_reason_code: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -3094,6 +3260,14 @@ enum ResourceCommand {
         #[arg(long)]
         expected_observations: Option<usize>,
     },
+}
+
+#[derive(Debug, Parser)]
+#[command(name = "workvcs record")]
+#[command(about = "Record and inspect semantic work notes")]
+struct RecordArgs {
+    #[command(subcommand)]
+    command: RecordCommand,
 }
 
 #[derive(Debug, Subcommand)]
@@ -8266,12 +8440,14 @@ fn run(cli: Cli) -> Result<String> {
             }
             if let Some(content) = evidence_content_from_cli(EvidenceContentArgs {
                 role: content_role,
+                role_label: "--content-role",
                 content,
                 content_digest,
                 content_file,
                 content_size_bytes,
                 media_type,
                 format_metadata_json,
+                content_error_message: "evidence content requires exactly one of --content, --content-file, or --content-digest with --content-size-bytes",
             })? {
                 options = options.with_contents(vec![content])?;
             }
@@ -8538,16 +8714,17 @@ fn run(cli: Cli) -> Result<String> {
                 fingerprint,
                 parse_cli_object("resource observation summary", &summary_json)?,
             )?;
-            if let Some(detail_content) =
-                resource_observation_detail_from_cli(ResourceObservationDetailArgs {
+            if let Some(detail_content) = resource_observation_detail_from_cli(
+                ResourceObservationDetailArgs {
                     content: detail_content,
                     content_file: detail_content_file,
                     content_digest: detail_content_digest,
                     content_size_bytes: detail_content_size_bytes,
                     media_type: detail_media_type,
                     format_metadata_json: detail_format_metadata_json,
-                })?
-            {
+                    detail_error_message: "resource observation detail requires exactly one of --detail-content, --detail-content-file, or --detail-content-digest with --detail-content-size-bytes",
+                },
+            )? {
                 options = options.with_detail_content(detail_content);
             }
             if let Some(source_session) = source_session {
@@ -8658,1280 +8835,414 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(output)
         }
-        Command::Verification {
-            command:
-                VerificationCommand::Record {
-                    store,
-                    branch,
-                    head,
-                    result,
-                    method,
-                    evidence,
-                    acceptance_criterion,
-                    verification_requirement,
-                    resource,
-                    adapter_kind,
-                    adapter_schema_version,
-                    scope_kind,
-                    scope_schema_version,
-                    scope_payload_json,
-                    baseline_fingerprint,
-                    baseline_observation,
-                    expected_branch,
-                    expected_head,
-                    expected_target_kind,
-                    expected_target,
-                    expected_result,
-                    expected_evidence_relations,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let target = match (acceptance_criterion, verification_requirement) {
-                (Some(acceptance_criterion), None) => VerificationTarget::AcceptanceCriterion(
-                    EntityId::parse_canonical(&acceptance_criterion)?,
-                ),
-                (None, Some(verification_requirement)) => {
-                    VerificationTarget::VerificationRequirement(EntityId::parse_canonical(
-                        &verification_requirement,
-                    )?)
+        Command::Verification { command } => match *command {
+            VerificationCommand::Record {
+                store,
+                branch,
+                head,
+                result,
+                method,
+                evidence,
+                acceptance_criterion,
+                verification_requirement,
+                resource,
+                adapter_kind,
+                adapter_schema_version,
+                scope_kind,
+                scope_schema_version,
+                scope_payload_json,
+                baseline_fingerprint,
+                baseline_observation,
+                expected_branch,
+                expected_head,
+                expected_target_kind,
+                expected_target,
+                expected_result,
+                expected_evidence_relations,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let target = match (acceptance_criterion, verification_requirement) {
+                    (Some(acceptance_criterion), None) => VerificationTarget::AcceptanceCriterion(
+                        EntityId::parse_canonical(&acceptance_criterion)?,
+                    ),
+                    (None, Some(verification_requirement)) => {
+                        VerificationTarget::VerificationRequirement(EntityId::parse_canonical(
+                            &verification_requirement,
+                        )?)
+                    }
+                    _ => {
+                        return Err(WorkVcsError::TaskInvalid(
+                            "verification record requires exactly one target".to_owned(),
+                        ));
+                    }
+                };
+                let mut options = VerificationCreateOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    target,
+                    parse_verification_result(&result)?,
+                )?;
+                if let Some(method) = method {
+                    options = options.with_method(method_value(&method))?;
                 }
-                _ => {
-                    return Err(WorkVcsError::TaskInvalid(
-                        "verification record requires exactly one target".to_owned(),
+                if !evidence.is_empty() {
+                    let evidence_ids = evidence
+                        .iter()
+                        .map(|evidence_id| EvidenceId::parse_canonical(evidence_id))
+                        .collect::<Result<Vec<_>>>()?;
+                    options = options.with_evidence(evidence_ids)?;
+                }
+                if resource.is_some()
+                    || adapter_kind.is_some()
+                    || adapter_schema_version.is_some()
+                    || scope_kind.is_some()
+                    || scope_schema_version.is_some()
+                    || scope_payload_json.is_some()
+                    || baseline_fingerprint.is_some()
+                    || baseline_observation.is_some()
+                {
+                    options = options.with_resource_basis(vec![resource_basis_from_cli(
+                        ResourceBasisArgs {
+                            resource,
+                            adapter_kind,
+                            adapter_schema_version,
+                            scope_kind,
+                            scope_schema_version,
+                            scope_payload_json,
+                            baseline_fingerprint,
+                            baseline_observation,
+                        },
+                    )?])?;
+                }
+                let verification = engine.create_verification(options)?;
+                let mut output = render_verification_create(&verification);
+                append_verification_record_expectations(
+                    &mut output,
+                    &verification,
+                    VerificationRecordExpectationArgs {
+                        expected_branch,
+                        expected_head,
+                        expected_target_kind,
+                        expected_target,
+                        expected_result,
+                        expected_evidence_relations,
+                    },
+                )?;
+                Ok(output)
+            }
+            VerificationCommand::Show {
+                store,
+                branch,
+                commit,
+                verification,
+                expected_state_digest,
+            } => {
+                let engine = Engine::open(store)?;
+                let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+                let snapshot =
+                    engine.verification_at(commit_id, EntityId::parse_canonical(&verification)?)?;
+                let mut output = render_verification_snapshot(&snapshot)?;
+                if let Some(expected_state_digest) = expected_state_digest {
+                    let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                    if snapshot.state_digest != expected_state_digest {
+                        return Err(WorkVcsError::DigestInvalid(format!(
+                            "verification state digest {} does not match expected {}",
+                            snapshot.state_digest, expected_state_digest
+                        )));
+                    }
+                    output.push_str("matches_expected=true\n");
+                }
+                Ok(output)
+            }
+            VerificationCommand::List {
+                store,
+                branch,
+                commit,
+                target_kind,
+                target,
+                result,
+                evidence,
+                resource,
+                baseline_observation,
+                baseline_fingerprint,
+                limit,
+                expected_verifications,
+            } => {
+                let engine = Engine::open(store)?;
+                let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+                let mut verifications = engine.verifications_at(commit_id)?;
+                if let Some(target_kind) = target_kind {
+                    let target_kind = parse_verification_target_kind(&target_kind)?;
+                    verifications.retain(|verification| {
+                        verification_target_kind(verification.target) == target_kind
+                    });
+                }
+                if let Some(target) = target {
+                    let target_id = EntityId::parse_canonical(&target)?;
+                    verifications
+                        .retain(|verification| verification.target.entity_id() == target_id);
+                }
+                if let Some(result) = result {
+                    let result = parse_verification_result(&result)?;
+                    verifications.retain(|verification| verification.state.result == result);
+                }
+                if let Some(evidence) = evidence {
+                    let evidence_id = EvidenceId::parse_canonical(&evidence)?;
+                    verifications.retain(|verification| {
+                        verification
+                            .state
+                            .evidence
+                            .iter()
+                            .any(|evidence| evidence.evidence_id == evidence_id)
+                    });
+                }
+                let resource_id = resource
+                    .map(|resource| ResourceId::parse_canonical(&resource))
+                    .transpose()?;
+                let baseline_observation_id = baseline_observation
+                    .map(|observation| ResourceObservationId::parse_canonical(&observation))
+                    .transpose()?;
+                let baseline_fingerprint = baseline_fingerprint
+                    .map(|fingerprint| Digest::from_hex(&fingerprint))
+                    .transpose()?;
+                if resource_id.is_some()
+                    || baseline_observation_id.is_some()
+                    || baseline_fingerprint.is_some()
+                {
+                    verifications.retain(|verification| {
+                        verification.state.resource_basis.iter().any(|basis| {
+                            let resource_matches = match resource_id {
+                                Some(resource_id) => basis.resource_id == resource_id,
+                                None => true,
+                            };
+                            let baseline_observation_matches = match baseline_observation_id {
+                                Some(observation_id) => {
+                                    basis.baseline_observation_id == Some(observation_id)
+                                }
+                                None => true,
+                            };
+                            let baseline_fingerprint_matches = match baseline_fingerprint {
+                                Some(fingerprint) => basis.baseline_fingerprint == fingerprint,
+                                None => true,
+                            };
+                            resource_matches
+                                && baseline_observation_matches
+                                && baseline_fingerprint_matches
+                        })
+                    });
+                }
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "verification list limit must be greater than zero".to_owned(),
                     ));
                 }
-            };
-            let mut options = VerificationCreateOptions::new(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                target,
-                parse_verification_result(&result)?,
-            )?;
-            if let Some(method) = method {
-                options = options.with_method(method_value(&method))?;
-            }
-            if !evidence.is_empty() {
-                let evidence_ids = evidence
-                    .iter()
-                    .map(|evidence_id| EvidenceId::parse_canonical(evidence_id))
-                    .collect::<Result<Vec<_>>>()?;
-                options = options.with_evidence(evidence_ids)?;
-            }
-            if resource.is_some()
-                || adapter_kind.is_some()
-                || adapter_schema_version.is_some()
-                || scope_kind.is_some()
-                || scope_schema_version.is_some()
-                || scope_payload_json.is_some()
-                || baseline_fingerprint.is_some()
-                || baseline_observation.is_some()
-            {
-                options = options.with_resource_basis(vec![resource_basis_from_cli(
-                    ResourceBasisArgs {
-                        resource,
-                        adapter_kind,
-                        adapter_schema_version,
-                        scope_kind,
-                        scope_schema_version,
-                        scope_payload_json,
-                        baseline_fingerprint,
-                        baseline_observation,
-                    },
-                )?])?;
-            }
-            let verification = engine.create_verification(options)?;
-            let mut output = render_verification_create(&verification);
-            append_verification_record_expectations(
-                &mut output,
-                &verification,
-                VerificationRecordExpectationArgs {
-                    expected_branch,
-                    expected_head,
-                    expected_target_kind,
-                    expected_target,
-                    expected_result,
-                    expected_evidence_relations,
-                },
-            )?;
-            Ok(output)
-        }
-        Command::Verification {
-            command:
-                VerificationCommand::Show {
-                    store,
-                    branch,
-                    commit,
-                    verification,
-                    expected_state_digest,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            let snapshot =
-                engine.verification_at(commit_id, EntityId::parse_canonical(&verification)?)?;
-            let mut output = render_verification_snapshot(&snapshot)?;
-            if let Some(expected_state_digest) = expected_state_digest {
-                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
-                if snapshot.state_digest != expected_state_digest {
-                    return Err(WorkVcsError::DigestInvalid(format!(
-                        "verification state digest {} does not match expected {}",
-                        snapshot.state_digest, expected_state_digest
-                    )));
+                if let Some(limit) = limit {
+                    verifications.truncate(limit);
                 }
-                output.push_str("matches_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Verification {
-            command:
-                VerificationCommand::List {
-                    store,
-                    branch,
-                    commit,
-                    target_kind,
-                    target,
-                    result,
-                    evidence,
-                    resource,
-                    baseline_observation,
-                    baseline_fingerprint,
-                    limit,
-                    expected_verifications,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
-            let mut verifications = engine.verifications_at(commit_id)?;
-            if let Some(target_kind) = target_kind {
-                let target_kind = parse_verification_target_kind(&target_kind)?;
-                verifications.retain(|verification| {
-                    verification_target_kind(verification.target) == target_kind
-                });
-            }
-            if let Some(target) = target {
-                let target_id = EntityId::parse_canonical(&target)?;
-                verifications.retain(|verification| verification.target.entity_id() == target_id);
-            }
-            if let Some(result) = result {
-                let result = parse_verification_result(&result)?;
-                verifications.retain(|verification| verification.state.result == result);
-            }
-            if let Some(evidence) = evidence {
-                let evidence_id = EvidenceId::parse_canonical(&evidence)?;
-                verifications.retain(|verification| {
-                    verification
-                        .state
-                        .evidence
-                        .iter()
-                        .any(|evidence| evidence.evidence_id == evidence_id)
-                });
-            }
-            let resource_id = resource
-                .map(|resource| ResourceId::parse_canonical(&resource))
-                .transpose()?;
-            let baseline_observation_id = baseline_observation
-                .map(|observation| ResourceObservationId::parse_canonical(&observation))
-                .transpose()?;
-            let baseline_fingerprint = baseline_fingerprint
-                .map(|fingerprint| Digest::from_hex(&fingerprint))
-                .transpose()?;
-            if resource_id.is_some()
-                || baseline_observation_id.is_some()
-                || baseline_fingerprint.is_some()
-            {
-                verifications.retain(|verification| {
-                    verification.state.resource_basis.iter().any(|basis| {
-                        let resource_matches = match resource_id {
-                            Some(resource_id) => basis.resource_id == resource_id,
-                            None => true,
-                        };
-                        let baseline_observation_matches = match baseline_observation_id {
-                            Some(observation_id) => {
-                                basis.baseline_observation_id == Some(observation_id)
-                            }
-                            None => true,
-                        };
-                        let baseline_fingerprint_matches = match baseline_fingerprint {
-                            Some(fingerprint) => basis.baseline_fingerprint == fingerprint,
-                            None => true,
-                        };
-                        resource_matches
-                            && baseline_observation_matches
-                            && baseline_fingerprint_matches
-                    })
-                });
-            }
-            if matches!(limit, Some(0)) {
-                return Err(WorkVcsError::QueryInvalid(
-                    "verification list limit must be greater than zero".to_owned(),
-                ));
-            }
-            if let Some(limit) = limit {
-                verifications.truncate(limit);
-            }
-            let mut output = render_verification_list(commit_id, &verifications)?;
-            if let Some(expected_verifications) = expected_verifications {
-                let actual_verifications = verifications.len();
-                if actual_verifications != expected_verifications {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "verifications {actual_verifications} does not match expected {expected_verifications}"
-                    )));
+                let mut output = render_verification_list(commit_id, &verifications)?;
+                if let Some(expected_verifications) = expected_verifications {
+                    let actual_verifications = verifications.len();
+                    if actual_verifications != expected_verifications {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "verifications {actual_verifications} does not match expected {expected_verifications}"
+                        )));
+                    }
+                    output.push_str("verifications_match_expected=true\n");
                 }
-                output.push_str("verifications_match_expected=true\n");
+                Ok(output)
             }
-            Ok(output)
-        }
-        Command::Verification {
-            command:
-                VerificationCommand::CacheRecord {
-                    store,
-                    branch,
-                    head,
-                    verification,
-                    resource_basis_ordinal,
-                    adapter_kind,
-                    adapter_schema_version,
-                    scope_schema_version,
-                    observation_status,
-                    observed_fingerprint,
-                    observation,
-                    detail_json,
-                    expected_evaluated_commit,
-                    expected_applicability,
-                    expected_reason_code,
-                    expected_resource_stamps,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let stamp = applicability_stamp_from_cli(
+            VerificationCommand::CacheRecord {
+                store,
+                branch,
+                head,
+                verification,
                 resource_basis_ordinal,
                 adapter_kind,
                 adapter_schema_version,
                 scope_schema_version,
-                &observation_status,
+                observation_status,
                 observed_fingerprint,
                 observation,
-            )?;
-            let snapshot = engine.record_verification_applicability(
-                VerificationApplicabilityRecordOptions::new(
-                    BranchId::parse_canonical(&branch)?,
-                    EntityId::parse_canonical(&verification)?,
-                    CommitId::parse_canonical(&head)?,
-                )?
-                .with_resource_stamps(vec![stamp])?
-                .with_detail(parse_cli_object(
-                    "verification applicability detail",
-                    &detail_json,
-                )?)?,
-            )?;
-            let mut output = render_verification_applicability_cache(&snapshot);
-            append_verification_cache_record_expectations(
-                &mut output,
-                &snapshot,
-                VerificationCacheRecordExpectationArgs {
-                    expected_evaluated_commit,
-                    expected_applicability,
-                    expected_reason_code,
-                    expected_resource_stamps,
-                },
-            )?;
-            Ok(output)
-        }
-        Command::Verification {
-            command:
-                VerificationCommand::CacheShow {
-                    store,
-                    branch,
-                    verification,
-                    expected_evaluated_commit,
-                    expected_applicability,
-                    expected_reason_code,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let branch_id = BranchId::parse_canonical(&branch)?;
-            let verification_id = EntityId::parse_canonical(&verification)?;
-            let snapshot = engine.verification_applicability_cache(branch_id, verification_id)?;
-            let mut output = render_verification_applicability_cache_lookup(
-                branch_id,
-                verification_id,
-                snapshot.as_ref(),
-            )?;
-            if let Some(expected_evaluated_commit) = expected_evaluated_commit {
-                let expected_evaluated_commit =
-                    CommitId::parse_canonical(&expected_evaluated_commit)?;
-                if snapshot
-                    .as_ref()
-                    .is_none_or(|cache| cache.evaluated_commit_id != expected_evaluated_commit)
-                {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "verification cache evaluated commit does not match expected {}",
-                        expected_evaluated_commit
-                    )));
-                }
-                output.push_str("evaluated_commit_matches_expected=true\n");
-            }
-            if let Some(expected_applicability) = expected_applicability {
-                let expected_applicability =
-                    parse_verification_applicability(&expected_applicability)?;
-                if snapshot
-                    .as_ref()
-                    .is_none_or(|cache| cache.applicability != expected_applicability)
-                {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "verification cache applicability does not match expected {}",
-                        expected_applicability
-                    )));
-                }
-                output.push_str("applicability_matches_expected=true\n");
-            }
-            if let Some(expected_reason_code) = expected_reason_code {
-                if snapshot
-                    .as_ref()
-                    .is_none_or(|cache| cache.reason_code != expected_reason_code)
-                {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "verification cache reason code does not match expected {}",
-                        expected_reason_code
-                    )));
-                }
-                output.push_str("reason_code_matches_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Verification {
-            command:
-                VerificationCommand::CacheList {
-                    store,
-                    branch,
-                    verification,
-                    applicability,
-                    reason_code,
-                    resource,
-                    observation,
+                detail_json,
+                expected_evaluated_commit,
+                expected_applicability,
+                expected_reason_code,
+                expected_resource_stamps,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let stamp = applicability_stamp_from_cli(
+                    resource_basis_ordinal,
+                    adapter_kind,
+                    adapter_schema_version,
+                    scope_schema_version,
+                    &observation_status,
                     observed_fingerprint,
-                    limit,
-                    expected_caches,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let mut options =
-                VerificationApplicabilityCacheListOptions::new(BranchId::parse_canonical(&branch)?);
-            if let Some(verification) = verification {
-                options =
-                    options.with_verification_entity_id(EntityId::parse_canonical(&verification)?);
-            }
-            if let Some(applicability) = applicability {
-                options =
-                    options.with_applicability(parse_verification_applicability(&applicability)?);
-            }
-            let mut result = engine.verification_applicability_caches(options)?;
-            if let Some(reason_code) = reason_code {
-                result
-                    .caches
-                    .retain(|cache| cache.reason_code == reason_code);
-            }
-            let resource_id = resource
-                .map(|resource| ResourceId::parse_canonical(&resource))
-                .transpose()?;
-            let observation_id = observation
-                .map(|observation| ResourceObservationId::parse_canonical(&observation))
-                .transpose()?;
-            let observed_fingerprint = observed_fingerprint
-                .map(|fingerprint| Digest::from_hex(&fingerprint))
-                .transpose()?;
-            if resource_id.is_some() || observation_id.is_some() || observed_fingerprint.is_some() {
-                let mut filtered = Vec::new();
-                for cache in result.caches {
-                    if verification_cache_matches_resource_filters(
-                        &engine,
-                        &cache,
-                        resource_id,
-                        observation_id,
-                        observed_fingerprint,
-                    )? {
-                        filtered.push(cache);
-                    }
-                }
-                result.caches = filtered;
-            }
-            if matches!(limit, Some(0)) {
-                return Err(WorkVcsError::TaskInvalid(
-                    "verification cache-list limit must be greater than zero".to_owned(),
-                ));
-            }
-            if let Some(limit) = limit {
-                result.caches.truncate(limit);
-            }
-            let mut output = render_verification_applicability_cache_list(&result);
-            if let Some(expected_caches) = expected_caches {
-                let actual_caches = result.caches.len();
-                if actual_caches != expected_caches {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "verification caches {actual_caches} does not match expected {expected_caches}"
-                    )));
-                }
-                output.push_str("caches_match_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Record {
-            command:
-                RecordCommand::Show {
-                    store,
-                    branch,
-                    commit,
-                    record,
-                    expected_state_digest,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
-            let snapshot = engine.record_at(commit_id, EntityId::parse_canonical(&record)?)?;
-            let mut output = render_record_show(&snapshot)?;
-            if let Some(expected_state_digest) = expected_state_digest {
-                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
-                if snapshot.state_digest != expected_state_digest {
-                    return Err(WorkVcsError::DigestInvalid(format!(
-                        "record state digest {} does not match expected {}",
-                        snapshot.state_digest, expected_state_digest
-                    )));
-                }
-                output.push_str("matches_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Record {
-            command:
-                RecordCommand::List {
-                    store,
-                    branch,
-                    commit,
-                    kind,
-                    status,
-                    scope_json,
-                    statement_contains,
-                    limit,
-                    expected_records,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let mut options =
-                RecordListOptions::new(resolve_record_query_commit(&engine, branch, commit)?);
-            if let Some(kind) = kind {
-                options = options.with_kind(parse_record_kind(&kind)?);
-            }
-            if let Some(status) = status {
-                options = options.with_status(parse_record_status(&status)?);
-            }
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
-            }
-            if let Some(statement_contains) = statement_contains {
-                options = options.with_statement_contains(statement_contains)?;
-            }
-            if matches!(limit, Some(0)) {
-                return Err(WorkVcsError::QueryInvalid(
-                    "record list limit must be greater than zero".to_owned(),
-                ));
-            }
-            let mut result = engine.records_at(options)?;
-            if let Some(limit) = limit {
-                result.records.truncate(limit);
-            }
-            let mut output = render_record_list(&result);
-            if let Some(expected_records) = expected_records {
-                let actual_records = result.records.len();
-                if actual_records != expected_records {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "records {actual_records} does not match expected {expected_records}"
-                    )));
-                }
-                output.push_str("records_match_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkInvalidates {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_record,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation =
-                engine.create_record_relation(RecordRelationCreateOptions::invalidates(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    EntityId::parse_canonical(&target_record)?,
-                    rationale,
-                )?)?;
-            Ok(render_record_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkInvalidatesKnowledge {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_knowledge,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation = engine.create_record_knowledge_relation(
-                RecordKnowledgeRelationCreateOptions::invalidates(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    EntityId::parse_canonical(&target_knowledge)?,
-                    rationale,
-                )?,
-            )?;
-            Ok(render_record_knowledge_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkValidates {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_record,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation =
-                engine.create_record_relation(RecordRelationCreateOptions::validates(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    EntityId::parse_canonical(&target_record)?,
-                    rationale,
-                )?)?;
-            Ok(render_record_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkValidatesKnowledge {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_knowledge,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation = engine.create_record_knowledge_relation(
-                RecordKnowledgeRelationCreateOptions::validates(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    EntityId::parse_canonical(&target_knowledge)?,
-                    rationale,
-                )?,
-            )?;
-            Ok(render_record_knowledge_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkSupports {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_record,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation = engine.create_record_relation(RecordRelationCreateOptions::supports(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                EntityId::parse_canonical(&source_record)?,
-                EntityId::parse_canonical(&target_record)?,
-                rationale,
-            )?)?;
-            Ok(render_record_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkSupportsKnowledge {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_knowledge,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation = engine.create_record_knowledge_relation(
-                RecordKnowledgeRelationCreateOptions::supports(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    EntityId::parse_canonical(&target_knowledge)?,
-                    rationale,
-                )?,
-            )?;
-            Ok(render_record_knowledge_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkContradicts {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_record,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation =
-                engine.create_record_relation(RecordRelationCreateOptions::contradicts(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    EntityId::parse_canonical(&target_record)?,
-                    rationale,
-                )?)?;
-            Ok(render_record_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkContradictsKnowledge {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_knowledge,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation = engine.create_record_knowledge_relation(
-                RecordKnowledgeRelationCreateOptions::contradicts(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    EntityId::parse_canonical(&target_knowledge)?,
-                    rationale,
-                )?,
-            )?;
-            Ok(render_record_knowledge_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkDerivedFrom {
-                    store,
-                    branch,
-                    head,
-                    result_record,
-                    source_record,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation =
-                engine.create_record_relation(RecordRelationCreateOptions::derived_from(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&result_record)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    rationale,
-                )?)?;
-            Ok(render_record_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::LinkRelatedTo {
-                    store,
-                    branch,
-                    head,
-                    source_record,
-                    target_record,
-                    label,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let relation =
-                engine.create_record_relation(RecordRelationCreateOptions::related_to(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    EntityId::parse_canonical(&source_record)?,
-                    EntityId::parse_canonical(&target_record)?,
-                    label,
-                    rationale,
-                )?)?;
-            Ok(render_record_relation_create(&relation))
-        }
-        Command::Record {
-            command:
-                RecordCommand::SupersedeDecision {
-                    store,
-                    branch,
-                    head,
-                    replacement_record,
-                    prior_record,
-                    prior_record_version,
-                    because_record,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = DecisionRecordSupersedeOptions::new(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                EntityId::parse_canonical(&replacement_record)?,
-                EntityId::parse_canonical(&prior_record)?,
-                EntityVersionId::parse_canonical(&prior_record_version)?,
-                rationale,
-            )?;
-            if let Some(because_record) = because_record {
-                options = options.with_causal_record(EntityId::parse_canonical(&because_record)?);
-            }
-            let superseded = engine.supersede_decision_record(options)?;
-            Ok(render_decision_record_supersede(&superseded))
-        }
-        Command::Record {
-            command:
-                RecordCommand::RelationList {
-                    store,
-                    branch,
-                    commit,
-                    relation_type,
-                    label,
-                    source_record,
-                    target_record,
-                    limit,
-                    expected_relations,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let mut options = RecordRelationListOptions::new(resolve_record_query_commit(
-                &engine, branch, commit,
-            )?);
-            if let Some(relation_type) = relation_type {
-                options = options.with_relation_type(parse_record_relation_type(&relation_type)?);
-            }
-            if let Some(label) = label {
-                options = options.with_relation_label(label)?;
-            }
-            if let Some(source_record) = source_record {
-                options = options.with_source_record(EntityId::parse_canonical(&source_record)?);
-            }
-            if let Some(target_record) = target_record {
-                options = options.with_target_record(EntityId::parse_canonical(&target_record)?);
-            }
-            if matches!(limit, Some(0)) {
-                return Err(WorkVcsError::QueryInvalid(
-                    "record relation-list limit must be greater than zero".to_owned(),
-                ));
-            }
-            let mut result = engine.record_relations_at(options)?;
-            if let Some(limit) = limit {
-                result.relations.truncate(limit);
-            }
-            let mut output = render_record_relation_list(&result);
-            if let Some(expected_relations) = expected_relations {
-                let actual_relations = result.relations.len();
-                if actual_relations != expected_relations {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "record relations {actual_relations} does not match expected {expected_relations}"
-                    )));
-                }
-                output.push_str("relations_match_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Record {
-            command:
-                RecordCommand::KnowledgeRelationList {
-                    store,
-                    branch,
-                    commit,
-                    relation_type,
-                    source_record,
-                    target_knowledge,
-                    limit,
-                    expected_relations,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let mut options = RecordKnowledgeRelationListOptions::new(resolve_record_query_commit(
-                &engine, branch, commit,
-            )?);
-            if let Some(relation_type) = relation_type {
-                options = options
-                    .with_relation_type(parse_record_knowledge_relation_type(&relation_type)?);
-            }
-            if let Some(source_record) = source_record {
-                options = options.with_source_record(EntityId::parse_canonical(&source_record)?);
-            }
-            if let Some(target_knowledge) = target_knowledge {
-                options =
-                    options.with_target_knowledge(EntityId::parse_canonical(&target_knowledge)?);
-            }
-            if matches!(limit, Some(0)) {
-                return Err(WorkVcsError::QueryInvalid(
-                    "record knowledge-relation-list limit must be greater than zero".to_owned(),
-                ));
-            }
-            let mut result = engine.record_knowledge_relations_at(options)?;
-            if let Some(limit) = limit {
-                result.relations.truncate(limit);
-            }
-            let mut output = render_record_knowledge_relation_list(&result);
-            if let Some(expected_relations) = expected_relations {
-                let actual_relations = result.relations.len();
-                if actual_relations != expected_relations {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "record knowledge relations {actual_relations} does not match expected {expected_relations}"
-                    )));
-                }
-                output.push_str("relations_match_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Record {
-            command:
-                RecordCommand::KnowledgeRelationShow {
-                    store,
-                    branch,
-                    commit,
-                    relation,
-                    expected_state_digest,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
-            let snapshot = engine
-                .record_knowledge_relation_at(commit_id, RelationId::parse_canonical(&relation)?)?;
-            let mut output = render_record_knowledge_relation_snapshot(&snapshot);
-            if let Some(expected_state_digest) = expected_state_digest {
-                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
-                if snapshot.state_digest != expected_state_digest {
-                    return Err(WorkVcsError::DigestInvalid(format!(
-                        "record knowledge relation state digest {} does not match expected {}",
-                        snapshot.state_digest, expected_state_digest
-                    )));
-                }
-                output.push_str("matches_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Record {
-            command:
-                RecordCommand::KnowledgeRelationRemove {
-                    store,
-                    branch,
-                    head,
-                    relation,
-                    relation_version,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let removed = engine.remove_record_knowledge_relation(
-                RecordKnowledgeRelationRemoveOptions::new(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    RelationId::parse_canonical(&relation)?,
-                    RelationVersionId::parse_canonical(&relation_version)?,
-                    rationale,
-                )?,
-            )?;
-            Ok(render_record_knowledge_relation_remove(&removed))
-        }
-        Command::Record {
-            command:
-                RecordCommand::KnowledgeRelationRestore {
-                    store,
-                    branch,
-                    head,
-                    relation,
-                    relation_version,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let restored = engine.restore_record_knowledge_relation(
-                RecordKnowledgeRelationRestoreOptions::new(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
-                    RelationId::parse_canonical(&relation)?,
-                    RelationVersionId::parse_canonical(&relation_version)?,
-                    rationale,
-                )?,
-            )?;
-            Ok(render_record_knowledge_relation_restore(&restored))
-        }
-        Command::Record {
-            command:
-                RecordCommand::RelationShow {
-                    store,
-                    branch,
-                    commit,
-                    relation,
-                    expected_state_digest,
-                },
-        } => {
-            let engine = Engine::open(store)?;
-            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
-            let snapshot =
-                engine.record_relation_at(commit_id, RelationId::parse_canonical(&relation)?)?;
-            let mut output = render_record_relation_snapshot(&snapshot);
-            if let Some(expected_state_digest) = expected_state_digest {
-                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
-                if snapshot.state_digest != expected_state_digest {
-                    return Err(WorkVcsError::DigestInvalid(format!(
-                        "record relation state digest {} does not match expected {}",
-                        snapshot.state_digest, expected_state_digest
-                    )));
-                }
-                output.push_str("matches_expected=true\n");
-            }
-            Ok(output)
-        }
-        Command::Record {
-            command:
-                RecordCommand::RelationRemove {
-                    store,
-                    branch,
-                    head,
-                    relation,
-                    relation_version,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let removed = engine.remove_record_relation(RecordRelationRemoveOptions::new(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                RelationId::parse_canonical(&relation)?,
-                RelationVersionId::parse_canonical(&relation_version)?,
-                rationale,
-            )?)?;
-            Ok(render_record_relation_remove(&removed))
-        }
-        Command::Record {
-            command:
-                RecordCommand::RelationRestore {
-                    store,
-                    branch,
-                    head,
-                    relation,
-                    relation_version,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let restored = engine.restore_record_relation(RecordRelationRestoreOptions::new(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                RelationId::parse_canonical(&relation)?,
-                RelationVersionId::parse_canonical(&relation_version)?,
-                rationale,
-            )?)?;
-            Ok(render_record_relation_restore(&restored))
-        }
-        Command::Record {
-            command:
-                RecordCommand::Assumption {
-                    store,
-                    branch,
-                    head,
-                    statement,
-                    scope_json,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = RecordCreateOptions::assumption(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                statement,
-            )?;
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
-            }
-            let record = engine.create_record(options)?;
-            Ok(render_record_create(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::Attempt {
-                    store,
-                    branch,
-                    head,
-                    statement,
-                    scope_json,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = RecordCreateOptions::attempt(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                statement,
-            )?;
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
-            }
-            let record = engine.create_record(options)?;
-            Ok(render_record_create(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::AttemptStatus {
-                    store,
-                    branch,
-                    head,
-                    record,
-                    record_version,
-                    status,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let branch_id = BranchId::parse_canonical(&branch)?;
-            let head_id = CommitId::parse_canonical(&head)?;
-            let record_id = EntityId::parse_canonical(&record)?;
-            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
-            let options = match parse_attempt_record_status(&status)? {
-                RecordStatus::Succeeded => RecordTransitionOptions::complete_attempt_succeeded(
-                    branch_id,
-                    head_id,
-                    record_id,
-                    record_version_id,
-                    rationale,
-                )?,
-                RecordStatus::Failed => RecordTransitionOptions::complete_attempt_failed(
-                    branch_id,
-                    head_id,
-                    record_id,
-                    record_version_id,
-                    rationale,
-                )?,
-                RecordStatus::Inconclusive => {
-                    RecordTransitionOptions::complete_attempt_inconclusive(
-                        branch_id,
-                        head_id,
-                        record_id,
-                        record_version_id,
-                        rationale,
+                    observation,
+                )?;
+                let snapshot = engine.record_verification_applicability(
+                    VerificationApplicabilityRecordOptions::new(
+                        BranchId::parse_canonical(&branch)?,
+                        EntityId::parse_canonical(&verification)?,
+                        CommitId::parse_canonical(&head)?,
                     )?
-                }
-                _ => {
-                    return Err(WorkVcsError::RecordInvalid(format!(
-                        "attempt status {status:?} is not a transition target"
-                    )));
-                }
-            };
-            let record = engine.transition_record(options)?;
-            Ok(render_record_transition(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::AssumptionStatus {
-                    store,
-                    branch,
-                    head,
-                    record,
-                    record_version,
-                    status,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let branch_id = BranchId::parse_canonical(&branch)?;
-            let head_id = CommitId::parse_canonical(&head)?;
-            let record_id = EntityId::parse_canonical(&record)?;
-            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
-            let options = match parse_assumption_record_status(&status)? {
-                RecordStatus::Validated => RecordTransitionOptions::validate_assumption(
+                    .with_resource_stamps(vec![stamp])?
+                    .with_detail(parse_cli_object(
+                        "verification applicability detail",
+                        &detail_json,
+                    )?)?,
+                )?;
+                let mut output = render_verification_applicability_cache(&snapshot);
+                append_verification_cache_record_expectations(
+                    &mut output,
+                    &snapshot,
+                    VerificationCacheRecordExpectationArgs {
+                        expected_evaluated_commit,
+                        expected_applicability,
+                        expected_reason_code,
+                        expected_resource_stamps,
+                    },
+                )?;
+                Ok(output)
+            }
+            VerificationCommand::CacheShow {
+                store,
+                branch,
+                verification,
+                expected_evaluated_commit,
+                expected_applicability,
+                expected_reason_code,
+            } => {
+                let engine = Engine::open(store)?;
+                let branch_id = BranchId::parse_canonical(&branch)?;
+                let verification_id = EntityId::parse_canonical(&verification)?;
+                let snapshot =
+                    engine.verification_applicability_cache(branch_id, verification_id)?;
+                let mut output = render_verification_applicability_cache_lookup(
                     branch_id,
-                    head_id,
-                    record_id,
-                    record_version_id,
-                    rationale,
-                )?,
-                RecordStatus::Invalidated => RecordTransitionOptions::invalidate_assumption(
-                    branch_id,
-                    head_id,
-                    record_id,
-                    record_version_id,
-                    rationale,
-                )?,
-                _ => {
-                    return Err(WorkVcsError::RecordInvalid(format!(
-                        "assumption status {status:?} is not a transition target"
-                    )));
+                    verification_id,
+                    snapshot.as_ref(),
+                )?;
+                if let Some(expected_evaluated_commit) = expected_evaluated_commit {
+                    let expected_evaluated_commit =
+                        CommitId::parse_canonical(&expected_evaluated_commit)?;
+                    if snapshot
+                        .as_ref()
+                        .is_none_or(|cache| cache.evaluated_commit_id != expected_evaluated_commit)
+                    {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "verification cache evaluated commit does not match expected {}",
+                            expected_evaluated_commit
+                        )));
+                    }
+                    output.push_str("evaluated_commit_matches_expected=true\n");
                 }
-            };
-            let record = engine.transition_record(options)?;
-            Ok(render_record_transition(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::Finding {
-                    store,
-                    branch,
-                    head,
-                    statement,
-                    scope_json,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = RecordCreateOptions::finding(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                statement,
-            )?;
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
-            }
-            let record = engine.create_record(options)?;
-            Ok(render_record_create(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::Handoff {
-                    store,
-                    branch,
-                    head,
-                    statement,
-                    scope_json,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = RecordCreateOptions::handoff(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                statement,
-            )?;
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
-            }
-            let record = engine.create_record(options)?;
-            Ok(render_record_create(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::Decision {
-                    store,
-                    branch,
-                    head,
-                    statement,
-                    scope_json,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = RecordCreateOptions::decision(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                statement,
-            )?;
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
-            }
-            let record = engine.create_record(options)?;
-            Ok(render_record_create(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::DecisionStatus {
-                    store,
-                    branch,
-                    head,
-                    record,
-                    record_version,
-                    status,
-                    rationale,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let branch_id = BranchId::parse_canonical(&branch)?;
-            let head_id = CommitId::parse_canonical(&head)?;
-            let record_id = EntityId::parse_canonical(&record)?;
-            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
-            let options = match parse_decision_record_status(&status)? {
-                RecordStatus::Superseded => RecordTransitionOptions::supersede_decision(
-                    branch_id,
-                    head_id,
-                    record_id,
-                    record_version_id,
-                    rationale,
-                )?,
-                RecordStatus::Withdrawn => RecordTransitionOptions::withdraw_decision(
-                    branch_id,
-                    head_id,
-                    record_id,
-                    record_version_id,
-                    rationale,
-                )?,
-                _ => {
-                    return Err(WorkVcsError::RecordInvalid(format!(
-                        "decision status {status:?} is not a transition target"
-                    )));
+                if let Some(expected_applicability) = expected_applicability {
+                    let expected_applicability =
+                        parse_verification_applicability(&expected_applicability)?;
+                    if snapshot
+                        .as_ref()
+                        .is_none_or(|cache| cache.applicability != expected_applicability)
+                    {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "verification cache applicability does not match expected {}",
+                            expected_applicability
+                        )));
+                    }
+                    output.push_str("applicability_matches_expected=true\n");
                 }
-            };
-            let record = engine.transition_record(options)?;
-            Ok(render_record_transition(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::Question {
-                    store,
-                    branch,
-                    head,
-                    statement,
-                    scope_json,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = RecordCreateOptions::question(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                statement,
-            )?;
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+                if let Some(expected_reason_code) = expected_reason_code {
+                    if snapshot
+                        .as_ref()
+                        .is_none_or(|cache| cache.reason_code != expected_reason_code)
+                    {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "verification cache reason code does not match expected {}",
+                            expected_reason_code
+                        )));
+                    }
+                    output.push_str("reason_code_matches_expected=true\n");
+                }
+                Ok(output)
             }
-            let record = engine.create_record(options)?;
-            Ok(render_record_create(&record))
-        }
-        Command::Record {
-            command:
-                RecordCommand::Risk {
-                    store,
-                    branch,
-                    head,
-                    statement,
-                    scope_json,
-                },
-        } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = RecordCreateOptions::risk(
-                BranchId::parse_canonical(&branch)?,
-                CommitId::parse_canonical(&head)?,
-                statement,
-            )?;
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            VerificationCommand::CacheList {
+                store,
+                branch,
+                verification,
+                applicability,
+                reason_code,
+                resource,
+                observation,
+                observed_fingerprint,
+                limit,
+                expected_caches,
+            } => {
+                let engine = Engine::open(store)?;
+                let mut options = VerificationApplicabilityCacheListOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                );
+                if let Some(verification) = verification {
+                    options = options
+                        .with_verification_entity_id(EntityId::parse_canonical(&verification)?);
+                }
+                if let Some(applicability) = applicability {
+                    options = options
+                        .with_applicability(parse_verification_applicability(&applicability)?);
+                }
+                let mut result = engine.verification_applicability_caches(options)?;
+                if let Some(reason_code) = reason_code {
+                    result
+                        .caches
+                        .retain(|cache| cache.reason_code == reason_code);
+                }
+                let resource_id = resource
+                    .map(|resource| ResourceId::parse_canonical(&resource))
+                    .transpose()?;
+                let observation_id = observation
+                    .map(|observation| ResourceObservationId::parse_canonical(&observation))
+                    .transpose()?;
+                let observed_fingerprint = observed_fingerprint
+                    .map(|fingerprint| Digest::from_hex(&fingerprint))
+                    .transpose()?;
+                if resource_id.is_some()
+                    || observation_id.is_some()
+                    || observed_fingerprint.is_some()
+                {
+                    let mut filtered = Vec::new();
+                    for cache in result.caches {
+                        if verification_cache_matches_resource_filters(
+                            &engine,
+                            &cache,
+                            resource_id,
+                            observation_id,
+                            observed_fingerprint,
+                        )? {
+                            filtered.push(cache);
+                        }
+                    }
+                    result.caches = filtered;
+                }
+                if matches!(limit, Some(0)) {
+                    return Err(WorkVcsError::TaskInvalid(
+                        "verification cache-list limit must be greater than zero".to_owned(),
+                    ));
+                }
+                if let Some(limit) = limit {
+                    result.caches.truncate(limit);
+                }
+                let mut output = render_verification_applicability_cache_list(&result);
+                if let Some(expected_caches) = expected_caches {
+                    let actual_caches = result.caches.len();
+                    if actual_caches != expected_caches {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "verification caches {actual_caches} does not match expected {expected_caches}"
+                        )));
+                    }
+                    output.push_str("caches_match_expected=true\n");
+                }
+                Ok(output)
             }
-            let record = engine.create_record(options)?;
-            Ok(render_record_create(&record))
-        }
+        },
+        Command::Record { args } => run_record(args),
         Command::Session {
             command:
                 SessionCommand::Start {
@@ -10696,6 +10007,7 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(output)
         }
+        Command::Verify { args } => run_verify(args),
         Command::Merge {
             command:
                 MergeCommand::Start {
@@ -10963,6 +10275,946 @@ fn run(cli: Cli) -> Result<String> {
     }
 }
 
+fn run_record(args: Vec<String>) -> Result<String> {
+    let args = match RecordArgs::try_parse_from(
+        std::iter::once(String::from("workvcs record")).chain(args),
+    ) {
+        Ok(args) => args,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            return Ok(error.to_string());
+        }
+        Err(error) => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "record arguments invalid: {error}"
+            )));
+        }
+    };
+    match args.command {
+        RecordCommand::Show {
+            store,
+            branch,
+            commit,
+            record,
+            expected_state_digest,
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
+            let snapshot = engine.record_at(commit_id, EntityId::parse_canonical(&record)?)?;
+            let mut output = render_record_show(&snapshot)?;
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "record state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
+        }
+        RecordCommand::List {
+            store,
+            branch,
+            commit,
+            kind,
+            status,
+            scope_json,
+            statement_contains,
+            limit,
+            expected_records,
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options =
+                RecordListOptions::new(resolve_record_query_commit(&engine, branch, commit)?);
+            if let Some(kind) = kind {
+                options = options.with_kind(parse_record_kind(&kind)?);
+            }
+            if let Some(status) = status {
+                options = options.with_status(parse_record_status(&status)?);
+            }
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            if let Some(statement_contains) = statement_contains {
+                options = options.with_statement_contains(statement_contains)?;
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "record list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.records_at(options)?;
+            if let Some(limit) = limit {
+                result.records.truncate(limit);
+            }
+            let mut output = render_record_list(&result);
+            if let Some(expected_records) = expected_records {
+                let actual_records = result.records.len();
+                if actual_records != expected_records {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "records {actual_records} does not match expected {expected_records}"
+                    )));
+                }
+                output.push_str("records_match_expected=true\n");
+            }
+            Ok(output)
+        }
+        RecordCommand::LinkInvalidates {
+            store,
+            branch,
+            head,
+            source_record,
+            target_record,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_record_relation(RecordRelationCreateOptions::invalidates(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_record)?,
+                    rationale,
+                )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        RecordCommand::LinkInvalidatesKnowledge {
+            store,
+            branch,
+            head,
+            source_record,
+            target_knowledge,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation = engine.create_record_knowledge_relation(
+                RecordKnowledgeRelationCreateOptions::invalidates(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_knowledge)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_create(&relation))
+        }
+        RecordCommand::LinkValidates {
+            store,
+            branch,
+            head,
+            source_record,
+            target_record,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_record_relation(RecordRelationCreateOptions::validates(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_record)?,
+                    rationale,
+                )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        RecordCommand::LinkValidatesKnowledge {
+            store,
+            branch,
+            head,
+            source_record,
+            target_knowledge,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation = engine.create_record_knowledge_relation(
+                RecordKnowledgeRelationCreateOptions::validates(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_knowledge)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_create(&relation))
+        }
+        RecordCommand::LinkSupports {
+            store,
+            branch,
+            head,
+            source_record,
+            target_record,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation = engine.create_record_relation(RecordRelationCreateOptions::supports(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&source_record)?,
+                EntityId::parse_canonical(&target_record)?,
+                rationale,
+            )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        RecordCommand::LinkSupportsKnowledge {
+            store,
+            branch,
+            head,
+            source_record,
+            target_knowledge,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation = engine.create_record_knowledge_relation(
+                RecordKnowledgeRelationCreateOptions::supports(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_knowledge)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_create(&relation))
+        }
+        RecordCommand::LinkContradicts {
+            store,
+            branch,
+            head,
+            source_record,
+            target_record,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_record_relation(RecordRelationCreateOptions::contradicts(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_record)?,
+                    rationale,
+                )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        RecordCommand::LinkContradictsKnowledge {
+            store,
+            branch,
+            head,
+            source_record,
+            target_knowledge,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation = engine.create_record_knowledge_relation(
+                RecordKnowledgeRelationCreateOptions::contradicts(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_knowledge)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_create(&relation))
+        }
+        RecordCommand::LinkDerivedFrom {
+            store,
+            branch,
+            head,
+            result_record,
+            source_record,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_record_relation(RecordRelationCreateOptions::derived_from(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&result_record)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    rationale,
+                )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        RecordCommand::LinkRelatedTo {
+            store,
+            branch,
+            head,
+            source_record,
+            target_record,
+            label,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let relation =
+                engine.create_record_relation(RecordRelationCreateOptions::related_to(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&source_record)?,
+                    EntityId::parse_canonical(&target_record)?,
+                    label,
+                    rationale,
+                )?)?;
+            Ok(render_record_relation_create(&relation))
+        }
+        RecordCommand::SupersedeDecision {
+            store,
+            branch,
+            head,
+            replacement_record,
+            prior_record,
+            prior_record_version,
+            because_record,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = DecisionRecordSupersedeOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                EntityId::parse_canonical(&replacement_record)?,
+                EntityId::parse_canonical(&prior_record)?,
+                EntityVersionId::parse_canonical(&prior_record_version)?,
+                rationale,
+            )?;
+            if let Some(because_record) = because_record {
+                options = options.with_causal_record(EntityId::parse_canonical(&because_record)?);
+            }
+            let superseded = engine.supersede_decision_record(options)?;
+            Ok(render_decision_record_supersede(&superseded))
+        }
+        RecordCommand::RelationList {
+            store,
+            branch,
+            commit,
+            relation_type,
+            label,
+            source_record,
+            target_record,
+            limit,
+            expected_relations,
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options = RecordRelationListOptions::new(resolve_record_query_commit(
+                &engine, branch, commit,
+            )?);
+            if let Some(relation_type) = relation_type {
+                options = options.with_relation_type(parse_record_relation_type(&relation_type)?);
+            }
+            if let Some(label) = label {
+                options = options.with_relation_label(label)?;
+            }
+            if let Some(source_record) = source_record {
+                options = options.with_source_record(EntityId::parse_canonical(&source_record)?);
+            }
+            if let Some(target_record) = target_record {
+                options = options.with_target_record(EntityId::parse_canonical(&target_record)?);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "record relation-list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.record_relations_at(options)?;
+            if let Some(limit) = limit {
+                result.relations.truncate(limit);
+            }
+            let mut output = render_record_relation_list(&result);
+            if let Some(expected_relations) = expected_relations {
+                let actual_relations = result.relations.len();
+                if actual_relations != expected_relations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "record relations {actual_relations} does not match expected {expected_relations}"
+                    )));
+                }
+                output.push_str("relations_match_expected=true\n");
+            }
+            Ok(output)
+        }
+        RecordCommand::KnowledgeRelationList {
+            store,
+            branch,
+            commit,
+            relation_type,
+            source_record,
+            target_knowledge,
+            limit,
+            expected_relations,
+        } => {
+            let engine = Engine::open(store)?;
+            let mut options = RecordKnowledgeRelationListOptions::new(resolve_record_query_commit(
+                &engine, branch, commit,
+            )?);
+            if let Some(relation_type) = relation_type {
+                options = options
+                    .with_relation_type(parse_record_knowledge_relation_type(&relation_type)?);
+            }
+            if let Some(source_record) = source_record {
+                options = options.with_source_record(EntityId::parse_canonical(&source_record)?);
+            }
+            if let Some(target_knowledge) = target_knowledge {
+                options =
+                    options.with_target_knowledge(EntityId::parse_canonical(&target_knowledge)?);
+            }
+            if matches!(limit, Some(0)) {
+                return Err(WorkVcsError::QueryInvalid(
+                    "record knowledge-relation-list limit must be greater than zero".to_owned(),
+                ));
+            }
+            let mut result = engine.record_knowledge_relations_at(options)?;
+            if let Some(limit) = limit {
+                result.relations.truncate(limit);
+            }
+            let mut output = render_record_knowledge_relation_list(&result);
+            if let Some(expected_relations) = expected_relations {
+                let actual_relations = result.relations.len();
+                if actual_relations != expected_relations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "record knowledge relations {actual_relations} does not match expected {expected_relations}"
+                    )));
+                }
+                output.push_str("relations_match_expected=true\n");
+            }
+            Ok(output)
+        }
+        RecordCommand::KnowledgeRelationShow {
+            store,
+            branch,
+            commit,
+            relation,
+            expected_state_digest,
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
+            let snapshot = engine
+                .record_knowledge_relation_at(commit_id, RelationId::parse_canonical(&relation)?)?;
+            let mut output = render_record_knowledge_relation_snapshot(&snapshot);
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "record knowledge relation state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
+        }
+        RecordCommand::KnowledgeRelationRemove {
+            store,
+            branch,
+            head,
+            relation,
+            relation_version,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let removed = engine.remove_record_knowledge_relation(
+                RecordKnowledgeRelationRemoveOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    RelationId::parse_canonical(&relation)?,
+                    RelationVersionId::parse_canonical(&relation_version)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_remove(&removed))
+        }
+        RecordCommand::KnowledgeRelationRestore {
+            store,
+            branch,
+            head,
+            relation,
+            relation_version,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let restored = engine.restore_record_knowledge_relation(
+                RecordKnowledgeRelationRestoreOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    RelationId::parse_canonical(&relation)?,
+                    RelationVersionId::parse_canonical(&relation_version)?,
+                    rationale,
+                )?,
+            )?;
+            Ok(render_record_knowledge_relation_restore(&restored))
+        }
+        RecordCommand::RelationShow {
+            store,
+            branch,
+            commit,
+            relation,
+            expected_state_digest,
+        } => {
+            let engine = Engine::open(store)?;
+            let commit_id = resolve_record_query_commit(&engine, branch, commit)?;
+            let snapshot =
+                engine.record_relation_at(commit_id, RelationId::parse_canonical(&relation)?)?;
+            let mut output = render_record_relation_snapshot(&snapshot);
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if snapshot.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "record relation state digest {} does not match expected {}",
+                        snapshot.state_digest, expected_state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
+        }
+        RecordCommand::RelationRemove {
+            store,
+            branch,
+            head,
+            relation,
+            relation_version,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let removed = engine.remove_record_relation(RecordRelationRemoveOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                RelationId::parse_canonical(&relation)?,
+                RelationVersionId::parse_canonical(&relation_version)?,
+                rationale,
+            )?)?;
+            Ok(render_record_relation_remove(&removed))
+        }
+        RecordCommand::RelationRestore {
+            store,
+            branch,
+            head,
+            relation,
+            relation_version,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let restored = engine.restore_record_relation(RecordRelationRestoreOptions::new(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                RelationId::parse_canonical(&relation)?,
+                RelationVersionId::parse_canonical(&relation_version)?,
+                rationale,
+            )?)?;
+            Ok(render_record_relation_restore(&restored))
+        }
+        RecordCommand::Assumption {
+            store,
+            branch,
+            head,
+            statement,
+            scope_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::assumption(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        RecordCommand::Attempt {
+            store,
+            branch,
+            head,
+            statement,
+            scope_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::attempt(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        RecordCommand::AttemptStatus {
+            store,
+            branch,
+            head,
+            record,
+            record_version,
+            status,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let record_id = EntityId::parse_canonical(&record)?;
+            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
+            let options = match parse_attempt_record_status(&status)? {
+                RecordStatus::Succeeded => RecordTransitionOptions::complete_attempt_succeeded(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Failed => RecordTransitionOptions::complete_attempt_failed(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Inconclusive => {
+                    RecordTransitionOptions::complete_attempt_inconclusive(
+                        branch_id,
+                        head_id,
+                        record_id,
+                        record_version_id,
+                        rationale,
+                    )?
+                }
+                _ => {
+                    return Err(WorkVcsError::RecordInvalid(format!(
+                        "attempt status {status:?} is not a transition target"
+                    )));
+                }
+            };
+            let record = engine.transition_record(options)?;
+            Ok(render_record_transition(&record))
+        }
+        RecordCommand::AssumptionStatus {
+            store,
+            branch,
+            head,
+            record,
+            record_version,
+            status,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let record_id = EntityId::parse_canonical(&record)?;
+            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
+            let options = match parse_assumption_record_status(&status)? {
+                RecordStatus::Validated => RecordTransitionOptions::validate_assumption(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Invalidated => RecordTransitionOptions::invalidate_assumption(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                _ => {
+                    return Err(WorkVcsError::RecordInvalid(format!(
+                        "assumption status {status:?} is not a transition target"
+                    )));
+                }
+            };
+            let record = engine.transition_record(options)?;
+            Ok(render_record_transition(&record))
+        }
+        RecordCommand::Finding {
+            store,
+            branch,
+            head,
+            statement,
+            scope_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::finding(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        RecordCommand::Handoff {
+            store,
+            branch,
+            head,
+            statement,
+            scope_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::handoff(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        RecordCommand::Decision {
+            store,
+            branch,
+            head,
+            statement,
+            scope_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::decision(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        RecordCommand::DecisionStatus {
+            store,
+            branch,
+            head,
+            record,
+            record_version,
+            status,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let record_id = EntityId::parse_canonical(&record)?;
+            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
+            let options = match parse_decision_record_status(&status)? {
+                RecordStatus::Superseded => RecordTransitionOptions::supersede_decision(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Withdrawn => RecordTransitionOptions::withdraw_decision(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                _ => {
+                    return Err(WorkVcsError::RecordInvalid(format!(
+                        "decision status {status:?} is not a transition target"
+                    )));
+                }
+            };
+            let record = engine.transition_record(options)?;
+            Ok(render_record_transition(&record))
+        }
+        RecordCommand::Question {
+            store,
+            branch,
+            head,
+            statement,
+            scope_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::question(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+        RecordCommand::Risk {
+            store,
+            branch,
+            head,
+            statement,
+            scope_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let mut options = RecordCreateOptions::risk(
+                BranchId::parse_canonical(&branch)?,
+                CommitId::parse_canonical(&head)?,
+                statement,
+            )?;
+            if let Some(scope_json) = scope_json {
+                options = options.with_scope(parse_cli_object("record scope", &scope_json)?)?;
+            }
+            let record = engine.create_record(options)?;
+            Ok(render_record_create(&record))
+        }
+    }
+}
+
+fn run_verify(args: Vec<String>) -> Result<String> {
+    let args = match VerifyArgs::try_parse_from(
+        std::iter::once(String::from("workvcs verify")).chain(args),
+    ) {
+        Ok(args) => args,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            return Ok(error.to_string());
+        }
+        Err(error) => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "verify arguments invalid: {error}"
+            )));
+        }
+    };
+    let VerifyArgs {
+        store,
+        branch,
+        head,
+        result,
+        method,
+        source_session,
+        evidence_kind,
+        evidence_metadata_json,
+        evidence_content_role,
+        evidence_content,
+        evidence_content_digest,
+        evidence_content_file,
+        evidence_content_size_bytes,
+        evidence_media_type,
+        evidence_format_metadata_json,
+        acceptance_criterion,
+        verification_requirement,
+        resource,
+        adapter_kind,
+        adapter_schema_version,
+        scope_kind,
+        scope_schema_version,
+        scope_payload_json,
+        resource_fingerprint,
+        resource_content,
+        resource_content_file,
+        resource_summary_json,
+        resource_detail_content,
+        resource_detail_content_file,
+        resource_detail_content_digest,
+        resource_detail_content_size_bytes,
+        resource_detail_media_type,
+        resource_detail_format_metadata_json,
+        cache_detail_json,
+        expected_branch,
+        expected_head,
+        expected_target_kind,
+        expected_target,
+        expected_result,
+        expected_evidence_kind,
+        expected_evidence_relations,
+        expected_resource_basis,
+        expected_cache_applicability,
+        expected_cache_reason_code,
+    } = args;
+    let mut engine = Engine::open(store)?;
+    let source_session_id = source_session
+        .as_deref()
+        .map(SessionId::parse_canonical)
+        .transpose()?;
+    let target = verification_target_from_cli(acceptance_criterion, verification_requirement)?;
+    let mut evidence = EvidenceCreateOptions::new(
+        evidence_kind,
+        parse_cli_object("verify evidence metadata", &evidence_metadata_json)?,
+    )?;
+    if let Some(source_session_id) = source_session_id {
+        evidence = evidence.with_source_session_id(source_session_id);
+    }
+    if let Some(content) = evidence_content_from_cli(EvidenceContentArgs {
+        role: evidence_content_role,
+        role_label: "--evidence-content-role",
+        content: evidence_content,
+        content_digest: evidence_content_digest,
+        content_file: evidence_content_file,
+        content_size_bytes: evidence_content_size_bytes,
+        media_type: evidence_media_type,
+        format_metadata_json: evidence_format_metadata_json,
+        content_error_message: "evidence content requires exactly one of --evidence-content, --evidence-content-file, or --evidence-content-digest with --evidence-content-size-bytes",
+    })? {
+        evidence = evidence.with_contents(vec![content])?;
+    }
+    let mut options = VerifyOptions::new(
+        BranchId::parse_canonical(&branch)?,
+        CommitId::parse_canonical(&head)?,
+        target,
+        parse_verification_result(&result)?,
+        evidence,
+    )?;
+    if let Some(method) = method {
+        options = options.with_method(method_value(&method))?;
+    }
+    let resource_observation = verify_resource_observation_from_cli(
+        VerifyResourceObservationArgs {
+            resource,
+            adapter_kind,
+            adapter_schema_version,
+            scope_kind,
+            scope_schema_version,
+            scope_payload_json,
+            resource_fingerprint,
+            resource_content,
+            resource_content_file,
+            resource_summary_json,
+            resource_detail_content,
+            resource_detail_content_file,
+            resource_detail_content_digest,
+            resource_detail_content_size_bytes,
+            resource_detail_media_type,
+            resource_detail_format_metadata_json,
+        },
+        source_session_id,
+    )?;
+    if resource_observation.is_none() && cache_detail_json != "{}" {
+        return Err(WorkVcsError::TaskInvalid(
+            "--cache-detail-json requires resource observation inputs".to_owned(),
+        ));
+    }
+    if let Some(resource_observation) = resource_observation {
+        options = options.with_resource_observation(resource_observation);
+    }
+    options =
+        options.with_cache_detail(parse_cli_object("verify cache detail", &cache_detail_json)?)?;
+    let result = engine.verify(options)?;
+    let mut output = render_verify_result(&result)?;
+    append_verify_expectations(
+        &mut output,
+        &result,
+        VerifyExpectationArgs {
+            expected_branch,
+            expected_head,
+            expected_target_kind,
+            expected_target,
+            expected_result,
+            expected_evidence_kind,
+            expected_evidence_relations,
+            expected_resource_basis,
+            expected_cache_applicability,
+            expected_cache_reason_code,
+        },
+    )?;
+    Ok(output)
+}
+
 fn parse_task_status(value: &str) -> Result<TaskStatus> {
     match value {
         "pending" => Ok(TaskStatus::Pending),
@@ -11069,6 +11321,23 @@ fn parse_verification_applicability(value: &str) -> Result<VerificationApplicabi
         other => Err(WorkVcsError::TaskInvalid(format!(
             "verification applicability {other:?} is not in the CLI vocabulary"
         ))),
+    }
+}
+
+fn verification_target_from_cli(
+    acceptance_criterion: Option<String>,
+    verification_requirement: Option<String>,
+) -> Result<VerificationTarget> {
+    match (acceptance_criterion, verification_requirement) {
+        (Some(acceptance_criterion), None) => Ok(VerificationTarget::AcceptanceCriterion(
+            EntityId::parse_canonical(&acceptance_criterion)?,
+        )),
+        (None, Some(verification_requirement)) => Ok(VerificationTarget::VerificationRequirement(
+            EntityId::parse_canonical(&verification_requirement)?,
+        )),
+        _ => Err(WorkVcsError::TaskInvalid(
+            "verify requires exactly one target".to_owned(),
+        )),
     }
 }
 
@@ -11721,12 +11990,14 @@ fn split_work_state_mapping<'a>(label: &str, value: &'a str) -> Result<(&'a str,
 
 struct EvidenceContentArgs {
     role: Option<String>,
+    role_label: &'static str,
     content: Option<String>,
     content_digest: Option<String>,
     content_file: Option<PathBuf>,
     content_size_bytes: Option<i64>,
     media_type: Option<String>,
     format_metadata_json: String,
+    content_error_message: &'static str,
 }
 
 fn evidence_content_from_cli(args: EvidenceContentArgs) -> Result<Option<EvidenceContentInput>> {
@@ -11741,7 +12012,7 @@ fn evidence_content_from_cli(args: EvidenceContentArgs) -> Result<Option<Evidenc
         return Ok(None);
     }
 
-    let role = required_arg("--content-role", args.role)?;
+    let role = required_arg(args.role_label, args.role)?;
     let mut content = match (
         args.content,
         args.content_digest,
@@ -11764,8 +12035,7 @@ fn evidence_content_from_cli(args: EvidenceContentArgs) -> Result<Option<Evidenc
         }
         _ => {
             return Err(WorkVcsError::EvidenceInvalid(
-                "evidence content requires exactly one of --content, --content-file, or --content-digest with --content-size-bytes"
-                    .to_owned(),
+                args.content_error_message.to_owned(),
             ));
         }
     };
@@ -11804,6 +12074,7 @@ struct ResourceObservationDetailArgs {
     content_size_bytes: Option<i64>,
     media_type: Option<String>,
     format_metadata_json: String,
+    detail_error_message: &'static str,
 }
 
 fn resource_observation_detail_from_cli(
@@ -11840,8 +12111,7 @@ fn resource_observation_detail_from_cli(
         }
         _ => {
             return Err(WorkVcsError::ResourceInvalid(
-                "resource observation detail requires exactly one of --detail-content, --detail-content-file, or --detail-content-digest with --detail-content-size-bytes"
-                    .to_owned(),
+                args.detail_error_message.to_owned(),
             ));
         }
     };
@@ -11892,6 +12162,96 @@ fn resource_basis_from_cli(args: ResourceBasisArgs) -> Result<VerificationResour
         )?)?;
     }
     Ok(basis)
+}
+
+struct VerifyResourceObservationArgs {
+    resource: Option<String>,
+    adapter_kind: Option<String>,
+    adapter_schema_version: Option<i64>,
+    scope_kind: Option<String>,
+    scope_schema_version: Option<i64>,
+    scope_payload_json: Option<String>,
+    resource_fingerprint: Option<String>,
+    resource_content: Option<String>,
+    resource_content_file: Option<PathBuf>,
+    resource_summary_json: String,
+    resource_detail_content: Option<String>,
+    resource_detail_content_file: Option<PathBuf>,
+    resource_detail_content_digest: Option<String>,
+    resource_detail_content_size_bytes: Option<i64>,
+    resource_detail_media_type: Option<String>,
+    resource_detail_format_metadata_json: String,
+}
+
+fn verify_resource_observation_from_cli(
+    args: VerifyResourceObservationArgs,
+    source_session_id: Option<SessionId>,
+) -> Result<Option<VerifyResourceObservationInput>> {
+    let has_resource_args = args.resource.is_some()
+        || args.adapter_kind.is_some()
+        || args.adapter_schema_version.is_some()
+        || args.scope_kind.is_some()
+        || args.scope_schema_version.is_some()
+        || args.scope_payload_json.is_some()
+        || args.resource_fingerprint.is_some()
+        || args.resource_content.is_some()
+        || args.resource_content_file.is_some()
+        || args.resource_summary_json != "{}"
+        || args.resource_detail_content.is_some()
+        || args.resource_detail_content_file.is_some()
+        || args.resource_detail_content_digest.is_some()
+        || args.resource_detail_content_size_bytes.is_some()
+        || args.resource_detail_media_type.is_some()
+        || args.resource_detail_format_metadata_json != "{}";
+    if !has_resource_args {
+        return Ok(None);
+    }
+
+    let fingerprint = fingerprint_from_cli(
+        args.resource_fingerprint,
+        args.resource_content,
+        args.resource_content_file,
+    )?;
+    let mut observation = ResourceObservationCreateOptions::new(
+        ResourceId::parse_canonical(&required_arg("--resource", args.resource)?)?,
+        required_arg("--adapter-kind", args.adapter_kind)?,
+        required_arg("--adapter-schema-version", args.adapter_schema_version)?,
+        fingerprint,
+        parse_cli_object(
+            "verify resource observation summary",
+            &args.resource_summary_json,
+        )?,
+    )?;
+    if let Some(detail_content) = resource_observation_detail_from_cli(
+        ResourceObservationDetailArgs {
+            content: args.resource_detail_content,
+            content_file: args.resource_detail_content_file,
+            content_digest: args.resource_detail_content_digest,
+            content_size_bytes: args.resource_detail_content_size_bytes,
+            media_type: args.resource_detail_media_type,
+            format_metadata_json: args.resource_detail_format_metadata_json,
+            detail_error_message: "resource observation detail requires exactly one of --resource-detail-content, --resource-detail-content-file, or --resource-detail-content-digest with --resource-detail-content-size-bytes",
+        },
+    )? {
+        observation = observation.with_detail_content(detail_content);
+    }
+    if let Some(source_session_id) = source_session_id {
+        observation = observation.with_source_session_id(source_session_id);
+    }
+
+    let scope_kind = required_arg("--scope-kind", args.scope_kind)?;
+    let scope_schema_version = required_arg("--scope-schema-version", args.scope_schema_version)?;
+    let scope_payload = parse_cli_object(
+        "verify resource scope payload",
+        &required_arg("--scope-payload-json", args.scope_payload_json)?,
+    )?;
+
+    Ok(Some(VerifyResourceObservationInput::new(
+        observation,
+        scope_kind,
+        scope_schema_version,
+        scope_payload,
+    )?))
 }
 
 fn applicability_stamp_from_cli(
@@ -13160,6 +13520,152 @@ fn render_verification_create(verification: &VerificationCreateCommit) -> String
         verification.work_state_digest,
         verification.state.result
     )
+}
+
+fn render_verify_result(result: &VerifyResult) -> Result<String> {
+    let observation = result.resource_observation.as_ref();
+    let cache = result.applicability_cache.as_ref();
+    let verification = &result.verification;
+    let mut output = format!(
+        "evidence_id={}\nevidence_kind={}\nevidence_contents={}\nsource_session_id={}\nresource_observation_recorded={}\nobservation_id={}\nresource_id={}\nresource_fingerprint={}\nverification_entity_id={}\nverification_entity_version_id={}\nverification_state_digest={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\ntarget_kind={}\ntarget_entity_id={}\nresult={}\nevidence_relations={}\nresource_basis={}\napplicability_cache_recorded={}\napplicability={}\nreason_code={}\nresource_stamps={}\n",
+        result.evidence.evidence_id,
+        result.evidence.evidence_kind,
+        result.evidence.contents.len(),
+        render_optional_display_or_none(result.evidence.source_session_id.as_ref()),
+        observation.is_some(),
+        render_optional_display_or_none(observation.map(|observation| &observation.observation_id)),
+        render_optional_display_or_none(observation.map(|observation| &observation.resource_id)),
+        render_optional_display_or_none(
+            observation.map(|observation| &observation.state.fingerprint)
+        ),
+        verification.verification_entity_id,
+        verification.verification_entity_version_id,
+        verification.verification_state_digest,
+        verification.branch_id,
+        verification.previous_head_commit_id,
+        verification.commit_id,
+        verification.changeset_id,
+        verification_target_kind(verification.target),
+        verification.target.entity_id(),
+        verification.state.result,
+        verification.evidenced_by_relations.len(),
+        verification.state.resource_basis.len(),
+        cache.is_some(),
+        render_optional_display_or_none(cache.map(|cache| &cache.applicability)),
+        cache
+            .map(|cache| cache.reason_code.as_str())
+            .unwrap_or("none"),
+        cache.map(|cache| cache.resource_stamps.len()).unwrap_or(0)
+    );
+    write_evidence_content_fields(&mut output, &result.evidence.contents)?;
+    Ok(output)
+}
+
+struct VerifyExpectationArgs {
+    expected_branch: Option<String>,
+    expected_head: Option<String>,
+    expected_target_kind: Option<String>,
+    expected_target: Option<String>,
+    expected_result: Option<String>,
+    expected_evidence_kind: Option<String>,
+    expected_evidence_relations: Option<usize>,
+    expected_resource_basis: Option<usize>,
+    expected_cache_applicability: Option<String>,
+    expected_cache_reason_code: Option<String>,
+}
+
+fn append_verify_expectations(
+    output: &mut String,
+    result: &VerifyResult,
+    expectations: VerifyExpectationArgs,
+) -> Result<()> {
+    let VerifyExpectationArgs {
+        expected_branch,
+        expected_head,
+        expected_target_kind,
+        expected_target,
+        expected_result,
+        expected_evidence_kind,
+        expected_evidence_relations,
+        expected_resource_basis,
+        expected_cache_applicability,
+        expected_cache_reason_code,
+    } = expectations;
+    let verification = &result.verification;
+    append_expected_branch_id_match(
+        output,
+        "verify branch",
+        &verification.branch_id,
+        expected_branch.as_deref(),
+        "branch_match_expected",
+    )?;
+    append_expected_commit_id_match(
+        output,
+        "verify head",
+        &verification.previous_head_commit_id,
+        expected_head.as_deref(),
+        "head_match_expected",
+    )?;
+    append_expected_text_match(
+        output,
+        "verify target kind",
+        verification_target_kind(verification.target),
+        expected_target_kind.as_deref(),
+        "target_kind_match_expected",
+    )?;
+    let actual_target = verification.target.entity_id().to_string();
+    append_expected_text_match(
+        output,
+        "verify target",
+        &actual_target,
+        expected_target.as_deref(),
+        "target_match_expected",
+    )?;
+    let actual_result = verification.state.result.to_string();
+    append_expected_text_match(
+        output,
+        "verify result",
+        &actual_result,
+        expected_result.as_deref(),
+        "result_match_expected",
+    )?;
+    append_expected_text_match(
+        output,
+        "verify evidence kind",
+        &result.evidence.evidence_kind,
+        expected_evidence_kind.as_deref(),
+        "evidence_kind_match_expected",
+    )?;
+    append_expected_count_match(
+        output,
+        "verify evidence relations",
+        verification.evidenced_by_relations.len(),
+        expected_evidence_relations,
+        "evidence_relations_match_expected",
+    )?;
+    append_expected_count_match(
+        output,
+        "verify resource basis",
+        verification.state.resource_basis.len(),
+        expected_resource_basis,
+        "resource_basis_match_expected",
+    )?;
+    if expected_cache_applicability.is_some() || expected_cache_reason_code.is_some() {
+        let cache = result.applicability_cache.as_ref().ok_or_else(|| {
+            WorkVcsError::QueryInvalid("verify did not record an applicability cache".to_owned())
+        })?;
+        append_verification_cache_record_expectations(
+            output,
+            cache,
+            VerificationCacheRecordExpectationArgs {
+                expected_evaluated_commit: None,
+                expected_applicability: expected_cache_applicability,
+                expected_reason_code: expected_cache_reason_code,
+                expected_resource_stamps: None,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 struct VerificationRecordExpectationArgs {
@@ -18488,6 +18994,7 @@ mod tests {
                 "context",
                 "next",
                 "runnable",
+                "verify",
                 "verification",
                 "projection",
                 "bundle",
@@ -18553,6 +19060,7 @@ mod tests {
             ("context", "Show the current session context"),
             ("next", "Select next runnable work for a session"),
             ("runnable", "Inspect runnable task projections"),
+            ("verify", "Run a single-target verification wrapper"),
             ("verification", "Record and inspect verifications"),
             ("projection", "Refresh and inspect runtime projections"),
             ("bundle", "Export, validate, import, and apply bundles"),
@@ -18574,6 +19082,56 @@ mod tests {
                 "top-level command has blank help summary: {name}"
             );
         }
+    }
+
+    #[test]
+    fn cli_lazy_record_and_verify_commands_render_nested_help() {
+        let record_help =
+            run(Cli::try_parse_from(["workvcs", "record", "--help"]).expect("parse record help"))
+                .expect("record help");
+        assert!(record_help.contains("Record and inspect semantic work notes"));
+        assert!(record_help.contains("Usage: workvcs record <COMMAND>"));
+        assert!(record_help.contains("assumption"));
+
+        let verify_help =
+            run(Cli::try_parse_from(["workvcs", "verify", "--help"]).expect("parse verify help"))
+                .expect("verify help");
+        assert!(verify_help.contains("Run a single-target verification wrapper"));
+        assert!(verify_help.contains("--evidence-content-role"));
+        assert!(verify_help.contains("--resource-detail-content-file"));
+    }
+
+    #[test]
+    fn cli_verify_content_errors_use_verify_flag_labels() {
+        let evidence_error = evidence_content_from_cli(EvidenceContentArgs {
+            role: None,
+            role_label: "--evidence-content-role",
+            content: Some("proof".to_owned()),
+            content_digest: None,
+            content_file: None,
+            content_size_bytes: None,
+            media_type: None,
+            format_metadata_json: "{}".to_owned(),
+            content_error_message:
+                "evidence content requires exactly one of --evidence-content, --evidence-content-file, or --evidence-content-digest with --evidence-content-size-bytes",
+        })
+        .expect_err("missing verify evidence role should fail");
+        assert!(format!("{evidence_error}").contains("--evidence-content-role"));
+
+        let detail_error = resource_observation_detail_from_cli(ResourceObservationDetailArgs {
+            content: Some("detail".to_owned()),
+            content_file: None,
+            content_digest: Some(
+                "0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+            ),
+            content_size_bytes: Some(1),
+            media_type: None,
+            format_metadata_json: "{}".to_owned(),
+            detail_error_message:
+                "resource observation detail requires exactly one of --resource-detail-content, --resource-detail-content-file, or --resource-detail-content-digest with --resource-detail-content-size-bytes",
+        })
+        .expect_err("ambiguous verify resource detail source should fail");
+        assert!(format!("{detail_error}").contains("--resource-detail-content"));
     }
 
     #[test]

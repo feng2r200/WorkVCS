@@ -1209,6 +1209,13 @@ pub(super) fn load_active_session_runtime_for_update(
     })
 }
 
+pub(super) fn session_lifecycle_state_for_connection(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<SessionLifecycleState> {
+    Ok(session_snapshot_from_connection(connection, session_id)?.lifecycle_state)
+}
+
 fn load_live_session_runtime_for_update(
     transaction: &Transaction<'_>,
     session_id: SessionId,

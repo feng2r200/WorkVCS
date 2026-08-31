@@ -14,9 +14,9 @@ deployment, and plugin activation remain separate workflows.
 
 Current V0.1 does not include a daemon, GUI, TUI, cloud sync, remote
 collaboration, automatic transcript parsing, LLM extraction, or Agent
-orchestration. A Session can be explicitly marked `potentially_stale`, but
-automatic stale detection and stale-gated Claim takeover remain Open. Claim
-takeover is explicit and still requires `--force` plus a rationale.
+orchestration. A Session can be explicitly marked `potentially_stale`; Claim
+takeover is stale-gated, explicit, and still requires `--force` plus a
+rationale. Automatic stale detection remains Open.
 
 ## Build Or Install
 
@@ -93,7 +93,7 @@ Inspect continuation context:
 
 ```bash
 workvcs context "$STORE" --session "$SESSION_ID"
-workvcs context "$STORE" --session "$SESSION_ID" --profile handoff --budget-items 20
+workvcs context "$STORE" --session "$SESSION_ID" --profile normal --budget-items 20
 workvcs next "$STORE" --session "$SESSION_ID"
 ```
 
@@ -134,7 +134,31 @@ workvcs verify "$STORE" \
   --result passed \
   --method cli \
   --evidence-kind command_output \
+  --evidence-content-role log \
   --evidence-content "validation command passed"
+```
+
+Capture the emitted `verification_entity_id` and `commit_id`. Use that
+`commit_id` as the next `HEAD_COMMIT_ID`. Before marking the Task done, inspect
+the current Task version at the new head:
+
+```bash
+workvcs task show "$STORE" \
+  --branch "$BRANCH_ID" \
+  --task "$TASK_ENTITY_ID"
+```
+
+Capture the current `task_entity_version_id`, then close the Task:
+
+```bash
+workvcs task transition "$STORE" \
+  --branch "$BRANCH_ID" \
+  --head "$HEAD_COMMIT_ID" \
+  --task "$TASK_ENTITY_ID" \
+  --task-version "$CURRENT_TASK_ENTITY_VERSION_ID" \
+  --status done \
+  --outcome completed \
+  --session "$SESSION_ID"
 ```
 
 End a Session with a summary and create a focused handoff:
@@ -201,8 +225,9 @@ workvcs claim guard "$STORE" \
   --task "$TASK_ENTITY_ID"
 ```
 
-When an operator must override a blocked active Claim, use forced takeover with
-a rationale and inspect the guard afterward:
+When an operator must override a blocked active Claim, first mark the previous
+owning Session as `potentially_stale`, then use forced takeover with a rationale
+and inspect the guard afterward:
 
 ```bash
 workvcs session mark-stale "$STORE" \
@@ -236,10 +261,10 @@ intended state transition.
 
 ## Still Open For V1
 
-- The documented loop has not yet been used as the durable WorkVCS state system
-  for a full implementation slice.
+- The documented loop has been dogfooded for one implementation closeout, but
+  still needs a real blocked recovery handoff and lower-friction ID capture.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
 - Context packets still need more V1 categories and persistence decisions.
-- Automatic stale detection and stale-gated Claim takeover policy remain open.
+- Automatic stale detection remains open.
 - Larger Store validation has not yet been run.

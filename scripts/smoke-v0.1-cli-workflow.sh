@@ -1868,6 +1868,25 @@ expect_value "$claim_transfer_guard_output" "allowed_match_expected" "true"
 expect_value "$claim_transfer_guard_output" "reason_match_expected" "true"
 expect_value "$claim_transfer_guard_output" "active_claims_match_expected" "true"
 
+expect_failure_contains "must be potentially_stale before forced takeover" \
+    claim takeover "$store" \
+    --session "$claim_recovery_takeover_session_id" \
+    --claim "$claim_transfer_id" \
+    --force \
+    --rationale "operator recovery smoke"
+
+claim_takeover_stale_mark_output="$(run_workvcs \
+    session mark-stale "$store" \
+    --session "$claim_recovery_target_session_id" \
+    --rationale "operator recovery smoke: previous session cannot continue" \
+    --expected-session "$claim_recovery_target_session_id" \
+    --expected-lifecycle-state potentially_stale \
+    --expected-active-workspace "$workspace_id" \
+    --expected-active-branch "$branch_id")"
+expect_value "$claim_takeover_stale_mark_output" "lifecycle_state" "potentially_stale"
+expect_value "$claim_takeover_stale_mark_output" "session_match_expected" "true"
+expect_value "$claim_takeover_stale_mark_output" "lifecycle_state_match_expected" "true"
+
 claim_takeover_output="$(run_workvcs \
     claim takeover "$store" \
     --session "$claim_recovery_takeover_session_id" \
@@ -1876,16 +1895,19 @@ claim_takeover_output="$(run_workvcs \
     --rationale "operator recovery smoke" \
     --expected-previous-claim "$claim_transfer_id" \
     --expected-previous-session "$claim_recovery_target_session_id" \
+    --expected-previous-session-lifecycle-state potentially_stale \
     --expected-session "$claim_recovery_takeover_session_id" \
     --expected-mode exclusive \
     --expected-lifecycle-state active)"
 claim_takeover_id="$(value "$claim_takeover_output" "claim_id")"
 expect_value "$claim_takeover_output" "previous_claim_id" "$claim_transfer_id"
+expect_value "$claim_takeover_output" "previous_session_lifecycle_state" "potentially_stale"
 expect_value "$claim_takeover_output" "previous_lifecycle_state" "released"
 expect_value "$claim_takeover_output" "lifecycle_state" "active"
 expect_value "$claim_takeover_output" "rationale" "operator recovery smoke"
 expect_value "$claim_takeover_output" "previous_claim_match_expected" "true"
 expect_value "$claim_takeover_output" "previous_session_match_expected" "true"
+expect_value "$claim_takeover_output" "previous_session_lifecycle_state_match_expected" "true"
 expect_value "$claim_takeover_output" "session_match_expected" "true"
 expect_value "$claim_takeover_output" "mode_match_expected" "true"
 expect_value "$claim_takeover_output" "lifecycle_state_match_expected" "true"
@@ -1943,10 +1965,12 @@ stale_list_output="$(run_workvcs \
     --lifecycle potentially_stale \
     --workspace "$workspace_id" \
     --branch "$branch_id" \
-    --expected-sessions 1)"
-expect_value "$stale_list_output" "sessions" "1"
-expect_value "$stale_list_output" "session.0.session_id" "$stale_session_id"
+    --expected-sessions 2)"
+expect_value "$stale_list_output" "sessions" "2"
+expect_value "$stale_list_output" "session.0.session_id" "$claim_recovery_target_session_id"
 expect_value "$stale_list_output" "session.0.lifecycle_state" "potentially_stale"
+expect_value "$stale_list_output" "session.1.session_id" "$stale_session_id"
+expect_value "$stale_list_output" "session.1.lifecycle_state" "potentially_stale"
 expect_value "$stale_list_output" "sessions_match_expected" "true"
 
 step "integrity gate"
@@ -1958,7 +1982,7 @@ store_integrity_output="$(run_workvcs \
     --expected-checked-changesets 19 \
     --expected-checked-change-operations 27 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 40 \
+    --expected-checked-events 41 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "2"
@@ -1966,7 +1990,7 @@ expect_value "$store_integrity_output" "checked_commits" "19"
 expect_value "$store_integrity_output" "checked_changesets" "19"
 expect_value "$store_integrity_output" "checked_change_operations" "27"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "40"
+expect_value "$store_integrity_output" "checked_events" "41"
 expect_value "$store_integrity_output" "checked_checkpoints" "1"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -1979,11 +2003,11 @@ doctor_output="$(run_workvcs \
     --expected-checked-changesets 19 \
     --expected-checked-change-operations 27 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 40 \
+    --expected-checked-events 41 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=2 checked_commits=19 checked_changesets=19 checked_change_operations=27 checked_changeset_causal_anchors=0 checked_events=40 checked_checkpoints=1 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=19 checked_changesets=19 checked_change_operations=27 checked_changeset_causal_anchors=0 checked_events=41 checked_checkpoints=1 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'

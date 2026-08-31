@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0419 / Phase 4LD
+Last refreshed: 2026-09-01 by ADR-0420 / Phase 4LE
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -30,20 +30,20 @@ not complete.
 | V1 area | Design confirmed | Implemented | Smoke proven | Dogfood proven | Open / next action |
 | --- | --- | --- | --- | --- | --- |
 | Canonical IDs, digests, and WorkState hashing | Yes | Yes | Partial | No | Keep as regression foundation; no further work unless another V1 slice exposes a concrete compatibility gap. |
-| Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | No | Phase 4LC adds local install/use documentation; next prove the path with a larger Store validation run so the operator path is not only a temporary smoke Store. |
+| Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | Partial | Phase 4LE creates a durable local dogfood Store for a full implementation closeout; next prove the path with a larger Store validation run. |
 | Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | No | Create a real dogfood walkthrough that branches and restores Work State for an implementation slice. |
-| Goal, Plan, Task, ordering, dependencies, and containment | Yes | Yes | Partial | No | Use WorkVCS itself to manage a nontrivial implementation Plan, then record the missing ergonomics. |
-| Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Partial | Use the `verify` wrapper and explicit cache refresh in more durable implementation handoffs; the next missing loop is focused handoff authoring/reading. |
+| Goal, Plan, Task, ordering, dependencies, and containment | Yes | Yes | Partial | Partial | Phase 4LE uses a real WorkVCS Task through implementation closeout; still use WorkVCS itself to manage a nontrivial Goal/Plan. |
+| Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Yes | Phase 4LE dogfoods AC/VR/Verification for an implementation closeout; repeat this in recovery and handoff-consumption scenarios. |
 | Verification command wrapper | Yes | Yes | Yes | Partial | Extend beyond caller-supplied observation data only after Resource adapter/path normalization is confirmed; keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Resource-backed stale-cache recovery from baseline observations is implemented; Resource path/glob normalization and adapter-backed re-observation remain Open. |
-| Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | No | Explicit `potentially_stale` marking is implemented and smoke-proven; dogfood the select-and-continue loop with real implementation work instead of only script-generated Tasks. |
-| Claim modes and guard behavior | Yes | Partial | Partial | No | Transfer and forced takeover now have explicit runtime replacement and smoke coverage; stale-gated takeover policy and durable dogfood remain Open. |
+| Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Partial | Phase 4LE uses Session, Context, `next`, SessionDiff, and Handoff for a real implementation closeout; still dogfood blocked recovery continuation. |
+| Claim modes and guard behavior | Yes | Yes | Yes | Partial | Transfer, stale marking, and stale-gated forced takeover are implemented and smoke-covered; dogfood the full takeover recovery path in a real handoff. |
 | Context resolver | Yes | Partial | Yes | Partial | Complete the remaining V1 context categories and dogfood flow: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
-| Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | No | Use real Findings/Decisions/Handoffs during implementation and inspect `why` output for continuation quality. |
-| Handoff | Yes | Yes | Yes | No | Use focused Handoff in a durable implementation handoff, then decide whether typed relations or context packets are needed for V1. |
+| Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LE records a real Finding and Handoff; inspect `why` output for continuation quality in the next handoff-consumption slice. |
+| Handoff | Yes | Yes | Yes | Partial | Phase 4LE authors and reads a focused implementation closeout Handoff; next consume a handoff as the continuation entrypoint. |
 | Merge lifecycle | Yes | Yes | Yes | No | Dogfood divergent Work Branch resolution and document recovery behavior for moved heads or unresolved items. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | No | Validate a real export/import/restore path and record Bundle container/profile details still Open for V1. |
-| CLI discoverability and operator use | Partial | Partial | Partial | No | Phase 4LC adds install, quickstart, validation, and common recovery documentation tied to the current runnable command surface; next dogfood the guide in a durable implementation slice. |
+| CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LE dogfoods the guide through one closeout and fixes context/verify examples; next reduce manual key-value capture. |
 | Actionable errors and recovery | Yes | Partial | Partial | No | Audit common failures and document safe next actions; add behavior only where current errors block dogfood. |
 | Larger Store and performance evidence | Partial | No | No | No | Run a representative larger Store workload before adding indexes or claiming scale readiness. |
 
@@ -52,17 +52,15 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Use the local operator guide to run a durable WorkVCS-managed implementation
-   slice and record missing ergonomics.
-2. Add stale-gated Claim takeover policy on top of the explicit
-   `potentially_stale` Session state.
-3. Dogfood Claim transfer, forced takeover, and stale marking in a durable implementation recovery
-   path and record missing ergonomics.
-4. Complete the remaining V1 Context Resolver categories when the verify and
+1. Dogfood Claim transfer, stale marking, and stale-gated takeover in a durable
+   implementation recovery path and record missing ergonomics.
+2. Consume a focused Handoff as the continuation entrypoint and inspect `why`
+   output for missing continuation context.
+3. Complete the remaining V1 Context Resolver categories when the verify and
    handoff surfaces can supply real packet content.
-5. Dogfood focused Handoff in a durable implementation handoff and record the
-   missing consumption ergonomics.
-6. Run larger Store validation before designing performance indexes.
+4. Reduce manual key-value capture in the operator CLI only where the dogfood
+   evidence shows repeated friction.
+5. Run larger Store validation before designing performance indexes.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the
@@ -113,6 +111,9 @@ The following remain beyond V1 even if they would make dogfood easier:
   guard, transfer recovery, and forced takeover recovery loop. Phase 4LC adds a
   local operator quickstart and recovery guide tied to the current CLI surface.
   Phase 4LD adds explicit `session mark-stale` support and smoke-proves
-  `potentially_stale` show/list behavior. WorkVCS has still not been used as
-  the durable state system for a complete implementation slice or for another
-  real project.
+  `potentially_stale` show/list behavior. Phase 4LE makes forced Claim takeover
+  stale-gated, fixes the previous Session lifecycle evidence, and dogfoods a
+  real implementation Task/Session/Claim/AC/VR/Verification/SessionDiff/Handoff
+  closeout. WorkVCS has still not been used to consume a handoff as a
+  continuation entrypoint, to recover a real blocked handoff with stale-gated
+  takeover, or for another real project.

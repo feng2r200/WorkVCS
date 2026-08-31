@@ -1,5 +1,5 @@
 use super::runnable::{self, RunnableTaskClaimCoordination, RunnableTasksOptions};
-use super::session::{self, SessionFocus};
+use super::session::{self, SessionFocus, SessionLifecycleState};
 use crate::canonical::{CanonicalValue, canonical_bytes};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history;
@@ -328,6 +328,7 @@ pub struct ClaimForceTakeoverResult {
     pub previous_claim_id: ClaimId,
     pub claim_id: ClaimId,
     pub previous_session_id: SessionId,
+    pub previous_session_lifecycle_state: SessionLifecycleState,
     pub session_id: SessionId,
     pub taken_over_at_us: i64,
     pub previous_last_activity_at_us: i64,
@@ -746,7 +747,14 @@ pub(crate) fn force_takeover_claim(
     let previous_last_activity_at_us =
         require_active_claim_runtime(&transaction, options.claim_id())?;
     let previous_session_lifecycle_state =
-        session_lifecycle_state_for_event(&transaction, previous_claim.session_id)?;
+        session::session_lifecycle_state_for_connection(&transaction, previous_claim.session_id)?;
+    if previous_session_lifecycle_state != SessionLifecycleState::PotentiallyStale {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "claim {} previous session {} must be potentially_stale before forced takeover",
+            options.claim_id(),
+            previous_claim.session_id
+        )));
+    }
 
     delete_claim_runtime_row(&transaction, options.claim_id())?;
     ensure_active_claim_mode_allowed(
@@ -771,7 +779,7 @@ pub(crate) fn force_takeover_claim(
         claim_id,
         &previous_claim,
         previous_last_activity_at_us,
-        previous_session_lifecycle_state,
+        session_lifecycle_state_label(previous_session_lifecycle_state),
         options.session_id(),
         options.rationale(),
     )?;
@@ -790,6 +798,7 @@ pub(crate) fn force_takeover_claim(
         previous_claim_id: options.claim_id(),
         claim_id,
         previous_session_id: previous_claim.session_id,
+        previous_session_lifecycle_state,
         session_id: options.session_id(),
         taken_over_at_us: now_us,
         previous_last_activity_at_us,
@@ -1830,35 +1839,12 @@ fn claim_force_taken_over_payload_json(
     ])?)
 }
 
-fn session_lifecycle_state_for_event(
-    connection: &Connection,
-    session_id: SessionId,
-) -> Result<&'static str> {
-    let runtime_count = connection
-        .query_row(
-            "SELECT count(*)
-             FROM session_runtime
-             WHERE session_id = ?1",
-            params![&session_id.raw_bytes()[..]],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(storage_error)?;
-    if runtime_count == 1 {
-        return Ok("active");
+fn session_lifecycle_state_label(lifecycle_state: SessionLifecycleState) -> &'static str {
+    match lifecycle_state {
+        SessionLifecycleState::Active => "active",
+        SessionLifecycleState::PotentiallyStale => "potentially_stale",
+        SessionLifecycleState::Ended => "ended",
     }
-    let diff_count = connection
-        .query_row(
-            "SELECT count(*)
-             FROM session_diff
-             WHERE session_id = ?1",
-            params![&session_id.raw_bytes()[..]],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(storage_error)?;
-    if diff_count == 1 {
-        return Ok("ended");
-    }
-    Ok("unknown")
 }
 
 fn canonical_json_string(value: &CanonicalValue) -> Result<String> {

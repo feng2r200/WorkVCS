@@ -4350,6 +4350,9 @@ enum ClaimCommand {
         expected_previous_session: Option<String>,
 
         #[arg(long)]
+        expected_previous_session_lifecycle_state: Option<String>,
+
+        #[arg(long)]
         expected_session: Option<String>,
 
         #[arg(long)]
@@ -10219,6 +10222,7 @@ fn run(cli: Cli) -> Result<String> {
                     expected_previous_claim,
                     expected_claim,
                     expected_previous_session,
+                    expected_previous_session_lifecycle_state,
                     expected_session,
                     expected_mode,
                     expected_lifecycle_state,
@@ -10243,6 +10247,7 @@ fn run(cli: Cli) -> Result<String> {
                     expected_previous_claim,
                     expected_claim,
                     expected_previous_session,
+                    expected_previous_session_lifecycle_state,
                     expected_session,
                     expected_mode,
                     expected_lifecycle_state,
@@ -16930,10 +16935,11 @@ fn render_claim_transfer(claim: &ClaimTransferResult) -> String {
 
 fn render_claim_force_takeover(claim: &ClaimForceTakeoverResult) -> String {
     format!(
-        "previous_claim_id={}\nclaim_id={}\nprevious_session_id={}\nsession_id={}\nworkspace_id={}\nbranch_id={}\ntask_entity_id={}\nmode={}\ntaken_over_at_us={}\nprevious_last_activity_at_us={}\nrationale={}\nprevious_lifecycle_state={}\nlifecycle_state={}\n",
+        "previous_claim_id={}\nclaim_id={}\nprevious_session_id={}\nprevious_session_lifecycle_state={}\nsession_id={}\nworkspace_id={}\nbranch_id={}\ntask_entity_id={}\nmode={}\ntaken_over_at_us={}\nprevious_last_activity_at_us={}\nrationale={}\nprevious_lifecycle_state={}\nlifecycle_state={}\n",
         claim.previous_claim_id,
         claim.claim_id,
         claim.previous_session_id,
+        session_lifecycle_state(claim.previous_session_lifecycle_state),
         claim.session_id,
         claim.state.workspace_id,
         claim.state.branch_id,
@@ -17000,6 +17006,7 @@ struct ClaimForceTakeoverExpectationArgs {
     expected_previous_claim: Option<String>,
     expected_claim: Option<String>,
     expected_previous_session: Option<String>,
+    expected_previous_session_lifecycle_state: Option<String>,
     expected_session: Option<String>,
     expected_mode: Option<String>,
     expected_lifecycle_state: Option<String>,
@@ -17014,6 +17021,7 @@ fn append_claim_force_takeover_expectations(
         expected_previous_claim,
         expected_claim,
         expected_previous_session,
+        expected_previous_session_lifecycle_state,
         expected_session,
         expected_mode,
         expected_lifecycle_state,
@@ -17027,6 +17035,20 @@ fn append_claim_force_takeover_expectations(
             )));
         }
         output.push_str("previous_claim_match_expected=true\n");
+    }
+    if let Some(expected_previous_session_lifecycle_state) =
+        expected_previous_session_lifecycle_state
+    {
+        let expected_previous_session_lifecycle_state =
+            parse_session_lifecycle_state(&expected_previous_session_lifecycle_state)?;
+        if result.previous_session_lifecycle_state != expected_previous_session_lifecycle_state {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim takeover previous session lifecycle state {} does not match expected {}",
+                session_lifecycle_state(result.previous_session_lifecycle_state),
+                session_lifecycle_state(expected_previous_session_lifecycle_state)
+            )));
+        }
+        output.push_str("previous_session_lifecycle_state_match_expected=true\n");
     }
     append_claim_replacement_expectations(
         output,
@@ -29966,6 +29988,40 @@ mod tests {
         .expect("parse takeover without force"));
         assert!(missing_force.is_err());
 
+        let active_owner_takeover = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "takeover",
+            store,
+            "--session",
+            &third_session_id,
+            "--claim",
+            &second_claim_id,
+            "--force",
+            "--rationale",
+            "operator recovery",
+        ])
+        .expect("parse active-owner takeover"));
+        assert!(active_owner_takeover.is_err());
+
+        let marked_stale = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "mark-stale",
+            store,
+            "--session",
+            &second_session_id,
+            "--rationale",
+            "operator recovery: previous session cannot continue",
+            "--expected-session",
+            &second_session_id,
+            "--expected-lifecycle-state",
+            "potentially_stale",
+        ])
+        .expect("parse mark stale"))
+        .expect("mark previous session stale");
+        assert_eq!(value(&marked_stale, "lifecycle_state"), "potentially_stale");
+
         let taken_over = run(Cli::try_parse_from([
             "workvcs",
             "claim",
@@ -29982,6 +30038,8 @@ mod tests {
             &second_claim_id,
             "--expected-previous-session",
             &second_session_id,
+            "--expected-previous-session-lifecycle-state",
+            "potentially_stale",
             "--expected-session",
             &third_session_id,
             "--expected-mode",
@@ -29995,6 +30053,10 @@ mod tests {
         assert_ne!(third_claim_id, second_claim_id);
         assert_eq!(value(&taken_over, "previous_claim_id"), second_claim_id);
         assert_eq!(value(&taken_over, "previous_session_id"), second_session_id);
+        assert_eq!(
+            value(&taken_over, "previous_session_lifecycle_state"),
+            "potentially_stale"
+        );
         assert_eq!(value(&taken_over, "session_id"), third_session_id);
         assert_eq!(value(&taken_over, "rationale"), "operator recovery");
         assert_eq!(value(&taken_over, "previous_lifecycle_state"), "released");
@@ -30002,6 +30064,13 @@ mod tests {
         assert_eq!(value(&taken_over, "previous_claim_match_expected"), "true");
         assert_eq!(
             value(&taken_over, "previous_session_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &taken_over,
+                "previous_session_lifecycle_state_match_expected"
+            ),
             "true"
         );
         assert_eq!(value(&taken_over, "session_match_expected"), "true");

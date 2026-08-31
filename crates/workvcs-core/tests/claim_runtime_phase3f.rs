@@ -5,8 +5,8 @@ use workvcs_core::{
     CanonicalValue, ClaimForceTakeoverOptions, ClaimGuardOptions, ClaimGuardReason, ClaimId,
     ClaimLifecycleState, ClaimListOptions, ClaimMode, ClaimReleaseOptions, ClaimTaskOptions,
     ClaimTransferOptions, Engine, EntityId, ErrorCategory, ErrorCode, SessionEndOptions,
-    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSnapshot, WorkspaceInfo,
-    WorkspaceInitOptions, canonical_bytes,
+    SessionLifecycleState, SessionMarkStaleOptions, SessionStartOptions, StoreInitOptions,
+    TaskCreateOptions, TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,6 +235,7 @@ struct ClaimForceTakenOverPayload<'a> {
     workspace: &'a WorkspaceInfo,
     task_entity_id: EntityId,
     previous_last_activity_at_us: i64,
+    previous_session_lifecycle_state: &'a str,
     rationale: &'a str,
 }
 
@@ -272,7 +273,7 @@ fn claim_force_taken_over_payload(payload: ClaimForceTakenOverPayload<'_>) -> St
             ),
             (
                 "previous_session_lifecycle_state".to_owned(),
-                CanonicalValue::String("active".to_owned()),
+                CanonicalValue::String(payload.previous_session_lifecycle_state.to_owned()),
             ),
             (
                 "rationale".to_owned(),
@@ -1134,11 +1135,43 @@ fn force_takeover_claim_requires_rationale_and_records_prior_claim() {
     assert_eq!(empty_rationale.code(), ErrorCode::ClaimInvalid);
     assert_eq!(empty_rationale.category(), ErrorCategory::Runtime);
     assert_eq!(runtime_counts(&connection), before);
+    let rationale = "previous agent is unavailable";
+    let active_source = engine
+        .force_takeover_claim(
+            ClaimForceTakeoverOptions::new(taking_session.session_id, claimed.claim_id, rationale)
+                .expect("takeover options"),
+        )
+        .expect_err("active source session cannot be force-taken-over");
+    assert_eq!(active_source.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(active_source.category(), ErrorCategory::Runtime);
+    assert_eq!(runtime_counts(&connection), before);
+
+    let marked = engine
+        .mark_session_potentially_stale(
+            SessionMarkStaleOptions::new(
+                previous_session_id,
+                "operator recovery: previous session cannot continue",
+            )
+            .expect("mark stale options"),
+        )
+        .expect("mark previous session potentially stale");
+    assert_eq!(
+        marked.state.lifecycle_state,
+        SessionLifecycleState::PotentiallyStale
+    );
+    let after_mark = runtime_counts(&connection);
+    assert_eq!(after_mark.object_identity, before.object_identity);
+    assert_eq!(after_mark.claim, before.claim);
+    assert_eq!(after_mark.claim_runtime, before.claim_runtime);
+    assert_eq!(after_mark.session_diff, before.session_diff);
+    assert_eq!(after_mark.changeset, before.changeset);
+    assert_eq!(after_mark.change_operation, before.change_operation);
+    assert_eq!(after_mark.workstate_commit, before.workstate_commit);
+    assert_eq!(after_mark.event, before.event + 1);
     let before_head = engine
         .branch_head(workspace.initial_branch_id)
         .expect("branch head before takeover");
 
-    let rationale = "previous agent is unavailable";
     let taken_over = engine
         .force_takeover_claim(
             ClaimForceTakeoverOptions::new(taking_session.session_id, claimed.claim_id, rationale)
@@ -1149,6 +1182,10 @@ fn force_takeover_claim_requires_rationale_and_records_prior_claim() {
     assert_eq!(taken_over.previous_claim_id, claimed.claim_id);
     assert_ne!(taken_over.claim_id, claimed.claim_id);
     assert_eq!(taken_over.previous_session_id, previous_session_id);
+    assert_eq!(
+        taken_over.previous_session_lifecycle_state,
+        SessionLifecycleState::PotentiallyStale
+    );
     assert_eq!(taken_over.session_id, taking_session.session_id);
     assert_eq!(
         taken_over.previous_last_activity_at_us,
@@ -1174,14 +1211,14 @@ fn force_takeover_claim_requires_rationale_and_records_prior_claim() {
     assert_eq!(taken_over.state.mode, ClaimMode::Exclusive);
 
     let after = runtime_counts(&connection);
-    assert_eq!(after.object_identity, before.object_identity + 1);
-    assert_eq!(after.claim, before.claim + 1);
-    assert_eq!(after.claim_runtime, before.claim_runtime);
-    assert_eq!(after.session_diff, before.session_diff);
-    assert_eq!(after.changeset, before.changeset);
-    assert_eq!(after.change_operation, before.change_operation);
-    assert_eq!(after.workstate_commit, before.workstate_commit);
-    assert_eq!(after.event, before.event + 1);
+    assert_eq!(after.object_identity, after_mark.object_identity + 1);
+    assert_eq!(after.claim, after_mark.claim + 1);
+    assert_eq!(after.claim_runtime, after_mark.claim_runtime);
+    assert_eq!(after.session_diff, after_mark.session_diff);
+    assert_eq!(after.changeset, after_mark.changeset);
+    assert_eq!(after.change_operation, after_mark.change_operation);
+    assert_eq!(after.workstate_commit, after_mark.workstate_commit);
+    assert_eq!(after.event, after_mark.event + 1);
 
     let after_head = engine
         .branch_head(workspace.initial_branch_id)
@@ -1210,6 +1247,7 @@ fn force_takeover_claim_requires_rationale_and_records_prior_claim() {
             workspace: &workspace,
             task_entity_id: task_snapshot.task_entity_id,
             previous_last_activity_at_us: taken_over.previous_last_activity_at_us,
+            previous_session_lifecycle_state: "potentially_stale",
             rationale,
         })
     );

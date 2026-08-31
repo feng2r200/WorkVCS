@@ -619,16 +619,9 @@ expect_value "$verification_refresh_output" "result_match_expected" "true"
 expect_value "$verification_refresh_output" "evidence_relations_match_expected" "true"
 
 cache_refresh_output="$(run_workvcs \
-    verification cache-record "$store" \
+    verification cache-refresh "$store" \
     --branch "$branch_id" \
-    --head "$head_commit_id" \
     --verification "$verification_id" \
-    --adapter-kind git \
-    --adapter-schema-version 1 \
-    --scope-schema-version 1 \
-    --observation-status observed \
-    --observed-fingerprint "$fingerprint" \
-    --observation "$observation_id" \
     --expected-evaluated-commit "$head_commit_id" \
     --expected-applicability applicable \
     --expected-reason-code all_basis_applicable \

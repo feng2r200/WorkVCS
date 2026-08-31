@@ -936,6 +936,39 @@ impl VerificationApplicabilityRecordOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationApplicabilityRefreshOptions {
+    branch_id: BranchId,
+    verification_entity_id: EntityId,
+    expected_evaluated_commit_id: Option<CommitId>,
+    detail: CanonicalValue,
+}
+
+impl VerificationApplicabilityRefreshOptions {
+    pub fn new(branch_id: BranchId, verification_entity_id: EntityId) -> Result<Self> {
+        Ok(Self {
+            branch_id,
+            verification_entity_id,
+            expected_evaluated_commit_id: None,
+            detail: CanonicalValue::object(Vec::new())?,
+        })
+    }
+
+    pub fn with_expected_evaluated_commit_id(
+        mut self,
+        expected_evaluated_commit_id: CommitId,
+    ) -> Self {
+        self.expected_evaluated_commit_id = Some(expected_evaluated_commit_id);
+        self
+    }
+
+    pub fn with_detail(mut self, detail: CanonicalValue) -> Result<Self> {
+        require_object("verification applicability refresh detail", &detail)?;
+        self.detail = detail;
+        Ok(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerificationApplicabilityCacheSnapshot {
     pub branch_id: BranchId,
     pub verification_entity_id: EntityId,
@@ -3352,6 +3385,43 @@ pub(crate) fn record_verification_applicability(
             options.branch_id, options.verification_entity_id
         ))
     })
+}
+
+pub(crate) fn refresh_verification_applicability(
+    connection: &mut StoreConnection,
+    options: &VerificationApplicabilityRefreshOptions,
+) -> Result<VerificationApplicabilityCacheSnapshot> {
+    connection.verify_foreign_keys()?;
+    require_object("verification applicability refresh detail", &options.detail)?;
+
+    let head = branch_head(connection, options.branch_id)?;
+    if let Some(expected_evaluated_commit_id) = options.expected_evaluated_commit_id
+        && head.head_commit_id != expected_evaluated_commit_id
+    {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, expected_evaluated_commit_id, head.head_commit_id
+        )));
+    }
+    let verification = verification_at(
+        connection,
+        head.head_commit_id,
+        options.verification_entity_id,
+    )?;
+    let resource_stamps = observed_stamps_from_baseline_resource_basis(
+        connection,
+        options.verification_entity_id,
+        &verification.state.resource_basis,
+    )?;
+    let record_options = VerificationApplicabilityRecordOptions::new(
+        options.branch_id,
+        options.verification_entity_id,
+        head.head_commit_id,
+    )?
+    .with_resource_stamps(resource_stamps)?
+    .with_detail(options.detail.clone())?;
+
+    record_verification_applicability(connection, &record_options)
 }
 
 pub(crate) fn verification_applicability_cache(
@@ -8360,6 +8430,34 @@ fn validate_applicability_resource_stamp_snapshots_against_basis(
         resource_basis,
         stamps.iter().map(ResourceStampView::from),
     )
+}
+
+fn observed_stamps_from_baseline_resource_basis(
+    connection: &StoreConnection,
+    verification_entity_id: EntityId,
+    resource_basis: &[VerificationResourceBasis],
+) -> Result<Vec<ApplicabilityResourceStampInput>> {
+    let mut stamps = Vec::with_capacity(resource_basis.len());
+    for (index, basis) in resource_basis.iter().enumerate() {
+        validate_verification_resource_basis_entry(basis)?;
+        let Some(observation_id) = basis.baseline_observation_id else {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification {verification_entity_id} resource basis ordinal {index} cannot be refreshed from baseline because it has no baseline observation"
+            )));
+        };
+        require_verification_resource_basis_references(connection, basis)?;
+        let observation = resource_observation(connection, observation_id)?;
+        let stamp = ApplicabilityResourceStampInput::observed(
+            index as i64,
+            basis.adapter_kind.clone(),
+            basis.adapter_schema_version,
+            basis.scope_schema_version,
+            observation.fingerprint,
+        )?
+        .with_observation_id(observation_id)?;
+        stamps.push(stamp);
+    }
+    Ok(stamps)
 }
 
 fn validate_applicability_resource_stamps_against_basis<'a>(

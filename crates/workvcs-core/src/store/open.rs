@@ -43,14 +43,14 @@ use crate::history::{
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheListOptions, VerificationApplicabilityCacheListResult,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
-    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
-    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions,
-    WorkspaceListResult, WorkspaceResourceAssociationListOptions,
-    WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
-    WorkspaceResourceAssociationResult,
+    VerificationApplicabilityRefreshOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
+    VerificationRequirementSnapshot, VerificationSnapshot, WhyQueryOptions, WhyQueryResult,
+    WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit, WorkStateRestoreOptions,
+    WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::history::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
@@ -1274,6 +1274,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::record_verification_applicability(&mut self.connection, options)
+    }
+
+    pub(crate) fn refresh_verification_applicability(
+        &mut self,
+        options: &VerificationApplicabilityRefreshOptions,
+    ) -> Result<VerificationApplicabilityCacheSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::refresh_verification_applicability(&mut self.connection, options)
     }
 
     pub(crate) fn task_at(

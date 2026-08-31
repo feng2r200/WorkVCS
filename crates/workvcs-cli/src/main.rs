@@ -90,19 +90,20 @@ use workvcs_core::{
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, VerificationApplicability, VerificationApplicabilityCacheListOptions,
     VerificationApplicabilityCacheListResult, VerificationApplicabilityCacheSnapshot,
-    VerificationApplicabilityRecordOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
-    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
-    VerificationRequirementSnapshot, VerificationResourceBasis, VerificationResult,
-    VerificationSnapshot, VerificationTarget, VerifyOptions, VerifyResourceObservationInput,
-    VerifyResult, WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
-    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkState,
-    WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
-    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceId, WorkspaceInfo,
-    WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
-    WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
-    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
-    content_object_digest, entity_version_digest, parse_canonical_json, relation_version_digest,
+    VerificationApplicabilityRecordOptions, VerificationApplicabilityRefreshOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
+    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot,
+    VerificationResourceBasis, VerificationResult, VerificationSnapshot, VerificationTarget,
+    VerifyOptions, VerifyResourceObservationInput, VerifyResult, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
+    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateDiff, WorkStateDiffChangeKind,
+    WorkStateDiffOptions, WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions,
+    WorkVcsError, WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions,
+    WorkspaceListResult, WorkspaceResourceAssociationListOptions,
+    WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
+    WorkspaceResourceAssociationResult, canonical_bytes, content_object_digest,
+    entity_version_digest, parse_canonical_json, relation_version_digest,
     work_state_mapping_digest,
 };
 
@@ -4408,6 +4409,31 @@ enum VerificationCommand {
 
         #[arg(long)]
         observation: Option<String>,
+
+        #[arg(long, default_value = "{}")]
+        detail_json: String,
+
+        #[arg(long)]
+        expected_evaluated_commit: Option<String>,
+
+        #[arg(long)]
+        expected_applicability: Option<String>,
+
+        #[arg(long)]
+        expected_reason_code: Option<String>,
+
+        #[arg(long)]
+        expected_resource_stamps: Option<usize>,
+    },
+    CacheRefresh {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        verification: String,
 
         #[arg(long, default_value = "{}")]
         detail_json: String,
@@ -9091,6 +9117,44 @@ fn run(cli: Cli) -> Result<String> {
                         &detail_json,
                     )?)?,
                 )?;
+                let mut output = render_verification_applicability_cache(&snapshot);
+                append_verification_cache_record_expectations(
+                    &mut output,
+                    &snapshot,
+                    VerificationCacheRecordExpectationArgs {
+                        expected_evaluated_commit,
+                        expected_applicability,
+                        expected_reason_code,
+                        expected_resource_stamps,
+                    },
+                )?;
+                Ok(output)
+            }
+            VerificationCommand::CacheRefresh {
+                store,
+                branch,
+                verification,
+                detail_json,
+                expected_evaluated_commit,
+                expected_applicability,
+                expected_reason_code,
+                expected_resource_stamps,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let mut options = VerificationApplicabilityRefreshOptions::new(
+                    BranchId::parse_canonical(&branch)?,
+                    EntityId::parse_canonical(&verification)?,
+                )?
+                .with_detail(parse_cli_object(
+                    "verification applicability refresh detail",
+                    &detail_json,
+                )?)?;
+                if let Some(expected_evaluated_commit) = expected_evaluated_commit.as_deref() {
+                    options = options.with_expected_evaluated_commit_id(CommitId::parse_canonical(
+                        expected_evaluated_commit,
+                    )?);
+                }
+                let snapshot = engine.refresh_verification_applicability(options)?;
                 let mut output = render_verification_applicability_cache(&snapshot);
                 append_verification_cache_record_expectations(
                     &mut output,
@@ -34536,6 +34600,114 @@ mod tests {
         .expect("parse transition"))
         .expect("transition task");
         assert!(transition.contains("status=done"));
+        let advanced_head = value(&transition, "commit_id");
+
+        let stale_after_transition = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "status",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse stale after transition"))
+        .expect("stale after transition");
+        assert_eq!(stale_after_transition, "status=stale\n");
+
+        let mismatched_refresh = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--expected-evaluated-commit",
+            &head,
+        ])
+        .expect("parse mismatched cache refresh"));
+        assert!(matches!(
+            mismatched_refresh,
+            Err(WorkVcsError::BranchHeadConflict(_))
+        ));
+        let unchanged_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse unchanged cache show"))
+        .expect("show unchanged cache");
+        assert_eq!(value(&unchanged_cache, "evaluated_commit_id"), head);
+
+        let refreshed_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--detail-json",
+            r#"{"reason":"post_task_transition"}"#,
+            "--expected-evaluated-commit",
+            &advanced_head,
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse cache refresh"))
+        .expect("refresh cache");
+        assert_eq!(
+            value(&refreshed_cache, "evaluated_commit_id"),
+            advanced_head
+        );
+        assert_eq!(value(&refreshed_cache, "applicability"), "applicable");
+        assert_eq!(
+            value(&refreshed_cache, "reason_code"),
+            "all_basis_applicable"
+        );
+        assert_eq!(
+            value(&refreshed_cache, "evaluated_commit_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&refreshed_cache, "applicability_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&refreshed_cache, "reason_code_matches_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&refreshed_cache, "resource_stamps_match_expected"),
+            "true"
+        );
+
+        let verified_after_refresh = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "status",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse verified after refresh"))
+        .expect("verified after refresh");
+        assert_eq!(verified_after_refresh, "status=verified\n");
     }
 
     #[test]

@@ -76,11 +76,14 @@ dogfood_cache_reason_code=all_basis_applicable
 dogfood_doctor_valid_required=true
 ```
 
-Residual gap:
+Residual gap at Phase 4KY:
 
 This is dogfood proof for the bounded wrapper command and its direct
 Evidence/Resource/Verification/cache composition. It is not proof that V1
-Resource observation production, path/glob normalization, or cache recovery is
-complete. The probe exposed a concrete recovery gap: after a later WorkState
-commit advances the branch head, a Resource-backed Verification becomes stale
-until the applicability cache is explicitly refreshed for the new head.
+Resource observation production, path/glob normalization, or adapter-backed
+cache refresh is complete. The probe exposed a concrete recovery gap: after a
+later WorkState commit advances the branch head, a Resource-backed Verification
+becomes stale until the applicability cache is explicitly refreshed for the new
+head. ADR-0415 closes the baseline-observation refresh path for this gap while
+leaving external Resource re-observation outside V1 until Resource adapter/path
+normalization is confirmed.

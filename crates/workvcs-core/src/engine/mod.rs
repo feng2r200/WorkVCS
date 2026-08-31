@@ -74,14 +74,14 @@ use crate::history::{
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheListOptions, VerificationApplicabilityCacheListResult,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationRequirementRevisionCommit,
-    VerificationRequirementRevisionOptions, VerificationRequirementSnapshot, VerificationSnapshot,
-    WhyQueryOptions, WhyQueryResult, WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions,
-    WorkspaceListResult, WorkspaceResourceAssociationListOptions,
-    WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
-    WorkspaceResourceAssociationResult,
+    VerificationApplicabilityRefreshOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions,
+    VerificationRequirementRevisionCommit, VerificationRequirementRevisionOptions,
+    VerificationRequirementSnapshot, VerificationSnapshot, WhyQueryOptions, WhyQueryResult,
+    WorkStateDiff, WorkStateDiffOptions, WorkStateRestoreCommit, WorkStateRestoreOptions,
+    WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
 };
 use crate::history::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
@@ -741,6 +741,13 @@ impl Engine {
         options: VerificationApplicabilityRecordOptions,
     ) -> Result<VerificationApplicabilityCacheSnapshot> {
         self.store.record_verification_applicability(&options)
+    }
+
+    pub fn refresh_verification_applicability(
+        &mut self,
+        options: VerificationApplicabilityRefreshOptions,
+    ) -> Result<VerificationApplicabilityCacheSnapshot> {
+        self.store.refresh_verification_applicability(&options)
     }
 
     pub fn task_at(&self, commit_id: CommitId, task_entity_id: EntityId) -> Result<TaskSnapshot> {

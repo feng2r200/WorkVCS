@@ -8,7 +8,8 @@ use workvcs_core::{
     EvidenceContentInput, EvidenceCreateOptions, ResourceCreateOptions,
     ResourceObservationCreateOptions, ResourceObservationDetailInput, StoreInitOptions,
     TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionOptions,
-    VerificationApplicability, VerificationResult, VerificationTarget, VerifyOptions,
+    VerificationApplicability, VerificationApplicabilityRefreshOptions, VerificationCreateOptions,
+    VerificationResourceBasis, VerificationResult, VerificationTarget, VerifyOptions,
     VerifyResourceObservationInput, WorkspaceInfo, WorkspaceInitOptions, content_object_digest,
 };
 
@@ -229,6 +230,229 @@ fn verify_wrapper_records_resource_observation_verification_and_applicable_cache
         1
     );
     assert_eq!(count_rows(&connection, "applicability_resource_stamp"), 1);
+}
+
+#[test]
+fn resource_backed_verification_cache_refresh_recovers_after_later_branch_head() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let fixture = create_required_criterion(&mut engine, &workspace);
+    let resource = engine
+        .create_resource(ResourceCreateOptions::new("filesystem").expect("resource options"))
+        .expect("create resource");
+    let fingerprint = content_object_digest(b"src/lib.rs verified content");
+    let observation = ResourceObservationCreateOptions::new(
+        resource.resource_id,
+        "filesystem",
+        1,
+        fingerprint,
+        metadata("current source snapshot"),
+    )
+    .expect("observation options");
+    let resource_observation = VerifyResourceObservationInput::new(
+        observation,
+        "path",
+        1,
+        object(vec![("path", string("src/lib.rs"))]),
+    )
+    .expect("verify resource observation");
+
+    let result = engine
+        .verify(
+            VerifyOptions::new(
+                workspace.initial_branch_id,
+                fixture.criterion.commit_id,
+                VerificationTarget::AcceptanceCriterion(
+                    fixture.criterion.acceptance_criterion_entity_id,
+                ),
+                VerificationResult::Passed,
+                evidence_options("cargo test"),
+            )
+            .expect("verify options")
+            .with_resource_observation(resource_observation),
+        )
+        .expect("verify wrapper");
+    let original_cache = result.applicability_cache.as_ref().expect("initial cache");
+    let observation_id = result
+        .resource_observation
+        .as_ref()
+        .expect("resource observation")
+        .observation_id;
+    assert_eq!(
+        original_cache.evaluated_commit_id,
+        result.verification.commit_id
+    );
+    assert_eq!(
+        original_cache.applicability,
+        VerificationApplicability::Applicable
+    );
+
+    let advanced = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                result.verification.commit_id,
+                fixture.task.task_entity_id,
+                fixture.criterion.task_entity_version_id,
+                TaskStatus::Done,
+            )
+            .expect("done options")
+            .with_outcome("verified before later head advance")
+            .expect("done outcome"),
+        )
+        .expect("advance branch");
+    assert_eq!(
+        engine
+            .acceptance_criterion_effective_status_for_branch(
+                workspace.initial_branch_id,
+                fixture.criterion.acceptance_criterion_entity_id,
+            )
+            .expect("branch AC status after advance"),
+        AcceptanceCriterionEffectiveStatus::Stale
+    );
+    let mismatched_expected_head = engine
+        .refresh_verification_applicability(
+            VerificationApplicabilityRefreshOptions::new(
+                workspace.initial_branch_id,
+                result.verification.verification_entity_id,
+            )
+            .expect("refresh options")
+            .with_expected_evaluated_commit_id(result.verification.commit_id),
+        )
+        .expect_err("mismatched expected head should fail before refresh");
+    assert_eq!(
+        mismatched_expected_head.code(),
+        ErrorCode::BranchHeadConflict
+    );
+    let unchanged_cache = engine
+        .verification_applicability_cache(
+            workspace.initial_branch_id,
+            result.verification.verification_entity_id,
+        )
+        .expect("read cache after failed refresh")
+        .expect("old cache");
+    assert_eq!(
+        unchanged_cache.evaluated_commit_id,
+        result.verification.commit_id
+    );
+    assert_eq!(
+        engine
+            .acceptance_criterion_effective_status_for_branch(
+                workspace.initial_branch_id,
+                fixture.criterion.acceptance_criterion_entity_id,
+            )
+            .expect("branch AC status after failed refresh"),
+        AcceptanceCriterionEffectiveStatus::Stale
+    );
+
+    let refreshed = engine
+        .refresh_verification_applicability(
+            VerificationApplicabilityRefreshOptions::new(
+                workspace.initial_branch_id,
+                result.verification.verification_entity_id,
+            )
+            .expect("refresh options")
+            .with_detail(metadata("phase4kz refresh"))
+            .expect("refresh detail"),
+        )
+        .expect("refresh applicability");
+    assert_eq!(refreshed.evaluated_commit_id, advanced.commit_id);
+    assert_eq!(
+        refreshed.applicability,
+        VerificationApplicability::Applicable
+    );
+    assert_eq!(refreshed.reason_code, "all_basis_applicable");
+    assert_eq!(refreshed.resource_stamps.len(), 1);
+    assert_eq!(
+        refreshed.resource_stamps[0].observed_fingerprint,
+        Some(fingerprint)
+    );
+    assert_eq!(
+        refreshed.resource_stamps[0].observation_id,
+        Some(observation_id)
+    );
+    assert_eq!(
+        engine
+            .acceptance_criterion_effective_status_for_branch(
+                workspace.initial_branch_id,
+                fixture.criterion.acceptance_criterion_entity_id,
+            )
+            .expect("branch AC status after refresh"),
+        AcceptanceCriterionEffectiveStatus::Verified
+    );
+
+    let connection = raw_connection(&path);
+    assert_eq!(
+        count_rows(&connection, "verification_applicability_cache"),
+        1
+    );
+    assert_eq!(count_rows(&connection, "applicability_resource_stamp"), 1);
+}
+
+#[test]
+fn cache_refresh_rejects_resource_basis_without_baseline_observation() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let fixture = create_required_criterion(&mut engine, &workspace);
+    let resource = engine
+        .create_resource(ResourceCreateOptions::new("filesystem").expect("resource options"))
+        .expect("create resource");
+    let fingerprint = content_object_digest(b"manual resource baseline");
+    let resource_basis = VerificationResourceBasis::new(
+        resource.resource_id,
+        "filesystem",
+        1,
+        "path",
+        1,
+        object(vec![("path", string("src/lib.rs"))]),
+        fingerprint,
+    )
+    .expect("resource basis without baseline observation");
+    let verification = engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                workspace.initial_branch_id,
+                fixture.criterion.commit_id,
+                VerificationTarget::AcceptanceCriterion(
+                    fixture.criterion.acceptance_criterion_entity_id,
+                ),
+                VerificationResult::Passed,
+            )
+            .expect("verification options")
+            .with_method(metadata("manual resource assertion"))
+            .expect("verification method")
+            .with_resource_basis(vec![resource_basis])
+            .expect("resource basis"),
+        )
+        .expect("create verification");
+    let connection = raw_connection(&path);
+    let before_caches = count_rows(&connection, "verification_applicability_cache");
+    let before_stamps = count_rows(&connection, "applicability_resource_stamp");
+
+    let error = engine
+        .refresh_verification_applicability(
+            VerificationApplicabilityRefreshOptions::new(
+                workspace.initial_branch_id,
+                verification.verification_entity_id,
+            )
+            .expect("refresh options"),
+        )
+        .expect_err("missing baseline observation should reject refresh");
+
+    assert_eq!(error.code(), ErrorCode::TaskInvalid);
+    assert!(
+        error
+            .to_string()
+            .contains("cannot be refreshed from baseline because it has no baseline observation")
+    );
+    assert_eq!(
+        count_rows(&connection, "verification_applicability_cache"),
+        before_caches
+    );
+    assert_eq!(
+        count_rows(&connection, "applicability_resource_stamp"),
+        before_stamps
+    );
 }
 
 #[test]

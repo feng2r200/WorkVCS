@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-08-31 by ADR-0414 / Phase 4KY
+Last refreshed: 2026-09-01 by ADR-0415 / Phase 4KZ
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -33,9 +33,9 @@ not complete.
 | Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | No | Add install/use documentation and a larger Store validation run so the operator path is not only a temporary smoke Store. |
 | Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | No | Create a real dogfood walkthrough that branches and restores Work State for an implementation slice. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Yes | Yes | Partial | No | Use WorkVCS itself to manage a nontrivial implementation Plan, then record the missing ergonomics. |
-| Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Partial | Use the `verify` wrapper in more durable implementation handoffs and close the post-verification cache refresh/recovery path exposed by Phase 4KY dogfood. |
+| Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Partial | Use the `verify` wrapper and explicit cache refresh in more durable implementation handoffs; the next missing loop is focused handoff authoring/reading. |
 | Verification command wrapper | Yes | Yes | Yes | Partial | Extend beyond caller-supplied observation data only after Resource adapter/path normalization is confirmed; keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
-| Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Close Resource path/glob normalization and add a clearer recovery flow for Resource-backed Verification cache staleness after later branch-head commits. |
+| Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Resource-backed stale-cache recovery from baseline observations is implemented; Resource path/glob normalization and adapter-backed re-observation remain Open. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | No | Dogfood the select-and-continue loop with real implementation work instead of only script-generated Tasks. |
 | Claim modes and guard behavior | Yes | Partial | Partial | No | Shared claims exist; stale takeover, transfer, and force provenance remain V1 gaps. |
 | Context resolver | Yes | Partial | Yes | Partial | Complete the remaining V1 context categories and dogfood flow: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, focused Handoff reading, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
@@ -52,17 +52,14 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Close the cache refresh/recovery flow exposed by Phase 4KY dogfood: after a
-   later WorkState commit advances a branch head, a Resource-backed Verification
-   needs an explicit, ergonomic applicability refresh path.
-2. Close Handoff beyond `Record(kind=handoff)`: Session-end diff, focused
+1. Close Handoff beyond `Record(kind=handoff)`: Session-end diff, focused
    handoff creation, and handoff consumption.
-3. Add stale Claim takeover, transfer, and force provenance, then dogfood a
+2. Add stale Claim takeover, transfer, and force provenance, then dogfood a
    blocked-claim recovery path.
-4. Add install, quickstart, and recovery documentation for a local operator.
-5. Complete the remaining V1 Context Resolver categories when the verify and
+3. Add install, quickstart, and recovery documentation for a local operator.
+4. Complete the remaining V1 Context Resolver categories when the verify and
    handoff surfaces can supply real packet content.
-6. Run larger Store validation before designing performance indexes.
+5. Run larger Store validation before designing performance indexes.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the
@@ -103,5 +100,7 @@ The following remain beyond V1 even if they would make dogfood easier:
   dogfood Store for the single-target `verify` wrapper and records one concrete
   recovery gap: after a Task completion advances the branch head, Resource-backed
   Verification applicability is stale until the cache is refreshed for the new
-  head. WorkVCS has still not been used as the durable state system for a
-  complete implementation slice or for another real project.
+  head. Phase 4KZ adds explicit `verification cache-refresh` recovery for the
+  baseline-observation case and replaces the manual `cache-record` recovery step
+  in repository smoke. WorkVCS has still not been used as the durable state
+  system for a complete implementation slice or for another real project.

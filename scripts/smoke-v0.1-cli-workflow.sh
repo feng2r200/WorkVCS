@@ -712,6 +712,210 @@ expect_value "$claim_release_output" "lifecycle_state" "released"
 expect_value "$claim_release_output" "session_match_expected" "true"
 expect_value "$claim_release_output" "lifecycle_state_match_expected" "true"
 
+step "verification requirement closure"
+vr_task_output="$(run_workvcs \
+    task create "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --description "Smoke CLI VR-backed task" \
+    --priority 4)"
+vr_task_id="$(value "$vr_task_output" "task_entity_id")"
+vr_task_version_id="$(value "$vr_task_output" "task_entity_version_id")"
+head_commit_id="$(value "$vr_task_output" "commit_id")"
+expect_value "$vr_task_output" "status" "pending"
+
+vr_criterion_output="$(run_workvcs \
+    ac create "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --task "$vr_task_id" \
+    --task-version "$vr_task_version_id" \
+    --local-key "AC-SMOKE-VR" \
+    --statement "The WorkVCS CLI smoke workflow supports Verification Requirement closure.")"
+vr_criterion_id="$(value "$vr_criterion_output" "acceptance_criterion_entity_id")"
+vr_criterion_version_id="$(value "$vr_criterion_output" "acceptance_criterion_entity_version_id")"
+vr_task_version_id="$(value "$vr_criterion_output" "task_entity_version_id")"
+head_commit_id="$(value "$vr_criterion_output" "commit_id")"
+expect_value "$vr_criterion_output" "classification" "required"
+
+vr_requirement_output="$(run_workvcs \
+    vr create "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --criterion "$vr_criterion_id" \
+    --criterion-version "$vr_criterion_version_id" \
+    --local-key "VR-SMOKE-1" \
+    --statement "The CLI records a Verification targeted at this Requirement.")"
+vr_requirement_id="$(value "$vr_requirement_output" "verification_requirement_entity_id")"
+vr_requirement_version_id="$(value "$vr_requirement_output" "verification_requirement_entity_version_id")"
+vr_criterion_version_id="$(value "$vr_requirement_output" "acceptance_criterion_entity_version_id")"
+head_commit_id="$(value "$vr_requirement_output" "commit_id")"
+expect_value "$vr_requirement_output" "local_key" "VR-SMOKE-1"
+
+vr_criterion_show_output="$(run_workvcs \
+    ac show "$store" \
+    --branch "$branch_id" \
+    --criterion "$vr_criterion_id")"
+expect_value "$vr_criterion_show_output" "acceptance_criterion_entity_id" "$vr_criterion_id"
+expect_value "$vr_criterion_show_output" "acceptance_criterion_entity_version_id" "$vr_criterion_version_id"
+expect_value "$vr_criterion_show_output" "verification_requirements" "1"
+expect_value "$vr_criterion_show_output" "verification_requirement.0.local_key" "VR-SMOKE-1"
+expect_value "$vr_criterion_show_output" "verification_requirement.0.verification_requirement_entity_id" "$vr_requirement_id"
+
+vr_requirement_list_output="$(run_workvcs \
+    vr list "$store" \
+    --branch "$branch_id" \
+    --criterion "$vr_criterion_id" \
+    --local-key "VR-SMOKE-1" \
+    --expected-requirements 1)"
+expect_value "$vr_requirement_list_output" "requirements" "1"
+expect_value "$vr_requirement_list_output" "requirement.0.acceptance_criterion_entity_id" "$vr_criterion_id"
+expect_value "$vr_requirement_list_output" "requirement.0.local_key" "VR-SMOKE-1"
+expect_value "$vr_requirement_list_output" "requirement.0.verification_requirement_entity_id" "$vr_requirement_id"
+expect_value "$vr_requirement_list_output" "requirement.0.verification_requirement_entity_version_id" "$vr_requirement_version_id"
+expect_value "$vr_requirement_list_output" "requirements_match_expected" "true"
+
+vr_status_before_output="$(run_workvcs \
+    ac status "$store" \
+    --branch "$branch_id" \
+    --criterion "$vr_criterion_id")"
+expect_value "$vr_status_before_output" "status" "unverified"
+
+expect_failure_contains \
+    "unverified" \
+    task transition "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --task "$vr_task_id" \
+    --task-version "$vr_task_version_id" \
+    --status done \
+    --outcome completed \
+    --session "$session_id"
+
+vr_verification_output="$(run_workvcs \
+    verification record "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --verification-requirement "$vr_requirement_id" \
+    --result passed \
+    --method manual-review \
+    --evidence "$evidence_id" \
+    --resource "$resource_id" \
+    --adapter-kind git \
+    --adapter-schema-version 1 \
+    --scope-kind path \
+    --scope-schema-version 1 \
+    --scope-payload-json '{"path":"src/lib.rs"}' \
+    --baseline-fingerprint "$fingerprint" \
+    --baseline-observation "$observation_id" \
+    --expected-branch "$branch_id" \
+    --expected-head "$head_commit_id" \
+    --expected-target-kind verification_requirement \
+    --expected-target "$vr_requirement_id" \
+    --expected-result passed \
+    --expected-evidence-relations 1)"
+vr_verification_id="$(value "$vr_verification_output" "verification_entity_id")"
+head_commit_id="$(value "$vr_verification_output" "commit_id")"
+expect_value "$vr_verification_output" "branch_match_expected" "true"
+expect_value "$vr_verification_output" "head_match_expected" "true"
+expect_value "$vr_verification_output" "target_kind_match_expected" "true"
+expect_value "$vr_verification_output" "target_match_expected" "true"
+expect_value "$vr_verification_output" "result_match_expected" "true"
+expect_value "$vr_verification_output" "evidence_relations_match_expected" "true"
+
+vr_verification_list_output="$(run_workvcs \
+    verification list "$store" \
+    --branch "$branch_id" \
+    --target-kind verification_requirement \
+    --target "$vr_requirement_id" \
+    --expected-verifications 1)"
+expect_value "$vr_verification_list_output" "verifications" "1"
+expect_value "$vr_verification_list_output" "verification.0.verification_entity_id" "$vr_verification_id"
+expect_value "$vr_verification_list_output" "verification.0.target_kind" "verification_requirement"
+expect_value "$vr_verification_list_output" "verification.0.target_entity_id" "$vr_requirement_id"
+expect_value "$vr_verification_list_output" "verification.0.result" "passed"
+expect_value "$vr_verification_list_output" "verification.0.resource_basis" "1"
+expect_value "$vr_verification_list_output" "verifications_match_expected" "true"
+
+vr_cache_output="$(run_workvcs \
+    verification cache-record "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --verification "$vr_verification_id" \
+    --adapter-kind git \
+    --adapter-schema-version 1 \
+    --scope-schema-version 1 \
+    --observation-status observed \
+    --observed-fingerprint "$fingerprint" \
+    --observation "$observation_id" \
+    --expected-evaluated-commit "$head_commit_id" \
+    --expected-applicability applicable \
+    --expected-reason-code all_basis_applicable \
+    --expected-resource-stamps 1)"
+expect_value "$vr_cache_output" "evaluated_commit_matches_expected" "true"
+expect_value "$vr_cache_output" "applicability_matches_expected" "true"
+expect_value "$vr_cache_output" "reason_code_matches_expected" "true"
+expect_value "$vr_cache_output" "resource_stamps_match_expected" "true"
+
+vr_status_after_output="$(run_workvcs \
+    ac status "$store" \
+    --branch "$branch_id" \
+    --criterion "$vr_criterion_id")"
+expect_value "$vr_status_after_output" "status" "verified"
+
+vr_claim_output="$(run_workvcs \
+    claim task "$store" \
+    --session "$session_id" \
+    --task "$vr_task_id" \
+    --expected-workspace "$workspace_id" \
+    --expected-branch "$branch_id" \
+    --expected-task "$vr_task_id" \
+    --expected-mode exclusive \
+    --expected-lifecycle-state active)"
+vr_claim_id="$(value "$vr_claim_output" "claim_id")"
+expect_value "$vr_claim_output" "workspace_match_expected" "true"
+expect_value "$vr_claim_output" "branch_match_expected" "true"
+expect_value "$vr_claim_output" "task_match_expected" "true"
+expect_value "$vr_claim_output" "mode_match_expected" "true"
+expect_value "$vr_claim_output" "lifecycle_state_match_expected" "true"
+
+vr_completion_output="$(run_workvcs \
+    task transition "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --task "$vr_task_id" \
+    --task-version "$vr_task_version_id" \
+    --status done \
+    --outcome completed \
+    --session "$session_id")"
+vr_completed_task_state_digest="$(value "$vr_completion_output" "task_state_digest")"
+vr_task_version_id="$(value "$vr_completion_output" "task_entity_version_id")"
+head_commit_id="$(value "$vr_completion_output" "commit_id")"
+expect_value "$vr_completion_output" "task_entity_id" "$vr_task_id"
+expect_value "$vr_completion_output" "status" "done"
+
+vr_completed_task_output="$(run_workvcs \
+    task show "$store" \
+    --branch "$branch_id" \
+    --task "$vr_task_id" \
+    --expected-state-digest "$vr_completed_task_state_digest")"
+expect_value "$vr_completed_task_output" "task_entity_version_id" "$vr_task_version_id"
+expect_value "$vr_completed_task_output" "status" "done"
+expect_value "$vr_completed_task_output" "priority" "4"
+expect_value "$vr_completed_task_output" "matches_expected" "true"
+
+vr_claim_release_output="$(run_workvcs \
+    claim release "$store" \
+    --session "$session_id" \
+    --claim "$vr_claim_id" \
+    --expected-session "$session_id" \
+    --expected-lifecycle-state released)"
+expect_value "$vr_claim_release_output" "claim_id" "$vr_claim_id"
+expect_value "$vr_claim_release_output" "session_id" "$session_id"
+expect_value "$vr_claim_release_output" "lifecycle_state" "released"
+expect_value "$vr_claim_release_output" "session_match_expected" "true"
+expect_value "$vr_claim_release_output" "lifecycle_state_match_expected" "true"
+
 step "merge lifecycle"
 merge_base_commit_id="$head_commit_id"
 source_branch_output="$(run_workvcs \
@@ -886,9 +1090,9 @@ expect_value "$merge_closed_list_output" "merges_match_expected" "true"
 merge_history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 12)"
+    --expected-entries 17)"
 expect_value "$merge_history_output" "start_commit_id" "$result_commit_id"
-expect_value "$merge_history_output" "entries" "12"
+expect_value "$merge_history_output" "entries" "17"
 expect_value "$merge_history_output" "entries_match_expected" "true"
 expect_contains "$merge_history_output" "operation=merge.continue"
 
@@ -1505,19 +1709,19 @@ store_integrity_output="$(run_workvcs \
     store integrity "$store" \
     --require-valid \
     --expected-checked-branches 2 \
-    --expected-checked-commits 13 \
-    --expected-checked-changesets 13 \
-    --expected-checked-change-operations 17 \
+    --expected-checked-commits 18 \
+    --expected-checked-changesets 18 \
+    --expected-checked-change-operations 26 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 24 \
+    --expected-checked-events 31 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "2"
-expect_value "$store_integrity_output" "checked_commits" "13"
-expect_value "$store_integrity_output" "checked_changesets" "13"
-expect_value "$store_integrity_output" "checked_change_operations" "17"
+expect_value "$store_integrity_output" "checked_commits" "18"
+expect_value "$store_integrity_output" "checked_changesets" "18"
+expect_value "$store_integrity_output" "checked_change_operations" "26"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "24"
+expect_value "$store_integrity_output" "checked_events" "31"
 expect_value "$store_integrity_output" "checked_checkpoints" "1"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -1526,15 +1730,15 @@ doctor_output="$(run_workvcs \
     doctor "$store" \
     --require-valid \
     --expected-checked-branches 2 \
-    --expected-checked-commits 13 \
-    --expected-checked-changesets 13 \
-    --expected-checked-change-operations 17 \
+    --expected-checked-commits 18 \
+    --expected-checked-changesets 18 \
+    --expected-checked-change-operations 26 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 24 \
+    --expected-checked-events 31 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=2 checked_commits=13 checked_changesets=13 checked_change_operations=17 checked_changeset_causal_anchors=0 checked_events=24 checked_checkpoints=1 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=18 checked_changesets=18 checked_change_operations=26 checked_changeset_causal_anchors=0 checked_events=31 checked_checkpoints=1 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'
@@ -1544,6 +1748,9 @@ printf 'branch_id=%s\n' "$branch_id"
 printf 'genesis_state_digest=%s\n' "$genesis_state_digest"
 printf 'task_entity_id=%s\n' "$task_id"
 printf 'verification_entity_id=%s\n' "$verification_id"
+printf 'vr_task_entity_id=%s\n' "$vr_task_id"
+printf 'vr_requirement_entity_id=%s\n' "$vr_requirement_id"
+printf 'vr_verification_entity_id=%s\n' "$vr_verification_id"
 printf 'claim_id=%s\n' "$claim_id"
 printf 'source_branch_id=%s\n' "$source_branch_id"
 printf 'merge_id=%s\n' "$merge_id"

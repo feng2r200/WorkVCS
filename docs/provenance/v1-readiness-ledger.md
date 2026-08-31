@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0421 / Phase 4LF
+Last refreshed: 2026-09-01 by ADR-0422 / Phase 4LG
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -36,11 +36,11 @@ not complete.
 | Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Yes | Phase 4LE dogfoods AC/VR/Verification for an implementation closeout; repeat this in recovery and handoff-consumption scenarios. |
 | Verification command wrapper | Yes | Yes | Yes | Partial | Extend beyond caller-supplied observation data only after Resource adapter/path normalization is confirmed; keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Resource-backed stale-cache recovery from baseline observations is implemented; Resource path/glob normalization and adapter-backed re-observation remain Open. |
-| Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Partial | Phase 4LF consumes a focused Handoff into a continuation Session and uses `next` to claim the continuation Task; still dogfood blocked recovery continuation. |
-| Claim modes and guard behavior | Yes | Yes | Yes | Partial | Transfer, stale marking, and stale-gated forced takeover are implemented and smoke-covered; dogfood the full takeover recovery path in a real handoff. |
+| Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. |
+| Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LG dogfoods the blocked Handoff takeover recovery path with guard failure, explicit stale marking, stale-gated forced takeover, and recovered guard success; Claim transfer remains smoke-proven but not yet real-project dogfooded. |
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LF proves current Context is sufficient for focused Handoff continuation; complete remaining V1 categories: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LF inspects `why` during Handoff continuation and finds zero relation edges for the Handoff focus link; decide that relation semantics before adding `why` output. |
-| Handoff | Yes | Yes | Yes | Yes | Phase 4LF adds and dogfoods `handoff consume` as a focused continuation entrypoint; next prove blocked Handoff recovery with stale-gated Claim takeover. |
+| Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover; repeat on another real project before claiming broad dogfood maturity. |
 | Merge lifecycle | Yes | Yes | Yes | No | Dogfood divergent Work Branch resolution and document recovery behavior for moved heads or unresolved items. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | No | Validate a real export/import/restore path and record Bundle container/profile details still Open for V1. |
 | CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`; continue reducing manual key-value capture only where dogfood shows repeated friction. |
@@ -52,15 +52,14 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Dogfood Claim transfer, stale marking, and stale-gated takeover in a durable
-   implementation recovery path and record missing ergonomics.
-2. Decide whether Handoff focus belongs in `why` as a relation, using the Phase
+1. Decide whether Handoff focus belongs in `why` as a relation, using the Phase
    4LF zero-edge evidence before changing explanation semantics.
-3. Complete the remaining V1 Context Resolver categories when the verify and
+2. Complete the remaining V1 Context Resolver categories when the verify and
    handoff surfaces can supply real packet content.
-4. Reduce manual key-value capture in the operator CLI only where the dogfood
+3. Reduce manual key-value capture in the operator CLI only where the dogfood
    evidence shows repeated friction.
-5. Run larger Store validation before designing performance indexes.
+4. Run larger Store validation before designing performance indexes.
+5. Use WorkVCS on another real project before claiming broad dogfood maturity.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the
@@ -116,5 +115,7 @@ The following remain beyond V1 even if they would make dogfood easier:
   real implementation Task/Session/Claim/AC/VR/Verification/SessionDiff/Handoff
   closeout. Phase 4LF dogfoods a focused Handoff as the continuation entrypoint,
   adds `handoff consume`, and records that `why` still does not expose the
-  Handoff focus link as a relation. WorkVCS has still not been used to recover a
-  real blocked handoff with stale-gated takeover or for another real project.
+  Handoff focus link as a relation. Phase 4LG dogfoods a focused Handoff
+  continuation blocked by another Session's active Claim, then recovers it with
+  explicit stale marking and stale-gated forced takeover. WorkVCS has still not
+  been used for another real project.

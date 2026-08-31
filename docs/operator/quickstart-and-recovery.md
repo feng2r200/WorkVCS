@@ -246,6 +246,31 @@ workvcs claim guard "$STORE" \
   --task "$TASK_ENTITY_ID"
 ```
 
+If a focused Handoff continuation is blocked by another active Session's Claim,
+first consume the Handoff, inspect the guard, then recover with the same
+stale-gated takeover chain:
+
+```bash
+workvcs handoff consume "$STORE" \
+  --commit "$HANDOFF_COMMIT_ID" \
+  --handoff "$HANDOFF_RECORD_ID" \
+  --session "$CONTINUATION_SESSION_ID"
+
+workvcs claim guard "$STORE" \
+  --session "$CONTINUATION_SESSION_ID" \
+  --task "$TASK_ENTITY_ID"
+
+workvcs session mark-stale "$STORE" \
+  --session "$PREVIOUS_OWNER_SESSION_ID" \
+  --rationale "previous owner cannot continue"
+
+workvcs claim takeover "$STORE" \
+  --session "$CONTINUATION_SESSION_ID" \
+  --claim "$CLAIM_ID" \
+  --force \
+  --rationale "handoff recovery"
+```
+
 When an operator must override a blocked active Claim, first mark the previous
 owning Session as `potentially_stale`, then use forced takeover with a rationale
 and inspect the guard afterward:
@@ -283,7 +308,7 @@ intended state transition.
 ## Still Open For V1
 
 - The documented loop has been dogfooded for one implementation closeout, but
-  still needs a real blocked recovery handoff.
+  has not yet been repeated on another real project.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
 - Context packets still need more V1 categories and persistence decisions.

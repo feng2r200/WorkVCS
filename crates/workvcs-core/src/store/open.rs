@@ -89,14 +89,15 @@ use crate::identity::{
 use crate::runtime::{
     ClaimGuardOptions, ClaimGuardResult, ClaimListOptions, ClaimListResult, ClaimNextOptions,
     ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
-    ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions, MergeAbortResult,
-    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
-    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
-    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult,
+    ClaimTaskResult, ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketOptions,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
+    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult,
+    MergeListOptions, MergeListResult, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
+    SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions, SessionListResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -1632,6 +1633,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::context_overview(&self.connection, options)
+    }
+
+    pub(crate) fn context_packet(&self, options: &ContextPacketOptions) -> Result<ContextPacket> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::context_packet(&self.connection, options)
     }
 
     pub(crate) fn next_work(&mut self, options: &NextWorkOptions) -> Result<NextWorkResult> {

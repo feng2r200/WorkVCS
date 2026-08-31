@@ -254,6 +254,37 @@ expect_value "$session_output" "workspace_match_expected" "true"
 expect_value "$session_output" "branch_match_expected" "true"
 expect_value "$session_output" "lifecycle_state_match_expected" "true"
 
+step "context packet profile budget"
+context_overview_output="$(run_workvcs \
+    context "$store" \
+    --session "$session_id")"
+context_state_digest="$(value "$context_overview_output" "state_digest")"
+expect_value "$context_overview_output" "runnable_candidates" "2"
+expect_value "$context_overview_output" "runnable_ready" "1"
+
+context_packet_output="$(run_workvcs \
+    context "$store" \
+    --session "$session_id" \
+    --profile brief \
+    --budget-items 3 \
+    --expected-state-digest "$context_state_digest")"
+expect_value "$context_packet_output" "context_profile" "brief"
+expect_value "$context_packet_output" "context_budget_items" "3"
+expect_value "$context_packet_output" "context_available_items" "6"
+expect_value "$context_packet_output" "context_items" "3"
+expect_value "$context_packet_output" "context_omitted_items" "3"
+expect_value "$context_packet_output" "context_item.0.priority" "P0"
+expect_value "$context_packet_output" "context_item.0.category" "session_anchor"
+expect_value "$context_packet_output" "context_omission_priority.0.priority" "P0"
+expect_value "$context_packet_output" "context_omission_category.0.category" "current_task"
+expect_value "$context_packet_output" "matches_expected" "true"
+
+expect_failure_contains \
+    "context budget items must be greater than zero" \
+    context "$store" \
+    --session "$session_id" \
+    --budget-items 0
+
 step "evidence create and show"
 evidence_output="$(run_workvcs \
     evidence create "$store" \

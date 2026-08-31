@@ -103,14 +103,14 @@ use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
     ClaimGuardOptions, ClaimGuardResult, ClaimListOptions, ClaimListResult, ClaimNextOptions,
     ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
-    ClaimTaskResult, ContextOverview, ContextOverviewOptions, MergeAbortOptions, MergeAbortResult,
-    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
-    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
-    RunnableTasksOptions, RunnableTasksProjection, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionListOptions, SessionListResult,
-    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult,
+    ClaimTaskResult, ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketOptions,
+    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
+    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult,
+    MergeListOptions, MergeListResult, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
+    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
+    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
+    SessionFocusUpdateResult, SessionListOptions, SessionListResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 use std::path::Path;
 
@@ -1047,6 +1047,10 @@ impl Engine {
 
     pub fn context_overview(&self, options: ContextOverviewOptions) -> Result<ContextOverview> {
         self.store.context_overview(&options)
+    }
+
+    pub fn context_packet(&self, options: ContextPacketOptions) -> Result<ContextPacket> {
+        self.store.context_packet(&options)
     }
 
     pub fn next_work(&mut self, options: NextWorkOptions) -> Result<NextWorkResult> {

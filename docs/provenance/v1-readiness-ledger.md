@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-08-31 by ADR-0412 / Phase 4KW
+Last refreshed: 2026-08-31 by ADR-0413 / Phase 4KX
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -38,7 +38,7 @@ not complete.
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | No | Close Resource path/glob normalization and persisted observation capture policy where needed by the `verify` wrapper. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | No | Dogfood the select-and-continue loop with real implementation work instead of only script-generated Tasks. |
 | Claim modes and guard behavior | Yes | Partial | Partial | No | Shared claims exist; stale takeover, transfer, and force provenance remain V1 gaps. |
-| Context resolver | Yes | Partial | Partial | No | Implement `brief`/`normal`/`full` profiles, P0-P9 item priority, hard budget omission, and omission summaries. |
+| Context resolver | Yes | Partial | Yes | Partial | Complete the remaining V1 context categories and dogfood flow: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, focused Handoff reading, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | No | Use real Findings/Decisions/Handoffs during implementation and inspect `why` output for continuation quality. |
 | Handoff | Yes | Partial | No | No | Move beyond explicit `Record(kind=handoff)` creation toward Session-end diff plus focused handoff authoring/reading. |
 | Merge lifecycle | Yes | Yes | Yes | No | Dogfood divergent Work Branch resolution and document recovery behavior for moved heads or unresolved items. |
@@ -52,15 +52,15 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Close `context` profile and hard-budget behavior with a real continuation
-   walkthrough.
-2. Add the deterministic `verify` wrapper and prove it captures execution
+1. Add the deterministic `verify` wrapper and prove it captures execution
    Evidence plus Resource state.
-3. Close Handoff beyond `Record(kind=handoff)`: Session-end diff, focused
+2. Close Handoff beyond `Record(kind=handoff)`: Session-end diff, focused
    handoff creation, and handoff consumption.
-4. Add stale Claim takeover, transfer, and force provenance, then dogfood a
+3. Add stale Claim takeover, transfer, and force provenance, then dogfood a
    blocked-claim recovery path.
-5. Add install, quickstart, and recovery documentation for a local operator.
+4. Add install, quickstart, and recovery documentation for a local operator.
+5. Complete the remaining V1 Context Resolver categories when the verify and
+   handoff surfaces can supply real packet content.
 6. Run larger Store validation before designing performance indexes.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
@@ -91,11 +91,12 @@ The following remain beyond V1 even if they would make dogfood easier:
   Resource, Record, Session, Claim, Context, Next, Runnable, Verification,
   Projection, Bundle, Checkpoint, and Merge command families.
 - `scripts/smoke-v0.1-cli-workflow.sh` is the repository process-level smoke
-  entrypoint and has been extended through ADR-0410 to cover integrity,
-  scheduling/claim-next, Merge, Checkpoint, Bundle, divergence, and VR-backed
-  AC closure.
+  entrypoint and has been extended through ADR-0413 to cover integrity,
+  scheduling/claim-next, context profile/budget packets, Merge, Checkpoint,
+  Bundle, divergence, and VR-backed AC closure.
 - The core test inventory currently contains focused tests for the major
   implemented V1 areas.
-- Current smoke Stores are temporary and scripted. They are not evidence that
-  WorkVCS has been used as the durable state system for its own implementation
-  or for another real project.
+- Current smoke Stores are temporary and scripted. Phase 4KX adds a local
+  dogfood Store for context packet budget behavior, but WorkVCS has still not
+  been used as the durable state system for a complete implementation slice or
+  for another real project.

@@ -127,7 +127,11 @@ pub use runtime::{
     ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions, ClaimNextResult,
     ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
 };
-pub use runtime::{ContextOverview, ContextOverviewOptions};
+pub use runtime::{
+    ContextItem, ContextItemCategory, ContextItemSubject, ContextOmissionBucket,
+    ContextOmissionCategory, ContextOmissionSummary, ContextOverview, ContextOverviewOptions,
+    ContextPacket, ContextPacketEnvelope, ContextPacketOptions, ContextPriority, ContextProfile,
+};
 pub use runtime::{
     MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
     MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult,

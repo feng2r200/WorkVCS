@@ -23,20 +23,20 @@ use workvcs_core::{
     ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions,
     ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
     ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
-    EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId, EventListOptions,
-    EventListResult, EventSnapshot, EvidenceContentInput, EvidenceContentSnapshot,
-    EvidenceCreateOptions, EvidenceCreateResult, EvidenceId, EvidenceListOptions,
-    EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
-    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
-    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
-    ExternalRefId, ExternalVersionId, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
-    GoalStatus, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry, HistoryQueryOptions,
-    ImportId, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
-    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
-    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureDerivedFromRelationCreateCommit,
+    ContextPacket, ContextPacketOptions, ContextProfile, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityTransitionCommit,
+    EntityTransitionOptions, EntityVersionId, EventId, EventListOptions, EventListResult,
+    EventSnapshot, EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions,
+    EvidenceCreateResult, EvidenceId, EvidenceListOptions, EvidenceListResult, EvidenceSnapshot,
+    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
+    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
+    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalStatus, GoalTransitionCommit,
+    GoalTransitionOptions, HistoryEntry, HistoryQueryOptions, ImportId, IntegrityReport,
+    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
+    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -497,6 +497,12 @@ enum Command {
 
         #[arg(long)]
         session: String,
+
+        #[arg(long)]
+        profile: Option<String>,
+
+        #[arg(long)]
+        budget_items: Option<usize>,
 
         #[arg(long)]
         expected_state_digest: Option<String>,
@@ -10560,19 +10566,35 @@ fn run(cli: Cli) -> Result<String> {
         Command::Context {
             store,
             session,
+            profile,
+            budget_items,
             expected_state_digest,
         } => {
             let engine = Engine::open(store)?;
-            let context = engine.context_overview(ContextOverviewOptions::new(
-                SessionId::parse_canonical(&session)?,
-            ))?;
-            let mut output = render_context_overview(&context);
+            let session_id = SessionId::parse_canonical(&session)?;
+            let use_packet = profile.is_some() || budget_items.is_some();
+            let (state_digest, mut output) = if use_packet {
+                let mut options = ContextPacketOptions::new(session_id);
+                if let Some(profile) = profile {
+                    options = options.with_profile(parse_context_profile(&profile)?);
+                }
+                if let Some(budget_items) = budget_items {
+                    options = options.with_budget_items(budget_items)?;
+                }
+                let packet = engine.context_packet(options)?;
+                (packet.envelope.state_digest, render_context_packet(&packet))
+            } else {
+                let context = engine.context_overview(ContextOverviewOptions::new(session_id))?;
+                (
+                    context.branch.state_digest,
+                    render_context_overview(&context),
+                )
+            };
             if let Some(expected_state_digest) = expected_state_digest {
                 let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
-                if context.branch.state_digest != expected_state_digest {
+                if state_digest != expected_state_digest {
                     return Err(WorkVcsError::DigestInvalid(format!(
-                        "context state digest {} does not match expected {}",
-                        context.branch.state_digest, expected_state_digest
+                        "context state digest {state_digest} does not match expected {expected_state_digest}"
                     )));
                 }
                 output.push_str("matches_expected=true\n");
@@ -10951,6 +10973,17 @@ fn parse_task_status(value: &str) -> Result<TaskStatus> {
         "cancelled" => Ok(TaskStatus::Cancelled),
         other => Err(WorkVcsError::TaskInvalid(format!(
             "task status {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn parse_context_profile(value: &str) -> Result<ContextProfile> {
+    match value {
+        "brief" => Ok(ContextProfile::Brief),
+        "normal" => Ok(ContextProfile::Normal),
+        "full" => Ok(ContextProfile::Full),
+        other => Err(WorkVcsError::QueryInvalid(format!(
+            "context profile {other:?} is not in the CLI vocabulary"
         ))),
     }
 }
@@ -15832,6 +15865,87 @@ fn render_context_overview(context: &ContextOverview) -> String {
             output,
             "context_record_knowledge_relation.{index}.relation_state_digest={}",
             relation.state_digest
+        );
+    }
+    output
+}
+
+fn render_context_packet(packet: &ContextPacket) -> String {
+    let envelope = &packet.envelope;
+    let focus_entity_id = envelope
+        .focus_entity_id
+        .map(|focus_entity_id| focus_entity_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let last_activity_at_us = envelope
+        .last_activity_at_us
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let budget_items = packet
+        .budget_items
+        .map(|value| value.get().to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let mut output = format!(
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\ncontext_profile={}\ncontext_budget_items={}\ncontext_available_items={}\ncontext_items={}\ncontext_omitted_items={}\ncontext_omission_priorities={}\ncontext_omission_categories={}\n",
+        envelope.session_id,
+        session_lifecycle_state(envelope.lifecycle_state),
+        envelope.workspace_id,
+        envelope.branch_id,
+        envelope.branch_name,
+        envelope.head_commit_id,
+        envelope.state_digest,
+        envelope.started_at_us,
+        last_activity_at_us,
+        focus_entity_id,
+        packet.profile.as_str(),
+        budget_items,
+        packet.available_items,
+        packet.items.len(),
+        packet.omission_summary.total,
+        packet.omission_summary.by_priority.len(),
+        packet.omission_summary.by_category.len()
+    );
+    for (index, item) in packet.items.iter().enumerate() {
+        let summary_json = serde_json::to_string(&item.summary).expect("context item summary JSON");
+        let _ = writeln!(output, "context_item.{index}.key={}", item.item_key);
+        let _ = writeln!(
+            output,
+            "context_item.{index}.priority={}",
+            item.priority.as_str()
+        );
+        let _ = writeln!(
+            output,
+            "context_item.{index}.category={}",
+            item.category.as_str()
+        );
+        let _ = writeln!(
+            output,
+            "context_item.{index}.subject={}",
+            item.subject.as_ref_string()
+        );
+        let _ = writeln!(output, "context_item.{index}.summary_json={summary_json}");
+    }
+    for (index, bucket) in packet.omission_summary.by_priority.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "context_omission_priority.{index}.priority={}",
+            bucket.priority.as_str()
+        );
+        let _ = writeln!(
+            output,
+            "context_omission_priority.{index}.omitted={}",
+            bucket.omitted
+        );
+    }
+    for (index, bucket) in packet.omission_summary.by_category.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "context_omission_category.{index}.category={}",
+            bucket.category.as_str()
+        );
+        let _ = writeln!(
+            output,
+            "context_omission_category.{index}.omitted={}",
+            bucket.omitted
         );
     }
     output
@@ -34010,6 +34124,8 @@ mod tests {
         assert!(context.contains("records=0"));
         assert!(context.contains("record_relations=0"));
         assert!(context.contains(&format!("candidate.0.task_entity_id={task_id}")));
+        assert!(!context.contains("context_profile="));
+        assert!(!context.contains("context_item.0.key="));
 
         let expected_context = run(Cli::try_parse_from([
             "workvcs",
@@ -34039,6 +34155,72 @@ mod tests {
         ])
         .expect("parse mismatched context"));
         assert!(mismatched_context.is_err());
+
+        let packet_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "2",
+            "--expected-state-digest",
+            &value(&context, "state_digest"),
+        ])
+        .expect("parse packet context"))
+        .expect("packet context");
+        assert_eq!(value(&packet_context, "context_profile"), "brief");
+        assert_eq!(value(&packet_context, "context_budget_items"), "2");
+        assert_eq!(value(&packet_context, "context_items"), "2");
+        assert_eq!(value(&packet_context, "context_omitted_items"), "2");
+        assert_eq!(value(&packet_context, "context_item.0.priority"), "P0");
+        assert_eq!(
+            value(&packet_context, "context_item.0.category"),
+            "session_anchor"
+        );
+        assert_eq!(value(&packet_context, "matches_expected"), "true");
+        assert_eq!(
+            value(&packet_context, "context_omission_priority.0.priority"),
+            "P0"
+        );
+        assert_eq!(
+            value(&packet_context, "context_omission_category.0.category"),
+            "current_task"
+        );
+
+        let zero_budget_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--budget-items",
+            "0",
+        ])
+        .expect("parse zero budget context"));
+        assert!(matches!(
+            zero_budget_context,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "context budget items must be greater than zero"
+        ));
+
+        let unknown_profile_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--profile",
+            "tiny",
+        ])
+        .expect("parse unknown profile context"));
+        assert!(matches!(
+            unknown_profile_context,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "context profile \"tiny\" is not in the CLI vocabulary"
+        ));
 
         let runnable = run(Cli::try_parse_from([
             "workvcs",

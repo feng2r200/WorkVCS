@@ -141,6 +141,27 @@ genesis_state_digest="$(value "$workspace_output" "state_digest")"
 expect_value "$workspace_output" "branch_name" "main"
 expect_nonempty "$workspace_output" "genesis_changeset_id"
 
+step "goal create"
+goal_output="$(run_workvcs \
+    goal create "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --description "Smoke CLI workflow goal")"
+goal_id="$(value "$goal_output" "goal_entity_id")"
+head_commit_id="$(value "$goal_output" "commit_id")"
+expect_value "$goal_output" "status" "active"
+
+step "plan create"
+plan_output="$(run_workvcs \
+    plan create "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --description "Smoke CLI workflow plan" \
+    --strategy "Keep the runnable work path explicit")"
+plan_id="$(value "$plan_output" "plan_entity_id")"
+head_commit_id="$(value "$plan_output" "commit_id")"
+expect_value "$plan_output" "status" "active"
+
 step "task create"
 task_output="$(run_workvcs \
     task create "$store" \
@@ -153,6 +174,30 @@ task_version_id="$(value "$task_output" "task_entity_version_id")"
 head_commit_id="$(value "$task_output" "commit_id")"
 expect_value "$task_output" "status" "pending"
 expect_nonempty "$task_output" "changeset_id"
+
+step "goal-plan containment"
+goal_plan_containment_output="$(run_workvcs \
+    task contain "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --parent "$goal_id" \
+    --child "$plan_id")"
+goal_plan_relation_id="$(value "$goal_plan_containment_output" "relation_id")"
+head_commit_id="$(value "$goal_plan_containment_output" "commit_id")"
+expect_value "$goal_plan_containment_output" "parent_kind" "goal"
+expect_value "$goal_plan_containment_output" "child_kind" "plan"
+
+step "plan-task containment"
+plan_task_containment_output="$(run_workvcs \
+    task contain "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --parent "$plan_id" \
+    --child "$task_id")"
+plan_task_relation_id="$(value "$plan_task_containment_output" "relation_id")"
+head_commit_id="$(value "$plan_task_containment_output" "commit_id")"
+expect_value "$plan_task_containment_output" "parent_kind" "plan"
+expect_value "$plan_task_containment_output" "child_kind" "task"
 
 step "prerequisite task create"
 prerequisite_task_output="$(run_workvcs \
@@ -266,18 +311,25 @@ context_packet_output="$(run_workvcs \
     context "$store" \
     --session "$session_id" \
     --profile brief \
-    --budget-items 5 \
+    --budget-items 6 \
     --expected-state-digest "$context_state_digest")"
 expect_value "$context_packet_output" "context_profile" "brief"
-expect_value "$context_packet_output" "context_budget_items" "5"
-expect_value "$context_packet_output" "context_available_items" "8"
-expect_value "$context_packet_output" "context_items" "5"
+expect_value "$context_packet_output" "context_budget_items" "6"
+expect_value "$context_packet_output" "context_available_items" "9"
+expect_value "$context_packet_output" "context_items" "6"
 expect_value "$context_packet_output" "context_omitted_items" "3"
 expect_value "$context_packet_output" "context_item.0.priority" "P0"
 expect_value "$context_packet_output" "context_item.0.category" "session_anchor"
 expect_value "$context_packet_output" "context_item.4.priority" "P1"
-expect_value "$context_packet_output" "context_item.4.category" "acceptance_criterion"
-expect_value "$context_packet_output" "context_item.4.subject" "acceptance_criterion:$criterion_id"
+expect_value "$context_packet_output" "context_item.4.category" "goal_plan_path"
+expect_value "$context_packet_output" "context_item.4.subject" "goal_plan_path:$task_id"
+expect_contains "$context_packet_output" "goal:$goal_id"
+expect_contains "$context_packet_output" "plan:$plan_id"
+expect_contains "$context_packet_output" "relation=$goal_plan_relation_id"
+expect_contains "$context_packet_output" "relation=$plan_task_relation_id"
+expect_value "$context_packet_output" "context_item.5.priority" "P1"
+expect_value "$context_packet_output" "context_item.5.category" "acceptance_criterion"
+expect_value "$context_packet_output" "context_item.5.subject" "acceptance_criterion:$criterion_id"
 expect_value "$context_packet_output" "context_omission_priority.0.priority" "P2"
 expect_value "$context_packet_output" "context_omission_category.0.category" "task_readiness"
 expect_value "$context_packet_output" "context_omission_category.1.category" "blocked_dependency"
@@ -452,9 +504,9 @@ step "history and show-at"
 history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 7)"
+    --expected-entries 11)"
 expect_value "$history_output" "start_commit_id" "$head_commit_id"
-expect_value "$history_output" "entries" "7"
+expect_value "$history_output" "entries" "11"
 expect_value "$history_output" "entries_match_expected" "true"
 expect_contains "$history_output" "operation=verification.record"
 
@@ -721,9 +773,9 @@ expect_value "$completed_runnable_output" "candidates_match_expected" "true"
 completion_history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 10)"
+    --expected-entries 14)"
 expect_value "$completion_history_output" "start_commit_id" "$head_commit_id"
-expect_value "$completion_history_output" "entries" "10"
+expect_value "$completion_history_output" "entries" "14"
 expect_value "$completion_history_output" "entries_match_expected" "true"
 expect_contains "$completion_history_output" "operation=entity.transition"
 
@@ -1138,9 +1190,9 @@ expect_value "$merge_closed_list_output" "merges_match_expected" "true"
 merge_history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 17)"
+    --expected-entries 21)"
 expect_value "$merge_history_output" "start_commit_id" "$result_commit_id"
-expect_value "$merge_history_output" "entries" "17"
+expect_value "$merge_history_output" "entries" "21"
 expect_value "$merge_history_output" "entries_match_expected" "true"
 expect_contains "$merge_history_output" "operation=merge.continue"
 
@@ -1982,19 +2034,19 @@ store_integrity_output="$(run_workvcs \
     store integrity "$store" \
     --require-valid \
     --expected-checked-branches 2 \
-    --expected-checked-commits 19 \
-    --expected-checked-changesets 19 \
-    --expected-checked-change-operations 27 \
+    --expected-checked-commits 23 \
+    --expected-checked-changesets 23 \
+    --expected-checked-change-operations 31 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 41 \
+    --expected-checked-events 45 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "2"
-expect_value "$store_integrity_output" "checked_commits" "19"
-expect_value "$store_integrity_output" "checked_changesets" "19"
-expect_value "$store_integrity_output" "checked_change_operations" "27"
+expect_value "$store_integrity_output" "checked_commits" "23"
+expect_value "$store_integrity_output" "checked_changesets" "23"
+expect_value "$store_integrity_output" "checked_change_operations" "31"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "41"
+expect_value "$store_integrity_output" "checked_events" "45"
 expect_value "$store_integrity_output" "checked_checkpoints" "1"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -2003,15 +2055,15 @@ doctor_output="$(run_workvcs \
     doctor "$store" \
     --require-valid \
     --expected-checked-branches 2 \
-    --expected-checked-commits 19 \
-    --expected-checked-changesets 19 \
-    --expected-checked-change-operations 27 \
+    --expected-checked-commits 23 \
+    --expected-checked-changesets 23 \
+    --expected-checked-change-operations 31 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 41 \
+    --expected-checked-events 45 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=2 checked_commits=19 checked_changesets=19 checked_change_operations=27 checked_changeset_causal_anchors=0 checked_events=41 checked_checkpoints=1 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=23 checked_changesets=23 checked_change_operations=31 checked_changeset_causal_anchors=0 checked_events=45 checked_checkpoints=1 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'

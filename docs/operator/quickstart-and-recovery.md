@@ -101,7 +101,9 @@ workvcs claim next "$STORE" \
 
 When context options are present, packet fields are emitted with
 `claim_next_` prefixes, for example `claim_next_context_profile` and
-`claim_next_context_item.0.category`. If the selected Task has Acceptance
+`claim_next_context_item.0.category`. If the selected Task is contained by a
+Goal or Plan, brief packets include a `goal_plan_path` item that summarizes the
+current hierarchy. If the selected Task has Acceptance
 Criteria or Verification Requirements, brief packets include
 `acceptance_criterion` and `verification_requirement` context items whose
 subjects can be reused with `workvcs verify`. When a Task is blocked by an
@@ -348,8 +350,8 @@ intended state transition.
   has not yet been repeated on another real project.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
-- Context packets still need Goal/Plan path packets, Attempt execution detail,
-  path-sensitive Knowledge policy, and persistence decisions.
+- Context packets still need Attempt execution detail, path-sensitive Knowledge
+  policy, and persistence decisions.
 - `why` does not yet expose the Handoff focus link as a relation.
 - Automatic stale detection remains open.
 - Larger Store validation has not yet been run.

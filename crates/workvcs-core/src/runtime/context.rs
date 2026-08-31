@@ -3,8 +3,9 @@ use super::session::{self, SessionLifecycleState, SessionSnapshot};
 use crate::error::{Result, WorkVcsError};
 use crate::history::{
     self, AcceptanceCriterionEffectiveStatus, AcceptanceCriterionSnapshot, BranchHead,
-    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeStatus, RecordKind, RecordKnowledgeRelationListOptions,
+    GoalSnapshot, KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
+    KnowledgeRelationListResult, KnowledgeStatus, PlanSnapshot, PrimaryContainmentEndpointKind,
+    PrimaryContainmentSnapshot, RecordKind, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordListOptions, RecordListResult,
     RecordRelationListOptions, RecordRelationListResult, RecordStatus, TaskSnapshot,
     VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget, WhyRelationEdge,
@@ -12,7 +13,7 @@ use crate::history::{
 };
 use crate::identity::{BranchId, CommitId, Digest, EntityId, RelationId, SessionId, WorkspaceId};
 use crate::store::StoreConnection;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,6 +141,7 @@ pub enum ContextItemCategory {
     SessionAnchor,
     BranchOverview,
     CurrentTask,
+    GoalPlanPath,
     AcceptanceCriterion,
     VerificationRequirement,
     TaskReadiness,
@@ -162,6 +164,7 @@ impl ContextItemCategory {
             Self::SessionAnchor => "session_anchor",
             Self::BranchOverview => "branch_overview",
             Self::CurrentTask => "current_task",
+            Self::GoalPlanPath => "goal_plan_path",
             Self::AcceptanceCriterion => "acceptance_criterion",
             Self::VerificationRequirement => "verification_requirement",
             Self::TaskReadiness => "task_readiness",
@@ -193,6 +196,9 @@ pub enum ContextItemSubject {
         workspace_id: WorkspaceId,
     },
     Task {
+        task_entity_id: EntityId,
+    },
+    GoalPlanPath {
         task_entity_id: EntityId,
     },
     AcceptanceCriterion {
@@ -229,6 +235,7 @@ impl ContextItemSubject {
             } => format!("branch:{branch_id}@{commit_id}"),
             Self::Workspace { workspace_id } => format!("workspace:{workspace_id}"),
             Self::Task { task_entity_id } => format!("task:{task_entity_id}"),
+            Self::GoalPlanPath { task_entity_id } => format!("goal_plan_path:{task_entity_id}"),
             Self::AcceptanceCriterion {
                 acceptance_criterion_entity_id,
             } => format!("acceptance_criterion:{acceptance_criterion_entity_id}"),
@@ -352,6 +359,9 @@ pub struct ContextOverview {
     pub branch: BranchHead,
     pub runnable_tasks: RunnableTasksProjection,
     pub tasks: Vec<TaskSnapshot>,
+    pub plans: Vec<PlanSnapshot>,
+    pub goals: Vec<GoalSnapshot>,
+    pub primary_containment_relations: Vec<PrimaryContainmentSnapshot>,
     pub acceptance_criteria: Vec<ContextAcceptanceCriterionSnapshot>,
     pub verification_requirements: Vec<VerificationRequirementSnapshot>,
     pub knowledge: KnowledgeListResult,
@@ -410,6 +420,34 @@ pub(crate) fn context_overview(
     }) {
         return Err(WorkVcsError::SessionInvalid(format!(
             "session {} task context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
+    let plans = history::plans_at(connection, branch.head_commit_id)?;
+    if plans.iter().any(|plan| {
+        plan.workspace_id != active_workspace_id || plan.commit_id != branch.head_commit_id
+    }) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} plan context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
+    let goals = history::goals_at(connection, branch.head_commit_id)?;
+    if goals.iter().any(|goal| {
+        goal.workspace_id != active_workspace_id || goal.commit_id != branch.head_commit_id
+    }) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} goal context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
+    let primary_containment_relations =
+        history::primary_containment_relations_at(connection, branch.head_commit_id)?;
+    if primary_containment_relations.iter().any(|relation| {
+        relation.workspace_id != active_workspace_id || relation.commit_id != branch.head_commit_id
+    }) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} primary containment context anchor changed while resolving overview",
             options.session_id()
         )));
     }
@@ -492,6 +530,9 @@ pub(crate) fn context_overview(
         branch,
         runnable_tasks,
         tasks,
+        plans,
+        goals,
+        primary_containment_relations,
         acceptance_criteria,
         verification_requirements,
         knowledge,
@@ -585,6 +626,17 @@ fn collect_context_items(
         .iter()
         .map(|task| (task.task_entity_id, task))
         .collect::<BTreeMap<_, _>>();
+    let plans_by_id = context
+        .plans
+        .iter()
+        .map(|plan| (plan.plan_entity_id, plan))
+        .collect::<BTreeMap<_, _>>();
+    let goals_by_id = context
+        .goals
+        .iter()
+        .map(|goal| (goal.goal_entity_id, goal))
+        .collect::<BTreeMap<_, _>>();
+    let primary_parent_by_child = primary_parent_by_child(&context.primary_containment_relations)?;
     push_context_item(
         &mut items,
         profile,
@@ -641,6 +693,23 @@ fn collect_context_items(
                 candidate.task.state.description
             ),
         );
+        if let Some(goal_plan_path_summary) = goal_plan_path_summary(
+            candidate.task.task_entity_id,
+            &primary_parent_by_child,
+            &plans_by_id,
+            &goals_by_id,
+        )? {
+            push_context_item(
+                &mut items,
+                profile,
+                ContextPriority::P1,
+                ContextItemCategory::GoalPlanPath,
+                ContextItemSubject::GoalPlanPath {
+                    task_entity_id: candidate.task.task_entity_id,
+                },
+                goal_plan_path_summary,
+            );
+        }
         for criterion_ref in &candidate.task.state.acceptance_criteria {
             let criterion = criteria_by_id
                 .get(&criterion_ref.acceptance_criterion_entity_id)
@@ -874,6 +943,102 @@ fn collect_context_items(
     Ok(items)
 }
 
+fn primary_parent_by_child(
+    relations: &[PrimaryContainmentSnapshot],
+) -> Result<BTreeMap<EntityId, &PrimaryContainmentSnapshot>> {
+    let mut parent_by_child = BTreeMap::new();
+    for relation in relations {
+        if relation.parent_entity_id == relation.child_entity_id {
+            return Err(WorkVcsError::RelationInvalid(format!(
+                "current primary containment relation {} is a self edge",
+                relation.relation_id
+            )));
+        }
+        if let Some(existing) = parent_by_child.insert(relation.child_entity_id, relation) {
+            return Err(WorkVcsError::RelationInvalid(format!(
+                "entity {} has multiple current primary containment parents: {} and {}",
+                relation.child_entity_id, existing.parent_entity_id, relation.parent_entity_id
+            )));
+        }
+    }
+    Ok(parent_by_child)
+}
+
+fn goal_plan_path_summary(
+    task_entity_id: EntityId,
+    primary_parent_by_child: &BTreeMap<EntityId, &PrimaryContainmentSnapshot>,
+    plans_by_id: &BTreeMap<EntityId, &PlanSnapshot>,
+    goals_by_id: &BTreeMap<EntityId, &GoalSnapshot>,
+) -> Result<Option<String>> {
+    let mut current_entity_id = task_entity_id;
+    let mut current_kind = PrimaryContainmentEndpointKind::Task;
+    let mut seen = BTreeSet::new();
+    let mut path_segments = Vec::new();
+
+    while let Some(relation) = primary_parent_by_child.get(&current_entity_id) {
+        if !seen.insert(current_entity_id) {
+            return Err(WorkVcsError::RelationInvalid(format!(
+                "current primary containment graph contains a cycle at entity {current_entity_id}"
+            )));
+        }
+        if relation.child_kind != current_kind {
+            return Err(WorkVcsError::RelationInvalid(format!(
+                "primary containment relation {} child kind {} does not match resolved path kind {} for entity {}",
+                relation.relation_id, relation.child_kind, current_kind, current_entity_id
+            )));
+        }
+
+        match relation.parent_kind {
+            PrimaryContainmentEndpointKind::Goal => {
+                let goal = goals_by_id.get(&relation.parent_entity_id).ok_or_else(|| {
+                    WorkVcsError::GoalInvalid(format!(
+                        "primary containment relation {} references missing goal {}",
+                        relation.relation_id, relation.parent_entity_id
+                    ))
+                })?;
+                path_segments.push(format!(
+                    "goal:{} status={} relation={}: {}",
+                    goal.goal_entity_id,
+                    goal.state.status,
+                    relation.relation_id,
+                    goal.state.description
+                ));
+            }
+            PrimaryContainmentEndpointKind::Plan => {
+                let plan = plans_by_id.get(&relation.parent_entity_id).ok_or_else(|| {
+                    WorkVcsError::PlanInvalid(format!(
+                        "primary containment relation {} references missing plan {}",
+                        relation.relation_id, relation.parent_entity_id
+                    ))
+                })?;
+                path_segments.push(format!(
+                    "plan:{} status={} relation={}: {}",
+                    plan.plan_entity_id,
+                    plan.state.status,
+                    relation.relation_id,
+                    plan.state.description
+                ));
+            }
+            PrimaryContainmentEndpointKind::Task => {}
+        }
+
+        current_entity_id = relation.parent_entity_id;
+        current_kind = relation.parent_kind;
+    }
+
+    if path_segments.is_empty() {
+        return Ok(None);
+    }
+
+    path_segments.reverse();
+    Ok(Some(format!(
+        "goal_plan_path task={} path={} > task:{}",
+        task_entity_id,
+        path_segments.join(" > "),
+        task_entity_id
+    )))
+}
+
 fn push_context_item(
     items: &mut Vec<ContextItem>,
     profile: ContextProfile,
@@ -894,6 +1059,7 @@ fn profile_allows_category(profile: ContextProfile, category: ContextItemCategor
             ContextItemCategory::SessionAnchor
                 | ContextItemCategory::BranchOverview
                 | ContextItemCategory::CurrentTask
+                | ContextItemCategory::GoalPlanPath
                 | ContextItemCategory::AcceptanceCriterion
                 | ContextItemCategory::VerificationRequirement
                 | ContextItemCategory::TaskReadiness

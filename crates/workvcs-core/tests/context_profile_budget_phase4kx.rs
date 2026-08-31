@@ -2,10 +2,11 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, ContextItemCategory,
-    ContextPacketOptions, ContextPriority, ContextProfile, Engine, ErrorCode,
-    KnowledgeCreateOptions, RecordCreateOptions, RecordTransitionOptions, SessionId,
-    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
-    VerificationRequirementCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
+    ContextPacketOptions, ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions,
+    KnowledgeCreateOptions, PlanCreateOptions, PrimaryContainmentCreateOptions,
+    RecordCreateOptions, RecordTransitionOptions, SessionId, SessionStartOptions, StoreInitOptions,
+    TaskCreateOptions, TaskSchedulingRelationCreateOptions, VerificationRequirementCreateOptions,
+    WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -412,6 +413,151 @@ fn context_packet_includes_current_task_verification_obligations() {
             .iter()
             .any(
                 |bucket| bucket.category == ContextItemCategory::TaskReadiness
+                    && bucket.omitted == 1
+            )
+    );
+}
+
+#[test]
+fn context_packet_includes_goal_plan_path_for_current_tasks() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let goal = engine
+        .create_goal(
+            GoalCreateOptions::new(branch_id, head, "Ship the context resolver")
+                .expect("goal options"),
+        )
+        .expect("create goal");
+    head = goal.commit_id;
+    let plan = engine
+        .create_plan(
+            PlanCreateOptions::new(
+                branch_id,
+                head,
+                "Implement path packets",
+                "Reuse current containment snapshots",
+            )
+            .expect("plan options"),
+        )
+        .expect("create plan");
+    head = plan.commit_id;
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Expose path to the agent")
+                .expect("task options"),
+        )
+        .expect("create task");
+    head = task.commit_id;
+    let goal_plan = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                branch_id,
+                head,
+                goal.goal_entity_id,
+                plan.plan_entity_id,
+            )
+            .expect("goal-plan containment options"),
+        )
+        .expect("create goal-plan containment");
+    head = goal_plan.commit_id;
+    let plan_task = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                branch_id,
+                head,
+                plan.plan_entity_id,
+                task.task_entity_id,
+            )
+            .expect("plan-task containment options"),
+        )
+        .expect("create plan-task containment");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let packet = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+        )
+        .expect("brief context packet");
+
+    assert_eq!(packet.envelope.head_commit_id, plan_task.commit_id);
+    assert_eq!(packet.available_items, 5);
+    assert_eq!(packet.items[0].category, ContextItemCategory::SessionAnchor);
+    assert_eq!(
+        packet.items[1].category,
+        ContextItemCategory::BranchOverview
+    );
+    assert_eq!(packet.items[2].category, ContextItemCategory::CurrentTask);
+    let path_item = packet
+        .items
+        .iter()
+        .find(|item| item.category == ContextItemCategory::GoalPlanPath)
+        .expect("goal plan path item");
+    assert_eq!(path_item.priority, ContextPriority::P1);
+    assert_eq!(
+        path_item.subject.as_ref_string(),
+        format!("goal_plan_path:{}", task.task_entity_id)
+    );
+    assert!(
+        path_item
+            .summary
+            .contains(&format!("task={}", task.task_entity_id))
+    );
+    assert!(
+        path_item
+            .summary
+            .contains(&format!("goal:{}", goal.goal_entity_id))
+    );
+    assert!(path_item.summary.contains("status=active"));
+    assert!(path_item.summary.contains("Ship the context resolver"));
+    assert!(
+        path_item
+            .summary
+            .contains(&format!("plan:{}", plan.plan_entity_id))
+    );
+    assert!(path_item.summary.contains("Implement path packets"));
+    assert!(
+        path_item
+            .summary
+            .contains(&format!("relation={}", goal_plan.relation_id))
+    );
+    assert!(
+        path_item
+            .summary
+            .contains(&format!("relation={}", plan_task.relation_id))
+    );
+
+    let tight_packet = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id)
+                .with_profile(ContextProfile::Brief)
+                .with_budget_items(3)
+                .expect("budgeted context options"),
+        )
+        .expect("tight context packet");
+
+    assert_eq!(tight_packet.items.len(), 3);
+    assert!(
+        !tight_packet
+            .items
+            .iter()
+            .any(|item| item.category == ContextItemCategory::GoalPlanPath)
+    );
+    assert!(
+        tight_packet
+            .omission_summary
+            .by_category
+            .iter()
+            .any(
+                |bucket| bucket.category == ContextItemCategory::GoalPlanPath
                     && bucket.omitted == 1
             )
     );

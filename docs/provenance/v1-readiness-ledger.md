@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0416 / Phase 4LA
+Last refreshed: 2026-09-01 by ADR-0417 / Phase 4LB
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -37,7 +37,7 @@ not complete.
 | Verification command wrapper | Yes | Yes | Yes | Partial | Extend beyond caller-supplied observation data only after Resource adapter/path normalization is confirmed; keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Resource-backed stale-cache recovery from baseline observations is implemented; Resource path/glob normalization and adapter-backed re-observation remain Open. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | No | Dogfood the select-and-continue loop with real implementation work instead of only script-generated Tasks. |
-| Claim modes and guard behavior | Yes | Partial | Partial | No | Shared claims exist; stale takeover, transfer, and force provenance remain V1 gaps. |
+| Claim modes and guard behavior | Yes | Partial | Partial | No | Transfer and forced takeover now have explicit runtime replacement and smoke coverage; stale takeover remains blocked on `potentially_stale` Session state and durable dogfood. |
 | Context resolver | Yes | Partial | Yes | Partial | Complete the remaining V1 context categories and dogfood flow: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | No | Use real Findings/Decisions/Handoffs during implementation and inspect `why` output for continuation quality. |
 | Handoff | Yes | Yes | Yes | No | Use focused Handoff in a durable implementation handoff, then decide whether typed relations or context packets are needed for V1. |
@@ -52,14 +52,16 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Add stale Claim takeover, transfer, and force provenance, then dogfood a
-   blocked-claim recovery path.
-2. Add install, quickstart, and recovery documentation for a local operator.
-3. Complete the remaining V1 Context Resolver categories when the verify and
+1. Add install, quickstart, and recovery documentation for a local operator.
+2. Implement real `potentially_stale` Session state before adding stale Claim
+   takeover policy.
+3. Dogfood Claim transfer / forced takeover in a durable implementation recovery
+   path and record missing ergonomics.
+4. Complete the remaining V1 Context Resolver categories when the verify and
    handoff surfaces can supply real packet content.
-4. Dogfood focused Handoff in a durable implementation handoff and record the
+5. Dogfood focused Handoff in a durable implementation handoff and record the
    missing consumption ergonomics.
-5. Run larger Store validation before designing performance indexes.
+6. Run larger Store validation before designing performance indexes.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the
@@ -104,6 +106,9 @@ The following remain beyond V1 even if they would make dogfood easier:
   baseline-observation case and replaces the manual `cache-record` recovery step
   in repository smoke. Phase 4LA adds focused `handoff create/show` commands
   over existing SessionDiff and `Record(kind=handoff)` semantics, and smoke now
-  proves an end-session, handoff-author, handoff-consume loop. WorkVCS has still
+  proves an end-session, handoff-author, handoff-consume loop. Phase 4LB adds
+  explicit Claim transfer and forced takeover replacement operations over
+  existing Claim occurrence/runtime/Event tables; smoke now proves a blocked
+  guard, transfer recovery, and forced takeover recovery loop. WorkVCS has still
   not been used as the durable state system for a complete implementation slice
   or for another real project.

@@ -19,10 +19,11 @@ use workvcs_core::{
     ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot, CheckpointCreateOptions,
     CheckpointCreateResult, CheckpointId, CheckpointLatestOptions, CheckpointLatestResult,
     CheckpointListOptions, CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
-    ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason, ClaimGuardResult, ClaimId,
-    ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
-    ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
+    ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardAction, ClaimGuardOptions,
+    ClaimGuardReason, ClaimGuardResult, ClaimId, ClaimLifecycleState, ClaimListOptions,
+    ClaimListResult, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
+    ClaimTransferResult, CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
     ContextPacket, ContextPacketOptions, ContextProfile, DecisionRecordSupersedeCommit,
     DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityTransitionCommit,
     EntityTransitionOptions, EntityVersionId, EventId, EventListOptions, EventListResult,
@@ -4265,6 +4266,71 @@ enum ClaimCommand {
 
         #[arg(long)]
         expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
+    },
+    Transfer {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        from_session: String,
+
+        #[arg(long)]
+        to_session: String,
+
+        #[arg(long)]
+        claim: String,
+
+        #[arg(long)]
+        expected_previous_claim: Option<String>,
+
+        #[arg(long)]
+        expected_claim: Option<String>,
+
+        #[arg(long)]
+        expected_from_session: Option<String>,
+
+        #[arg(long)]
+        expected_to_session: Option<String>,
+
+        #[arg(long)]
+        expected_mode: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
+    },
+    Takeover {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        claim: String,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long)]
+        rationale: String,
+
+        #[arg(long)]
+        expected_previous_claim: Option<String>,
+
+        #[arg(long)]
+        expected_claim: Option<String>,
+
+        #[arg(long)]
+        expected_previous_session: Option<String>,
+
+        #[arg(long)]
+        expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_mode: Option<String>,
 
         #[arg(long)]
         expected_lifecycle_state: Option<String>,
@@ -10002,6 +10068,84 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 output.push_str("lifecycle_state_match_expected=true\n");
             }
+            Ok(output)
+        }
+        Command::Claim {
+            command:
+                ClaimCommand::Transfer {
+                    store,
+                    from_session,
+                    to_session,
+                    claim,
+                    expected_previous_claim,
+                    expected_claim,
+                    expected_from_session,
+                    expected_to_session,
+                    expected_mode,
+                    expected_lifecycle_state,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let transferred = engine.transfer_claim(ClaimTransferOptions::new(
+                SessionId::parse_canonical(&from_session)?,
+                SessionId::parse_canonical(&to_session)?,
+                ClaimId::parse_canonical(&claim)?,
+            ))?;
+            let mut output = render_claim_transfer(&transferred);
+            append_claim_transfer_expectations(
+                &mut output,
+                &transferred,
+                ClaimTransferExpectationArgs {
+                    expected_previous_claim,
+                    expected_claim,
+                    expected_from_session,
+                    expected_to_session,
+                    expected_mode,
+                    expected_lifecycle_state,
+                },
+            )?;
+            Ok(output)
+        }
+        Command::Claim {
+            command:
+                ClaimCommand::Takeover {
+                    store,
+                    session,
+                    claim,
+                    force,
+                    rationale,
+                    expected_previous_claim,
+                    expected_claim,
+                    expected_previous_session,
+                    expected_session,
+                    expected_mode,
+                    expected_lifecycle_state,
+                },
+        } => {
+            if !force {
+                return Err(WorkVcsError::ClaimInvalid(
+                    "claim takeover currently requires --force".to_owned(),
+                ));
+            }
+            let mut engine = Engine::open(store)?;
+            let taken_over = engine.force_takeover_claim(ClaimForceTakeoverOptions::new(
+                SessionId::parse_canonical(&session)?,
+                ClaimId::parse_canonical(&claim)?,
+                rationale,
+            )?)?;
+            let mut output = render_claim_force_takeover(&taken_over);
+            append_claim_force_takeover_expectations(
+                &mut output,
+                &taken_over,
+                ClaimForceTakeoverExpectationArgs {
+                    expected_previous_claim,
+                    expected_claim,
+                    expected_previous_session,
+                    expected_session,
+                    expected_mode,
+                    expected_lifecycle_state,
+                },
+            )?;
             Ok(output)
         }
         Command::Context {
@@ -16644,6 +16788,218 @@ fn render_claim_release(claim: &ClaimReleaseResult) -> String {
     )
 }
 
+fn render_claim_transfer(claim: &ClaimTransferResult) -> String {
+    format!(
+        "previous_claim_id={}\nclaim_id={}\nfrom_session_id={}\nto_session_id={}\nsession_id={}\nworkspace_id={}\nbranch_id={}\ntask_entity_id={}\nmode={}\ntransferred_at_us={}\nprevious_last_activity_at_us={}\nprevious_lifecycle_state={}\nlifecycle_state={}\n",
+        claim.previous_claim_id,
+        claim.claim_id,
+        claim.from_session_id,
+        claim.to_session_id,
+        claim.to_session_id,
+        claim.state.workspace_id,
+        claim.state.branch_id,
+        claim.state.task_entity_id,
+        claim_mode(claim.state.mode),
+        claim.transferred_at_us,
+        claim.previous_last_activity_at_us,
+        claim_lifecycle_state(claim.previous_state.lifecycle_state),
+        claim_lifecycle_state(claim.state.lifecycle_state)
+    )
+}
+
+fn render_claim_force_takeover(claim: &ClaimForceTakeoverResult) -> String {
+    format!(
+        "previous_claim_id={}\nclaim_id={}\nprevious_session_id={}\nsession_id={}\nworkspace_id={}\nbranch_id={}\ntask_entity_id={}\nmode={}\ntaken_over_at_us={}\nprevious_last_activity_at_us={}\nrationale={}\nprevious_lifecycle_state={}\nlifecycle_state={}\n",
+        claim.previous_claim_id,
+        claim.claim_id,
+        claim.previous_session_id,
+        claim.session_id,
+        claim.state.workspace_id,
+        claim.state.branch_id,
+        claim.state.task_entity_id,
+        claim_mode(claim.state.mode),
+        claim.taken_over_at_us,
+        claim.previous_last_activity_at_us,
+        claim.rationale,
+        claim_lifecycle_state(claim.previous_state.lifecycle_state),
+        claim_lifecycle_state(claim.state.lifecycle_state)
+    )
+}
+
+struct ClaimTransferExpectationArgs {
+    expected_previous_claim: Option<String>,
+    expected_claim: Option<String>,
+    expected_from_session: Option<String>,
+    expected_to_session: Option<String>,
+    expected_mode: Option<String>,
+    expected_lifecycle_state: Option<String>,
+}
+
+fn append_claim_transfer_expectations(
+    output: &mut String,
+    result: &ClaimTransferResult,
+    expectations: ClaimTransferExpectationArgs,
+) -> Result<()> {
+    let ClaimTransferExpectationArgs {
+        expected_previous_claim,
+        expected_claim,
+        expected_from_session,
+        expected_to_session,
+        expected_mode,
+        expected_lifecycle_state,
+    } = expectations;
+    if let Some(expected_previous_claim) = expected_previous_claim {
+        let expected_previous_claim = ClaimId::parse_canonical(&expected_previous_claim)?;
+        if result.previous_claim_id != expected_previous_claim {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim transfer previous claim {} does not match expected {}",
+                result.previous_claim_id, expected_previous_claim
+            )));
+        }
+        output.push_str("previous_claim_match_expected=true\n");
+    }
+    append_claim_replacement_expectations(
+        output,
+        result.claim_id,
+        result.from_session_id,
+        result.to_session_id,
+        result.state.mode,
+        result.state.lifecycle_state,
+        ClaimReplacementExpectationArgs {
+            expected_claim,
+            expected_previous_session: expected_from_session,
+            expected_session: expected_to_session,
+            expected_mode,
+            expected_lifecycle_state,
+        },
+    )
+}
+
+struct ClaimForceTakeoverExpectationArgs {
+    expected_previous_claim: Option<String>,
+    expected_claim: Option<String>,
+    expected_previous_session: Option<String>,
+    expected_session: Option<String>,
+    expected_mode: Option<String>,
+    expected_lifecycle_state: Option<String>,
+}
+
+fn append_claim_force_takeover_expectations(
+    output: &mut String,
+    result: &ClaimForceTakeoverResult,
+    expectations: ClaimForceTakeoverExpectationArgs,
+) -> Result<()> {
+    let ClaimForceTakeoverExpectationArgs {
+        expected_previous_claim,
+        expected_claim,
+        expected_previous_session,
+        expected_session,
+        expected_mode,
+        expected_lifecycle_state,
+    } = expectations;
+    if let Some(expected_previous_claim) = expected_previous_claim {
+        let expected_previous_claim = ClaimId::parse_canonical(&expected_previous_claim)?;
+        if result.previous_claim_id != expected_previous_claim {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim takeover previous claim {} does not match expected {}",
+                result.previous_claim_id, expected_previous_claim
+            )));
+        }
+        output.push_str("previous_claim_match_expected=true\n");
+    }
+    append_claim_replacement_expectations(
+        output,
+        result.claim_id,
+        result.previous_session_id,
+        result.session_id,
+        result.state.mode,
+        result.state.lifecycle_state,
+        ClaimReplacementExpectationArgs {
+            expected_claim,
+            expected_previous_session,
+            expected_session,
+            expected_mode,
+            expected_lifecycle_state,
+        },
+    )
+}
+
+struct ClaimReplacementExpectationArgs {
+    expected_claim: Option<String>,
+    expected_previous_session: Option<String>,
+    expected_session: Option<String>,
+    expected_mode: Option<String>,
+    expected_lifecycle_state: Option<String>,
+}
+
+fn append_claim_replacement_expectations(
+    output: &mut String,
+    claim_id: ClaimId,
+    previous_session_id: SessionId,
+    session_id: SessionId,
+    mode: ClaimMode,
+    lifecycle_state: ClaimLifecycleState,
+    expectations: ClaimReplacementExpectationArgs,
+) -> Result<()> {
+    let ClaimReplacementExpectationArgs {
+        expected_claim,
+        expected_previous_session,
+        expected_session,
+        expected_mode,
+        expected_lifecycle_state,
+    } = expectations;
+    if let Some(expected_claim) = expected_claim {
+        let expected_claim = ClaimId::parse_canonical(&expected_claim)?;
+        if claim_id != expected_claim {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim replacement claim {claim_id} does not match expected {expected_claim}"
+            )));
+        }
+        output.push_str("claim_match_expected=true\n");
+    }
+    if let Some(expected_previous_session) = expected_previous_session {
+        let expected_previous_session = SessionId::parse_canonical(&expected_previous_session)?;
+        if previous_session_id != expected_previous_session {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim replacement previous session {previous_session_id} does not match expected {expected_previous_session}"
+            )));
+        }
+        output.push_str("previous_session_match_expected=true\n");
+    }
+    if let Some(expected_session) = expected_session {
+        let expected_session = SessionId::parse_canonical(&expected_session)?;
+        if session_id != expected_session {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim replacement session {session_id} does not match expected {expected_session}"
+            )));
+        }
+        output.push_str("session_match_expected=true\n");
+    }
+    if let Some(expected_mode) = expected_mode {
+        let expected_mode = parse_claim_mode(&expected_mode)?;
+        if mode != expected_mode {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim replacement mode {} does not match expected {}",
+                claim_mode(mode),
+                claim_mode(expected_mode)
+            )));
+        }
+        output.push_str("mode_match_expected=true\n");
+    }
+    if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+        let expected_lifecycle_state = parse_claim_lifecycle_state(&expected_lifecycle_state)?;
+        if lifecycle_state != expected_lifecycle_state {
+            return Err(WorkVcsError::ClaimInvalid(format!(
+                "claim replacement lifecycle state {} does not match expected {}",
+                claim_lifecycle_state(lifecycle_state),
+                claim_lifecycle_state(expected_lifecycle_state)
+            )));
+        }
+        output.push_str("lifecycle_state_match_expected=true\n");
+    }
+    Ok(())
+}
+
 fn render_context_overview(context: &ContextOverview) -> String {
     let session = &context.session;
     let focus_entity_id = session
@@ -19537,6 +19893,7 @@ mod tests {
                 "resource",
                 "record",
                 "session",
+                "handoff",
                 "claim",
                 "context",
                 "next",
@@ -29108,6 +29465,303 @@ mod tests {
         ])
         .expect("parse zero-limit runnable"));
         assert!(zero_limit.is_err());
+    }
+
+    #[test]
+    fn cli_runs_claim_transfer_and_force_takeover_workflow() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Claim replacement task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+
+        let first_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse first session start"))
+        .expect("start first session");
+        let first_session_id = value(&first_session, "session_id");
+        let second_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse second session start"))
+        .expect("start second session");
+        let second_session_id = value(&second_session, "session_id");
+        let third_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse third session start"))
+        .expect("start third session");
+        let third_session_id = value(&third_session, "session_id");
+
+        let first_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &first_session_id,
+            "--task",
+            &task_id,
+            "--expected-mode",
+            "exclusive",
+            "--expected-lifecycle-state",
+            "active",
+        ])
+        .expect("parse claim task"))
+        .expect("claim task");
+        let first_claim_id = value(&first_claim, "claim_id");
+
+        let blocked_guard = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "guard",
+            store,
+            "--session",
+            &second_session_id,
+            "--task",
+            &task_id,
+            "--expected-allowed",
+            "false",
+            "--expected-reason",
+            "exclusive_claim_owned_by_other_session",
+            "--expected-active-claims",
+            "1",
+        ])
+        .expect("parse blocked guard"))
+        .expect("blocked guard");
+        assert_eq!(value(&blocked_guard, "allowed_match_expected"), "true");
+        assert_eq!(value(&blocked_guard, "reason_match_expected"), "true");
+
+        let transferred = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "transfer",
+            store,
+            "--from-session",
+            &first_session_id,
+            "--to-session",
+            &second_session_id,
+            "--claim",
+            &first_claim_id,
+            "--expected-previous-claim",
+            &first_claim_id,
+            "--expected-from-session",
+            &first_session_id,
+            "--expected-to-session",
+            &second_session_id,
+            "--expected-mode",
+            "exclusive",
+            "--expected-lifecycle-state",
+            "active",
+        ])
+        .expect("parse claim transfer"))
+        .expect("transfer claim");
+        let second_claim_id = value(&transferred, "claim_id");
+        assert_ne!(second_claim_id, first_claim_id);
+        assert_eq!(value(&transferred, "previous_claim_id"), first_claim_id);
+        assert_eq!(value(&transferred, "from_session_id"), first_session_id);
+        assert_eq!(value(&transferred, "to_session_id"), second_session_id);
+        assert_eq!(value(&transferred, "previous_lifecycle_state"), "released");
+        assert_eq!(value(&transferred, "lifecycle_state"), "active");
+        assert_eq!(value(&transferred, "previous_claim_match_expected"), "true");
+        assert_eq!(
+            value(&transferred, "previous_session_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&transferred, "session_match_expected"), "true");
+        assert_eq!(value(&transferred, "mode_match_expected"), "true");
+        assert_eq!(
+            value(&transferred, "lifecycle_state_match_expected"),
+            "true"
+        );
+
+        let old_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "show",
+            store,
+            "--claim",
+            &first_claim_id,
+            "--expected-lifecycle-state",
+            "released",
+        ])
+        .expect("parse old claim show"))
+        .expect("show old claim");
+        assert_eq!(
+            value(&old_claim, "lifecycle_state_matches_expected"),
+            "true"
+        );
+
+        let transferred_guard = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "guard",
+            store,
+            "--session",
+            &second_session_id,
+            "--task",
+            &task_id,
+            "--expected-allowed",
+            "true",
+            "--expected-reason",
+            "owned_exclusive_claim",
+            "--expected-active-claims",
+            "1",
+        ])
+        .expect("parse transferred guard"))
+        .expect("transferred guard");
+        assert_eq!(value(&transferred_guard, "allowed_match_expected"), "true");
+        assert_eq!(value(&transferred_guard, "reason_match_expected"), "true");
+
+        let missing_force = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "takeover",
+            store,
+            "--session",
+            &third_session_id,
+            "--claim",
+            &second_claim_id,
+            "--rationale",
+            "operator recovery",
+        ])
+        .expect("parse takeover without force"));
+        assert!(missing_force.is_err());
+
+        let taken_over = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "takeover",
+            store,
+            "--session",
+            &third_session_id,
+            "--claim",
+            &second_claim_id,
+            "--force",
+            "--rationale",
+            "operator recovery",
+            "--expected-previous-claim",
+            &second_claim_id,
+            "--expected-previous-session",
+            &second_session_id,
+            "--expected-session",
+            &third_session_id,
+            "--expected-mode",
+            "exclusive",
+            "--expected-lifecycle-state",
+            "active",
+        ])
+        .expect("parse claim takeover"))
+        .expect("force takeover claim");
+        let third_claim_id = value(&taken_over, "claim_id");
+        assert_ne!(third_claim_id, second_claim_id);
+        assert_eq!(value(&taken_over, "previous_claim_id"), second_claim_id);
+        assert_eq!(value(&taken_over, "previous_session_id"), second_session_id);
+        assert_eq!(value(&taken_over, "session_id"), third_session_id);
+        assert_eq!(value(&taken_over, "rationale"), "operator recovery");
+        assert_eq!(value(&taken_over, "previous_lifecycle_state"), "released");
+        assert_eq!(value(&taken_over, "lifecycle_state"), "active");
+        assert_eq!(value(&taken_over, "previous_claim_match_expected"), "true");
+        assert_eq!(
+            value(&taken_over, "previous_session_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&taken_over, "session_match_expected"), "true");
+        assert_eq!(value(&taken_over, "mode_match_expected"), "true");
+        assert_eq!(value(&taken_over, "lifecycle_state_match_expected"), "true");
+
+        let released_second_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "show",
+            store,
+            "--claim",
+            &second_claim_id,
+            "--expected-lifecycle-state",
+            "released",
+        ])
+        .expect("parse released second claim show"))
+        .expect("show released second claim");
+        assert_eq!(
+            value(&released_second_claim, "lifecycle_state_matches_expected"),
+            "true"
+        );
+
+        let final_guard = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "guard",
+            store,
+            "--session",
+            &third_session_id,
+            "--task",
+            &task_id,
+            "--expected-allowed",
+            "true",
+            "--expected-reason",
+            "owned_exclusive_claim",
+            "--expected-active-claims",
+            "1",
+        ])
+        .expect("parse final guard"))
+        .expect("final guard");
+        assert_eq!(value(&final_guard, "allowed_match_expected"), "true");
+        assert_eq!(value(&final_guard, "reason_match_expected"), "true");
     }
 
     #[test]

@@ -87,17 +87,18 @@ use crate::identity::{
     RelationId,
 };
 use crate::runtime::{
-    ClaimGuardOptions, ClaimGuardResult, ClaimListOptions, ClaimListResult, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
-    ClaimTaskResult, ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
-    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult,
-    MergeListOptions, MergeListResult, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
-    RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
-    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult, VerifyOptions, VerifyResult,
+    ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardOptions, ClaimGuardResult,
+    ClaimListOptions, ClaimListResult, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
+    ClaimTransferResult, ContextOverview, ContextOverviewOptions, ContextPacket,
+    ContextPacketOptions, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
+    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
+    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
+    RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionLifecycleState,
+    SessionListOptions, SessionListResult, SessionSnapshot, SessionStartOptions,
+    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -1633,6 +1634,24 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::release_claim(&mut self.connection, options)
+    }
+
+    pub(crate) fn transfer_claim(
+        &mut self,
+        options: &ClaimTransferOptions,
+    ) -> Result<ClaimTransferResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::transfer_claim(&mut self.connection, options)
+    }
+
+    pub(crate) fn force_takeover_claim(
+        &mut self,
+        options: &ClaimForceTakeoverOptions,
+    ) -> Result<ClaimForceTakeoverResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::force_takeover_claim(&mut self.connection, options)
     }
 
     pub(crate) fn runnable_tasks(

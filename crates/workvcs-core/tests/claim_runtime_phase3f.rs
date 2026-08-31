@@ -2,10 +2,11 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    CanonicalValue, ClaimGuardOptions, ClaimGuardReason, ClaimId, ClaimLifecycleState,
-    ClaimListOptions, ClaimMode, ClaimReleaseOptions, ClaimTaskOptions, Engine, EntityId,
-    ErrorCategory, ErrorCode, SessionEndOptions, SessionStartOptions, StoreInitOptions,
-    TaskCreateOptions, TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    CanonicalValue, ClaimForceTakeoverOptions, ClaimGuardOptions, ClaimGuardReason, ClaimId,
+    ClaimLifecycleState, ClaimListOptions, ClaimMode, ClaimReleaseOptions, ClaimTaskOptions,
+    ClaimTransferOptions, Engine, EntityId, ErrorCategory, ErrorCode, SessionEndOptions,
+    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSnapshot, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,6 +161,138 @@ fn claim_released_payload(
             (
                 "workspace_id".to_owned(),
                 CanonicalValue::String(workspace.workspace_id.to_string()),
+            ),
+        ])
+        .expect("payload"),
+    )
+}
+
+fn claim_transferred_payload(
+    previous_claim_id: ClaimId,
+    claim_id: ClaimId,
+    from_session_id: workvcs_core::SessionId,
+    to_session_id: workvcs_core::SessionId,
+    workspace: &WorkspaceInfo,
+    task_entity_id: EntityId,
+    previous_last_activity_at_us: i64,
+) -> String {
+    canonical_json(
+        &CanonicalValue::object(vec![
+            (
+                "branch_id".to_owned(),
+                CanonicalValue::String(workspace.initial_branch_id.to_string()),
+            ),
+            (
+                "claim_id".to_owned(),
+                CanonicalValue::String(claim_id.to_string()),
+            ),
+            (
+                "from_session_id".to_owned(),
+                CanonicalValue::String(from_session_id.to_string()),
+            ),
+            (
+                "lifecycle_state".to_owned(),
+                CanonicalValue::String("active".to_owned()),
+            ),
+            (
+                "mode".to_owned(),
+                CanonicalValue::String("exclusive".to_owned()),
+            ),
+            (
+                "previous_claim_id".to_owned(),
+                CanonicalValue::String(previous_claim_id.to_string()),
+            ),
+            (
+                "previous_last_activity_at_us".to_owned(),
+                CanonicalValue::safe_integer(previous_last_activity_at_us).expect("safe integer"),
+            ),
+            (
+                "reason".to_owned(),
+                CanonicalValue::String("transfer".to_owned()),
+            ),
+            (
+                "task_entity_id".to_owned(),
+                CanonicalValue::String(task_entity_id.to_string()),
+            ),
+            (
+                "to_session_id".to_owned(),
+                CanonicalValue::String(to_session_id.to_string()),
+            ),
+            (
+                "workspace_id".to_owned(),
+                CanonicalValue::String(workspace.workspace_id.to_string()),
+            ),
+        ])
+        .expect("payload"),
+    )
+}
+
+struct ClaimForceTakenOverPayload<'a> {
+    previous_claim_id: ClaimId,
+    claim_id: ClaimId,
+    previous_session_id: workvcs_core::SessionId,
+    session_id: workvcs_core::SessionId,
+    workspace: &'a WorkspaceInfo,
+    task_entity_id: EntityId,
+    previous_last_activity_at_us: i64,
+    rationale: &'a str,
+}
+
+fn claim_force_taken_over_payload(payload: ClaimForceTakenOverPayload<'_>) -> String {
+    canonical_json(
+        &CanonicalValue::object(vec![
+            (
+                "branch_id".to_owned(),
+                CanonicalValue::String(payload.workspace.initial_branch_id.to_string()),
+            ),
+            (
+                "claim_id".to_owned(),
+                CanonicalValue::String(payload.claim_id.to_string()),
+            ),
+            (
+                "lifecycle_state".to_owned(),
+                CanonicalValue::String("active".to_owned()),
+            ),
+            (
+                "mode".to_owned(),
+                CanonicalValue::String("exclusive".to_owned()),
+            ),
+            (
+                "previous_claim_id".to_owned(),
+                CanonicalValue::String(payload.previous_claim_id.to_string()),
+            ),
+            (
+                "previous_last_activity_at_us".to_owned(),
+                CanonicalValue::safe_integer(payload.previous_last_activity_at_us)
+                    .expect("safe integer"),
+            ),
+            (
+                "previous_session_id".to_owned(),
+                CanonicalValue::String(payload.previous_session_id.to_string()),
+            ),
+            (
+                "previous_session_lifecycle_state".to_owned(),
+                CanonicalValue::String("active".to_owned()),
+            ),
+            (
+                "rationale".to_owned(),
+                CanonicalValue::String(payload.rationale.to_owned()),
+            ),
+            (
+                "reason".to_owned(),
+                CanonicalValue::String("force".to_owned()),
+            ),
+            (
+                "session_id".to_owned(),
+                CanonicalValue::String(payload.session_id.to_string()),
+            ),
+            (
+                "task_entity_id".to_owned(),
+                CanonicalValue::String(payload.task_entity_id.to_string()),
+            ),
+            (
+                "workspace_id".to_owned(),
+                CanonicalValue::String(payload.workspace.workspace_id.to_string()),
             ),
         ])
         .expect("payload"),
@@ -852,6 +985,234 @@ fn release_claim_projects_released_occurrence_without_workstate_mutation() {
         .claim_snapshot(claimed.claim_id)
         .expect("released claim snapshot");
     assert_eq!(snapshot, released.state);
+}
+
+#[test]
+fn transfer_claim_replaces_active_occurrence_without_workstate_mutation() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (task_snapshot, from_session_id) =
+        create_task_and_session(&mut engine, &workspace, "Transfer claim target");
+    let to_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("to session");
+    let claimed = engine
+        .claim_task(ClaimTaskOptions::new(
+            from_session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("claim task");
+    let connection = raw_connection(&path);
+    let before = runtime_counts(&connection);
+    let before_head = engine
+        .branch_head(workspace.initial_branch_id)
+        .expect("branch head before transfer");
+
+    let transferred = engine
+        .transfer_claim(ClaimTransferOptions::new(
+            from_session_id,
+            to_session.session_id,
+            claimed.claim_id,
+        ))
+        .expect("transfer claim");
+
+    assert_eq!(transferred.previous_claim_id, claimed.claim_id);
+    assert_ne!(transferred.claim_id, claimed.claim_id);
+    assert_eq!(transferred.from_session_id, from_session_id);
+    assert_eq!(transferred.to_session_id, to_session.session_id);
+    assert!(transferred.transferred_at_us >= claimed.claimed_at_us);
+    assert_eq!(
+        transferred.previous_last_activity_at_us,
+        claimed.claimed_at_us
+    );
+    assert_eq!(
+        transferred.previous_state.lifecycle_state,
+        ClaimLifecycleState::Released
+    );
+    assert_eq!(transferred.previous_state.last_activity_at_us, None);
+    assert_eq!(
+        transferred.state.lifecycle_state,
+        ClaimLifecycleState::Active
+    );
+    assert_eq!(transferred.state.session_id, to_session.session_id);
+    assert_eq!(transferred.state.workspace_id, workspace.workspace_id);
+    assert_eq!(transferred.state.branch_id, workspace.initial_branch_id);
+    assert_eq!(
+        transferred.state.task_entity_id,
+        task_snapshot.task_entity_id
+    );
+    assert_eq!(transferred.state.mode, ClaimMode::Exclusive);
+
+    let after = runtime_counts(&connection);
+    assert_eq!(after.object_identity, before.object_identity + 1);
+    assert_eq!(after.claim, before.claim + 1);
+    assert_eq!(after.claim_runtime, before.claim_runtime);
+    assert_eq!(after.session_diff, before.session_diff);
+    assert_eq!(after.changeset, before.changeset);
+    assert_eq!(after.change_operation, before.change_operation);
+    assert_eq!(after.workstate_commit, before.workstate_commit);
+    assert_eq!(after.event, before.event + 1);
+
+    let after_head = engine
+        .branch_head(workspace.initial_branch_id)
+        .expect("branch head after transfer");
+    assert_eq!(after_head.head_commit_id, before_head.head_commit_id);
+    assert_eq!(after_head.state_digest, before_head.state_digest);
+    assert!(
+        engine
+            .active_claims_for_session(ClaimListOptions::for_session(from_session_id))
+            .expect("from claims")
+            .claims
+            .is_empty()
+    );
+    let to_claims = engine
+        .active_claims_for_session(ClaimListOptions::for_session(to_session.session_id))
+        .expect("to claims");
+    assert_eq!(to_claims.claims, vec![transferred.state.clone()]);
+
+    assert_eq!(
+        event_count(&connection, from_session_id, "claim.transferred"),
+        1
+    );
+    assert_eq!(
+        latest_event_payload(&connection, from_session_id, "claim.transferred"),
+        claim_transferred_payload(
+            claimed.claim_id,
+            transferred.claim_id,
+            from_session_id,
+            to_session.session_id,
+            &workspace,
+            task_snapshot.task_entity_id,
+            transferred.previous_last_activity_at_us,
+        )
+    );
+    let source_guard = engine
+        .task_claim_guard(ClaimGuardOptions::terminal_task_mutation(
+            from_session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("source guard");
+    assert_eq!(
+        source_guard.reason,
+        ClaimGuardReason::ExclusiveClaimOwnedByOtherSession
+    );
+    let target_guard = engine
+        .task_claim_guard(ClaimGuardOptions::terminal_task_mutation(
+            to_session.session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("target guard");
+    assert_eq!(target_guard.reason, ClaimGuardReason::OwnedExclusiveClaim);
+}
+
+#[test]
+fn force_takeover_claim_requires_rationale_and_records_prior_claim() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (task_snapshot, previous_session_id) =
+        create_task_and_session(&mut engine, &workspace, "Force takeover claim target");
+    let taking_session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("taking session");
+    let claimed = engine
+        .claim_task(ClaimTaskOptions::new(
+            previous_session_id,
+            task_snapshot.task_entity_id,
+        ))
+        .expect("claim task");
+    let connection = raw_connection(&path);
+    let before = runtime_counts(&connection);
+    let empty_rationale =
+        ClaimForceTakeoverOptions::new(taking_session.session_id, claimed.claim_id, "   ")
+            .expect_err("empty rationale should fail");
+    assert_eq!(empty_rationale.code(), ErrorCode::ClaimInvalid);
+    assert_eq!(empty_rationale.category(), ErrorCategory::Runtime);
+    assert_eq!(runtime_counts(&connection), before);
+    let before_head = engine
+        .branch_head(workspace.initial_branch_id)
+        .expect("branch head before takeover");
+
+    let rationale = "previous agent is unavailable";
+    let taken_over = engine
+        .force_takeover_claim(
+            ClaimForceTakeoverOptions::new(taking_session.session_id, claimed.claim_id, rationale)
+                .expect("takeover options"),
+        )
+        .expect("force takeover");
+
+    assert_eq!(taken_over.previous_claim_id, claimed.claim_id);
+    assert_ne!(taken_over.claim_id, claimed.claim_id);
+    assert_eq!(taken_over.previous_session_id, previous_session_id);
+    assert_eq!(taken_over.session_id, taking_session.session_id);
+    assert_eq!(
+        taken_over.previous_last_activity_at_us,
+        claimed.claimed_at_us
+    );
+    assert_eq!(taken_over.rationale, rationale);
+    assert_eq!(
+        taken_over.previous_state.lifecycle_state,
+        ClaimLifecycleState::Released
+    );
+    assert_eq!(taken_over.previous_state.last_activity_at_us, None);
+    assert_eq!(
+        taken_over.state.lifecycle_state,
+        ClaimLifecycleState::Active
+    );
+    assert_eq!(taken_over.state.session_id, taking_session.session_id);
+    assert_eq!(taken_over.state.workspace_id, workspace.workspace_id);
+    assert_eq!(taken_over.state.branch_id, workspace.initial_branch_id);
+    assert_eq!(
+        taken_over.state.task_entity_id,
+        task_snapshot.task_entity_id
+    );
+    assert_eq!(taken_over.state.mode, ClaimMode::Exclusive);
+
+    let after = runtime_counts(&connection);
+    assert_eq!(after.object_identity, before.object_identity + 1);
+    assert_eq!(after.claim, before.claim + 1);
+    assert_eq!(after.claim_runtime, before.claim_runtime);
+    assert_eq!(after.session_diff, before.session_diff);
+    assert_eq!(after.changeset, before.changeset);
+    assert_eq!(after.change_operation, before.change_operation);
+    assert_eq!(after.workstate_commit, before.workstate_commit);
+    assert_eq!(after.event, before.event + 1);
+
+    let after_head = engine
+        .branch_head(workspace.initial_branch_id)
+        .expect("branch head after takeover");
+    assert_eq!(after_head.head_commit_id, before_head.head_commit_id);
+    assert_eq!(after_head.state_digest, before_head.state_digest);
+    assert_eq!(
+        event_count(
+            &connection,
+            taking_session.session_id,
+            "claim.force_taken_over"
+        ),
+        1
+    );
+    assert_eq!(
+        latest_event_payload(
+            &connection,
+            taking_session.session_id,
+            "claim.force_taken_over"
+        ),
+        claim_force_taken_over_payload(ClaimForceTakenOverPayload {
+            previous_claim_id: claimed.claim_id,
+            claim_id: taken_over.claim_id,
+            previous_session_id,
+            session_id: taking_session.session_id,
+            workspace: &workspace,
+            task_entity_id: task_snapshot.task_entity_id,
+            previous_last_activity_at_us: taken_over.previous_last_activity_at_us,
+            rationale,
+        })
+    );
 }
 
 #[test]

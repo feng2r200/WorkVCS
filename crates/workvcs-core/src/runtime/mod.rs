@@ -7,9 +7,10 @@ mod session;
 mod verify;
 
 pub use claim::{
-    ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason, ClaimGuardResult, ClaimLifecycleState,
-    ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions, ClaimNextResult,
-    ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
+    ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardAction, ClaimGuardOptions,
+    ClaimGuardReason, ClaimGuardResult, ClaimLifecycleState, ClaimListOptions, ClaimListResult,
+    ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
+    ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions, ClaimTransferResult,
 };
 pub use context::{
     ContextItem, ContextItemCategory, ContextItemSubject, ContextOmissionBucket,
@@ -38,8 +39,8 @@ pub use session::{
 pub use verify::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 
 pub(crate) use claim::{
-    active_claims_for_session, claim_next_task, claim_snapshot, claim_task, release_claim,
-    task_claim_guard,
+    active_claims_for_session, claim_next_task, claim_snapshot, claim_task, force_takeover_claim,
+    release_claim, task_claim_guard, transfer_claim,
 };
 pub(crate) use context::{context_overview, context_packet};
 pub(crate) use merge::{

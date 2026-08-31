@@ -16,6 +16,8 @@ const ACTIVE_CLAIM_LIFECYCLE_STATE: &str = "active";
 const RELEASED_CLAIM_LIFECYCLE_STATE: &str = "released";
 const CLAIM_CREATED_EVENT_KIND: &str = "claim.created";
 const CLAIM_RELEASED_EVENT_KIND: &str = "claim.released";
+const CLAIM_TRANSFERRED_EVENT_KIND: &str = "claim.transferred";
+const CLAIM_FORCE_TAKEN_OVER_EVENT_KIND: &str = "claim.force_taken_over";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClaimLifecycleState {
@@ -134,6 +136,74 @@ impl ClaimReleaseOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimTransferOptions {
+    from_session_id: SessionId,
+    to_session_id: SessionId,
+    claim_id: ClaimId,
+}
+
+impl ClaimTransferOptions {
+    pub fn new(from_session_id: SessionId, to_session_id: SessionId, claim_id: ClaimId) -> Self {
+        Self {
+            from_session_id,
+            to_session_id,
+            claim_id,
+        }
+    }
+
+    pub fn from_session_id(&self) -> SessionId {
+        self.from_session_id
+    }
+
+    pub fn to_session_id(&self) -> SessionId {
+        self.to_session_id
+    }
+
+    pub fn claim_id(&self) -> ClaimId {
+        self.claim_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimForceTakeoverOptions {
+    session_id: SessionId,
+    claim_id: ClaimId,
+    rationale: String,
+}
+
+impl ClaimForceTakeoverOptions {
+    pub fn new(
+        session_id: SessionId,
+        claim_id: ClaimId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale = rationale.into();
+        if rationale.trim().is_empty() {
+            return Err(WorkVcsError::ClaimInvalid(
+                "claim force takeover rationale must not be empty".to_owned(),
+            ));
+        }
+        Ok(Self {
+            session_id,
+            claim_id,
+            rationale,
+        })
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn claim_id(&self) -> ClaimId {
+        self.claim_id
+    }
+
+    pub fn rationale(&self) -> &str {
+        &self.rationale
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimNextOptions {
     session_id: SessionId,
     mode: ClaimMode,
@@ -238,6 +308,31 @@ pub struct ClaimReleaseResult {
     pub claim_id: ClaimId,
     pub session_id: SessionId,
     pub released_at_us: i64,
+    pub state: ClaimSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimTransferResult {
+    pub previous_claim_id: ClaimId,
+    pub claim_id: ClaimId,
+    pub from_session_id: SessionId,
+    pub to_session_id: SessionId,
+    pub transferred_at_us: i64,
+    pub previous_last_activity_at_us: i64,
+    pub previous_state: ClaimSnapshot,
+    pub state: ClaimSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimForceTakeoverResult {
+    pub previous_claim_id: ClaimId,
+    pub claim_id: ClaimId,
+    pub previous_session_id: SessionId,
+    pub session_id: SessionId,
+    pub taken_over_at_us: i64,
+    pub previous_last_activity_at_us: i64,
+    pub rationale: String,
+    pub previous_state: ClaimSnapshot,
     pub state: ClaimSnapshot,
 }
 
@@ -522,6 +617,185 @@ pub(crate) fn release_claim(
         session_id: options.session_id(),
         released_at_us: now_us,
         state: claim_snapshot(connection, options.claim_id())?,
+    })
+}
+
+pub(crate) fn transfer_claim(
+    connection: &mut StoreConnection,
+    options: &ClaimTransferOptions,
+) -> Result<ClaimTransferResult> {
+    connection.verify_foreign_keys()?;
+    if options.from_session_id() == options.to_session_id() {
+        return Err(WorkVcsError::ClaimInvalid(
+            "claim transfer source and target sessions must differ".to_owned(),
+        ));
+    }
+    let now_us = current_epoch_micros()?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let from_active =
+        session::load_active_session_runtime_for_update(&transaction, options.from_session_id())?;
+    let to_active =
+        session::load_active_session_runtime_for_update(&transaction, options.to_session_id())?;
+    let previous_claim = load_claim(&transaction, options.claim_id())?;
+    if previous_claim.session_id != options.from_session_id() {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "claim {} is owned by session {}, not transfer source {}",
+            options.claim_id(),
+            previous_claim.session_id,
+            options.from_session_id()
+        )));
+    }
+    ensure_claim_session_target(
+        "source",
+        options.from_session_id(),
+        &from_active,
+        options.claim_id(),
+        &previous_claim,
+    )?;
+    ensure_claim_session_target(
+        "target",
+        options.to_session_id(),
+        &to_active,
+        options.claim_id(),
+        &previous_claim,
+    )?;
+    let previous_last_activity_at_us =
+        require_active_claim_runtime(&transaction, options.claim_id())?;
+
+    delete_claim_runtime_row(&transaction, options.claim_id())?;
+    ensure_active_claim_mode_allowed(
+        &transaction,
+        previous_claim.workspace_id,
+        previous_claim.branch_id,
+        previous_claim.task_entity_id,
+        options.to_session_id(),
+        previous_claim.mode,
+    )?;
+
+    let claim_id = ClaimId::new_v7();
+    insert_claim_occurrence(
+        &transaction,
+        claim_id,
+        options.to_session_id(),
+        &previous_claim,
+        now_us,
+    )?;
+    let event_payload_json = claim_transferred_payload_json(
+        options.claim_id(),
+        claim_id,
+        &previous_claim,
+        previous_last_activity_at_us,
+        options.to_session_id(),
+    )?;
+    insert_claim_replacement_event(
+        &transaction,
+        options.from_session_id(),
+        previous_claim.workspace_id,
+        CLAIM_TRANSFERRED_EVENT_KIND,
+        now_us,
+        event_payload_json,
+    )?;
+    session::update_session_activity(&transaction, options.from_session_id(), now_us)?;
+    session::update_session_activity(&transaction, options.to_session_id(), now_us)?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(ClaimTransferResult {
+        previous_claim_id: options.claim_id(),
+        claim_id,
+        from_session_id: options.from_session_id(),
+        to_session_id: options.to_session_id(),
+        transferred_at_us: now_us,
+        previous_last_activity_at_us,
+        previous_state: claim_snapshot(connection, options.claim_id())?,
+        state: claim_snapshot(connection, claim_id)?,
+    })
+}
+
+pub(crate) fn force_takeover_claim(
+    connection: &mut StoreConnection,
+    options: &ClaimForceTakeoverOptions,
+) -> Result<ClaimForceTakeoverResult> {
+    connection.verify_foreign_keys()?;
+    let now_us = current_epoch_micros()?;
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let taking_active =
+        session::load_active_session_runtime_for_update(&transaction, options.session_id())?;
+    let previous_claim = load_claim(&transaction, options.claim_id())?;
+    if previous_claim.session_id == options.session_id() {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "session {} already owns active claim {}",
+            options.session_id(),
+            options.claim_id()
+        )));
+    }
+    ensure_claim_session_target(
+        "taking",
+        options.session_id(),
+        &taking_active,
+        options.claim_id(),
+        &previous_claim,
+    )?;
+    let previous_last_activity_at_us =
+        require_active_claim_runtime(&transaction, options.claim_id())?;
+    let previous_session_lifecycle_state =
+        session_lifecycle_state_for_event(&transaction, previous_claim.session_id)?;
+
+    delete_claim_runtime_row(&transaction, options.claim_id())?;
+    ensure_active_claim_mode_allowed(
+        &transaction,
+        previous_claim.workspace_id,
+        previous_claim.branch_id,
+        previous_claim.task_entity_id,
+        options.session_id(),
+        previous_claim.mode,
+    )?;
+
+    let claim_id = ClaimId::new_v7();
+    insert_claim_occurrence(
+        &transaction,
+        claim_id,
+        options.session_id(),
+        &previous_claim,
+        now_us,
+    )?;
+    let event_payload_json = claim_force_taken_over_payload_json(
+        options.claim_id(),
+        claim_id,
+        &previous_claim,
+        previous_last_activity_at_us,
+        previous_session_lifecycle_state,
+        options.session_id(),
+        options.rationale(),
+    )?;
+    insert_claim_replacement_event(
+        &transaction,
+        options.session_id(),
+        previous_claim.workspace_id,
+        CLAIM_FORCE_TAKEN_OVER_EVENT_KIND,
+        now_us,
+        event_payload_json,
+    )?;
+    session::update_session_activity(&transaction, options.session_id(), now_us)?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(ClaimForceTakeoverResult {
+        previous_claim_id: options.claim_id(),
+        claim_id,
+        previous_session_id: previous_claim.session_id,
+        session_id: options.session_id(),
+        taken_over_at_us: now_us,
+        previous_last_activity_at_us,
+        rationale: options.rationale().to_owned(),
+        previous_state: claim_snapshot(connection, options.claim_id())?,
+        state: claim_snapshot(connection, claim_id)?,
     })
 }
 
@@ -1190,6 +1464,130 @@ fn ensure_claim_runtime_exists(connection: &Connection, claim_id: ClaimId) -> Re
     }
 }
 
+fn require_active_claim_runtime(connection: &Connection, claim_id: ClaimId) -> Result<i64> {
+    load_claim_runtime(connection, claim_id)?
+        .ok_or_else(|| WorkVcsError::ClaimInvalid(format!("claim {claim_id} is not active")))
+}
+
+fn ensure_claim_session_target(
+    label: &str,
+    session_id: SessionId,
+    active: &session::ActiveSessionProjection,
+    claim_id: ClaimId,
+    claim: &ClaimRow,
+) -> Result<()> {
+    if active.active_workspace_id != claim.workspace_id
+        || active.active_branch_id != claim.branch_id
+    {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "{label} session {session_id} active target {}/{} does not match claim {} target {}/{}",
+            active.active_workspace_id,
+            active.active_branch_id,
+            claim_id,
+            claim.workspace_id,
+            claim.branch_id
+        )));
+    }
+    Ok(())
+}
+
+fn delete_claim_runtime_row(transaction: &Transaction<'_>, claim_id: ClaimId) -> Result<()> {
+    let deleted = transaction
+        .execute(
+            "DELETE FROM claim_runtime
+             WHERE claim_id = ?1",
+            params![&claim_id.raw_bytes()[..]],
+        )
+        .map_err(storage_error)?;
+    if deleted != 1 {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "claim {claim_id} runtime replacement affected {deleted} rows"
+        )));
+    }
+    Ok(())
+}
+
+fn insert_claim_occurrence(
+    transaction: &Transaction<'_>,
+    claim_id: ClaimId,
+    session_id: SessionId,
+    claim: &ClaimRow,
+    occurred_at_us: i64,
+) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT INTO object_identity(object_id, object_kind, created_at_us)
+             VALUES (?1, ?2, ?3)",
+            params![&claim_id.raw_bytes()[..], CLAIM_OBJECT_KIND, occurred_at_us],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO claim(
+                claim_id,
+                session_id,
+                workspace_id,
+                branch_id,
+                task_entity_id,
+                mode,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &claim_id.raw_bytes()[..],
+                &session_id.raw_bytes()[..],
+                &claim.workspace_id.raw_bytes()[..],
+                &claim.branch_id.raw_bytes()[..],
+                &claim.task_entity_id.raw_bytes()[..],
+                claim.mode.as_str(),
+                occurred_at_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO claim_runtime(claim_id, last_activity_at_us)
+             VALUES (?1, ?2)",
+            params![&claim_id.raw_bytes()[..], occurred_at_us],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn insert_claim_replacement_event(
+    transaction: &Transaction<'_>,
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    event_kind: &str,
+    occurred_at_us: i64,
+    payload_json: String,
+) -> Result<()> {
+    let event_id = EventId::new_v7();
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
+            params![
+                &event_id.raw_bytes()[..],
+                &workspace_id.raw_bytes()[..],
+                &session_id.raw_bytes()[..],
+                event_kind,
+                occurred_at_us,
+                payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
 fn release_claim_runtime_for_row(
     transaction: &Transaction<'_>,
     claim_id: ClaimId,
@@ -1310,6 +1708,157 @@ fn claim_released_payload_json(claim_id: ClaimId, claim: &ClaimRow) -> Result<St
             CanonicalValue::String(claim.workspace_id.to_string()),
         ),
     ])?)
+}
+
+fn claim_transferred_payload_json(
+    previous_claim_id: ClaimId,
+    claim_id: ClaimId,
+    previous_claim: &ClaimRow,
+    previous_last_activity_at_us: i64,
+    to_session_id: SessionId,
+) -> Result<String> {
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "branch_id".to_owned(),
+            CanonicalValue::String(previous_claim.branch_id.to_string()),
+        ),
+        (
+            "claim_id".to_owned(),
+            CanonicalValue::String(claim_id.to_string()),
+        ),
+        (
+            "from_session_id".to_owned(),
+            CanonicalValue::String(previous_claim.session_id.to_string()),
+        ),
+        (
+            "lifecycle_state".to_owned(),
+            CanonicalValue::String(ACTIVE_CLAIM_LIFECYCLE_STATE.to_owned()),
+        ),
+        (
+            "mode".to_owned(),
+            CanonicalValue::String(previous_claim.mode.as_str().to_owned()),
+        ),
+        (
+            "previous_claim_id".to_owned(),
+            CanonicalValue::String(previous_claim_id.to_string()),
+        ),
+        (
+            "previous_last_activity_at_us".to_owned(),
+            CanonicalValue::safe_integer(previous_last_activity_at_us)?,
+        ),
+        (
+            "reason".to_owned(),
+            CanonicalValue::String("transfer".to_owned()),
+        ),
+        (
+            "task_entity_id".to_owned(),
+            CanonicalValue::String(previous_claim.task_entity_id.to_string()),
+        ),
+        (
+            "to_session_id".to_owned(),
+            CanonicalValue::String(to_session_id.to_string()),
+        ),
+        (
+            "workspace_id".to_owned(),
+            CanonicalValue::String(previous_claim.workspace_id.to_string()),
+        ),
+    ])?)
+}
+
+fn claim_force_taken_over_payload_json(
+    previous_claim_id: ClaimId,
+    claim_id: ClaimId,
+    previous_claim: &ClaimRow,
+    previous_last_activity_at_us: i64,
+    previous_session_lifecycle_state: &str,
+    session_id: SessionId,
+    rationale: &str,
+) -> Result<String> {
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "branch_id".to_owned(),
+            CanonicalValue::String(previous_claim.branch_id.to_string()),
+        ),
+        (
+            "claim_id".to_owned(),
+            CanonicalValue::String(claim_id.to_string()),
+        ),
+        (
+            "lifecycle_state".to_owned(),
+            CanonicalValue::String(ACTIVE_CLAIM_LIFECYCLE_STATE.to_owned()),
+        ),
+        (
+            "mode".to_owned(),
+            CanonicalValue::String(previous_claim.mode.as_str().to_owned()),
+        ),
+        (
+            "previous_claim_id".to_owned(),
+            CanonicalValue::String(previous_claim_id.to_string()),
+        ),
+        (
+            "previous_last_activity_at_us".to_owned(),
+            CanonicalValue::safe_integer(previous_last_activity_at_us)?,
+        ),
+        (
+            "previous_session_id".to_owned(),
+            CanonicalValue::String(previous_claim.session_id.to_string()),
+        ),
+        (
+            "previous_session_lifecycle_state".to_owned(),
+            CanonicalValue::String(previous_session_lifecycle_state.to_owned()),
+        ),
+        (
+            "rationale".to_owned(),
+            CanonicalValue::String(rationale.to_owned()),
+        ),
+        (
+            "reason".to_owned(),
+            CanonicalValue::String("force".to_owned()),
+        ),
+        (
+            "session_id".to_owned(),
+            CanonicalValue::String(session_id.to_string()),
+        ),
+        (
+            "task_entity_id".to_owned(),
+            CanonicalValue::String(previous_claim.task_entity_id.to_string()),
+        ),
+        (
+            "workspace_id".to_owned(),
+            CanonicalValue::String(previous_claim.workspace_id.to_string()),
+        ),
+    ])?)
+}
+
+fn session_lifecycle_state_for_event(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<&'static str> {
+    let runtime_count = connection
+        .query_row(
+            "SELECT count(*)
+             FROM session_runtime
+             WHERE session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?;
+    if runtime_count == 1 {
+        return Ok("active");
+    }
+    let diff_count = connection
+        .query_row(
+            "SELECT count(*)
+             FROM session_diff
+             WHERE session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?;
+    if diff_count == 1 {
+        return Ok("ended");
+    }
+    Ok("unknown")
 }
 
 fn canonical_json_string(value: &CanonicalValue) -> Result<String> {

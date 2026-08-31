@@ -123,9 +123,10 @@ pub use identity::{
     SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
-    ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason, ClaimGuardResult, ClaimLifecycleState,
-    ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions, ClaimNextResult,
-    ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult,
+    ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardAction, ClaimGuardOptions,
+    ClaimGuardReason, ClaimGuardResult, ClaimLifecycleState, ClaimListOptions, ClaimListResult,
+    ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult,
+    ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions, ClaimTransferResult,
 };
 pub use runtime::{
     ContextItem, ContextItemCategory, ContextItemSubject, ContextOmissionBucket,

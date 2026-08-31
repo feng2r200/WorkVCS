@@ -1790,6 +1790,117 @@ expect_value "$handoff_show_output" "session_matches_expected" "true"
 expect_value "$handoff_show_output" "session_diff_matches_expected" "true"
 expect_value "$handoff_show_output" "focus_matches_expected" "true"
 
+step "claim replacement recovery"
+claim_recovery_source_session_output="$(run_workvcs \
+    session start "$store" \
+    --workspace "$workspace_id" \
+    --branch "$branch_id" \
+    --expected-workspace "$workspace_id" \
+    --expected-branch "$branch_id" \
+    --expected-lifecycle-state active)"
+claim_recovery_source_session_id="$(value "$claim_recovery_source_session_output" "session_id")"
+
+claim_recovery_target_session_output="$(run_workvcs \
+    session start "$store" \
+    --workspace "$workspace_id" \
+    --branch "$branch_id" \
+    --expected-workspace "$workspace_id" \
+    --expected-branch "$branch_id" \
+    --expected-lifecycle-state active)"
+claim_recovery_target_session_id="$(value "$claim_recovery_target_session_output" "session_id")"
+
+claim_recovery_takeover_session_output="$(run_workvcs \
+    session start "$store" \
+    --workspace "$workspace_id" \
+    --branch "$branch_id" \
+    --expected-workspace "$workspace_id" \
+    --expected-branch "$branch_id" \
+    --expected-lifecycle-state active)"
+claim_recovery_takeover_session_id="$(value "$claim_recovery_takeover_session_output" "session_id")"
+
+claim_recovery_claim_output="$(run_workvcs \
+    claim task "$store" \
+    --session "$claim_recovery_source_session_id" \
+    --task "$task_id" \
+    --expected-mode exclusive \
+    --expected-lifecycle-state active)"
+claim_recovery_claim_id="$(value "$claim_recovery_claim_output" "claim_id")"
+
+claim_recovery_blocked_guard_output="$(run_workvcs \
+    claim guard "$store" \
+    --session "$claim_recovery_target_session_id" \
+    --task "$task_id" \
+    --expected-allowed false \
+    --expected-reason exclusive_claim_owned_by_other_session \
+    --expected-active-claims 1)"
+expect_value "$claim_recovery_blocked_guard_output" "allowed_match_expected" "true"
+expect_value "$claim_recovery_blocked_guard_output" "reason_match_expected" "true"
+expect_value "$claim_recovery_blocked_guard_output" "active_claims_match_expected" "true"
+
+claim_transfer_output="$(run_workvcs \
+    claim transfer "$store" \
+    --from-session "$claim_recovery_source_session_id" \
+    --to-session "$claim_recovery_target_session_id" \
+    --claim "$claim_recovery_claim_id" \
+    --expected-previous-claim "$claim_recovery_claim_id" \
+    --expected-from-session "$claim_recovery_source_session_id" \
+    --expected-to-session "$claim_recovery_target_session_id" \
+    --expected-mode exclusive \
+    --expected-lifecycle-state active)"
+claim_transfer_id="$(value "$claim_transfer_output" "claim_id")"
+expect_value "$claim_transfer_output" "previous_claim_id" "$claim_recovery_claim_id"
+expect_value "$claim_transfer_output" "previous_lifecycle_state" "released"
+expect_value "$claim_transfer_output" "lifecycle_state" "active"
+expect_value "$claim_transfer_output" "previous_claim_match_expected" "true"
+expect_value "$claim_transfer_output" "previous_session_match_expected" "true"
+expect_value "$claim_transfer_output" "session_match_expected" "true"
+expect_value "$claim_transfer_output" "mode_match_expected" "true"
+expect_value "$claim_transfer_output" "lifecycle_state_match_expected" "true"
+
+claim_transfer_guard_output="$(run_workvcs \
+    claim guard "$store" \
+    --session "$claim_recovery_target_session_id" \
+    --task "$task_id" \
+    --expected-allowed true \
+    --expected-reason owned_exclusive_claim \
+    --expected-active-claims 1)"
+expect_value "$claim_transfer_guard_output" "allowed_match_expected" "true"
+expect_value "$claim_transfer_guard_output" "reason_match_expected" "true"
+expect_value "$claim_transfer_guard_output" "active_claims_match_expected" "true"
+
+claim_takeover_output="$(run_workvcs \
+    claim takeover "$store" \
+    --session "$claim_recovery_takeover_session_id" \
+    --claim "$claim_transfer_id" \
+    --force \
+    --rationale "operator recovery smoke" \
+    --expected-previous-claim "$claim_transfer_id" \
+    --expected-previous-session "$claim_recovery_target_session_id" \
+    --expected-session "$claim_recovery_takeover_session_id" \
+    --expected-mode exclusive \
+    --expected-lifecycle-state active)"
+claim_takeover_id="$(value "$claim_takeover_output" "claim_id")"
+expect_value "$claim_takeover_output" "previous_claim_id" "$claim_transfer_id"
+expect_value "$claim_takeover_output" "previous_lifecycle_state" "released"
+expect_value "$claim_takeover_output" "lifecycle_state" "active"
+expect_value "$claim_takeover_output" "rationale" "operator recovery smoke"
+expect_value "$claim_takeover_output" "previous_claim_match_expected" "true"
+expect_value "$claim_takeover_output" "previous_session_match_expected" "true"
+expect_value "$claim_takeover_output" "session_match_expected" "true"
+expect_value "$claim_takeover_output" "mode_match_expected" "true"
+expect_value "$claim_takeover_output" "lifecycle_state_match_expected" "true"
+
+claim_takeover_guard_output="$(run_workvcs \
+    claim guard "$store" \
+    --session "$claim_recovery_takeover_session_id" \
+    --task "$task_id" \
+    --expected-allowed true \
+    --expected-reason owned_exclusive_claim \
+    --expected-active-claims 1)"
+expect_value "$claim_takeover_guard_output" "allowed_match_expected" "true"
+expect_value "$claim_takeover_guard_output" "reason_match_expected" "true"
+expect_value "$claim_takeover_guard_output" "active_claims_match_expected" "true"
+
 step "integrity gate"
 store_integrity_output="$(run_workvcs \
     store integrity "$store" \
@@ -1799,7 +1910,7 @@ store_integrity_output="$(run_workvcs \
     --expected-checked-changesets 19 \
     --expected-checked-change-operations 27 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 32 \
+    --expected-checked-events 38 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "2"
@@ -1807,7 +1918,7 @@ expect_value "$store_integrity_output" "checked_commits" "19"
 expect_value "$store_integrity_output" "checked_changesets" "19"
 expect_value "$store_integrity_output" "checked_change_operations" "27"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "32"
+expect_value "$store_integrity_output" "checked_events" "38"
 expect_value "$store_integrity_output" "checked_checkpoints" "1"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -1820,11 +1931,11 @@ doctor_output="$(run_workvcs \
     --expected-checked-changesets 19 \
     --expected-checked-change-operations 27 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 32 \
+    --expected-checked-events 38 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=2 checked_commits=19 checked_changesets=19 checked_change_operations=27 checked_changeset_causal_anchors=0 checked_events=32 checked_checkpoints=1 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=19 checked_changesets=19 checked_change_operations=27 checked_changeset_causal_anchors=0 checked_events=38 checked_checkpoints=1 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'
@@ -1847,3 +1958,5 @@ printf 'bundle_import_id=%s\n' "$bundle_import_id"
 printf 'bundle_divergence_import_id=%s\n' "$bundle_divergence_import_id"
 printf 'session_diff_id=%s\n' "$session_diff_id"
 printf 'handoff_record_id=%s\n' "$handoff_record_id"
+printf 'claim_transfer_id=%s\n' "$claim_transfer_id"
+printf 'claim_takeover_id=%s\n' "$claim_takeover_id"

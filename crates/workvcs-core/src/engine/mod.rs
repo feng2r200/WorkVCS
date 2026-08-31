@@ -102,17 +102,18 @@ use crate::history::{
 };
 use crate::store::{Store, StoreInfo, StoreInitOptions};
 use crate::{
-    ClaimGuardOptions, ClaimGuardResult, ClaimListOptions, ClaimListResult, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
-    ClaimTaskResult, ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketOptions,
-    MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
-    MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult,
-    MergeListOptions, MergeListResult, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
-    MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
-    RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions, SessionEndResult,
-    SessionFocusOptions, SessionFocusUpdateResult, SessionListOptions, SessionListResult,
-    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, VerifyOptions, VerifyResult,
+    ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardOptions, ClaimGuardResult,
+    ClaimListOptions, ClaimListResult, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
+    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
+    ClaimTransferResult, ContextOverview, ContextOverviewOptions, ContextPacket,
+    ContextPacketOptions, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
+    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
+    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
+    RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionListOptions,
+    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use std::path::Path;
 
@@ -1056,6 +1057,17 @@ impl Engine {
 
     pub fn release_claim(&mut self, options: ClaimReleaseOptions) -> Result<ClaimReleaseResult> {
         self.store.release_claim(&options)
+    }
+
+    pub fn transfer_claim(&mut self, options: ClaimTransferOptions) -> Result<ClaimTransferResult> {
+        self.store.transfer_claim(&options)
+    }
+
+    pub fn force_takeover_claim(
+        &mut self,
+        options: ClaimForceTakeoverOptions,
+    ) -> Result<ClaimForceTakeoverResult> {
+        self.store.force_takeover_claim(&options)
     }
 
     pub fn runnable_tasks(&self, options: RunnableTasksOptions) -> Result<RunnableTasksProjection> {

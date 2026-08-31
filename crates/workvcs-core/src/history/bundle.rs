@@ -410,7 +410,22 @@ pub struct BundleImportPreflightResult {
     pub branch_heads_missing: usize,
     pub branch_heads_fast_forward: usize,
     pub branch_heads_diverged: usize,
+    pub branch_head_details: Vec<BundleBranchHeadPreflightDetail>,
     pub problem: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleBranchHeadPreflightDetail {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub branch_name: String,
+    pub source_head_commit_id: CommitId,
+    pub source_head_state_digest: Digest,
+    pub target_workspace_id: Option<WorkspaceId>,
+    pub target_head_commit_id: Option<CommitId>,
+    pub target_head_state_digest: Option<Digest>,
+    pub status: String,
+    pub merge_base_commit_id: Option<CommitId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -875,13 +890,14 @@ struct BundleBranchHeadSummary {
     lifecycle_state: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct BundleBranchPreflightSummary {
     exported_branch_heads: usize,
     already_present: usize,
     missing: usize,
     fast_forward: usize,
     diverged: usize,
+    details: Vec<BundleBranchHeadPreflightDetail>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1372,6 +1388,7 @@ pub(crate) fn preflight_bundle_import(
                 branch_heads_missing: 0,
                 branch_heads_fast_forward: 0,
                 branch_heads_diverged: 0,
+                branch_head_details: Vec::new(),
                 problem: Some(problem),
             });
         }
@@ -1408,6 +1425,7 @@ pub(crate) fn preflight_bundle_import(
             branch_heads_missing: branch_preflight.missing,
             branch_heads_fast_forward: branch_preflight.fast_forward,
             branch_heads_diverged: branch_preflight.diverged,
+            branch_head_details: branch_preflight.details,
             problem: Some(format!(
                 "local commit {} exists with a different state digest",
                 checked.manifest.commit_id
@@ -1460,6 +1478,7 @@ pub(crate) fn preflight_bundle_import(
         branch_heads_missing: branch_preflight.missing,
         branch_heads_fast_forward: branch_preflight.fast_forward,
         branch_heads_diverged: branch_preflight.diverged,
+        branch_head_details: branch_preflight.details,
         problem: None,
     })
 }
@@ -5919,6 +5938,29 @@ fn payload_reference_value(reference: &BundlePayloadReference) -> Result<Canonic
     ])
 }
 
+fn branch_head_preflight_detail_value(
+    detail: &BundleBranchHeadPreflightDetail,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("workspace_id", detail.workspace_id.to_string()),
+        string_field("branch_id", detail.branch_id.to_string()),
+        string_field("branch_name", detail.branch_name.clone()),
+        string_field(
+            "source_head_commit_id",
+            detail.source_head_commit_id.to_string(),
+        ),
+        string_field(
+            "source_head_state_digest",
+            detail.source_head_state_digest.to_string(),
+        ),
+        optional_display_field("target_workspace_id", detail.target_workspace_id),
+        optional_display_field("target_head_commit_id", detail.target_head_commit_id),
+        optional_display_field("target_head_state_digest", detail.target_head_state_digest),
+        string_field("status", detail.status.clone()),
+        optional_display_field("merge_base_commit_id", detail.merge_base_commit_id),
+    ])
+}
+
 fn bundle_import_attempt_detail_json(preflight: &BundleImportPreflightResult) -> Result<String> {
     let problem = preflight
         .problem
@@ -5991,6 +6033,23 @@ fn bundle_import_attempt_detail_json(preflight: &BundleImportPreflightResult) ->
             "branch_heads_diverged",
             usize_to_i64("branch_heads_diverged", preflight.branch_heads_diverged)?,
         )?,
+        integer_field(
+            "branch_head_detail_count",
+            usize_to_i64(
+                "branch_head_detail_count",
+                preflight.branch_head_details.len(),
+            )?,
+        )?,
+        (
+            "branch_head_details".to_owned(),
+            CanonicalValue::Array(
+                preflight
+                    .branch_head_details
+                    .iter()
+                    .map(branch_head_preflight_detail_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
         ("problem".to_owned(), problem),
     ])?;
     let bytes = canonical_bytes(&value)?;
@@ -6156,6 +6215,23 @@ fn bundle_import_apply_detail_json(
             "updated_branch_heads",
             usize_to_i64("updated_branch_heads", counts.updated_branch_heads)?,
         )?,
+        integer_field(
+            "branch_head_detail_count",
+            usize_to_i64(
+                "branch_head_detail_count",
+                preflight.branch_head_details.len(),
+            )?,
+        )?,
+        (
+            "branch_head_details".to_owned(),
+            CanonicalValue::Array(
+                preflight
+                    .branch_head_details
+                    .iter()
+                    .map(branch_head_preflight_detail_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
     ])?;
     let bytes = canonical_bytes(&value)?;
     String::from_utf8(bytes).map_err(|error| {
@@ -13586,26 +13662,51 @@ fn bundle_branch_preflight_summary(
         ..BundleBranchPreflightSummary::default()
     };
     for branch in &manifest.exported_branch_heads {
+        let mut detail = BundleBranchHeadPreflightDetail {
+            workspace_id: branch.workspace_id,
+            branch_id: branch.branch_id,
+            branch_name: branch.name.clone(),
+            source_head_commit_id: branch.head_commit_id,
+            source_head_state_digest: branch.head_state_digest,
+            target_workspace_id: None,
+            target_head_commit_id: None,
+            target_head_state_digest: None,
+            status: String::new(),
+            merge_base_commit_id: None,
+        };
         if branch.workspace_id != manifest.workspace_id {
             summary.diverged += 1;
+            detail.status = "diverged".to_owned();
+            summary.details.push(detail);
             continue;
         }
         let Some((local_workspace_id, local_head_commit_id, local_head_state_digest)) =
             load_local_branch_head_for_preflight(connection, branch.branch_id)?
         else {
             summary.missing += 1;
+            detail.status = "missing".to_owned();
+            summary.details.push(detail);
             continue;
         };
+        detail.target_workspace_id = Some(local_workspace_id);
+        detail.target_head_commit_id = Some(local_head_commit_id);
+        detail.target_head_state_digest = Some(local_head_state_digest);
         if local_workspace_id != branch.workspace_id {
             summary.diverged += 1;
+            detail.status = "diverged".to_owned();
+            summary.details.push(detail);
             continue;
         }
         if local_head_commit_id == branch.head_commit_id {
             if local_head_state_digest == branch.head_state_digest {
                 summary.already_present += 1;
+                detail.status = "already_present".to_owned();
             } else {
                 summary.diverged += 1;
+                detail.status = "diverged".to_owned();
+                detail.merge_base_commit_id = Some(local_head_commit_id);
             }
+            summary.details.push(detail);
             continue;
         }
         let local_digest_matches_manifest =
@@ -13614,9 +13715,20 @@ fn bundle_branch_preflight_summary(
             && manifest_commit_is_descendant(manifest, branch.head_commit_id, local_head_commit_id)
         {
             summary.fast_forward += 1;
+            detail.status = "fast_forward".to_owned();
+            detail.merge_base_commit_id = Some(local_head_commit_id);
         } else {
             summary.diverged += 1;
+            detail.status = "diverged".to_owned();
+            detail.merge_base_commit_id = common_manifest_local_merge_base(
+                connection,
+                branch.workspace_id,
+                branch.head_commit_id,
+                local_head_commit_id,
+                manifest,
+            )?;
         }
+        summary.details.push(detail);
     }
     Ok(summary)
 }
@@ -13700,6 +13812,135 @@ fn manifest_commit_is_descendant(
         }
     }
     false
+}
+
+fn common_manifest_local_merge_base(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    source_head_commit_id: CommitId,
+    target_head_commit_id: CommitId,
+    manifest: &BundleManifestSummary,
+) -> Result<Option<CommitId>> {
+    let source_ancestors = manifest_commit_ancestor_depths(manifest, source_head_commit_id);
+    let target_ancestors =
+        local_commit_ancestor_depths(connection, workspace_id, target_head_commit_id)?;
+    Ok(source_ancestors
+        .iter()
+        .filter_map(|(commit_id, source_depth)| {
+            target_ancestors.get(commit_id).map(|target_depth| {
+                (
+                    source_depth + target_depth,
+                    *target_depth,
+                    *source_depth,
+                    *commit_id,
+                )
+            })
+        })
+        .min()
+        .map(|(_, _, _, commit_id)| commit_id))
+}
+
+fn manifest_commit_ancestor_depths(
+    manifest: &BundleManifestSummary,
+    start_commit_id: CommitId,
+) -> BTreeMap<CommitId, usize> {
+    let parents_by_commit = manifest
+        .commits
+        .iter()
+        .map(|commit| (commit.commit_id, commit.parent_commit_ids.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+    let mut ancestors = BTreeMap::new();
+    let mut stack = vec![(start_commit_id, 0usize)];
+    while let Some((commit_id, depth)) = stack.pop() {
+        if ancestors.contains_key(&commit_id) {
+            continue;
+        }
+        ancestors.insert(commit_id, depth);
+        let Some(parents) = parents_by_commit.get(&commit_id) else {
+            continue;
+        };
+        for parent in *parents {
+            stack.push((*parent, depth + 1));
+        }
+    }
+    ancestors
+}
+
+fn local_commit_ancestor_depths(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    start_commit_id: CommitId,
+) -> Result<BTreeMap<CommitId, usize>> {
+    let mut ancestors = BTreeMap::new();
+    let mut stack = vec![(start_commit_id, 0usize)];
+    while let Some((commit_id, depth)) = stack.pop() {
+        if ancestors.contains_key(&commit_id) {
+            continue;
+        }
+        let commit_workspace_id = load_commit_workspace_id_for_preflight(connection, commit_id)?
+            .ok_or_else(|| {
+                WorkVcsError::QueryInvalid(format!(
+                    "local commit {commit_id} referenced by Branch preflight is missing"
+                ))
+            })?;
+        if commit_workspace_id != workspace_id {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "local commit {commit_id} belongs to workspace {commit_workspace_id}, expected {workspace_id}"
+            )));
+        }
+        ancestors.insert(commit_id, depth);
+        for parent in load_local_commit_parent_ids_for_preflight(connection, commit_id)? {
+            stack.push((parent, depth + 1));
+        }
+    }
+    Ok(ancestors)
+}
+
+fn load_commit_workspace_id_for_preflight(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Option<WorkspaceId>> {
+    connection
+        .inner()
+        .query_row(
+            "SELECT workspace_id
+             FROM workstate_commit
+             WHERE commit_id = ?1",
+            params![&commit_id.raw_bytes()[..]],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(storage_error)?
+        .map(|bytes| decode_workspace_id("workstate_commit.workspace_id", bytes))
+        .transpose()
+}
+
+fn load_local_commit_parent_ids_for_preflight(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+) -> Result<Vec<CommitId>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT parent_commit_id
+             FROM commit_parent
+             WHERE commit_id = ?1
+             ORDER BY parent_ordinal, parent_commit_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&commit_id.raw_bytes()[..]], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(storage_error)?;
+    let mut parents = Vec::new();
+    for row in rows {
+        parents.push(decode_commit_id(
+            "commit_parent.parent_commit_id",
+            row.map_err(storage_error)?,
+        )?);
+    }
+    Ok(parents)
 }
 
 fn source_store_relation(local_store_id: StoreId, source_store_id: StoreId) -> String {

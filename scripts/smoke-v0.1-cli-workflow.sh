@@ -1299,7 +1299,12 @@ bundle_divergence_preflight_output="$(run_workvcs \
     --expected-branch-heads-already-present 0 \
     --expected-branch-heads-missing 0 \
     --expected-branch-heads-fast-forward 0 \
-    --expected-branch-heads-diverged 1)"
+    --expected-branch-heads-diverged 1 \
+    --expected-branch-head-detail-count 1 \
+    --expected-first-branch-head-status diverged \
+    --expected-first-branch-head-source-head "$bundle_divergence_source_head_id" \
+    --expected-first-branch-head-target-head "$bundle_divergence_target_head_id" \
+    --expected-first-branch-head-merge-base "$bundle_divergence_first_commit_id")"
 expect_value "$bundle_divergence_preflight_output" "valid" "true"
 expect_value "$bundle_divergence_preflight_output" "valid_required" "true"
 expect_value "$bundle_divergence_preflight_output" "can_apply" "false"
@@ -1314,6 +1319,16 @@ expect_value "$bundle_divergence_preflight_output" "branch_heads_already_present
 expect_value "$bundle_divergence_preflight_output" "branch_heads_missing_match_expected" "true"
 expect_value "$bundle_divergence_preflight_output" "branch_heads_fast_forward_match_expected" "true"
 expect_value "$bundle_divergence_preflight_output" "branch_heads_diverged_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "branch_head_detail_count" "1"
+expect_value "$bundle_divergence_preflight_output" "branch_head_detail.0.status" "diverged"
+expect_value "$bundle_divergence_preflight_output" "branch_head_detail.0.source_head_commit_id" "$bundle_divergence_source_head_id"
+expect_value "$bundle_divergence_preflight_output" "branch_head_detail.0.target_head_commit_id" "$bundle_divergence_target_head_id"
+expect_value "$bundle_divergence_preflight_output" "branch_head_detail.0.merge_base_commit_id" "$bundle_divergence_first_commit_id"
+expect_value "$bundle_divergence_preflight_output" "branch_head_detail_count_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "first_branch_head_status_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "first_branch_head_source_head_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "first_branch_head_target_head_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "first_branch_head_merge_base_match_expected" "true"
 expect_value "$bundle_divergence_preflight_output" "problem" "none"
 
 expect_failure_contains \
@@ -1333,7 +1348,12 @@ bundle_divergence_import_output="$(run_workvcs \
     --expected-branch-heads-already-present 0 \
     --expected-branch-heads-missing 0 \
     --expected-branch-heads-fast-forward 0 \
-    --expected-branch-heads-diverged 1)"
+    --expected-branch-heads-diverged 1 \
+    --expected-branch-head-detail-count 1 \
+    --expected-first-branch-head-status diverged \
+    --expected-first-branch-head-source-head "$bundle_divergence_source_head_id" \
+    --expected-first-branch-head-target-head "$bundle_divergence_target_head_id" \
+    --expected-first-branch-head-merge-base "$bundle_divergence_first_commit_id")"
 bundle_divergence_import_id="$(value "$bundle_divergence_import_output" "import_id")"
 bundle_divergence_digest="$(value "$bundle_divergence_import_output" "bundle_digest")"
 expect_value "$bundle_divergence_import_output" "recorded" "true"
@@ -1342,6 +1362,16 @@ expect_value "$bundle_divergence_import_output" "outcome" "same_store_divergence
 expect_value "$bundle_divergence_import_output" "can_apply" "false"
 expect_value "$bundle_divergence_import_output" "outcome_matches_expected" "true"
 expect_value "$bundle_divergence_import_output" "branch_heads_diverged_match_expected" "true"
+expect_value "$bundle_divergence_import_output" "branch_head_detail_count" "1"
+expect_value "$bundle_divergence_import_output" "branch_head_detail.0.status" "diverged"
+expect_value "$bundle_divergence_import_output" "branch_head_detail.0.source_head_commit_id" "$bundle_divergence_source_head_id"
+expect_value "$bundle_divergence_import_output" "branch_head_detail.0.target_head_commit_id" "$bundle_divergence_target_head_id"
+expect_value "$bundle_divergence_import_output" "branch_head_detail.0.merge_base_commit_id" "$bundle_divergence_first_commit_id"
+expect_value "$bundle_divergence_import_output" "branch_head_detail_count_match_expected" "true"
+expect_value "$bundle_divergence_import_output" "first_branch_head_status_match_expected" "true"
+expect_value "$bundle_divergence_import_output" "first_branch_head_source_head_match_expected" "true"
+expect_value "$bundle_divergence_import_output" "first_branch_head_target_head_match_expected" "true"
+expect_value "$bundle_divergence_import_output" "first_branch_head_merge_base_match_expected" "true"
 expect_nonempty "$bundle_divergence_import_output" "import_id"
 
 bundle_divergence_apply_output="$(run_workvcs \
@@ -1352,7 +1382,12 @@ bundle_divergence_apply_output="$(run_workvcs \
     --expected-imported-entity-versions 0 \
     --expected-imported-checkpoints 0 \
     --expected-imported-checkpoint-statuses 0 \
-    --expected-updated-branch-heads 0)"
+    --expected-updated-branch-heads 0 \
+    --expected-branch-head-detail-count 1 \
+    --expected-first-branch-head-status diverged \
+    --expected-first-branch-head-source-head "$bundle_divergence_source_head_id" \
+    --expected-first-branch-head-target-head "$bundle_divergence_target_head_id" \
+    --expected-first-branch-head-merge-base "$bundle_divergence_first_commit_id")"
 expect_value "$bundle_divergence_apply_output" "applied" "false"
 expect_value "$bundle_divergence_apply_output" "import_id" "none"
 expect_value "$bundle_divergence_apply_output" "outcome" "same_store_divergence_detected"
@@ -1368,6 +1403,16 @@ expect_value "$bundle_divergence_apply_output" "imported_entity_versions_match_e
 expect_value "$bundle_divergence_apply_output" "imported_checkpoints_match_expected" "true"
 expect_value "$bundle_divergence_apply_output" "imported_checkpoint_statuses_match_expected" "true"
 expect_value "$bundle_divergence_apply_output" "updated_branch_heads_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "branch_head_detail_count" "1"
+expect_value "$bundle_divergence_apply_output" "branch_head_detail.0.status" "diverged"
+expect_value "$bundle_divergence_apply_output" "branch_head_detail.0.source_head_commit_id" "$bundle_divergence_source_head_id"
+expect_value "$bundle_divergence_apply_output" "branch_head_detail.0.target_head_commit_id" "$bundle_divergence_target_head_id"
+expect_value "$bundle_divergence_apply_output" "branch_head_detail.0.merge_base_commit_id" "$bundle_divergence_first_commit_id"
+expect_value "$bundle_divergence_apply_output" "branch_head_detail_count_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "first_branch_head_status_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "first_branch_head_source_head_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "first_branch_head_target_head_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "first_branch_head_merge_base_match_expected" "true"
 
 expect_failure_contains \
     "bundle apply did not apply: outcome=same_store_divergence_detected" \

@@ -9,30 +9,31 @@ use workvcs_core::{
     AcceptanceCriterionSnapshot, ApplicabilityResourceObservationStatus,
     ApplicabilityResourceStampInput, BranchForkOptions, BranchForkResult, BranchHead, BranchId,
     BranchProjectionRefreshOptions, BranchProjectionRefreshResult, BranchProjectionSnapshot,
-    BundleExportManifest, BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
-    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
-    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
-    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
-    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue,
-    ChangeOperationListResult, ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason,
-    ClaimGuardResult, ClaimId, ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode,
-    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
-    ClaimTaskOptions, ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview,
-    ContextOverviewOptions, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest,
-    Engine, EntityId, EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId,
-    EventListOptions, EventListResult, EventSnapshot, EvidenceContentInput,
-    EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceId,
-    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId,
-    ExternalObjectId, ExternalObjectRefListOptions, ExternalObjectRefListResult,
-    ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
-    ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, GoalCreateCommit,
-    GoalCreateOptions, GoalSnapshot, GoalStatus, GoalTransitionCommit, GoalTransitionOptions,
-    HistoryEntry, HistoryQueryOptions, ImportId, IntegrityReport, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    BundleBranchHeadPreflightDetail, BundleExportManifest, BundleExportOptions,
+    BundleImportApplyOptions, BundleImportApplyResult, BundleImportAttemptListOptions,
+    BundleImportAttemptListResult, BundleImportAttemptOptions, BundleImportAttemptResult,
+    BundleImportAttemptSnapshot, BundleImportPreflightOptions, BundleImportPreflightResult,
+    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
+    BundlePayloadExportOptions, BundlePayloadInput, BundlePayloadValidationOptions,
+    BundlePayloadValidationResult, CanonicalValue, ChangeOperationListResult,
+    ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot, CheckpointCreateOptions,
+    CheckpointCreateResult, CheckpointId, CheckpointLatestOptions, CheckpointLatestResult,
+    CheckpointListOptions, CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
+    ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason, ClaimGuardResult, ClaimId,
+    ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions,
+    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
+    ClaimTaskResult, CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine, EntityId,
+    EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId, EventListOptions,
+    EventListResult, EventSnapshot, EvidenceContentInput, EvidenceContentSnapshot,
+    EvidenceCreateOptions, EvidenceCreateResult, EvidenceId, EvidenceListOptions,
+    EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
+    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
+    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
+    ExternalRefId, ExternalVersionId, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
+    GoalStatus, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry, HistoryQueryOptions,
+    ImportId, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
     KnowledgeExposureDerivedFromRelationCreateCommit,
@@ -1545,6 +1546,21 @@ enum BundleCommand {
 
         #[arg(long)]
         expected_branch_heads_diverged: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_head_detail_count: Option<usize>,
+
+        #[arg(long)]
+        expected_first_branch_head_status: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_source_head: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_target_head: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_merge_base: Option<String>,
     },
     ApplyDir {
         #[arg(value_name = "STORE")]
@@ -1573,6 +1589,21 @@ enum BundleCommand {
 
         #[arg(long)]
         expected_updated_branch_heads: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_head_detail_count: Option<usize>,
+
+        #[arg(long)]
+        expected_first_branch_head_status: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_source_head: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_target_head: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_merge_base: Option<String>,
     },
     ImportDir {
         #[arg(value_name = "STORE")]
@@ -1607,6 +1638,21 @@ enum BundleCommand {
 
         #[arg(long)]
         expected_branch_heads_diverged: Option<usize>,
+
+        #[arg(long)]
+        expected_branch_head_detail_count: Option<usize>,
+
+        #[arg(long)]
+        expected_first_branch_head_status: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_source_head: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_target_head: Option<String>,
+
+        #[arg(long)]
+        expected_first_branch_head_merge_base: Option<String>,
     },
     ImportShow {
         #[arg(value_name = "STORE")]
@@ -6051,6 +6097,11 @@ fn run(cli: Cli) -> Result<String> {
                 expected_branch_heads_missing,
                 expected_branch_heads_fast_forward,
                 expected_branch_heads_diverged,
+                expected_branch_head_detail_count,
+                expected_first_branch_head_status,
+                expected_first_branch_head_source_head,
+                expected_first_branch_head_target_head,
+                expected_first_branch_head_merge_base,
             } => {
                 let engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
@@ -6130,6 +6181,15 @@ fn run(cli: Cli) -> Result<String> {
                     expected_branch_heads_diverged,
                     "branch_heads_diverged_match_expected",
                 )?;
+                append_branch_head_detail_expectations(
+                    &mut output,
+                    &preflight,
+                    expected_branch_head_detail_count,
+                    expected_first_branch_head_status,
+                    expected_first_branch_head_source_head,
+                    expected_first_branch_head_target_head,
+                    expected_first_branch_head_merge_base,
+                )?;
                 Ok(output)
             }
             BundleCommand::ApplyDir {
@@ -6142,6 +6202,11 @@ fn run(cli: Cli) -> Result<String> {
                 expected_imported_checkpoints,
                 expected_imported_checkpoint_statuses,
                 expected_updated_branch_heads,
+                expected_branch_head_detail_count,
+                expected_first_branch_head_status,
+                expected_first_branch_head_source_head,
+                expected_first_branch_head_target_head,
+                expected_first_branch_head_merge_base,
             } => {
                 let mut engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
@@ -6206,6 +6271,15 @@ fn run(cli: Cli) -> Result<String> {
                     expected_updated_branch_heads,
                     "updated_branch_heads_match_expected",
                 )?;
+                append_branch_head_detail_expectations(
+                    &mut output,
+                    &result.preflight,
+                    expected_branch_head_detail_count,
+                    expected_first_branch_head_status,
+                    expected_first_branch_head_source_head,
+                    expected_first_branch_head_target_head,
+                    expected_first_branch_head_merge_base,
+                )?;
                 Ok(output)
             }
             BundleCommand::ImportDir {
@@ -6220,6 +6294,11 @@ fn run(cli: Cli) -> Result<String> {
                 expected_branch_heads_missing,
                 expected_branch_heads_fast_forward,
                 expected_branch_heads_diverged,
+                expected_branch_head_detail_count,
+                expected_first_branch_head_status,
+                expected_first_branch_head_source_head,
+                expected_first_branch_head_target_head,
+                expected_first_branch_head_merge_base,
             } => {
                 let mut engine = Engine::open(store)?;
                 let manifest_bytes = read_bundle_file(&input_dir.join("manifest.json"))?;
@@ -6302,6 +6381,15 @@ fn run(cli: Cli) -> Result<String> {
                     result.preflight.branch_heads_diverged,
                     expected_branch_heads_diverged,
                     "branch_heads_diverged_match_expected",
+                )?;
+                append_branch_head_detail_expectations(
+                    &mut output,
+                    &result.preflight,
+                    expected_branch_head_detail_count,
+                    expected_first_branch_head_status,
+                    expected_first_branch_head_source_head,
+                    expected_first_branch_head_target_head,
+                    expected_first_branch_head_merge_base,
                 )?;
                 Ok(output)
             }
@@ -16527,8 +16615,115 @@ fn append_expected_optional_session_id_match(
     Ok(())
 }
 
+fn append_branch_head_detail_expectations(
+    output: &mut String,
+    preflight: &BundleImportPreflightResult,
+    expected_detail_count: Option<usize>,
+    expected_first_status: Option<String>,
+    expected_first_source_head: Option<String>,
+    expected_first_target_head: Option<String>,
+    expected_first_merge_base: Option<String>,
+) -> Result<()> {
+    append_expected_count_match(
+        output,
+        "bundle branch head detail count",
+        preflight.branch_head_details.len(),
+        expected_detail_count,
+        "branch_head_detail_count_match_expected",
+    )?;
+    let first = preflight.branch_head_details.first();
+    append_expected_text_match(
+        output,
+        "bundle first branch head detail status",
+        &first
+            .map(|detail| detail.status.clone())
+            .unwrap_or_else(|| "none".to_owned()),
+        expected_first_status.as_deref(),
+        "first_branch_head_status_match_expected",
+    )?;
+    append_expected_text_match(
+        output,
+        "bundle first branch head detail source head",
+        &first
+            .map(|detail| detail.source_head_commit_id.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        expected_first_source_head.as_deref(),
+        "first_branch_head_source_head_match_expected",
+    )?;
+    append_expected_text_match(
+        output,
+        "bundle first branch head detail target head",
+        &first
+            .and_then(|detail| detail.target_head_commit_id)
+            .map(|commit_id| commit_id.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        expected_first_target_head.as_deref(),
+        "first_branch_head_target_head_match_expected",
+    )?;
+    append_expected_text_match(
+        output,
+        "bundle first branch head detail merge base",
+        &first
+            .and_then(|detail| detail.merge_base_commit_id)
+            .map(|commit_id| commit_id.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        expected_first_merge_base.as_deref(),
+        "first_branch_head_merge_base_match_expected",
+    )
+}
+
+fn write_branch_head_preflight_details(
+    output: &mut String,
+    details: &[BundleBranchHeadPreflightDetail],
+) {
+    writeln!(output, "branch_head_detail_count={}", details.len()).expect("write to String");
+    for (index, detail) in details.iter().enumerate() {
+        let prefix = format!("branch_head_detail.{index}");
+        writeln!(output, "{prefix}.workspace_id={}", detail.workspace_id).expect("write to String");
+        writeln!(output, "{prefix}.branch_id={}", detail.branch_id).expect("write to String");
+        writeln!(output, "{prefix}.branch_name={}", detail.branch_name).expect("write to String");
+        writeln!(
+            output,
+            "{prefix}.source_head_commit_id={}",
+            detail.source_head_commit_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "{prefix}.source_head_state_digest={}",
+            detail.source_head_state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "{prefix}.target_workspace_id={}",
+            render_optional_display_or_none(detail.target_workspace_id.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "{prefix}.target_head_commit_id={}",
+            render_optional_display_or_none(detail.target_head_commit_id.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "{prefix}.target_head_state_digest={}",
+            render_optional_display_or_none(detail.target_head_state_digest.as_ref())
+        )
+        .expect("write to String");
+        writeln!(output, "{prefix}.status={}", detail.status).expect("write to String");
+        writeln!(
+            output,
+            "{prefix}.merge_base_commit_id={}",
+            render_optional_display_or_none(detail.merge_base_commit_id.as_ref())
+        )
+        .expect("write to String");
+    }
+}
+
 fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> String {
-    format!(
+    let mut output = format!(
         "valid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\naction={}\nmanifest_digest={}\npayload_index_digest={}\npayload_files={}\npayload_references={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nproblem={}\n",
         result.valid,
         result.format_compatible,
@@ -16563,11 +16758,13 @@ fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> Strin
         result.branch_heads_fast_forward,
         result.branch_heads_diverged,
         result.problem.as_deref().unwrap_or("none")
-    )
+    );
+    write_branch_head_preflight_details(&mut output, &result.branch_head_details);
+    output
 }
 
 fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
-    format!(
+    let mut output = format!(
         "recorded={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nproblem={}\n",
         result.recorded,
         render_optional_display_or_none(result.import_id.as_ref()),
@@ -16592,11 +16789,13 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
         result.preflight.branch_heads_fast_forward,
         result.preflight.branch_heads_diverged,
         result.preflight.problem.as_deref().unwrap_or("none")
-    )
+    );
+    write_branch_head_preflight_details(&mut output, &result.preflight.branch_head_details);
+    output
 }
 
 fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
-    format!(
+    let mut output = format!(
         "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nimported_content_objects={}\nimported_sessions={}\nimported_session_diffs={}\nimported_evidences={}\nimported_resources={}\nimported_resource_observations={}\nimported_verification_bases={}\nimported_events={}\nimported_knowledge_spaces={}\nimported_knowledge_exposures={}\nimported_knowledge_exposure_local_sources={}\nimported_knowledge_exposure_transitions={}\nimported_knowledge_exposure_source_statuses={}\nimported_relation_versions={}\nimported_changeset_causal_anchors={}\nimported_checkpoints={}\nimported_checkpoint_statuses={}\nupdated_branch_heads={}\nproblem={}\n",
         result.applied,
         render_optional_display_or_none(result.import_id.as_ref()),
@@ -16643,7 +16842,9 @@ fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
         result.imported_checkpoint_statuses,
         result.updated_branch_heads,
         result.preflight.problem.as_deref().unwrap_or("none")
-    )
+    );
+    write_branch_head_preflight_details(&mut output, &result.preflight.branch_head_details);
+    output
 }
 
 fn render_bundle_import_attempt_snapshot(snapshot: &BundleImportAttemptSnapshot) -> String {
@@ -25538,6 +25739,16 @@ mod tests {
             "0",
             "--expected-branch-heads-diverged",
             "1",
+            "--expected-branch-head-detail-count",
+            "1",
+            "--expected-first-branch-head-status",
+            "diverged",
+            "--expected-first-branch-head-source-head",
+            &source_second_commit,
+            "--expected-first-branch-head-target-head",
+            &target_diverged_commit,
+            "--expected-first-branch-head-merge-base",
+            &first_commit,
         ])
         .expect("parse divergent bundle preflight-dir"))
         .expect("preflight divergent bundle directory");
@@ -25552,8 +25763,42 @@ mod tests {
             "same_store_divergence_detected"
         );
         assert_eq!(value(&preflight, "branch_heads_diverged"), "1");
+        assert_eq!(value(&preflight, "branch_head_detail_count"), "1");
+        assert_eq!(value(&preflight, "branch_head_detail.0.status"), "diverged");
+        assert_eq!(
+            value(&preflight, "branch_head_detail.0.source_head_commit_id"),
+            source_second_commit
+        );
+        assert_eq!(
+            value(&preflight, "branch_head_detail.0.target_head_commit_id"),
+            target_diverged_commit
+        );
+        assert_eq!(
+            value(&preflight, "branch_head_detail.0.merge_base_commit_id"),
+            first_commit
+        );
         assert_eq!(
             value(&preflight, "branch_heads_diverged_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "branch_head_detail_count_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "first_branch_head_status_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "first_branch_head_source_head_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "first_branch_head_target_head_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&preflight, "first_branch_head_merge_base_match_expected"),
             "true"
         );
         assert_eq!(value(&preflight, "problem"), "none");
@@ -25590,6 +25835,16 @@ mod tests {
             "0",
             "--expected-branch-heads-diverged",
             "1",
+            "--expected-branch-head-detail-count",
+            "1",
+            "--expected-first-branch-head-status",
+            "diverged",
+            "--expected-first-branch-head-source-head",
+            &source_second_commit,
+            "--expected-first-branch-head-target-head",
+            &target_diverged_commit,
+            "--expected-first-branch-head-merge-base",
+            &first_commit,
         ])
         .expect("parse divergent bundle import-dir"))
         .expect("record divergent bundle import attempt");
@@ -25602,6 +25857,54 @@ mod tests {
         assert_eq!(value(&import_attempt, "outcome_matches_expected"), "true");
         assert_eq!(
             value(&import_attempt, "branch_heads_diverged_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&import_attempt, "branch_head_detail_count"), "1");
+        assert_eq!(
+            value(&import_attempt, "branch_head_detail.0.status"),
+            "diverged"
+        );
+        assert_eq!(
+            value(
+                &import_attempt,
+                "branch_head_detail.0.source_head_commit_id"
+            ),
+            source_second_commit
+        );
+        assert_eq!(
+            value(
+                &import_attempt,
+                "branch_head_detail.0.target_head_commit_id"
+            ),
+            target_diverged_commit
+        );
+        assert_eq!(
+            value(&import_attempt, "branch_head_detail.0.merge_base_commit_id"),
+            first_commit
+        );
+        assert_eq!(
+            value(&import_attempt, "branch_head_detail_count_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &import_attempt,
+                "first_branch_head_source_head_match_expected"
+            ),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &import_attempt,
+                "first_branch_head_target_head_match_expected"
+            ),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &import_attempt,
+                "first_branch_head_merge_base_match_expected"
+            ),
             "true"
         );
 
@@ -25624,6 +25927,16 @@ mod tests {
             "0",
             "--expected-updated-branch-heads",
             "0",
+            "--expected-branch-head-detail-count",
+            "1",
+            "--expected-first-branch-head-status",
+            "diverged",
+            "--expected-first-branch-head-source-head",
+            &source_second_commit,
+            "--expected-first-branch-head-target-head",
+            &target_diverged_commit,
+            "--expected-first-branch-head-merge-base",
+            &first_commit,
         ])
         .expect("parse divergent bundle apply-dir"))
         .expect("report non-applied divergent bundle");
@@ -25645,6 +25958,40 @@ mod tests {
             "true"
         );
         assert_eq!(value(&apply, "updated_branch_heads_match_expected"), "true");
+        assert_eq!(value(&apply, "branch_head_detail_count"), "1");
+        assert_eq!(value(&apply, "branch_head_detail.0.status"), "diverged");
+        assert_eq!(
+            value(&apply, "branch_head_detail.0.source_head_commit_id"),
+            source_second_commit
+        );
+        assert_eq!(
+            value(&apply, "branch_head_detail.0.target_head_commit_id"),
+            target_diverged_commit
+        );
+        assert_eq!(
+            value(&apply, "branch_head_detail.0.merge_base_commit_id"),
+            first_commit
+        );
+        assert_eq!(
+            value(&apply, "branch_head_detail_count_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&apply, "first_branch_head_status_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&apply, "first_branch_head_source_head_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&apply, "first_branch_head_target_head_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&apply, "first_branch_head_merge_base_match_expected"),
+            "true"
+        );
 
         let required_apply = run(Cli::try_parse_from([
             "workvcs",

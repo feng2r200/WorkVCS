@@ -20,6 +20,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4LG Blocked Handoff Recovery Dogfood Evidence](provenance/phase-4lg-blocked-handoff-recovery-dogfood.md)
 - [Phase 4LH Handoff Focus Why Evidence](provenance/phase-4lh-handoff-focus-why.md)
 - [Phase 4LI Claim Next Context Packet Evidence](provenance/phase-4li-claim-next-context-packet.md)
+- [Phase 4LJ Context AC and VR Packet Evidence](provenance/phase-4lj-context-ac-vr-packet.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -116,6 +117,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0422: Phase 4LG Blocked Handoff Recovery Dogfood](decisions/adr/0422-phase-4lg-blocked-handoff-recovery-dogfood.md)
 - [ADR-0423: Phase 4LH Handoff Focus Why](decisions/adr/0423-phase-4lh-handoff-focus-why.md)
 - [ADR-0424: Phase 4LI Claim Next Context Packet](decisions/adr/0424-phase-4li-claim-next-context-packet.md)
+- [ADR-0425: Phase 4LJ Context AC and VR Packet Items](decisions/adr/0425-phase-4lj-context-ac-vr-packet.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

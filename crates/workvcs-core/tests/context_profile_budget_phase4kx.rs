@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    ContextItemCategory, ContextPacketOptions, ContextPriority, ContextProfile, Engine, ErrorCode,
+    AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, ContextItemCategory,
+    ContextPacketOptions, ContextPriority, ContextProfile, Engine, ErrorCode,
     KnowledgeCreateOptions, RecordCreateOptions, RecordTransitionOptions, SessionId,
     SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
-    WorkspaceInfo, WorkspaceInitOptions,
+    VerificationRequirementCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -289,6 +290,128 @@ fn context_packet_budget_omits_whole_low_priority_items() {
             .iter()
             .any(
                 |bucket| bucket.category == ContextItemCategory::OlderProvenance
+                    && bucket.omitted == 1
+            )
+    );
+}
+
+#[test]
+fn context_packet_includes_current_task_verification_obligations() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Verify packet obligations")
+                .expect("task options"),
+        )
+        .expect("create task");
+    head = task.commit_id;
+    let criterion = engine
+        .create_acceptance_criterion(
+            AcceptanceCriterionCreateOptions::new(
+                branch_id,
+                head,
+                task.task_entity_id,
+                task.task_entity_version_id,
+                "ac-context",
+                "Packet tells the agent what must be verified.",
+                AcceptanceCriterionClassification::Required,
+            )
+            .expect("acceptance criterion options"),
+        )
+        .expect("create acceptance criterion");
+    head = criterion.commit_id;
+    let requirement = engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                branch_id,
+                head,
+                criterion.acceptance_criterion_entity_id,
+                criterion.acceptance_criterion_entity_version_id,
+                "vr-wrapper",
+                "Run the verify wrapper with captured evidence.",
+            )
+            .expect("verification requirement options"),
+        )
+        .expect("create verification requirement");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let packet = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id)
+                .with_profile(ContextProfile::Brief)
+                .with_budget_items(5)
+                .expect("budgeted context options"),
+        )
+        .expect("budgeted context packet");
+
+    assert_eq!(packet.envelope.head_commit_id, requirement.commit_id);
+    assert_eq!(packet.available_items, 6);
+    assert_eq!(packet.items.len(), 5);
+    assert_eq!(packet.items[0].category, ContextItemCategory::SessionAnchor);
+    assert_eq!(
+        packet.items[1].category,
+        ContextItemCategory::BranchOverview
+    );
+    assert_eq!(packet.items[2].category, ContextItemCategory::CurrentTask);
+    assert_eq!(
+        packet.items[3].category,
+        ContextItemCategory::AcceptanceCriterion
+    );
+    assert_eq!(
+        packet.items[3].subject.as_ref_string(),
+        format!(
+            "acceptance_criterion:{}",
+            criterion.acceptance_criterion_entity_id
+        )
+    );
+    assert!(packet.items[3].summary.contains("local_key=ac-context"));
+    assert!(packet.items[3].summary.contains("classification=required"));
+    assert!(packet.items[3].summary.contains("status=unverified"));
+    assert!(packet.items[3].summary.contains("requirements=1"));
+    assert!(
+        packet.items[3]
+            .summary
+            .contains("Packet tells the agent what must be verified.")
+    );
+    assert_eq!(
+        packet.items[4].category,
+        ContextItemCategory::VerificationRequirement
+    );
+    assert_eq!(
+        packet.items[4].subject.as_ref_string(),
+        format!(
+            "verification_requirement:{}",
+            requirement.verification_requirement_entity_id
+        )
+    );
+    assert!(packet.items[4].summary.contains(&format!(
+        "criterion={}",
+        criterion.acceptance_criterion_entity_id
+    )));
+    assert!(packet.items[4].summary.contains("local_key=vr-wrapper"));
+    assert!(
+        packet.items[4]
+            .summary
+            .contains("Run the verify wrapper with captured evidence.")
+    );
+    assert_eq!(packet.omission_summary.total, 1);
+    assert!(
+        packet
+            .omission_summary
+            .by_category
+            .iter()
+            .any(
+                |bucket| bucket.category == ContextItemCategory::TaskReadiness
                     && bucket.omitted == 1
             )
     );

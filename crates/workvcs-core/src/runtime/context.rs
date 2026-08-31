@@ -2,11 +2,13 @@ use super::runnable::{self, RunnableTasksOptions, RunnableTasksProjection};
 use super::session::{self, SessionLifecycleState, SessionSnapshot};
 use crate::error::{Result, WorkVcsError};
 use crate::history::{
-    self, BranchHead, KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
+    self, AcceptanceCriterionEffectiveStatus, AcceptanceCriterionSnapshot, BranchHead,
+    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeStatus, RecordKind, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordListOptions, RecordListResult,
-    RecordRelationListOptions, RecordRelationListResult, RecordStatus, WhyQueryOptions,
-    WhyQueryTarget, WhyRelationEdge, WhyRelationKind,
+    RecordRelationListOptions, RecordRelationListResult, RecordStatus,
+    VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget, WhyRelationEdge,
+    WhyRelationKind,
 };
 use crate::identity::{BranchId, CommitId, Digest, EntityId, RelationId, SessionId, WorkspaceId};
 use crate::store::StoreConnection;
@@ -138,6 +140,8 @@ pub enum ContextItemCategory {
     SessionAnchor,
     BranchOverview,
     CurrentTask,
+    AcceptanceCriterion,
+    VerificationRequirement,
     TaskReadiness,
     DirectCausalChain,
     ActiveDecision,
@@ -157,6 +161,8 @@ impl ContextItemCategory {
             Self::SessionAnchor => "session_anchor",
             Self::BranchOverview => "branch_overview",
             Self::CurrentTask => "current_task",
+            Self::AcceptanceCriterion => "acceptance_criterion",
+            Self::VerificationRequirement => "verification_requirement",
             Self::TaskReadiness => "task_readiness",
             Self::DirectCausalChain => "direct_causal_chain",
             Self::ActiveDecision => "active_decision",
@@ -187,6 +193,12 @@ pub enum ContextItemSubject {
     Task {
         task_entity_id: EntityId,
     },
+    AcceptanceCriterion {
+        acceptance_criterion_entity_id: EntityId,
+    },
+    VerificationRequirement {
+        verification_requirement_entity_id: EntityId,
+    },
     TaskReadiness {
         task_entity_id: EntityId,
     },
@@ -211,6 +223,12 @@ impl ContextItemSubject {
             } => format!("branch:{branch_id}@{commit_id}"),
             Self::Workspace { workspace_id } => format!("workspace:{workspace_id}"),
             Self::Task { task_entity_id } => format!("task:{task_entity_id}"),
+            Self::AcceptanceCriterion {
+                acceptance_criterion_entity_id,
+            } => format!("acceptance_criterion:{acceptance_criterion_entity_id}"),
+            Self::VerificationRequirement {
+                verification_requirement_entity_id,
+            } => format!("verification_requirement:{verification_requirement_entity_id}"),
             Self::TaskReadiness { task_entity_id } => {
                 format!("task_readiness:{task_entity_id}")
             }
@@ -323,12 +341,20 @@ pub struct ContextOverview {
     pub session: SessionSnapshot,
     pub branch: BranchHead,
     pub runnable_tasks: RunnableTasksProjection,
+    pub acceptance_criteria: Vec<ContextAcceptanceCriterionSnapshot>,
+    pub verification_requirements: Vec<VerificationRequirementSnapshot>,
     pub knowledge: KnowledgeListResult,
     pub knowledge_relations: KnowledgeRelationListResult,
     pub knowledge_exposure_relations: Vec<WhyRelationEdge>,
     pub records: RecordListResult,
     pub record_relations: RecordRelationListResult,
     pub record_knowledge_relations: RecordKnowledgeRelationListResult,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContextAcceptanceCriterionSnapshot {
+    pub snapshot: AcceptanceCriterionSnapshot,
+    pub effective_status: AcceptanceCriterionEffectiveStatus,
 }
 
 pub(crate) fn context_overview(
@@ -364,6 +390,23 @@ pub(crate) fn context_overview(
     {
         return Err(WorkVcsError::SessionInvalid(format!(
             "session {} context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
+    let acceptance_criteria = context_acceptance_criteria(
+        connection,
+        branch.head_commit_id,
+        active_workspace_id,
+        active_branch_id,
+    )?;
+    let verification_requirements =
+        history::verification_requirements_at(connection, branch.head_commit_id)?;
+    if verification_requirements.iter().any(|requirement| {
+        requirement.workspace_id != active_workspace_id
+            || requirement.commit_id != branch.head_commit_id
+    }) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} verification requirement context anchor changed while resolving overview",
             options.session_id()
         )));
     }
@@ -428,6 +471,8 @@ pub(crate) fn context_overview(
         session,
         branch,
         runnable_tasks,
+        acceptance_criteria,
+        verification_requirements,
         knowledge,
         knowledge_relations,
         knowledge_exposure_relations,
@@ -445,7 +490,7 @@ pub(crate) fn context_packet(
         connection,
         &ContextOverviewOptions::new(options.session_id()),
     )?;
-    let mut items = collect_context_items(&overview, options.profile());
+    let mut items = collect_context_items(&overview, options.profile())?;
     items.sort_by_key(|item| item.priority);
     let available_items = items.len();
     let limit = options
@@ -469,9 +514,51 @@ pub(crate) fn context_packet(
     })
 }
 
-fn collect_context_items(context: &ContextOverview, profile: ContextProfile) -> Vec<ContextItem> {
+fn context_acceptance_criteria(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+) -> Result<Vec<ContextAcceptanceCriterionSnapshot>> {
+    let criteria = history::acceptance_criteria_at(connection, commit_id)?;
+    criteria
+        .into_iter()
+        .map(|criterion| {
+            if criterion.workspace_id != workspace_id || criterion.commit_id != commit_id {
+                return Err(WorkVcsError::SessionInvalid(format!(
+                    "acceptance criterion {} does not belong to context commit {}",
+                    criterion.acceptance_criterion_entity_id, commit_id
+                )));
+            }
+            let effective_status = history::acceptance_criterion_effective_status_for_branch(
+                connection,
+                branch_id,
+                criterion.acceptance_criterion_entity_id,
+            )?;
+            Ok(ContextAcceptanceCriterionSnapshot {
+                snapshot: criterion,
+                effective_status,
+            })
+        })
+        .collect()
+}
+
+fn collect_context_items(
+    context: &ContextOverview,
+    profile: ContextProfile,
+) -> Result<Vec<ContextItem>> {
     let mut items = Vec::new();
     let session = &context.session;
+    let criteria_by_id = context
+        .acceptance_criteria
+        .iter()
+        .map(|criterion| (criterion.snapshot.acceptance_criterion_entity_id, criterion))
+        .collect::<BTreeMap<_, _>>();
+    let requirements_by_id = context
+        .verification_requirements
+        .iter()
+        .map(|requirement| (requirement.verification_requirement_entity_id, requirement))
+        .collect::<BTreeMap<_, _>>();
     push_context_item(
         &mut items,
         profile,
@@ -528,6 +615,81 @@ fn collect_context_items(context: &ContextOverview, profile: ContextProfile) -> 
                 candidate.task.state.description
             ),
         );
+        for criterion_ref in &candidate.task.state.acceptance_criteria {
+            let criterion = criteria_by_id
+                .get(&criterion_ref.acceptance_criterion_entity_id)
+                .ok_or_else(|| {
+                    WorkVcsError::TaskInvalid(format!(
+                        "task {} references missing acceptance criterion {}",
+                        candidate.task.task_entity_id, criterion_ref.acceptance_criterion_entity_id
+                    ))
+                })?;
+            if criterion.snapshot.task_entity_id != candidate.task.task_entity_id
+                || criterion.snapshot.local_key != criterion_ref.local_key
+            {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "task {} acceptance criterion reference {} does not match stored identity",
+                    candidate.task.task_entity_id, criterion_ref.local_key
+                )));
+            }
+            push_context_item(
+                &mut items,
+                profile,
+                ContextPriority::P1,
+                ContextItemCategory::AcceptanceCriterion,
+                ContextItemSubject::AcceptanceCriterion {
+                    acceptance_criterion_entity_id: criterion
+                        .snapshot
+                        .acceptance_criterion_entity_id,
+                },
+                format!(
+                    "acceptance criterion task={} local_key={} classification={} status={} requirements={}: {}",
+                    criterion.snapshot.task_entity_id,
+                    criterion.snapshot.local_key,
+                    criterion.snapshot.state.classification,
+                    criterion.effective_status,
+                    criterion.snapshot.state.verification_requirements.len(),
+                    criterion.snapshot.state.statement
+                ),
+            );
+            for requirement_ref in &criterion.snapshot.state.verification_requirements {
+                let requirement = requirements_by_id
+                    .get(&requirement_ref.verification_requirement_entity_id)
+                    .ok_or_else(|| {
+                        WorkVcsError::TaskInvalid(format!(
+                            "acceptance criterion {} references missing verification requirement {}",
+                            criterion.snapshot.acceptance_criterion_entity_id,
+                            requirement_ref.verification_requirement_entity_id
+                        ))
+                    })?;
+                if requirement.acceptance_criterion_entity_id
+                    != criterion.snapshot.acceptance_criterion_entity_id
+                    || requirement.local_key != requirement_ref.local_key
+                {
+                    return Err(WorkVcsError::TaskInvalid(format!(
+                        "acceptance criterion {} verification requirement reference {} does not match stored identity",
+                        criterion.snapshot.acceptance_criterion_entity_id,
+                        requirement_ref.local_key
+                    )));
+                }
+                push_context_item(
+                    &mut items,
+                    profile,
+                    ContextPriority::P1,
+                    ContextItemCategory::VerificationRequirement,
+                    ContextItemSubject::VerificationRequirement {
+                        verification_requirement_entity_id: requirement
+                            .verification_requirement_entity_id,
+                    },
+                    format!(
+                        "verification requirement criterion={} local_key={}: {}",
+                        requirement.acceptance_criterion_entity_id,
+                        requirement.local_key,
+                        requirement.state.statement
+                    ),
+                );
+            }
+        }
         push_context_item(
             &mut items,
             profile,
@@ -657,7 +819,7 @@ fn collect_context_items(context: &ContextOverview, profile: ContextProfile) -> 
             format!("session context workspace {workspace_id}"),
         );
     }
-    items
+    Ok(items)
 }
 
 fn push_context_item(
@@ -680,6 +842,8 @@ fn profile_allows_category(profile: ContextProfile, category: ContextItemCategor
             ContextItemCategory::SessionAnchor
                 | ContextItemCategory::BranchOverview
                 | ContextItemCategory::CurrentTask
+                | ContextItemCategory::AcceptanceCriterion
+                | ContextItemCategory::VerificationRequirement
                 | ContextItemCategory::TaskReadiness
                 | ContextItemCategory::ActiveDecision
                 | ContextItemCategory::ActiveAssumption

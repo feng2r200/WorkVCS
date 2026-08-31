@@ -247,9 +247,9 @@ explicit path or returns candidate paths; it never guesses.
 Profiles define eligible categories:
 
 - `brief`: Goal/Plan path, Task, Acceptance Criteria, blocker, dependency,
-  active Decision, and critical previous failure;
-- `normal`: `brief` plus Finding, Assumption, Attempt, Knowledge, and relevant
-  Session/Handoff;
+  active Decision, and critical previous failed Attempt detail;
+- `normal`: `brief` plus Finding, Assumption, Attempt detail, Knowledge, and
+  relevant Session/Handoff;
 - `full`: `normal` plus deeper causal ancestry, inactive related cognition,
   and more provenance.
 
@@ -262,7 +262,7 @@ P1 current Goal / Plan path
 P2 dependencies / readiness
 P3 direct causal chain
 P4 active Decisions / Assumptions
-P5 failed Attempts
+P5 failed Attempt detail
 P6 Findings
 P7 scoped Knowledge
 P8 relevant Handoff

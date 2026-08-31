@@ -4,9 +4,9 @@ use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, ContextItemCategory,
     ContextPacketOptions, ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions,
     KnowledgeCreateOptions, PlanCreateOptions, PrimaryContainmentCreateOptions,
-    RecordCreateOptions, RecordTransitionOptions, SessionId, SessionStartOptions, StoreInitOptions,
-    TaskCreateOptions, TaskSchedulingRelationCreateOptions, VerificationRequirementCreateOptions,
-    WorkspaceInfo, WorkspaceInitOptions,
+    RecordCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions, SessionId,
+    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
+    VerificationRequirementCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -205,6 +205,164 @@ fn context_packet_profiles_filter_categories_deterministically() {
     ));
     assert!(normal.items.len() > brief.items.len());
     assert!(full.items.len() > normal.items.len());
+}
+
+#[test]
+fn context_packet_summarizes_attempt_execution_detail() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let running = engine
+        .create_record(
+            RecordCreateOptions::attempt(branch_id, head, "Retry parser with bounded input")
+                .expect("running attempt options"),
+        )
+        .expect("create running attempt");
+    head = running.commit_id;
+
+    let succeeded_started = engine
+        .create_record(
+            RecordCreateOptions::attempt(
+                branch_id,
+                head,
+                "Prove normal profile attempt visibility",
+            )
+            .expect("succeeded attempt options"),
+        )
+        .expect("create succeeded attempt");
+    head = succeeded_started.commit_id;
+    let succeeded = engine
+        .transition_record(
+            RecordTransitionOptions::complete_attempt_succeeded(
+                branch_id,
+                head,
+                succeeded_started.record_entity_id,
+                succeeded_started.record_entity_version_id,
+                "Normal profile can keep completed Attempt detail",
+            )
+            .expect("succeeded transition options"),
+        )
+        .expect("succeed attempt");
+    head = succeeded.commit_id;
+
+    let failed_started = engine
+        .create_record(
+            RecordCreateOptions::attempt(branch_id, head, "Capture failed attempt for packet")
+                .expect("failed attempt options"),
+        )
+        .expect("create failed attempt");
+    head = failed_started.commit_id;
+    let failed = engine
+        .transition_record(
+            RecordTransitionOptions::complete_attempt_failed(
+                branch_id,
+                head,
+                failed_started.record_entity_id,
+                failed_started.record_entity_version_id,
+                "Failed attempt should be brief critical context",
+            )
+            .expect("failed transition options"),
+        )
+        .expect("fail attempt");
+    head = failed.commit_id;
+
+    let inconclusive_started = engine
+        .create_record(
+            RecordCreateOptions::attempt(branch_id, head, "Check outcome when source is partial")
+                .expect("inconclusive attempt options"),
+        )
+        .expect("create inconclusive attempt");
+    head = inconclusive_started.commit_id;
+    let inconclusive = engine
+        .transition_record(
+            RecordTransitionOptions::complete_attempt_inconclusive(
+                branch_id,
+                head,
+                inconclusive_started.record_entity_id,
+                inconclusive_started.record_entity_version_id,
+                "Source evidence did not settle the result",
+            )
+            .expect("inconclusive transition options"),
+        )
+        .expect("mark attempt inconclusive");
+    head = inconclusive.commit_id;
+
+    let relation = engine
+        .create_record_relation(
+            RecordRelationCreateOptions::related_to(
+                branch_id,
+                head,
+                failed.record_entity_id,
+                running.record_entity_id,
+                "retry-context",
+                "Failed attempt explains the still-running retry",
+            )
+            .expect("related attempt relation options"),
+        )
+        .expect("link failed attempt to retry");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let brief = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+        )
+        .expect("brief context packet");
+    let normal = engine
+        .context_packet(ContextPacketOptions::new(session.session_id))
+        .expect("normal context packet");
+
+    assert!(!contains_category(&brief, ContextItemCategory::Attempt));
+    let failed_summary = brief
+        .items
+        .iter()
+        .find(|item| item.category == ContextItemCategory::FailedAttempt)
+        .expect("brief failed attempt item")
+        .summary
+        .as_str();
+    assert!(failed_summary.contains("attempt detail status=failed terminal=true"));
+    assert!(failed_summary.contains(&format!("record={}", failed.record_entity_id)));
+    assert!(failed_summary.contains(&format!("version={}", failed.record_entity_version_id)));
+    assert!(failed_summary.contains(&format!("state_digest={}", failed.record_state_digest)));
+    assert!(failed_summary.contains("scope_json={}"));
+    assert!(failed_summary.contains("record_relations_out=1"));
+    assert!(failed_summary.contains("record_relations_in=0"));
+    assert!(failed_summary.contains("record_relation_types=out:related_to=1"));
+    assert!(failed_summary.ends_with("statement=Capture failed attempt for packet"));
+
+    let attempt_summaries = normal
+        .items
+        .iter()
+        .filter(|item| item.category == ContextItemCategory::Attempt)
+        .map(|item| item.summary.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(attempt_summaries.len(), 3);
+    assert!(attempt_summaries.iter().any(|summary| {
+        summary.contains("attempt detail status=running terminal=false")
+            && summary.contains(&format!("record={}", running.record_entity_id))
+            && summary.contains("record_relations_in=1")
+            && summary.contains("record_relation_types=in:related_to=1")
+    }));
+    assert!(attempt_summaries.iter().any(|summary| {
+        summary.contains("attempt detail status=succeeded terminal=true")
+            && summary.contains(&format!("record={}", succeeded.record_entity_id))
+    }));
+    assert!(attempt_summaries.iter().any(|summary| {
+        summary.contains("attempt detail status=inconclusive terminal=true")
+            && summary.contains(&format!("record={}", inconclusive.record_entity_id))
+    }));
+
+    assert!(normal.items.iter().any(|item| {
+        item.category == ContextItemCategory::DirectCausalChain
+            && item.subject.as_ref_string() == format!("relation:{}", relation.relation_id)
+    }));
 }
 
 #[test]

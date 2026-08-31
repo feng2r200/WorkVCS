@@ -108,7 +108,11 @@ Criteria or Verification Requirements, brief packets include
 `acceptance_criterion` and `verification_requirement` context items whose
 subjects can be reused with `workvcs verify`. When a Task is blocked by an
 unsatisfied dependency, brief packets also include `blocked_dependency` items
-that name the blocking Task and summarize its current status.
+that name the blocking Task and summarize its current status. Failed Attempts
+appear as `failed_attempt` items in brief packets; normal packets also include
+running, succeeded, and inconclusive `attempt` items. Attempt summaries expose
+status, terminality, current Record version and digest, canonical scope, and
+nearby Record relation counts.
 
 Inspect continuation context:
 
@@ -350,8 +354,9 @@ intended state transition.
   has not yet been repeated on another real project.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
-- Context packets still need Attempt execution detail, path-sensitive Knowledge
-  policy, and persistence decisions.
+- Context packets still need path-sensitive Knowledge policy, persistence
+  decisions, and a decision on whether transition rationale becomes a projected
+  Record field.
 - `why` does not yet expose the Handoff focus link as a relation.
 - Automatic stale detection remains open.
 - Larger Store validation has not yet been run.

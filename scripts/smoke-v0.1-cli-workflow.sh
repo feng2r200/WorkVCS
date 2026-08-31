@@ -341,6 +341,46 @@ expect_failure_contains \
     --session "$session_id" \
     --budget-items 0
 
+step "context attempt detail packet"
+attempt_output="$(run_workvcs \
+    record attempt "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --statement "Smoke failed attempt for context detail")"
+attempt_id="$(value "$attempt_output" "record_entity_id")"
+attempt_version_id="$(value "$attempt_output" "record_entity_version_id")"
+head_commit_id="$(value "$attempt_output" "commit_id")"
+expect_value "$attempt_output" "record_kind" "attempt"
+expect_value "$attempt_output" "record_status" "running"
+
+attempt_status_output="$(run_workvcs \
+    record attempt-status "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --record "$attempt_id" \
+    --record-version "$attempt_version_id" \
+    --status failed \
+    --rationale "Smoke captures failed execution detail")"
+attempt_version_id="$(value "$attempt_status_output" "record_entity_version_id")"
+attempt_state_digest="$(value "$attempt_status_output" "record_state_digest")"
+head_commit_id="$(value "$attempt_status_output" "commit_id")"
+expect_value "$attempt_status_output" "previous_record_status" "running"
+expect_value "$attempt_status_output" "record_status" "failed"
+
+attempt_context_output="$(run_workvcs \
+    context "$store" \
+    --session "$session_id" \
+    --profile brief)"
+expect_contains "$attempt_context_output" "category=failed_attempt"
+expect_contains "$attempt_context_output" "attempt detail status=failed terminal=true"
+expect_contains "$attempt_context_output" "record=$attempt_id"
+expect_contains "$attempt_context_output" "version=$attempt_version_id"
+expect_contains "$attempt_context_output" "state_digest=$attempt_state_digest"
+expect_contains "$attempt_context_output" "record_relations_out=0"
+expect_contains "$attempt_context_output" "record_relations_in=0"
+expect_contains "$attempt_context_output" "record_relation_types=none"
+expect_contains "$attempt_context_output" "statement=Smoke failed attempt for context detail"
+
 step "evidence create and show"
 evidence_output="$(run_workvcs \
     evidence create "$store" \
@@ -504,9 +544,9 @@ step "history and show-at"
 history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 11)"
+    --expected-entries 13)"
 expect_value "$history_output" "start_commit_id" "$head_commit_id"
-expect_value "$history_output" "entries" "11"
+expect_value "$history_output" "entries" "13"
 expect_value "$history_output" "entries_match_expected" "true"
 expect_contains "$history_output" "operation=verification.record"
 
@@ -773,9 +813,9 @@ expect_value "$completed_runnable_output" "candidates_match_expected" "true"
 completion_history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 14)"
+    --expected-entries 16)"
 expect_value "$completion_history_output" "start_commit_id" "$head_commit_id"
-expect_value "$completion_history_output" "entries" "14"
+expect_value "$completion_history_output" "entries" "16"
 expect_value "$completion_history_output" "entries_match_expected" "true"
 expect_contains "$completion_history_output" "operation=entity.transition"
 
@@ -1190,9 +1230,9 @@ expect_value "$merge_closed_list_output" "merges_match_expected" "true"
 merge_history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 21)"
+    --expected-entries 23)"
 expect_value "$merge_history_output" "start_commit_id" "$result_commit_id"
-expect_value "$merge_history_output" "entries" "21"
+expect_value "$merge_history_output" "entries" "23"
 expect_value "$merge_history_output" "entries_match_expected" "true"
 expect_contains "$merge_history_output" "operation=merge.continue"
 
@@ -2034,19 +2074,19 @@ store_integrity_output="$(run_workvcs \
     store integrity "$store" \
     --require-valid \
     --expected-checked-branches 2 \
-    --expected-checked-commits 23 \
-    --expected-checked-changesets 23 \
-    --expected-checked-change-operations 31 \
+    --expected-checked-commits 25 \
+    --expected-checked-changesets 25 \
+    --expected-checked-change-operations 33 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 45 \
+    --expected-checked-events 47 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "2"
-expect_value "$store_integrity_output" "checked_commits" "23"
-expect_value "$store_integrity_output" "checked_changesets" "23"
-expect_value "$store_integrity_output" "checked_change_operations" "31"
+expect_value "$store_integrity_output" "checked_commits" "25"
+expect_value "$store_integrity_output" "checked_changesets" "25"
+expect_value "$store_integrity_output" "checked_change_operations" "33"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "45"
+expect_value "$store_integrity_output" "checked_events" "47"
 expect_value "$store_integrity_output" "checked_checkpoints" "1"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -2055,15 +2095,15 @@ doctor_output="$(run_workvcs \
     doctor "$store" \
     --require-valid \
     --expected-checked-branches 2 \
-    --expected-checked-commits 23 \
-    --expected-checked-changesets 23 \
-    --expected-checked-change-operations 31 \
+    --expected-checked-commits 25 \
+    --expected-checked-changesets 25 \
+    --expected-checked-change-operations 33 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 45 \
+    --expected-checked-events 47 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=2 checked_commits=23 checked_changesets=23 checked_change_operations=31 checked_changeset_causal_anchors=0 checked_events=45 checked_checkpoints=1 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=25 checked_changesets=25 checked_change_operations=33 checked_changeset_causal_anchors=0 checked_events=47 checked_checkpoints=1 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'

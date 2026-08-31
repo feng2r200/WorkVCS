@@ -23,6 +23,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4LJ Context AC and VR Packet Evidence](provenance/phase-4lj-context-ac-vr-packet.md)
 - [Phase 4LK Context Blocker Packet Evidence](provenance/phase-4lk-context-blocker-packet.md)
 - [Phase 4LL Context Goal/Plan Path Packet Evidence](provenance/phase-4ll-context-goal-plan-path-packet.md)
+- [Phase 4LM Context Attempt Detail Packet Evidence](provenance/phase-4lm-context-attempt-detail-packet.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -122,6 +123,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0425: Phase 4LJ Context AC and VR Packet Items](decisions/adr/0425-phase-4lj-context-ac-vr-packet.md)
 - [ADR-0426: Phase 4LK Context Blocker Packet Items](decisions/adr/0426-phase-4lk-context-blocker-packet.md)
 - [ADR-0427: Phase 4LL Context Goal/Plan Path Packet Items](decisions/adr/0427-phase-4ll-context-goal-plan-path-packet.md)
+- [ADR-0428: Phase 4LM Context Attempt Detail Packet Items](decisions/adr/0428-phase-4lm-context-attempt-detail-packet.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

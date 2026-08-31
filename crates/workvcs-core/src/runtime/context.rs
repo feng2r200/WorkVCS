@@ -1,5 +1,6 @@
 use super::runnable::{self, RunnableTasksOptions, RunnableTasksProjection};
 use super::session::{self, SessionLifecycleState, SessionSnapshot};
+use crate::canonical::canonical_bytes;
 use crate::error::{Result, WorkVcsError};
 use crate::history::{
     self, AcceptanceCriterionEffectiveStatus, AcceptanceCriterionSnapshot, BranchHead,
@@ -7,9 +8,9 @@ use crate::history::{
     KnowledgeRelationListResult, KnowledgeStatus, PlanSnapshot, PrimaryContainmentEndpointKind,
     PrimaryContainmentSnapshot, RecordKind, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordListOptions, RecordListResult,
-    RecordRelationListOptions, RecordRelationListResult, RecordStatus, TaskSnapshot,
-    VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget, WhyRelationEdge,
-    WhyRelationKind,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationSnapshot, RecordSnapshot,
+    RecordStatus, TaskSnapshot, VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget,
+    WhyRelationEdge, WhyRelationKind,
 };
 use crate::identity::{BranchId, CommitId, Digest, EntityId, RelationId, SessionId, WorkspaceId};
 use crate::store::StoreConnection;
@@ -907,10 +908,7 @@ fn collect_context_items(
             ContextItemSubject::Record {
                 record_entity_id: record.record_entity_id,
             },
-            format!(
-                "{} {}: {}",
-                record.state.kind, record.state.status, record.state.statement
-            ),
+            record_context_summary(record, &context.record_relations.relations)?,
         );
     }
     for knowledge in &context.knowledge.knowledge {
@@ -1092,6 +1090,81 @@ fn record_priority_and_category(
         (RecordKind::Handoff, _) => (ContextPriority::P8, ContextItemCategory::RelevantHandoff),
         _ => (ContextPriority::P9, ContextItemCategory::OlderProvenance),
     }
+}
+
+fn record_context_summary(
+    record: &RecordSnapshot,
+    record_relations: &[RecordRelationSnapshot],
+) -> Result<String> {
+    if record.state.kind != RecordKind::Attempt {
+        return Ok(format!(
+            "{} {}: {}",
+            record.state.kind, record.state.status, record.state.statement
+        ));
+    }
+
+    let scope_json = String::from_utf8(canonical_bytes(&record.state.scope)?).map_err(|error| {
+        WorkVcsError::RecordInvalid(format!("attempt scope encode produced non-UTF-8: {error}"))
+    })?;
+    let outgoing_record_relations = record_relations
+        .iter()
+        .filter(|relation| relation.source_record_entity_id == record.record_entity_id)
+        .count();
+    let incoming_record_relations = record_relations
+        .iter()
+        .filter(|relation| relation.target_record_entity_id == record.record_entity_id)
+        .count();
+    Ok(format!(
+        "attempt detail status={} terminal={} record={} version={} state_digest={} scope_json={} record_relations_out={} record_relations_in={} record_relation_types={} statement={}",
+        record.state.status,
+        is_terminal_attempt_status(record.state.status),
+        record.record_entity_id,
+        record.record_entity_version_id,
+        record.state_digest,
+        scope_json,
+        outgoing_record_relations,
+        incoming_record_relations,
+        record_relation_type_summary(record.record_entity_id, record_relations),
+        record.state.statement
+    ))
+}
+
+fn is_terminal_attempt_status(status: RecordStatus) -> bool {
+    matches!(
+        status,
+        RecordStatus::Succeeded | RecordStatus::Failed | RecordStatus::Inconclusive
+    )
+}
+
+fn record_relation_type_summary(
+    record_entity_id: EntityId,
+    relations: &[RecordRelationSnapshot],
+) -> String {
+    let mut buckets = BTreeMap::<String, usize>::new();
+    for relation in relations {
+        if relation.source_record_entity_id == record_entity_id {
+            *buckets
+                .entry(format!("out:{}", relation.relation_type))
+                .or_default() += 1;
+        }
+        if relation.target_record_entity_id == record_entity_id {
+            *buckets
+                .entry(format!("in:{}", relation.relation_type))
+                .or_default() += 1;
+        }
+    }
+    relation_bucket_summary(&buckets)
+}
+
+fn relation_bucket_summary(buckets: &BTreeMap<String, usize>) -> String {
+    if buckets.is_empty() {
+        return "none".to_owned();
+    }
+    buckets
+        .iter()
+        .map(|(bucket, count)| format!("{bucket}={count}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn claim_coordination_summary(claim: &runnable::RunnableTaskClaimCoordination) -> String {

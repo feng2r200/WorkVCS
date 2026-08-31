@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0427 / Phase 4LL
+Last refreshed: 2026-09-01 by ADR-0428 / Phase 4LM
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -38,7 +38,7 @@ not complete.
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Resource-backed stale-cache recovery from baseline observations is implemented; Resource path/glob normalization and adapter-backed re-observation remain Open. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. |
 | Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LG dogfoods the blocked Handoff takeover recovery path with guard failure, explicit stale marking, stale-gated forced takeover, and recovered guard success; Claim transfer remains smoke-proven but not yet real-project dogfooded. |
-| Context resolver | Yes | Partial | Yes | Partial | Phase 4LL adds brief Goal/Plan path packet items from current primary containment; complete remaining V1 categories: Attempt details, path-sensitive Knowledge policy, and packet persistence. |
+| Context resolver | Yes | Partial | Yes | Partial | Phase 4LM adds deterministic Attempt detail for status, terminality, current version/digest, scope, and Record relation counts; complete remaining V1 gaps: path-sensitive Knowledge policy, packet persistence, and transition-rationale projection decision. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics; next prove broader causal/evolution and real-project explanation paths. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover; repeat on another real project before claiming broad dogfood maturity. |
 | Merge lifecycle | Yes | Yes | Yes | No | Dogfood divergent Work Branch resolution and document recovery behavior for moved heads or unresolved items. |
@@ -52,8 +52,9 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Complete the remaining V1 Context Resolver categories when the verify,
-   handoff, and claim-next surfaces expose real packet content.
+1. Complete the remaining V1 Context Resolver gaps: path-sensitive Knowledge
+   policy, context packet persistence, and the transition-rationale projection
+   decision.
 2. Reduce manual key-value capture in the operator CLI only where the dogfood
    evidence shows repeated friction.
 3. Run larger Store validation before designing performance indexes.
@@ -128,4 +129,7 @@ The following remain beyond V1 even if they would make dogfood easier:
   adds brief blocked dependency items and dogfoods using the surfaced blocking
   Task id as the next claim target. Phase 4LL adds brief Goal/Plan path items
   and dogfoods a CLI Goal -> Plan -> Task containment path through `claim next`
-  packet output. WorkVCS has still not been used for another real project.
+  packet output. Phase 4LM adds deterministic Attempt detail for failed brief
+  items and normal/full Attempt items, and dogfoods running, succeeded, failed,
+  and inconclusive status visibility through real CLI `context` packet output.
+  WorkVCS has still not been used for another real project.

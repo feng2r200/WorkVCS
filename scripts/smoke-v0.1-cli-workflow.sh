@@ -1374,6 +1374,31 @@ expect_value "$bundle_divergence_import_output" "first_branch_head_target_head_m
 expect_value "$bundle_divergence_import_output" "first_branch_head_merge_base_match_expected" "true"
 expect_nonempty "$bundle_divergence_import_output" "import_id"
 
+bundle_divergence_import_show_output="$(run_workvcs \
+    bundle import-show "$bundle_divergence_target_store" \
+    --import "$bundle_divergence_import_id" \
+    --expected-bundle-digest "$bundle_divergence_digest" \
+    --expected-outcome same_store_divergence_detected \
+    --expected-branch-head-detail-count 1 \
+    --expected-first-branch-head-status diverged \
+    --expected-first-branch-head-source-head "$bundle_divergence_source_head_id" \
+    --expected-first-branch-head-target-head "$bundle_divergence_target_head_id" \
+    --expected-first-branch-head-merge-base "$bundle_divergence_first_commit_id")"
+expect_value "$bundle_divergence_import_show_output" "import_id" "$bundle_divergence_import_id"
+expect_value "$bundle_divergence_import_show_output" "outcome" "same_store_divergence_detected"
+expect_value "$bundle_divergence_import_show_output" "bundle_matches_expected" "true"
+expect_value "$bundle_divergence_import_show_output" "outcome_matches_expected" "true"
+expect_value "$bundle_divergence_import_show_output" "branch_head_detail_count" "1"
+expect_value "$bundle_divergence_import_show_output" "branch_head_detail.0.status" "diverged"
+expect_value "$bundle_divergence_import_show_output" "branch_head_detail.0.source_head_commit_id" "$bundle_divergence_source_head_id"
+expect_value "$bundle_divergence_import_show_output" "branch_head_detail.0.target_head_commit_id" "$bundle_divergence_target_head_id"
+expect_value "$bundle_divergence_import_show_output" "branch_head_detail.0.merge_base_commit_id" "$bundle_divergence_first_commit_id"
+expect_value "$bundle_divergence_import_show_output" "branch_head_detail_count_match_expected" "true"
+expect_value "$bundle_divergence_import_show_output" "first_branch_head_status_match_expected" "true"
+expect_value "$bundle_divergence_import_show_output" "first_branch_head_source_head_match_expected" "true"
+expect_value "$bundle_divergence_import_show_output" "first_branch_head_target_head_match_expected" "true"
+expect_value "$bundle_divergence_import_show_output" "first_branch_head_merge_base_match_expected" "true"
+
 bundle_divergence_apply_output="$(run_workvcs \
     bundle apply-dir "$bundle_divergence_target_store" \
     --input-dir "$bundle_divergence_dir" \

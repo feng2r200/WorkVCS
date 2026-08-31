@@ -563,6 +563,7 @@ pub struct BundleImportAttemptOutcomeSnapshot {
     pub outcome: String,
     pub completed_at_us: i64,
     pub detail: CanonicalValue,
+    pub branch_head_details: Vec<BundleBranchHeadPreflightDetail>,
     pub detail_digest: Digest,
     pub detail_size_bytes: i64,
 }
@@ -13063,6 +13064,27 @@ fn integer_field_value(
     }
 }
 
+fn optional_integer_field_value(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> std::result::Result<Option<i64>, String> {
+    let fields = match value {
+        CanonicalValue::Object(fields) => fields,
+        _ => return Err(format!("{label} must be an object")),
+    };
+    let Some(value) = fields
+        .iter()
+        .find_map(|(candidate, value)| (candidate == field).then_some(value))
+    else {
+        return Ok(None);
+    };
+    match value {
+        CanonicalValue::Integer(value) => Ok(Some(value.get())),
+        _ => Err(format!("{label} field {field} must be an integer")),
+    }
+}
+
 fn expect_string_field(
     value: &CanonicalValue,
     label: &str,
@@ -13331,6 +13353,22 @@ fn parse_optional_workspace_field(
     match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
         CanonicalValue::Null => Ok(None),
         CanonicalValue::String(value) => WorkspaceId::parse_canonical(value)
+            .map(Some)
+            .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} field {field} must be null or string"
+        ))),
+    }
+}
+
+fn parse_optional_commit_field(
+    value: &CanonicalValue,
+    label: &str,
+    field: &str,
+) -> Result<Option<CommitId>> {
+    match object_field_ref(value, label, field).map_err(WorkVcsError::QueryInvalid)? {
+        CanonicalValue::Null => Ok(None),
+        CanonicalValue::String(value) => CommitId::parse_canonical(value)
             .map(Some)
             .map_err(|error| WorkVcsError::QueryInvalid(error.to_string())),
         _ => Err(WorkVcsError::QueryInvalid(format!(
@@ -14047,16 +14085,106 @@ fn load_bundle_import_attempt_outcome(
     validate_stored_text("import_attempt_outcome.outcome", &outcome)?;
     validate_positive_i64("import_attempt_outcome.completed_at_us", completed_at_us)?;
     let detail = validate_canonical_json_value("import_attempt_outcome.detail_json", &detail_json)?;
+    let branch_head_details = parse_import_attempt_branch_head_details(&detail)?;
     Ok(Some(BundleImportAttemptOutcomeSnapshot {
         outcome,
         completed_at_us,
         detail,
+        branch_head_details,
         detail_digest: content_object_digest(detail_json.as_bytes()),
         detail_size_bytes: usize_to_i64(
             "import_attempt_outcome.detail_json size",
             detail_json.len(),
         )?,
     }))
+}
+
+fn parse_import_attempt_branch_head_details(
+    detail: &CanonicalValue,
+) -> Result<Vec<BundleBranchHeadPreflightDetail>> {
+    let values = optional_array_field_ref(
+        detail,
+        "import_attempt_outcome.detail_json",
+        "branch_head_details",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    let details = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| parse_import_attempt_branch_head_detail(value, index))
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(count) = optional_integer_field_value(
+        detail,
+        "import_attempt_outcome.detail_json",
+        "branch_head_detail_count",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?
+    {
+        if count < 0 {
+            return Err(WorkVcsError::QueryInvalid(
+                "import_attempt_outcome.detail_json field branch_head_detail_count cannot be negative"
+                    .to_owned(),
+            ));
+        }
+        let count = usize::try_from(count).map_err(|_| {
+            WorkVcsError::QueryInvalid(
+                "import_attempt_outcome.detail_json field branch_head_detail_count does not fit usize"
+                    .to_owned(),
+            )
+        })?;
+        if count != details.len() {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "import_attempt_outcome.detail_json field branch_head_detail_count expected {}, found {} branch_head_details entries",
+                count,
+                details.len()
+            )));
+        }
+    }
+    Ok(details)
+}
+
+fn parse_import_attempt_branch_head_detail(
+    value: &CanonicalValue,
+    index: usize,
+) -> Result<BundleBranchHeadPreflightDetail> {
+    let label = format!("import_attempt_outcome.detail_json branch_head_details[{index}]");
+    let branch_name = string_field_value(value, &label, "branch_name")
+        .map(str::to_owned)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_stored_text(&format!("{label}.branch_name"), &branch_name)?;
+    let status = string_field_value(value, &label, "status")
+        .map(str::to_owned)
+        .map_err(WorkVcsError::QueryInvalid)?;
+    validate_import_attempt_branch_head_status(&label, &status)?;
+    Ok(BundleBranchHeadPreflightDetail {
+        workspace_id: parse_workspace_id_field(value, &label, "workspace_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        branch_id: parse_branch_id_field(value, &label, "branch_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        branch_name,
+        source_head_commit_id: parse_commit_id_field(value, &label, "source_head_commit_id")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        source_head_state_digest: parse_digest_field(value, &label, "source_head_state_digest")
+            .map_err(WorkVcsError::QueryInvalid)?,
+        target_workspace_id: parse_optional_workspace_field(value, &label, "target_workspace_id")?,
+        target_head_commit_id: parse_optional_commit_field(value, &label, "target_head_commit_id")?,
+        target_head_state_digest: parse_optional_digest_field(
+            value,
+            &label,
+            "target_head_state_digest",
+        )?,
+        status,
+        merge_base_commit_id: parse_optional_commit_field(value, &label, "merge_base_commit_id")?,
+    })
+}
+
+fn validate_import_attempt_branch_head_status(label: &str, value: &str) -> Result<()> {
+    match value {
+        "already_present" | "missing" | "fast_forward" | "diverged" => Ok(()),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label}.status must be already_present, missing, fast_forward, or diverged"
+        ))),
+    }
 }
 
 fn decode_store_id(column: &str, bytes: Vec<u8>) -> Result<StoreId> {

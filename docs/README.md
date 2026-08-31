@@ -16,6 +16,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Local Operator Quickstart and Recovery](operator/quickstart-and-recovery.md)
 - [Session Potentially Stale Smoke Evidence](provenance/session-potentially-stale-smoke-evidence.md)
 - [Phase 4LE Dogfood and Stale-Gated Takeover Evidence](provenance/phase-4le-dogfood-and-stale-gated-takeover.md)
+- [Phase 4LF Handoff Consumption Dogfood Evidence](provenance/phase-4lf-handoff-consumption-dogfood.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -108,6 +109,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0418: Phase 4LC Operator Quickstart and Recovery Docs](decisions/adr/0418-phase-4lc-operator-quickstart-recovery.md)
 - [ADR-0419: Phase 4LD Explicit Potentially Stale Session State](decisions/adr/0419-phase-4ld-session-potentially-stale.md)
 - [ADR-0420: Phase 4LE Stale-Gated Claim Takeover](decisions/adr/0420-phase-4le-stale-gated-claim-takeover.md)
+- [ADR-0421: Phase 4LF Handoff Consumption Dogfood](decisions/adr/0421-phase-4lf-handoff-consumption-dogfood.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

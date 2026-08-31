@@ -192,6 +192,27 @@ workvcs handoff show "$STORE" \
   --handoff "$HANDOFF_RECORD_ID"
 ```
 
+Start a continuation Session, then consume the Handoff into that Session's
+focus:
+
+```bash
+workvcs session start "$STORE" \
+  --workspace "$WORKSPACE_ID" \
+  --branch "$BRANCH_ID"
+```
+
+Capture the emitted `session_id` as `CONTINUATION_SESSION_ID`.
+
+```bash
+workvcs handoff consume "$STORE" \
+  --commit "$HANDOFF_COMMIT_ID" \
+  --handoff "$HANDOFF_RECORD_ID" \
+  --session "$CONTINUATION_SESSION_ID"
+```
+
+Inspect Context and `next` after consuming the Handoff. The Session focus should
+match the Handoff focus before work is claimed.
+
 ## Common Recovery Actions
 
 When a Store fails integrity or doctor checks, stop using it as an authority
@@ -262,9 +283,10 @@ intended state transition.
 ## Still Open For V1
 
 - The documented loop has been dogfooded for one implementation closeout, but
-  still needs a real blocked recovery handoff and lower-friction ID capture.
+  still needs a real blocked recovery handoff.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
 - Context packets still need more V1 categories and persistence decisions.
+- `why` does not yet expose the Handoff focus link as a relation.
 - Automatic stale detection remains open.
 - Larger Store validation has not yet been run.

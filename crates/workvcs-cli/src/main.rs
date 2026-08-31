@@ -4163,6 +4163,43 @@ enum HandoffCommand {
         #[arg(long)]
         expected_focus: Option<String>,
     },
+    #[command(group(
+        ArgGroup::new("handoff-consume-target")
+            .required(true)
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    Consume {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        handoff: String,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        expected_source_session: Option<String>,
+
+        #[arg(long)]
+        expected_session_diff: Option<String>,
+
+        #[arg(long)]
+        expected_focus: Option<String>,
+
+        #[arg(long)]
+        expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -11576,6 +11613,77 @@ fn run_handoff(command: HandoffCommand) -> Result<String> {
             }
             Ok(output)
         }
+        HandoffCommand::Consume {
+            store,
+            branch,
+            commit,
+            handoff,
+            session,
+            expected_source_session,
+            expected_session_diff,
+            expected_focus,
+            expected_session,
+            expected_lifecycle_state,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let commit_id = resolve_task_query_commit(&engine, branch, commit)?;
+            let record = engine.record_at(commit_id, EntityId::parse_canonical(&handoff)?)?;
+            if record.state.kind != RecordKind::Handoff {
+                return Err(WorkVcsError::RecordInvalid(format!(
+                    "record {} is {}, not handoff",
+                    record.record_entity_id, record.state.kind
+                )));
+            }
+            let fields = parse_handoff_scope(&record.state.scope)?.ok_or_else(|| {
+                WorkVcsError::RecordInvalid(
+                    "handoff scope is not a recognized focused handoff scope".to_owned(),
+                )
+            })?;
+            let focus_entity_id = fields.focus_entity_id.ok_or_else(|| {
+                WorkVcsError::RecordInvalid(
+                    "focused handoff scope does not contain a focus entity".to_owned(),
+                )
+            })?;
+            let session_diff_snapshot = match fields.session_diff_id {
+                Some(session_diff_id) => {
+                    let diff = engine.session_diff(session_diff_id)?;
+                    if diff.session_id != fields.session_id {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session diff {session_diff_id} belongs to session {}, not {}",
+                            diff.session_id, fields.session_id
+                        )));
+                    }
+                    Some(diff)
+                }
+                None => None,
+            };
+            let mut source_expectation_output = String::new();
+            append_handoff_consume_source_expectations(
+                &mut source_expectation_output,
+                &fields,
+                expected_source_session,
+                expected_session_diff,
+                expected_focus,
+            )?;
+            let consumed = engine.set_session_focus(SessionFocusOptions::new(
+                SessionId::parse_canonical(&session)?,
+                focus_entity_id,
+            ))?;
+            let mut output = render_handoff_consume(
+                &record,
+                &fields,
+                session_diff_snapshot.as_ref(),
+                &consumed,
+            )?;
+            output.push_str(&source_expectation_output);
+            append_handoff_consume_expectations(
+                &mut output,
+                &consumed,
+                expected_session,
+                expected_lifecycle_state,
+            )?;
+            Ok(output)
+        }
     }
 }
 
@@ -15246,6 +15354,53 @@ fn render_handoff_show(
     Ok(output)
 }
 
+fn render_handoff_consume(
+    record: &RecordSnapshot,
+    fields: &HandoffScopeFields,
+    session_diff: Option<&SessionDiffSnapshot>,
+    consumed: &SessionFocusUpdateResult,
+) -> Result<String> {
+    let mut output = render_handoff_show(record, Some(fields), session_diff)?;
+    let consumed_focus = consumed
+        .state
+        .focus
+        .as_ref()
+        .map(|focus| focus.focus_entity_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let consumed_focus_path_entries = consumed
+        .state
+        .focus
+        .as_ref()
+        .map(|focus| focus.path.len())
+        .unwrap_or(0);
+    writeln!(output, "consume_result=focus_set").expect("write to String");
+    writeln!(output, "consume_session_id={}", consumed.session_id).expect("write to String");
+    writeln!(
+        output,
+        "consume_lifecycle_state={}",
+        session_lifecycle_state(consumed.state.lifecycle_state)
+    )
+    .expect("write to String");
+    writeln!(output, "consume_focus_entity_id={consumed_focus}").expect("write to String");
+    writeln!(
+        output,
+        "consume_focus_path_entries={consumed_focus_path_entries}"
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "consume_focus_matches_handoff={}",
+        consumed
+            .state
+            .focus
+            .as_ref()
+            .map(|focus| focus.focus_entity_id)
+            == fields.focus_entity_id
+    )
+    .expect("write to String");
+    Ok(output)
+}
+
 fn append_handoff_scope_output(
     output: &mut String,
     fields: Option<&HandoffScopeFields>,
@@ -15346,6 +15501,78 @@ fn append_handoff_scope_expectations(
             )));
         }
         output.push_str("focus_matches_expected=true\n");
+    }
+    Ok(())
+}
+
+fn append_handoff_consume_source_expectations(
+    output: &mut String,
+    fields: &HandoffScopeFields,
+    expected_source_session: Option<String>,
+    expected_session_diff: Option<String>,
+    expected_focus: Option<String>,
+) -> Result<()> {
+    if let Some(expected_source_session) = expected_source_session {
+        let expected_source_session = SessionId::parse_canonical(&expected_source_session)?;
+        if fields.session_id != expected_source_session {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "handoff source session {} does not match expected {}",
+                fields.session_id, expected_source_session
+            )));
+        }
+        output.push_str("source_session_matches_expected=true\n");
+    }
+    if let Some(expected_session_diff) = expected_session_diff {
+        let expected_session_diff = optional_session_diff_expectation(&expected_session_diff)?;
+        if fields.session_diff_id != expected_session_diff {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "handoff session diff {} does not match expected {}",
+                render_optional_display_or_none(fields.session_diff_id.as_ref()),
+                render_optional_display_or_none(expected_session_diff.as_ref())
+            )));
+        }
+        output.push_str("session_diff_matches_expected=true\n");
+    }
+    if let Some(expected_focus) = expected_focus {
+        let expected_focus = optional_focus_expectation(&expected_focus)?;
+        if fields.focus_entity_id != expected_focus {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "handoff focus {} does not match expected {}",
+                render_optional_display_or_none(fields.focus_entity_id.as_ref()),
+                render_optional_display_or_none(expected_focus.as_ref())
+            )));
+        }
+        output.push_str("focus_matches_expected=true\n");
+    }
+    Ok(())
+}
+
+fn append_handoff_consume_expectations(
+    output: &mut String,
+    consumed: &SessionFocusUpdateResult,
+    expected_session: Option<String>,
+    expected_lifecycle_state: Option<String>,
+) -> Result<()> {
+    if let Some(expected_session) = expected_session {
+        let expected_session = SessionId::parse_canonical(&expected_session)?;
+        if consumed.session_id != expected_session {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "handoff consume session {} does not match expected {}",
+                consumed.session_id, expected_session
+            )));
+        }
+        output.push_str("consume_session_matches_expected=true\n");
+    }
+    if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+        let expected_lifecycle_state = parse_session_lifecycle_state(&expected_lifecycle_state)?;
+        if consumed.state.lifecycle_state != expected_lifecycle_state {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "handoff consume lifecycle state {} does not match expected {}",
+                session_lifecycle_state(consumed.state.lifecycle_state),
+                session_lifecycle_state(expected_lifecycle_state)
+            )));
+        }
+        output.push_str("consume_lifecycle_state_matches_expected=true\n");
     }
     Ok(())
 }
@@ -29629,6 +29856,111 @@ mod tests {
         assert_eq!(value(&shown, "session_matches_expected"), "true");
         assert_eq!(value(&shown, "session_diff_matches_expected"), "true");
         assert_eq!(value(&shown, "focus_matches_expected"), "true");
+
+        let continuation = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse continuation session start"))
+        .expect("start continuation session");
+        let continuation_session_id = value(&continuation, "session_id");
+
+        let mismatched_source_consume = run(Cli::try_parse_from([
+            "workvcs",
+            "handoff",
+            "consume",
+            store,
+            "--commit",
+            &handoff_commit,
+            "--handoff",
+            &handoff_id,
+            "--session",
+            &continuation_session_id,
+            "--expected-source-session",
+            &continuation_session_id,
+        ])
+        .expect("parse mismatched handoff consume"));
+        assert!(mismatched_source_consume.is_err());
+
+        let unchanged_after_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &continuation_session_id,
+            "--expected-focus",
+            "none",
+        ])
+        .expect("parse session show after mismatched consume"))
+        .expect("show session after mismatched consume");
+        assert_eq!(
+            value(&unchanged_after_mismatch, "focus_matches_expected"),
+            "true"
+        );
+        assert_eq!(value(&unchanged_after_mismatch, "focus_entity_id"), "none");
+
+        let consumed = run(Cli::try_parse_from([
+            "workvcs",
+            "handoff",
+            "consume",
+            store,
+            "--commit",
+            &handoff_commit,
+            "--handoff",
+            &handoff_id,
+            "--session",
+            &continuation_session_id,
+            "--expected-source-session",
+            &session_id,
+            "--expected-session-diff",
+            &session_diff_id,
+            "--expected-focus",
+            &task_id,
+            "--expected-session",
+            &continuation_session_id,
+            "--expected-lifecycle-state",
+            "active",
+        ])
+        .expect("parse handoff consume"))
+        .expect("consume handoff");
+        assert_eq!(value(&consumed, "record_kind"), "handoff");
+        assert_eq!(value(&consumed, "handoff_scope_recognized"), "true");
+        assert_eq!(value(&consumed, "session_id"), session_id);
+        assert_eq!(value(&consumed, "focus_entity_id"), task_id);
+        assert_eq!(value(&consumed, "consume_result"), "focus_set");
+        assert_eq!(
+            value(&consumed, "consume_session_id"),
+            continuation_session_id
+        );
+        assert_eq!(value(&consumed, "consume_lifecycle_state"), "active");
+        assert_eq!(value(&consumed, "consume_focus_entity_id"), task_id);
+        assert_eq!(value(&consumed, "consume_focus_matches_handoff"), "true");
+        assert_eq!(value(&consumed, "source_session_matches_expected"), "true");
+        assert_eq!(value(&consumed, "session_diff_matches_expected"), "true");
+        assert_eq!(value(&consumed, "focus_matches_expected"), "true");
+        assert_eq!(value(&consumed, "consume_session_matches_expected"), "true");
+        assert_eq!(
+            value(&consumed, "consume_lifecycle_state_matches_expected"),
+            "true"
+        );
+
+        let continuation_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &continuation_session_id,
+        ])
+        .expect("parse continuation context"))
+        .expect("read continuation context");
+        assert_eq!(value(&continuation_context, "focus_entity_id"), task_id);
 
         let mismatched_focus = run(Cli::try_parse_from([
             "workvcs",

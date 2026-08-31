@@ -275,6 +275,56 @@ workvcs verification cache-refresh "$STORE" \
   --verification "$VERIFICATION_ID"
 ```
 
+When a merge cannot be frozen, inspect every merge item and resolve each item
+explicitly before freezing. This includes `AUTO` items:
+
+```bash
+workvcs merge show "$STORE" \
+  --merge "$MERGE_ID"
+
+workvcs merge resolve "$STORE" \
+  --item "$MERGE_ITEM_ID" \
+  --kind theirs \
+  --session "$SESSION_ID" \
+  --rationale-json '{"reason":"accept source item"}'
+
+workvcs merge freeze "$STORE" \
+  --merge "$MERGE_ID"
+```
+
+When `merge continue` reports that the target or source Branch moved, do not
+try to force the stale attempt forward. Abort the stale attempt, start a new
+merge from the current Branch heads, then resolve/freeze/continue the new
+attempt. Repeat `merge resolve` for every item shown by `merge show`:
+
+```bash
+workvcs merge abort "$STORE" \
+  --merge "$STALE_MERGE_ID" \
+  --session "$SESSION_ID" \
+  --detail-json '{"reason":"restart after branch head moved"}'
+
+workvcs merge start "$STORE" \
+  --target-branch "$TARGET_BRANCH_ID" \
+  --source-branch "$SOURCE_BRANCH_ID" \
+  --session "$SESSION_ID"
+
+workvcs merge show "$STORE" \
+  --merge "$NEW_MERGE_ID"
+
+workvcs merge resolve "$STORE" \
+  --item "$NEW_MERGE_ITEM_ID" \
+  --kind theirs \
+  --session "$SESSION_ID" \
+  --rationale-json '{"reason":"accept item after restart"}'
+
+workvcs merge freeze "$STORE" \
+  --merge "$NEW_MERGE_ID"
+
+workvcs merge continue "$STORE" \
+  --merge "$NEW_MERGE_ID" \
+  --session "$SESSION_ID"
+```
+
 When an active Claim blocks another active Session and the claimant can hand
 work over, transfer the Claim:
 
@@ -359,4 +409,6 @@ intended state transition.
   Record field.
 - `why` does not yet expose the Handoff focus link as a relation.
 - Automatic stale detection remains open.
+- Merge lifecycle is locally dogfood-proven, but not yet another-project or
+  larger-Store proven.
 - Larger Store validation has not yet been run.

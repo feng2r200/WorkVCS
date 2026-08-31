@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0428 / Phase 4LM
+Last refreshed: 2026-09-01 by ADR-0429 / Phase 4LN
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -41,10 +41,10 @@ not complete.
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LM adds deterministic Attempt detail for status, terminality, current version/digest, scope, and Record relation counts; complete remaining V1 gaps: path-sensitive Knowledge policy, packet persistence, and transition-rationale projection decision. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics; next prove broader causal/evolution and real-project explanation paths. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover; repeat on another real project before claiming broad dogfood maturity. |
-| Merge lifecycle | Yes | Yes | Yes | No | Dogfood divergent Work Branch resolution and document recovery behavior for moved heads or unresolved items. |
+| Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Repeat on another real project or larger Store before release maturity claims. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | No | Validate a real export/import/restore path and record Bundle container/profile details still Open for V1. |
 | CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`; continue reducing manual key-value capture only where dogfood shows repeated friction. |
-| Actionable errors and recovery | Yes | Partial | Partial | No | Audit common failures and document safe next actions; add behavior only where current errors block dogfood. |
+| Actionable errors and recovery | Yes | Partial | Partial | Partial | Phase 4LN documents merge unresolved and moved-head recovery actions; CLI failure output is still mostly text, so stable key-value `error_code` output remains Open. |
 | Larger Store and performance evidence | Partial | No | No | No | Run a representative larger Store workload before adding indexes or claiming scale readiness. |
 
 ## Dogfood-Biased Next Queue
@@ -132,4 +132,8 @@ The following remain beyond V1 even if they would make dogfood easier:
   packet output. Phase 4LM adds deterministic Attempt detail for failed brief
   items and normal/full Attempt items, and dogfoods running, succeeded, failed,
   and inconclusive status visibility through real CLI `context` packet output.
-  WorkVCS has still not been used for another real project.
+  Phase 4LN dogfoods the merge lifecycle in a durable local Store: divergent
+  Branches produce `CONFLICT` and `AUTO` items, unresolved items block freeze,
+  target/source moved heads block continue, abort/restart recovery succeeds, and
+  the successful restarts create two-parent `merge.continue` commits. WorkVCS
+  has still not been used for another real project.

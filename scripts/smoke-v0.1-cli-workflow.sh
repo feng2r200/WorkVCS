@@ -900,6 +900,63 @@ merge_show_at_expected_output="$(run_workvcs \
     --expected-state-digest "$merge_state_digest")"
 expect_value "$merge_show_at_expected_output" "matches_expected" "true"
 
+step "checkpoint gate"
+checkpoint_output="$(run_workvcs \
+    checkpoint create "$store" \
+    --commit "$head_commit_id")"
+checkpoint_id="$(value "$checkpoint_output" "checkpoint_id")"
+checkpoint_content_digest="$(value "$checkpoint_output" "content_digest")"
+expect_value "$checkpoint_output" "commit_id" "$head_commit_id"
+expect_value "$checkpoint_output" "state_digest" "$merge_state_digest"
+expect_value "$checkpoint_output" "checkpoint_format_version" "1"
+expect_value "$checkpoint_output" "media_type" "application/vnd.workvcs.workstate-checkpoint+json"
+expect_value "$checkpoint_output" "usability_state" "usable"
+
+checkpoint_show_output="$(run_workvcs \
+    checkpoint show "$store" \
+    --checkpoint "$checkpoint_id" \
+    --expected-state-digest "$merge_state_digest" \
+    --expected-content-digest "$checkpoint_content_digest")"
+expect_value "$checkpoint_show_output" "checkpoint_id" "$checkpoint_id"
+expect_value "$checkpoint_show_output" "commit_id" "$head_commit_id"
+expect_value "$checkpoint_show_output" "state_matches_expected" "true"
+expect_value "$checkpoint_show_output" "content_matches_expected" "true"
+
+checkpoint_validate_output="$(run_workvcs \
+    checkpoint validate "$store" \
+    --checkpoint "$checkpoint_id" \
+    --require-valid)"
+expect_value "$checkpoint_validate_output" "checkpoint_id" "$checkpoint_id"
+expect_value "$checkpoint_validate_output" "valid" "true"
+expect_value "$checkpoint_validate_output" "problem" "none"
+expect_value "$checkpoint_validate_output" "expected_state_digest" "$merge_state_digest"
+expect_value "$checkpoint_validate_output" "expected_content_digest" "$checkpoint_content_digest"
+expect_value "$checkpoint_validate_output" "valid_required" "true"
+
+checkpoint_list_output="$(run_workvcs \
+    checkpoint list "$store" \
+    --commit "$head_commit_id" \
+    --usability-state usable \
+    --content-digest "$checkpoint_content_digest" \
+    --expected-checkpoints 1)"
+expect_value "$checkpoint_list_output" "commit_id" "$head_commit_id"
+expect_value "$checkpoint_list_output" "checkpoints" "1"
+expect_value "$checkpoint_list_output" "checkpoint[0].id" "$checkpoint_id"
+expect_value "$checkpoint_list_output" "checkpoint[0].content_digest" "$checkpoint_content_digest"
+expect_value "$checkpoint_list_output" "checkpoint[0].usability_state" "usable"
+expect_value "$checkpoint_list_output" "checkpoints_match_expected" "true"
+
+checkpoint_latest_output="$(run_workvcs \
+    checkpoint latest "$store" \
+    --commit "$head_commit_id" \
+    --require-found \
+    --expected-checkpoint "$checkpoint_id")"
+expect_value "$checkpoint_latest_output" "commit_id" "$head_commit_id"
+expect_value "$checkpoint_latest_output" "checkpoint_found" "true"
+expect_value "$checkpoint_latest_output" "checkpoint_id" "$checkpoint_id"
+expect_value "$checkpoint_latest_output" "checkpoint_found_required" "true"
+expect_value "$checkpoint_latest_output" "checkpoint_matches_expected" "true"
+
 step "runtime closeout"
 session_end_output="$(run_workvcs \
     session end "$store" \
@@ -924,7 +981,7 @@ store_integrity_output="$(run_workvcs \
     --expected-checked-change-operations 17 \
     --expected-checked-changeset-causal-anchors 0 \
     --expected-checked-events 24 \
-    --expected-checked-checkpoints 0 \
+    --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "2"
 expect_value "$store_integrity_output" "checked_commits" "13"
@@ -932,7 +989,7 @@ expect_value "$store_integrity_output" "checked_changesets" "13"
 expect_value "$store_integrity_output" "checked_change_operations" "17"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
 expect_value "$store_integrity_output" "checked_events" "24"
-expect_value "$store_integrity_output" "checked_checkpoints" "0"
+expect_value "$store_integrity_output" "checked_checkpoints" "1"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
 
@@ -945,10 +1002,10 @@ doctor_output="$(run_workvcs \
     --expected-checked-change-operations 17 \
     --expected-checked-changeset-causal-anchors 0 \
     --expected-checked-events 24 \
-    --expected-checked-checkpoints 0 \
+    --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=2 checked_commits=13 checked_changesets=13 checked_change_operations=17 checked_changeset_causal_anchors=0 checked_events=24 checked_checkpoints=0 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=13 checked_changesets=13 checked_change_operations=17 checked_changeset_causal_anchors=0 checked_events=24 checked_checkpoints=1 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'
@@ -962,4 +1019,5 @@ printf 'claim_id=%s\n' "$claim_id"
 printf 'source_branch_id=%s\n' "$source_branch_id"
 printf 'merge_id=%s\n' "$merge_id"
 printf 'merge_result_commit_id=%s\n' "$result_commit_id"
+printf 'checkpoint_id=%s\n' "$checkpoint_id"
 printf 'session_diff_id=%s\n' "$session_diff_id"

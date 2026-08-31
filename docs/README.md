@@ -65,6 +65,16 @@ recorded as Accepted ADRs:
 - [ADR-0037: Phase 3W Why Evidence Neighborhood](decisions/adr/0037-phase-3w-why-evidence-neighborhood.md)
 - [ADR-0038: Phase 3X Resource Runtime Foundation](decisions/adr/0038-phase-3x-resource-runtime-foundation.md)
 
+Recent repository-level CLI smoke gates:
+
+- [ADR-0397: Phase 4KH CLI Smoke Workflow](decisions/adr/0397-phase-4kh-cli-smoke-workflow.md)
+- [ADR-0398: Phase 4KI CLI Completion Gate Smoke](decisions/adr/0398-phase-4ki-cli-completion-gate-smoke.md)
+- [ADR-0399: Phase 4KJ CLI Smoke Runtime Closeout](decisions/adr/0399-phase-4kj-cli-smoke-runtime-closeout.md)
+- [ADR-0400: Phase 4KK CLI Smoke Integrity Gate](decisions/adr/0400-phase-4kk-cli-smoke-integrity-gate.md)
+- [ADR-0401: Phase 4KL CLI Smoke Scheduling Claim Next Gate](decisions/adr/0401-phase-4kl-cli-smoke-scheduling-claim-next-gate.md)
+- [ADR-0402: Phase 4KM Merge Action Expectations Smoke Gate](decisions/adr/0402-phase-4km-merge-action-expectations-smoke-gate.md)
+- [ADR-0403: Phase 4KN Checkpoint Smoke Gate](decisions/adr/0403-phase-4kn-checkpoint-smoke-gate.md)
+
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.
 

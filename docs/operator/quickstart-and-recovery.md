@@ -336,6 +336,23 @@ that owns the Checkpoint candidate, such as the imported Bundle head. Do not
 use it as a state-digest lookup for a later restore commit that happens to have
 the same Work State.
 
+For a representative opt-in local portability validation beyond the default
+smoke Store, run:
+
+```bash
+WORKVCS_LARGER_STORE_OUTPUT_ROOT=.work-governance/runtime/logs/phase-4lq \
+  ./scripts/larger-store-portability-v0.1.sh
+```
+
+The default workload creates 48 Tasks, copies the target Store after 24 Tasks,
+then adds AC/VR/Verification records, scheduling relations, Checkpoint, Bundle
+export/validate/preflight/apply, target restore, integrity, and doctor checks.
+Use `WORKVCS_LARGER_STORE_TASKS`,
+`WORKVCS_LARGER_STORE_BASELINE_TASKS`,
+`WORKVCS_LARGER_STORE_VERIFICATIONS`, and
+`WORKVCS_LARGER_STORE_RELATION_PAIRS` to scale the run. Keep it opt-in until a
+larger default smoke matrix is explicitly justified.
+
 ## Common Recovery Actions
 
 When a Store fails integrity or doctor checks, stop using it as an authority

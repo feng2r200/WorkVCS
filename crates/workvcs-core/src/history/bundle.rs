@@ -1669,13 +1669,13 @@ pub(crate) fn apply_bundle_import(
     let imported_resource_observations =
         apply_resource_observations(&transaction, &document, &payload_lookup)?;
     let imported_evidences = apply_evidences(&transaction, &document, &payload_lookup)?;
-    let imported_verification_bases =
-        apply_verification_bases(&transaction, &document, &payload_lookup)?;
     let imported_knowledge_exposures =
         apply_knowledge_exposure_closure(&transaction, &document, &payload_lookup)?;
     let imported_relation_versions =
         apply_relation_versions(&transaction, &document, &payload_lookup, now_us)?;
     let imported_commits = apply_commit_closure(&transaction, &document, &payload_lookup)?;
+    let imported_verification_bases =
+        apply_verification_bases(&transaction, &document, &payload_lookup)?;
     let imported_changeset_causal_anchors =
         apply_changeset_causal_anchors(&transaction, &document)?;
     let imported_events = apply_events(&transaction, &document, &payload_lookup)?;

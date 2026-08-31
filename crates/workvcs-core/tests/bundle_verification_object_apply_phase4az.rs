@@ -7,9 +7,9 @@ use workvcs_core::{
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput, CanonicalValue, CommitId,
     Engine, EvidenceContentInput, EvidenceCreateOptions, ResourceCreateOptions,
     ResourceObservationCreateOptions, ResourceObservationDetailInput, StoreInitOptions,
-    TaskCreateCommit, TaskCreateOptions, VerificationCreateOptions, VerificationResourceBasis,
-    VerificationResult, VerificationTarget, WorkspaceInfo, WorkspaceInitOptions,
-    content_object_digest,
+    TaskCreateCommit, TaskCreateOptions, VerificationCreateOptions,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WorkspaceInfo, WorkspaceInitOptions, content_object_digest,
 };
 
 fn store_paths() -> (TempDir, PathBuf, PathBuf) {
@@ -17,6 +17,124 @@ fn store_paths() -> (TempDir, PathBuf, PathBuf) {
     let source_path = tempdir.path().join("source.sqlite");
     let old_path = tempdir.path().join("old.sqlite");
     (tempdir, source_path, old_path)
+}
+
+#[test]
+fn bundle_apply_imports_verified_at_commit_before_verification_basis() {
+    let (_tempdir, source_path, old_path) = store_paths();
+    let (mut engine, workspace) = create_workspace(&source_path);
+    let task = create_task(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "baseline task before copied target",
+    );
+    drop(engine);
+    fs::copy(&source_path, &old_path).expect("copy old store");
+
+    let mut source_engine = Engine::open(&source_path).expect("open source store");
+    let acceptance = create_acceptance(&mut source_engine, &workspace, &task);
+    let requirement = source_engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                workspace.initial_branch_id,
+                acceptance.commit_id,
+                acceptance.acceptance_criterion_entity_id,
+                acceptance.acceptance_criterion_entity_version_id,
+                "vr.imported-verified-at",
+                "The bundle importer must import the verified-at commit before verification basis rows.",
+            )
+            .expect("verification requirement options"),
+        )
+        .expect("create verification requirement");
+    let evidence = source_engine
+        .create_evidence(
+            EvidenceCreateOptions::new(
+                "test-log",
+                object(vec![(
+                    "summary",
+                    string("verification requirement evidence"),
+                )]),
+            )
+            .expect("evidence options")
+            .with_contents(vec![
+                EvidenceContentInput::from_raw_bytes(
+                    "log",
+                    b"verification requirement evidence body",
+                )
+                .expect("evidence content"),
+            ])
+            .expect("evidence contents"),
+        )
+        .expect("create evidence");
+    let verification = source_engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                workspace.initial_branch_id,
+                requirement.commit_id,
+                VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+            )
+            .expect("verification options")
+            .with_evidence(vec![evidence.evidence_id])
+            .expect("verification evidence"),
+        )
+        .expect("create verification");
+
+    let export = source_engine
+        .export_bundle_payloads(BundlePayloadExportOptions::for_commit(
+            verification.commit_id,
+        ))
+        .expect("export payloads");
+    assert_eq!(export.manifest.verification_bases.len(), 1);
+    assert_eq!(
+        export.manifest.verification_bases[0].verified_at_commit_id,
+        requirement.commit_id
+    );
+    assert_eq!(export.manifest.verification_semantic_dependencies.len(), 1);
+
+    let mut old_engine = Engine::open(&old_path).expect("open old store");
+    let before = old_engine
+        .preflight_bundle_import(preflight_options(&export))
+        .expect("preflight before apply");
+    assert_eq!(before.action, "same_store_fast_forward_ready");
+    assert!(before.can_apply);
+
+    let applied = old_engine
+        .apply_bundle_import(apply_options(&export))
+        .expect("apply bundle import");
+
+    assert!(applied.applied);
+    assert_eq!(applied.outcome, "same_store_fast_forward_applied");
+    assert_eq!(applied.imported_commits, 3);
+    assert_eq!(applied.imported_entity_versions, 5);
+    assert_eq!(applied.imported_content_objects, 1);
+    assert_eq!(applied.imported_evidences, 1);
+    assert_eq!(applied.imported_verification_bases, 1);
+    assert_eq!(applied.imported_relation_versions, 2);
+    assert_eq!(applied.updated_branch_heads, 1);
+
+    let state = old_engine
+        .show_at(verification.commit_id)
+        .expect("show imported verification commit");
+    assert_eq!(state.state_digest, verification.work_state_digest);
+    let imported_verification = old_engine
+        .verification_at(verification.commit_id, verification.verification_entity_id)
+        .expect("imported verification");
+    assert_eq!(
+        imported_verification.state.verified_at_commit_id,
+        requirement.commit_id
+    );
+    assert_eq!(
+        imported_verification.target,
+        VerificationTarget::VerificationRequirement(requirement.verification_requirement_entity_id)
+    );
+    assert_eq!(
+        imported_verification.evidenced_by_relations[0].evidence_id,
+        evidence.evidence_id
+    );
 }
 
 fn object(entries: Vec<(&str, CanonicalValue)>) -> CanonicalValue {

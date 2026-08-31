@@ -89,6 +89,20 @@ workvcs claim task "$STORE" \
   --task "$TASK_ENTITY_ID"
 ```
 
+To claim the next runnable Task and immediately receive bounded post-claim
+context:
+
+```bash
+workvcs claim next "$STORE" \
+  --session "$SESSION_ID" \
+  --context-profile brief \
+  --context-budget-items 20
+```
+
+When context options are present, packet fields are emitted with
+`claim_next_` prefixes, for example `claim_next_context_profile` and
+`claim_next_context_item.0.category`.
+
 Inspect continuation context:
 
 ```bash

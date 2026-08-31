@@ -4288,6 +4288,12 @@ enum ClaimCommand {
 
         #[arg(long)]
         expected_lifecycle_state: Option<String>,
+
+        #[arg(long)]
+        context_profile: Option<String>,
+
+        #[arg(long)]
+        context_budget_items: Option<usize>,
     },
     Task {
         #[arg(value_name = "STORE")]
@@ -10084,12 +10090,22 @@ fn run(cli: Cli) -> Result<String> {
                     expected_task,
                     expected_mode,
                     expected_lifecycle_state,
+                    context_profile,
+                    context_budget_items,
                 },
         } => {
             let mut engine = Engine::open(store)?;
+            let session_id = SessionId::parse_canonical(&session)?;
+            let mut context_options = ContextPacketOptions::new(session_id);
+            let use_context_packet = context_profile.is_some() || context_budget_items.is_some();
+            if let Some(profile) = context_profile {
+                context_options = context_options.with_profile(parse_context_profile(&profile)?);
+            }
+            if let Some(budget_items) = context_budget_items {
+                context_options = context_options.with_budget_items(budget_items)?;
+            }
             let claimed = engine.claim_next_task(
-                ClaimNextOptions::new(SessionId::parse_canonical(&session)?)
-                    .with_mode(parse_claim_mode(&mode)?),
+                ClaimNextOptions::new(session_id).with_mode(parse_claim_mode(&mode)?),
             )?;
             let mut output = render_claim_next(&claimed);
             append_claim_next_expectations(
@@ -10104,6 +10120,11 @@ fn run(cli: Cli) -> Result<String> {
                     expected_lifecycle_state,
                 },
             )?;
+            if use_context_packet {
+                let packet = engine.context_packet(context_options)?;
+                output.push_str("claim_next_context_packet=true\n");
+                output.push_str(&render_claim_next_context_packet(&packet));
+            }
             Ok(output)
         }
         Command::Claim {
@@ -17741,6 +17762,19 @@ fn render_context_packet(packet: &ContextPacket) -> String {
         );
     }
     output
+}
+
+fn render_claim_next_context_packet(packet: &ContextPacket) -> String {
+    render_context_packet(packet)
+        .lines()
+        .map(|line| {
+            let mut prefixed = String::with_capacity("claim_next_".len() + line.len() + 1);
+            prefixed.push_str("claim_next_");
+            prefixed.push_str(line);
+            prefixed.push('\n');
+            prefixed
+        })
+        .collect()
 }
 
 fn context_canonical_json(value: &CanonicalValue) -> String {
@@ -30228,6 +30262,7 @@ mod tests {
         assert_eq!(value(&claimed, "selected"), "true");
         assert!(claimed.contains("claim_id="));
         assert!(claimed.contains("lifecycle_state=active"));
+        assert!(!claimed.contains("claim_next_context_packet="));
         let selected_task = value(&claimed, "task_entity_id");
         assert!(
             selected_task == value(&first, "task_entity_id")
@@ -30274,6 +30309,129 @@ mod tests {
         ])
         .expect("parse zero-limit runnable"));
         assert!(zero_limit.is_err());
+    }
+
+    #[test]
+    fn cli_claim_next_can_return_budgeted_context_packet() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Claim next with packet task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let task_head = value(&task, "commit_id");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let zero_budget = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "next",
+            store,
+            "--session",
+            &session_id,
+            "--context-budget-items",
+            "0",
+        ])
+        .expect("parse zero context budget claim next"));
+        assert!(matches!(
+            zero_budget,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "context budget items must be greater than zero"
+        ));
+
+        let claimed = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "next",
+            store,
+            "--session",
+            &session_id,
+            "--context-profile",
+            "brief",
+            "--context-budget-items",
+            "3",
+            "--expected-selected",
+            "true",
+            "--expected-head",
+            &task_head,
+            "--expected-task",
+            &task_id,
+            "--expected-mode",
+            "exclusive",
+            "--expected-lifecycle-state",
+            "active",
+        ])
+        .expect("parse claim next with context packet"))
+        .expect("claim next with context packet");
+        assert_eq!(value(&claimed, "selected"), "true");
+        assert_eq!(value(&claimed, "task_entity_id"), task_id);
+        assert_eq!(value(&claimed, "claim_next_context_packet"), "true");
+        assert_eq!(value(&claimed, "claim_next_session_id"), session_id);
+        assert_eq!(value(&claimed, "claim_next_focus_entity_id"), task_id);
+        assert_eq!(value(&claimed, "claim_next_context_profile"), "brief");
+        assert_eq!(value(&claimed, "claim_next_context_budget_items"), "3");
+        assert_eq!(value(&claimed, "claim_next_context_items"), "3");
+        assert_eq!(value(&claimed, "claim_next_context_omitted_items"), "1");
+        assert_eq!(
+            value(&claimed, "claim_next_context_item.0.category"),
+            "session_anchor"
+        );
+        assert_eq!(
+            value(&claimed, "claim_next_context_item.1.category"),
+            "branch_overview"
+        );
+        assert_eq!(
+            value(&claimed, "claim_next_context_item.2.category"),
+            "current_task"
+        );
+        assert_eq!(value(&claimed, "selected_match_expected"), "true");
+        assert_eq!(value(&claimed, "head_match_expected"), "true");
+        assert_eq!(value(&claimed, "task_match_expected"), "true");
+        assert_eq!(value(&claimed, "mode_match_expected"), "true");
+        assert_eq!(value(&claimed, "lifecycle_state_match_expected"), "true");
     }
 
     #[test]

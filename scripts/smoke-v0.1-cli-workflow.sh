@@ -465,6 +465,32 @@ expect_value "$completion_history_output" "entries" "5"
 expect_value "$completion_history_output" "entries_match_expected" "true"
 expect_contains "$completion_history_output" "operation=entity.transition"
 
+step "runtime closeout"
+claim_release_output="$(run_workvcs \
+    claim release "$store" \
+    --session "$session_id" \
+    --claim "$claim_id" \
+    --expected-session "$session_id" \
+    --expected-lifecycle-state released)"
+expect_value "$claim_release_output" "claim_id" "$claim_id"
+expect_value "$claim_release_output" "session_id" "$session_id"
+expect_value "$claim_release_output" "lifecycle_state" "released"
+expect_value "$claim_release_output" "session_match_expected" "true"
+expect_value "$claim_release_output" "lifecycle_state_match_expected" "true"
+
+session_end_output="$(run_workvcs \
+    session end "$store" \
+    --session "$session_id" \
+    --summary-json '{"outcome":"smoke-complete"}' \
+    --expected-session "$session_id" \
+    --expected-lifecycle-state ended)"
+session_diff_id="$(value "$session_end_output" "session_diff_id")"
+expect_value "$session_end_output" "session_id" "$session_id"
+expect_value "$session_end_output" "lifecycle_state" "ended"
+expect_value "$session_end_output" "session_match_expected" "true"
+expect_value "$session_end_output" "lifecycle_state_match_expected" "true"
+expect_nonempty "$session_end_output" "session_diff_id"
+
 printf 'smoke_result=passed\n'
 printf 'store_id=%s\n' "$store_id"
 printf 'workspace_id=%s\n' "$workspace_id"
@@ -473,3 +499,4 @@ printf 'genesis_state_digest=%s\n' "$genesis_state_digest"
 printf 'task_entity_id=%s\n' "$task_id"
 printf 'verification_entity_id=%s\n' "$verification_id"
 printf 'claim_id=%s\n' "$claim_id"
+printf 'session_diff_id=%s\n' "$session_diff_id"

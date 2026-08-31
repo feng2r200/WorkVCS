@@ -140,12 +140,67 @@ task_output="$(run_workvcs \
     task create "$store" \
     --branch "$branch_id" \
     --head "$head_commit_id" \
-    --description "Smoke CLI workflow task")"
+    --description "Smoke CLI workflow task" \
+    --priority 7)"
 task_id="$(value "$task_output" "task_entity_id")"
 task_version_id="$(value "$task_output" "task_entity_version_id")"
 head_commit_id="$(value "$task_output" "commit_id")"
 expect_value "$task_output" "status" "pending"
 expect_nonempty "$task_output" "changeset_id"
+
+step "prerequisite task create"
+prerequisite_task_output="$(run_workvcs \
+    task create "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --description "Smoke CLI prerequisite task" \
+    --priority 1)"
+prerequisite_task_id="$(value "$prerequisite_task_output" "task_entity_id")"
+prerequisite_task_version_id="$(value "$prerequisite_task_output" "task_entity_version_id")"
+head_commit_id="$(value "$prerequisite_task_output" "commit_id")"
+expect_value "$prerequisite_task_output" "status" "pending"
+expect_nonempty "$prerequisite_task_output" "changeset_id"
+
+step "task scheduling"
+dependency_output="$(run_workvcs \
+    task depends-on "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --task "$task_id" \
+    --depends-on "$prerequisite_task_id")"
+dependency_relation_id="$(value "$dependency_output" "relation_id")"
+head_commit_id="$(value "$dependency_output" "commit_id")"
+expect_value "$dependency_output" "relation_type" "depends_on"
+expect_value "$dependency_output" "source_task_entity_id" "$task_id"
+expect_value "$dependency_output" "target_task_entity_id" "$prerequisite_task_id"
+
+order_output="$(run_workvcs \
+    task ordered-before "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --earlier "$prerequisite_task_id" \
+    --later "$task_id")"
+order_relation_id="$(value "$order_output" "relation_id")"
+head_commit_id="$(value "$order_output" "commit_id")"
+expect_value "$order_output" "relation_type" "ordered_before"
+expect_value "$order_output" "source_task_entity_id" "$prerequisite_task_id"
+expect_value "$order_output" "target_task_entity_id" "$task_id"
+
+scheduling_output="$(run_workvcs \
+    task scheduling-list "$store" \
+    --branch "$branch_id" \
+    --expected-relations 2)"
+expect_value "$scheduling_output" "commit_id" "$head_commit_id"
+expect_value "$scheduling_output" "relations" "2"
+expect_value "$scheduling_output" "relations_match_expected" "true"
+expect_value "$scheduling_output" "relation.0.relation_id" "$dependency_relation_id"
+expect_value "$scheduling_output" "relation.0.relation_type" "depends_on"
+expect_value "$scheduling_output" "relation.0.source_task_entity_id" "$task_id"
+expect_value "$scheduling_output" "relation.0.target_task_entity_id" "$prerequisite_task_id"
+expect_value "$scheduling_output" "relation.1.relation_id" "$order_relation_id"
+expect_value "$scheduling_output" "relation.1.relation_type" "ordered_before"
+expect_value "$scheduling_output" "relation.1.source_task_entity_id" "$prerequisite_task_id"
+expect_value "$scheduling_output" "relation.1.target_task_entity_id" "$task_id"
 
 step "acceptance criterion create"
 criterion_output="$(run_workvcs \
@@ -356,9 +411,9 @@ step "history and show-at"
 history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 4)"
+    --expected-entries 7)"
 expect_value "$history_output" "start_commit_id" "$head_commit_id"
-expect_value "$history_output" "entries" "4"
+expect_value "$history_output" "entries" "7"
 expect_value "$history_output" "entries_match_expected" "true"
 expect_contains "$history_output" "operation=verification.record"
 
@@ -376,24 +431,39 @@ show_at_expected_output="$(run_workvcs \
     --expected-state-digest "$state_digest")"
 expect_value "$show_at_expected_output" "matches_expected" "true"
 
-step "runnable and next"
+step "runnable scheduling"
 runnable_output="$(run_workvcs \
     runnable tasks "$store" \
     --session "$session_id" \
     --expected-head "$head_commit_id" \
-    --expected-candidates 1)"
+    --expected-candidates 2)"
 expect_value "$runnable_output" "head_commit_id" "$head_commit_id"
-expect_value "$runnable_output" "candidates" "1"
-expect_value "$runnable_output" "candidate.0.task_entity_id" "$task_id"
+expect_value "$runnable_output" "candidates" "2"
+expect_value "$runnable_output" "candidate.0.task_entity_id" "$prerequisite_task_id"
+expect_value "$runnable_output" "candidate.0.status" "pending"
+expect_value "$runnable_output" "candidate.0.priority" "1"
 expect_value "$runnable_output" "candidate.0.runnable" "true"
+expect_value "$runnable_output" "candidate.0.lifecycle_eligible" "true"
+expect_value "$runnable_output" "candidate.0.dependency_ready" "true"
 expect_value "$runnable_output" "candidate.0.claim" "unclaimed"
+expect_value "$runnable_output" "candidate.0.unsatisfied_dependencies" ""
+expect_value "$runnable_output" "candidate.0.blocked_reasons" ""
+expect_value "$runnable_output" "candidate.1.task_entity_id" "$task_id"
+expect_value "$runnable_output" "candidate.1.status" "pending"
+expect_value "$runnable_output" "candidate.1.priority" "7"
+expect_value "$runnable_output" "candidate.1.runnable" "false"
+expect_value "$runnable_output" "candidate.1.lifecycle_eligible" "true"
+expect_value "$runnable_output" "candidate.1.dependency_ready" "false"
+expect_value "$runnable_output" "candidate.1.claim" "unclaimed"
+expect_value "$runnable_output" "candidate.1.unsatisfied_dependencies" "$prerequisite_task_id"
+expect_value "$runnable_output" "candidate.1.blocked_reasons" "dependency_blocked"
 expect_value "$runnable_output" "head_matches_expected" "true"
 expect_value "$runnable_output" "candidates_match_expected" "true"
 
 guard_output="$(run_workvcs \
     claim guard "$store" \
     --session "$session_id" \
-    --task "$task_id" \
+    --task "$prerequisite_task_id" \
     --expected-allowed true \
     --expected-reason unclaimed \
     --expected-active-claims 0)"
@@ -403,12 +473,163 @@ expect_value "$guard_output" "allowed_match_expected" "true"
 expect_value "$guard_output" "reason_match_expected" "true"
 expect_value "$guard_output" "active_claims_match_expected" "true"
 
+claim_next_output="$(run_workvcs \
+    claim next "$store" \
+    --session "$session_id" \
+    --expected-selected true \
+    --expected-head "$head_commit_id" \
+    --expected-inspected-candidates 2 \
+    --expected-task "$prerequisite_task_id" \
+    --expected-mode exclusive \
+    --expected-lifecycle-state active)"
+prerequisite_claim_id="$(value "$claim_next_output" "claim_id")"
+expect_value "$claim_next_output" "selected" "true"
+expect_value "$claim_next_output" "task_entity_id" "$prerequisite_task_id"
+expect_value "$claim_next_output" "selected_match_expected" "true"
+expect_value "$claim_next_output" "head_match_expected" "true"
+expect_value "$claim_next_output" "inspected_candidates_match_expected" "true"
+expect_value "$claim_next_output" "task_match_expected" "true"
+expect_value "$claim_next_output" "mode_match_expected" "true"
+expect_value "$claim_next_output" "lifecycle_state_match_expected" "true"
+
+claimed_runnable_output="$(run_workvcs \
+    runnable tasks "$store" \
+    --session "$session_id" \
+    --expected-head "$head_commit_id" \
+    --expected-candidates 1)"
+expect_value "$claimed_runnable_output" "candidate.0.task_entity_id" "$prerequisite_task_id"
+expect_value "$claimed_runnable_output" "candidate.0.claim" "claimed_by_session:${prerequisite_claim_id}"
+expect_value "$claimed_runnable_output" "candidates_match_expected" "true"
+
+step "prerequisite completion"
+prerequisite_completion_output="$(run_workvcs \
+    task transition "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --task "$prerequisite_task_id" \
+    --task-version "$prerequisite_task_version_id" \
+    --status done \
+    --outcome completed \
+    --session "$session_id")"
+prerequisite_task_version_id="$(value "$prerequisite_completion_output" "task_entity_version_id")"
+head_commit_id="$(value "$prerequisite_completion_output" "commit_id")"
+expect_value "$prerequisite_completion_output" "task_entity_id" "$prerequisite_task_id"
+expect_value "$prerequisite_completion_output" "status" "done"
+
+prerequisite_claim_release_output="$(run_workvcs \
+    claim release "$store" \
+    --session "$session_id" \
+    --claim "$prerequisite_claim_id" \
+    --expected-session "$session_id" \
+    --expected-lifecycle-state released)"
+expect_value "$prerequisite_claim_release_output" "claim_id" "$prerequisite_claim_id"
+expect_value "$prerequisite_claim_release_output" "session_id" "$session_id"
+expect_value "$prerequisite_claim_release_output" "lifecycle_state" "released"
+expect_value "$prerequisite_claim_release_output" "session_match_expected" "true"
+expect_value "$prerequisite_claim_release_output" "lifecycle_state_match_expected" "true"
+
+focus_clear_output="$(run_workvcs \
+    session focus-clear "$store" \
+    --session "$session_id" \
+    --expected-session "$session_id" \
+    --expected-focus none \
+    --expected-focus-path-entries 0 \
+    --expected-lifecycle-state active)"
+expect_value "$focus_clear_output" "session_id" "$session_id"
+expect_value "$focus_clear_output" "focus_entity_id" "none"
+expect_value "$focus_clear_output" "focus_path_entries" "0"
+expect_value "$focus_clear_output" "session_match_expected" "true"
+expect_value "$focus_clear_output" "focus_match_expected" "true"
+expect_value "$focus_clear_output" "focus_path_entries_match_expected" "true"
+expect_value "$focus_clear_output" "lifecycle_state_match_expected" "true"
+
+step "verification refresh after prerequisite completion"
+stale_status_output="$(run_workvcs \
+    ac status "$store" \
+    --branch "$branch_id" \
+    --criterion "$criterion_id")"
+expect_value "$stale_status_output" "status" "stale"
+
+verification_refresh_output="$(run_workvcs \
+    verification record "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --acceptance-criterion "$criterion_id" \
+    --result passed \
+    --method manual-review \
+    --evidence "$evidence_id" \
+    --resource "$resource_id" \
+    --adapter-kind git \
+    --adapter-schema-version 1 \
+    --scope-kind path \
+    --scope-schema-version 1 \
+    --scope-payload-json '{"path":"src/lib.rs"}' \
+    --baseline-fingerprint "$fingerprint" \
+    --baseline-observation "$observation_id" \
+    --expected-branch "$branch_id" \
+    --expected-head "$head_commit_id" \
+    --expected-target-kind acceptance_criterion \
+    --expected-target "$criterion_id" \
+    --expected-result passed \
+    --expected-evidence-relations 1)"
+verification_id="$(value "$verification_refresh_output" "verification_entity_id")"
+head_commit_id="$(value "$verification_refresh_output" "commit_id")"
+expect_value "$verification_refresh_output" "branch_match_expected" "true"
+expect_value "$verification_refresh_output" "head_match_expected" "true"
+expect_value "$verification_refresh_output" "target_kind_match_expected" "true"
+expect_value "$verification_refresh_output" "target_match_expected" "true"
+expect_value "$verification_refresh_output" "result_match_expected" "true"
+expect_value "$verification_refresh_output" "evidence_relations_match_expected" "true"
+
+cache_refresh_output="$(run_workvcs \
+    verification cache-record "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --verification "$verification_id" \
+    --adapter-kind git \
+    --adapter-schema-version 1 \
+    --scope-schema-version 1 \
+    --observation-status observed \
+    --observed-fingerprint "$fingerprint" \
+    --observation "$observation_id" \
+    --expected-evaluated-commit "$head_commit_id" \
+    --expected-applicability applicable \
+    --expected-reason-code all_basis_applicable \
+    --expected-resource-stamps 1)"
+expect_value "$cache_refresh_output" "evaluated_commit_matches_expected" "true"
+expect_value "$cache_refresh_output" "applicability_matches_expected" "true"
+expect_value "$cache_refresh_output" "reason_code_matches_expected" "true"
+expect_value "$cache_refresh_output" "resource_stamps_match_expected" "true"
+
+refreshed_status_output="$(run_workvcs \
+    ac status "$store" \
+    --branch "$branch_id" \
+    --criterion "$criterion_id")"
+expect_value "$refreshed_status_output" "status" "verified"
+
+ready_runnable_output="$(run_workvcs \
+    runnable tasks "$store" \
+    --session "$session_id" \
+    --expected-head "$head_commit_id" \
+    --expected-candidates 2)"
+expect_value "$ready_runnable_output" "candidate.0.task_entity_id" "$task_id"
+expect_value "$ready_runnable_output" "candidate.0.priority" "7"
+expect_value "$ready_runnable_output" "candidate.0.runnable" "true"
+expect_value "$ready_runnable_output" "candidate.0.dependency_ready" "true"
+expect_value "$ready_runnable_output" "candidate.0.claim" "unclaimed"
+expect_value "$ready_runnable_output" "candidate.1.task_entity_id" "$prerequisite_task_id"
+expect_value "$ready_runnable_output" "candidate.1.status" "done"
+expect_value "$ready_runnable_output" "candidate.1.runnable" "false"
+expect_value "$ready_runnable_output" "candidate.1.blocked_reasons" "lifecycle_ineligible"
+expect_value "$ready_runnable_output" "candidates_match_expected" "true"
+
+step "next dependent task"
 next_output="$(run_workvcs \
     next "$store" \
     --session "$session_id" \
     --expected-selected true \
     --expected-head "$head_commit_id" \
-    --expected-inspected-candidates 1 \
+    --expected-inspected-candidates 2 \
     --expected-task "$task_id" \
     --expected-mode exclusive \
     --expected-lifecycle-state active)"
@@ -423,14 +644,6 @@ expect_value "$next_output" "inspected_candidates_match_expected" "true"
 expect_value "$next_output" "task_match_expected" "true"
 expect_value "$next_output" "mode_match_expected" "true"
 expect_value "$next_output" "lifecycle_state_match_expected" "true"
-
-claimed_runnable_output="$(run_workvcs \
-    runnable tasks "$store" \
-    --session "$session_id" \
-    --expected-head "$head_commit_id" \
-    --expected-candidates 1)"
-expect_value "$claimed_runnable_output" "candidate.0.claim" "claimed_by_session:${claim_id}"
-expect_value "$claimed_runnable_output" "candidates_match_expected" "true"
 
 step "task completion after verification"
 completion_output="$(run_workvcs \
@@ -454,6 +667,7 @@ completed_task_output="$(run_workvcs \
     --expected-state-digest "$completed_task_state_digest")"
 expect_value "$completed_task_output" "task_entity_version_id" "$task_version_id"
 expect_value "$completed_task_output" "status" "done"
+expect_value "$completed_task_output" "priority" "7"
 expect_value "$completed_task_output" "matches_expected" "true"
 
 completed_runnable_output="$(run_workvcs \
@@ -464,6 +678,7 @@ completed_runnable_output="$(run_workvcs \
     --expected-candidates 1)"
 expect_value "$completed_runnable_output" "candidate.0.task_entity_id" "$task_id"
 expect_value "$completed_runnable_output" "candidate.0.status" "done"
+expect_value "$completed_runnable_output" "candidate.0.priority" "7"
 expect_value "$completed_runnable_output" "candidate.0.runnable" "false"
 expect_value "$completed_runnable_output" "candidate.0.lifecycle_eligible" "false"
 expect_value "$completed_runnable_output" "head_matches_expected" "true"
@@ -472,9 +687,9 @@ expect_value "$completed_runnable_output" "candidates_match_expected" "true"
 completion_history_output="$(run_workvcs \
     history "$store" \
     --branch "$branch_id" \
-    --expected-entries 5)"
+    --expected-entries 10)"
 expect_value "$completion_history_output" "start_commit_id" "$head_commit_id"
-expect_value "$completion_history_output" "entries" "5"
+expect_value "$completion_history_output" "entries" "10"
 expect_value "$completion_history_output" "entries_match_expected" "true"
 expect_contains "$completion_history_output" "operation=entity.transition"
 
@@ -509,19 +724,19 @@ store_integrity_output="$(run_workvcs \
     store integrity "$store" \
     --require-valid \
     --expected-checked-branches 1 \
-    --expected-checked-commits 5 \
-    --expected-checked-changesets 5 \
-    --expected-checked-change-operations 7 \
+    --expected-checked-commits 10 \
+    --expected-checked-changesets 10 \
+    --expected-checked-change-operations 14 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 10 \
+    --expected-checked-events 19 \
     --expected-checked-checkpoints 0 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "1"
-expect_value "$store_integrity_output" "checked_commits" "5"
-expect_value "$store_integrity_output" "checked_changesets" "5"
-expect_value "$store_integrity_output" "checked_change_operations" "7"
+expect_value "$store_integrity_output" "checked_commits" "10"
+expect_value "$store_integrity_output" "checked_changesets" "10"
+expect_value "$store_integrity_output" "checked_change_operations" "14"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "10"
+expect_value "$store_integrity_output" "checked_events" "19"
 expect_value "$store_integrity_output" "checked_checkpoints" "0"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -530,15 +745,15 @@ doctor_output="$(run_workvcs \
     doctor "$store" \
     --require-valid \
     --expected-checked-branches 1 \
-    --expected-checked-commits 5 \
-    --expected-checked-changesets 5 \
-    --expected-checked-change-operations 7 \
+    --expected-checked-commits 10 \
+    --expected-checked-changesets 10 \
+    --expected-checked-change-operations 14 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 10 \
+    --expected-checked-events 19 \
     --expected-checked-checkpoints 0 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=1 checked_commits=5 checked_changesets=5 checked_change_operations=7 checked_changeset_causal_anchors=0 checked_events=10 checked_checkpoints=0 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=1 checked_commits=10 checked_changesets=10 checked_change_operations=14 checked_changeset_causal_anchors=0 checked_events=19 checked_checkpoints=0 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'

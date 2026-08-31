@@ -1566,6 +1566,12 @@ enum BundleCommand {
         expected_imported_entity_versions: Option<usize>,
 
         #[arg(long)]
+        expected_imported_checkpoints: Option<usize>,
+
+        #[arg(long)]
+        expected_imported_checkpoint_statuses: Option<usize>,
+
+        #[arg(long)]
         expected_updated_branch_heads: Option<usize>,
     },
     ImportDir {
@@ -6133,6 +6139,8 @@ fn run(cli: Cli) -> Result<String> {
                 expected_outcome,
                 expected_imported_commits,
                 expected_imported_entity_versions,
+                expected_imported_checkpoints,
+                expected_imported_checkpoint_statuses,
                 expected_updated_branch_heads,
             } => {
                 let mut engine = Engine::open(store)?;
@@ -6176,6 +6184,20 @@ fn run(cli: Cli) -> Result<String> {
                     result.imported_entity_versions,
                     expected_imported_entity_versions,
                     "imported_entity_versions_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle apply imported checkpoints",
+                    result.imported_checkpoints,
+                    expected_imported_checkpoints,
+                    "imported_checkpoints_match_expected",
+                )?;
+                append_expected_count_match(
+                    &mut output,
+                    "bundle apply imported checkpoint statuses",
+                    result.imported_checkpoint_statuses,
+                    expected_imported_checkpoint_statuses,
+                    "imported_checkpoint_statuses_match_expected",
                 )?;
                 append_expected_count_match(
                     &mut output,
@@ -25131,6 +25153,20 @@ mod tests {
         .expect("create second task");
         let second_commit = value(&second, "commit_id");
 
+        let checkpoint = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "create",
+            source_store,
+            "--commit",
+            &second_commit,
+        ])
+        .expect("parse checkpoint create"))
+        .expect("create checkpoint");
+        let checkpoint_id = value(&checkpoint, "checkpoint_id");
+        let checkpoint_state_digest = value(&checkpoint, "state_digest");
+        let checkpoint_content_digest = value(&checkpoint, "content_digest");
+
         let export_dir = tempdir.path().join("same-store-bundle");
         run(Cli::try_parse_from([
             "workvcs",
@@ -25202,6 +25238,47 @@ mod tests {
         .expect("parse mismatched bundle apply-dir"));
         assert!(mismatched_apply.is_err());
 
+        let mismatch_checkpoint_apply_path =
+            tempdir.path().join("mismatch-checkpoint-apply.sqlite");
+        fs::copy(&old_path, &mismatch_checkpoint_apply_path)
+            .expect("copy mismatch checkpoint apply store");
+        let mismatch_checkpoint_apply_store = mismatch_checkpoint_apply_path
+            .to_str()
+            .expect("mismatch checkpoint apply store path text");
+        let mismatched_checkpoint_apply = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "apply-dir",
+            mismatch_checkpoint_apply_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--expected-imported-checkpoints",
+            "0",
+        ])
+        .expect("parse mismatched checkpoint bundle apply-dir"));
+        assert!(mismatched_checkpoint_apply.is_err());
+
+        let mismatch_checkpoint_status_apply_path = tempdir
+            .path()
+            .join("mismatch-checkpoint-status-apply.sqlite");
+        fs::copy(&old_path, &mismatch_checkpoint_status_apply_path)
+            .expect("copy mismatch checkpoint status apply store");
+        let mismatch_checkpoint_status_apply_store = mismatch_checkpoint_status_apply_path
+            .to_str()
+            .expect("mismatch checkpoint status apply store path text");
+        let mismatched_checkpoint_status_apply = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "apply-dir",
+            mismatch_checkpoint_status_apply_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--expected-imported-checkpoint-statuses",
+            "0",
+        ])
+        .expect("parse mismatched checkpoint status bundle apply-dir"));
+        assert!(mismatched_checkpoint_status_apply.is_err());
+
         let applied = run(Cli::try_parse_from([
             "workvcs",
             "bundle",
@@ -25215,6 +25292,10 @@ mod tests {
             "--expected-imported-commits",
             "1",
             "--expected-imported-entity-versions",
+            "1",
+            "--expected-imported-checkpoints",
+            "1",
+            "--expected-imported-checkpoint-statuses",
             "1",
             "--expected-updated-branch-heads",
             "1",
@@ -25230,11 +25311,21 @@ mod tests {
         );
         assert_eq!(value(&applied, "imported_commits"), "1");
         assert_eq!(value(&applied, "imported_entity_versions"), "1");
+        assert_eq!(value(&applied, "imported_checkpoints"), "1");
+        assert_eq!(value(&applied, "imported_checkpoint_statuses"), "1");
         assert_eq!(value(&applied, "updated_branch_heads"), "1");
         assert_eq!(value(&applied, "outcome_matches_expected"), "true");
         assert_eq!(value(&applied, "imported_commits_match_expected"), "true");
         assert_eq!(
             value(&applied, "imported_entity_versions_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&applied, "imported_checkpoints_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&applied, "imported_checkpoint_statuses_match_expected"),
             "true"
         );
         assert_eq!(
@@ -25249,6 +25340,59 @@ mod tests {
             )
             .expect("branch head");
         assert_eq!(value(&branch_head, "head_commit_id"), second_commit);
+
+        let latest_checkpoint = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "latest",
+            old_store,
+            "--commit",
+            &second_commit,
+            "--require-found",
+            "--expected-checkpoint",
+            &checkpoint_id,
+        ])
+        .expect("parse latest checkpoint"))
+        .expect("latest checkpoint");
+        assert_eq!(value(&latest_checkpoint, "checkpoint_found"), "true");
+        assert_eq!(value(&latest_checkpoint, "checkpoint_id"), checkpoint_id);
+        assert_eq!(
+            value(&latest_checkpoint, "checkpoint_matches_expected"),
+            "true"
+        );
+
+        let shown_checkpoint = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "show",
+            old_store,
+            "--checkpoint",
+            &checkpoint_id,
+            "--expected-state-digest",
+            &checkpoint_state_digest,
+            "--expected-content-digest",
+            &checkpoint_content_digest,
+        ])
+        .expect("parse checkpoint show"))
+        .expect("show checkpoint");
+        assert_eq!(value(&shown_checkpoint, "checkpoint_id"), checkpoint_id);
+        assert_eq!(value(&shown_checkpoint, "commit_id"), second_commit);
+        assert_eq!(value(&shown_checkpoint, "state_matches_expected"), "true");
+        assert_eq!(value(&shown_checkpoint, "content_matches_expected"), "true");
+
+        let validated_checkpoint = run(Cli::try_parse_from([
+            "workvcs",
+            "checkpoint",
+            "validate",
+            old_store,
+            "--checkpoint",
+            &checkpoint_id,
+            "--require-valid",
+        ])
+        .expect("parse checkpoint validate"))
+        .expect("validate checkpoint");
+        assert_eq!(value(&validated_checkpoint, "valid"), "true");
+        assert_eq!(value(&validated_checkpoint, "valid_required"), "true");
 
         let shown_import = run(Cli::try_parse_from([
             "workvcs",

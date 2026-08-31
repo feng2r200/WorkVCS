@@ -1000,6 +1000,17 @@ bundle_source_head_output="$(run_workvcs \
 bundle_state_digest="$(value "$bundle_source_head_output" "state_digest")"
 expect_value "$bundle_source_head_output" "head_commit_id" "$bundle_head_id"
 
+bundle_checkpoint_output="$(run_workvcs \
+    checkpoint create "$bundle_source_store" \
+    --commit "$bundle_head_id")"
+bundle_checkpoint_id="$(value "$bundle_checkpoint_output" "checkpoint_id")"
+bundle_checkpoint_content_digest="$(value "$bundle_checkpoint_output" "content_digest")"
+expect_value "$bundle_checkpoint_output" "commit_id" "$bundle_head_id"
+expect_value "$bundle_checkpoint_output" "state_digest" "$bundle_state_digest"
+expect_value "$bundle_checkpoint_output" "checkpoint_format_version" "1"
+expect_value "$bundle_checkpoint_output" "media_type" "application/vnd.workvcs.workstate-checkpoint+json"
+expect_value "$bundle_checkpoint_output" "usability_state" "usable"
+
 bundle_export_output="$(run_workvcs \
     bundle export "$bundle_source_store" \
     --commit "$bundle_head_id" \
@@ -1008,29 +1019,34 @@ bundle_export_output="$(run_workvcs \
     --expected-exported-branch-heads 1 \
     --expected-entities 2 \
     --expected-relations 0 \
-    --expected-checkpoint-candidates 0)"
+    --expected-checkpoint-candidates 1)"
 expect_value "$bundle_export_output" "commit_id" "$bundle_head_id"
 expect_value "$bundle_export_output" "commits" "3"
 expect_value "$bundle_export_output" "exported_branch_heads" "1"
 expect_value "$bundle_export_output" "entities" "2"
 expect_value "$bundle_export_output" "relations" "0"
-expect_value "$bundle_export_output" "checkpoint_candidates" "0"
+expect_value "$bundle_export_output" "checkpoint_candidates" "1"
 expect_value "$bundle_export_output" "state_matches_expected" "true"
 expect_value "$bundle_export_output" "commits_match_expected" "true"
 expect_value "$bundle_export_output" "exported_branch_heads_match_expected" "true"
 expect_value "$bundle_export_output" "entities_match_expected" "true"
 expect_value "$bundle_export_output" "relations_match_expected" "true"
 expect_value "$bundle_export_output" "checkpoint_candidates_match_expected" "true"
+expect_value "$bundle_export_output" "checkpoint_candidate[0].id" "$bundle_checkpoint_id"
+expect_value "$bundle_export_output" "checkpoint_candidate[0].commit_id" "$bundle_head_id"
+expect_value "$bundle_export_output" "checkpoint_candidate[0].state_digest" "$bundle_state_digest"
+expect_value "$bundle_export_output" "checkpoint_candidate[0].content_digest" "$bundle_checkpoint_content_digest"
+expect_value "$bundle_export_output" "checkpoint_candidate[0].usability_state" "usable"
 
 bundle_export_dir_output="$(run_workvcs \
     bundle export-dir "$bundle_source_store" \
     --commit "$bundle_head_id" \
     --output-dir "$bundle_dir" \
-    --expected-payload-files 5 \
-    --expected-payload-references 15)"
+    --expected-payload-files 7 \
+    --expected-payload-references 17)"
 expect_value "$bundle_export_dir_output" "commit_id" "$bundle_head_id"
-expect_value "$bundle_export_dir_output" "payload_files" "5"
-expect_value "$bundle_export_dir_output" "payload_references" "15"
+expect_value "$bundle_export_dir_output" "payload_files" "7"
+expect_value "$bundle_export_dir_output" "payload_references" "17"
 expect_value "$bundle_export_dir_output" "payload_files_match_expected" "true"
 expect_value "$bundle_export_dir_output" "payload_references_match_expected" "true"
 
@@ -1039,14 +1055,14 @@ bundle_validate_output="$(run_workvcs \
     --commit "$bundle_head_id" \
     --input-dir "$bundle_dir" \
     --require-valid \
-    --expected-payload-files 5 \
-    --expected-payload-references 15)"
+    --expected-payload-files 7 \
+    --expected-payload-references 17)"
 expect_value "$bundle_validate_output" "commit_id" "$bundle_head_id"
 expect_value "$bundle_validate_output" "valid" "true"
 expect_value "$bundle_validate_output" "valid_required" "true"
-expect_value "$bundle_validate_output" "expected_payload_files" "5"
-expect_value "$bundle_validate_output" "actual_payload_files" "5"
-expect_value "$bundle_validate_output" "expected_payload_references" "15"
+expect_value "$bundle_validate_output" "expected_payload_files" "7"
+expect_value "$bundle_validate_output" "actual_payload_files" "7"
+expect_value "$bundle_validate_output" "expected_payload_references" "17"
 expect_value "$bundle_validate_output" "payload_files_match_expected" "true"
 expect_value "$bundle_validate_output" "payload_references_match_expected" "true"
 expect_value "$bundle_validate_output" "problem" "none"
@@ -1056,8 +1072,8 @@ bundle_preflight_output="$(run_workvcs \
     --input-dir "$bundle_dir" \
     --require-valid \
     --require-can-apply \
-    --expected-payload-files 5 \
-    --expected-payload-references 15 \
+    --expected-payload-files 7 \
+    --expected-payload-references 17 \
     --expected-exported-branch-heads 1 \
     --expected-branch-heads-already-present 0 \
     --expected-branch-heads-missing 0 \
@@ -1086,6 +1102,8 @@ bundle_apply_output="$(run_workvcs \
     --expected-outcome same_store_fast_forward_applied \
     --expected-imported-commits 1 \
     --expected-imported-entity-versions 1 \
+    --expected-imported-checkpoints 1 \
+    --expected-imported-checkpoint-statuses 1 \
     --expected-updated-branch-heads 1)"
 bundle_import_id="$(value "$bundle_apply_output" "import_id")"
 bundle_digest="$(value "$bundle_apply_output" "bundle_digest")"
@@ -1094,10 +1112,14 @@ expect_value "$bundle_apply_output" "applied_required" "true"
 expect_value "$bundle_apply_output" "outcome" "same_store_fast_forward_applied"
 expect_value "$bundle_apply_output" "imported_commits" "1"
 expect_value "$bundle_apply_output" "imported_entity_versions" "1"
+expect_value "$bundle_apply_output" "imported_checkpoints" "1"
+expect_value "$bundle_apply_output" "imported_checkpoint_statuses" "1"
 expect_value "$bundle_apply_output" "updated_branch_heads" "1"
 expect_value "$bundle_apply_output" "outcome_matches_expected" "true"
 expect_value "$bundle_apply_output" "imported_commits_match_expected" "true"
 expect_value "$bundle_apply_output" "imported_entity_versions_match_expected" "true"
+expect_value "$bundle_apply_output" "imported_checkpoints_match_expected" "true"
+expect_value "$bundle_apply_output" "imported_checkpoint_statuses_match_expected" "true"
 expect_value "$bundle_apply_output" "updated_branch_heads_match_expected" "true"
 
 bundle_target_head_output="$(run_workvcs \
@@ -1115,6 +1137,39 @@ bundle_imported_task_output="$(run_workvcs \
 expect_value "$bundle_imported_task_output" "task_entity_id" "$bundle_task_id"
 expect_value "$bundle_imported_task_output" "status" "pending"
 expect_value "$bundle_imported_task_output" "priority" "5"
+
+bundle_target_checkpoint_latest_output="$(run_workvcs \
+    checkpoint latest "$bundle_target_store" \
+    --commit "$bundle_head_id" \
+    --require-found \
+    --expected-checkpoint "$bundle_checkpoint_id")"
+expect_value "$bundle_target_checkpoint_latest_output" "commit_id" "$bundle_head_id"
+expect_value "$bundle_target_checkpoint_latest_output" "checkpoint_found" "true"
+expect_value "$bundle_target_checkpoint_latest_output" "checkpoint_id" "$bundle_checkpoint_id"
+expect_value "$bundle_target_checkpoint_latest_output" "checkpoint_found_required" "true"
+expect_value "$bundle_target_checkpoint_latest_output" "checkpoint_matches_expected" "true"
+
+bundle_target_checkpoint_show_output="$(run_workvcs \
+    checkpoint show "$bundle_target_store" \
+    --checkpoint "$bundle_checkpoint_id" \
+    --expected-state-digest "$bundle_state_digest" \
+    --expected-content-digest "$bundle_checkpoint_content_digest")"
+expect_value "$bundle_target_checkpoint_show_output" "checkpoint_id" "$bundle_checkpoint_id"
+expect_value "$bundle_target_checkpoint_show_output" "commit_id" "$bundle_head_id"
+expect_value "$bundle_target_checkpoint_show_output" "state_matches_expected" "true"
+expect_value "$bundle_target_checkpoint_show_output" "content_matches_expected" "true"
+expect_value "$bundle_target_checkpoint_show_output" "usability_state" "usable"
+
+bundle_target_checkpoint_validate_output="$(run_workvcs \
+    checkpoint validate "$bundle_target_store" \
+    --checkpoint "$bundle_checkpoint_id" \
+    --require-valid)"
+expect_value "$bundle_target_checkpoint_validate_output" "checkpoint_id" "$bundle_checkpoint_id"
+expect_value "$bundle_target_checkpoint_validate_output" "valid" "true"
+expect_value "$bundle_target_checkpoint_validate_output" "problem" "none"
+expect_value "$bundle_target_checkpoint_validate_output" "expected_state_digest" "$bundle_state_digest"
+expect_value "$bundle_target_checkpoint_validate_output" "expected_content_digest" "$bundle_checkpoint_content_digest"
+expect_value "$bundle_target_checkpoint_validate_output" "valid_required" "true"
 
 bundle_import_show_output="$(run_workvcs \
     bundle import-show "$bundle_target_store" \
@@ -1199,5 +1254,6 @@ printf 'source_branch_id=%s\n' "$source_branch_id"
 printf 'merge_id=%s\n' "$merge_id"
 printf 'merge_result_commit_id=%s\n' "$result_commit_id"
 printf 'checkpoint_id=%s\n' "$checkpoint_id"
+printf 'bundle_checkpoint_id=%s\n' "$bundle_checkpoint_id"
 printf 'bundle_import_id=%s\n' "$bundle_import_id"
 printf 'session_diff_id=%s\n' "$session_diff_id"

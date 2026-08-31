@@ -7,6 +7,9 @@ tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/workvcs-cli-smoke.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 store="$tmp_dir/workvcs.sqlite"
+bundle_source_store="$tmp_dir/bundle-source.sqlite"
+bundle_target_store="$tmp_dir/bundle-target.sqlite"
+bundle_dir="$tmp_dir/bundle-export"
 observation_file="$tmp_dir/observation.bin"
 observation_detail_file="$tmp_dir/observation-detail.txt"
 printf 'baseline bytes' >"$observation_file"
@@ -957,6 +960,182 @@ expect_value "$checkpoint_latest_output" "checkpoint_id" "$checkpoint_id"
 expect_value "$checkpoint_latest_output" "checkpoint_found_required" "true"
 expect_value "$checkpoint_latest_output" "checkpoint_matches_expected" "true"
 
+step "bundle portability gate"
+bundle_init_output="$(run_workvcs \
+    init "$bundle_source_store" \
+    --display-name "bundle-smoke-source")"
+expect_contains "$bundle_init_output" "initialized store_id="
+
+bundle_workspace_output="$(run_workvcs \
+    workspace create "$bundle_source_store" \
+    --display-name "bundle-smoke-workspace")"
+bundle_branch_id="$(value "$bundle_workspace_output" "branch_id")"
+bundle_genesis_commit_id="$(value "$bundle_workspace_output" "genesis_commit_id")"
+expect_value "$bundle_workspace_output" "branch_name" "main"
+
+bundle_first_task_output="$(run_workvcs \
+    task create "$bundle_source_store" \
+    --branch "$bundle_branch_id" \
+    --head "$bundle_genesis_commit_id" \
+    --description "Bundle smoke older target task" \
+    --priority 4)"
+bundle_first_commit_id="$(value "$bundle_first_task_output" "commit_id")"
+expect_value "$bundle_first_task_output" "status" "pending"
+
+cp "$bundle_source_store" "$bundle_target_store"
+
+bundle_second_task_output="$(run_workvcs \
+    task create "$bundle_source_store" \
+    --branch "$bundle_branch_id" \
+    --head "$bundle_first_commit_id" \
+    --description "Bundle smoke exported task" \
+    --priority 5)"
+bundle_task_id="$(value "$bundle_second_task_output" "task_entity_id")"
+bundle_head_id="$(value "$bundle_second_task_output" "commit_id")"
+expect_value "$bundle_second_task_output" "status" "pending"
+
+bundle_source_head_output="$(run_workvcs \
+    branch head "$bundle_source_store" \
+    --branch "$bundle_branch_id")"
+bundle_state_digest="$(value "$bundle_source_head_output" "state_digest")"
+expect_value "$bundle_source_head_output" "head_commit_id" "$bundle_head_id"
+
+bundle_export_output="$(run_workvcs \
+    bundle export "$bundle_source_store" \
+    --commit "$bundle_head_id" \
+    --expected-state-digest "$bundle_state_digest" \
+    --expected-commits 3 \
+    --expected-exported-branch-heads 1 \
+    --expected-entities 2 \
+    --expected-relations 0 \
+    --expected-checkpoint-candidates 0)"
+expect_value "$bundle_export_output" "commit_id" "$bundle_head_id"
+expect_value "$bundle_export_output" "commits" "3"
+expect_value "$bundle_export_output" "exported_branch_heads" "1"
+expect_value "$bundle_export_output" "entities" "2"
+expect_value "$bundle_export_output" "relations" "0"
+expect_value "$bundle_export_output" "checkpoint_candidates" "0"
+expect_value "$bundle_export_output" "state_matches_expected" "true"
+expect_value "$bundle_export_output" "commits_match_expected" "true"
+expect_value "$bundle_export_output" "exported_branch_heads_match_expected" "true"
+expect_value "$bundle_export_output" "entities_match_expected" "true"
+expect_value "$bundle_export_output" "relations_match_expected" "true"
+expect_value "$bundle_export_output" "checkpoint_candidates_match_expected" "true"
+
+bundle_export_dir_output="$(run_workvcs \
+    bundle export-dir "$bundle_source_store" \
+    --commit "$bundle_head_id" \
+    --output-dir "$bundle_dir" \
+    --expected-payload-files 5 \
+    --expected-payload-references 15)"
+expect_value "$bundle_export_dir_output" "commit_id" "$bundle_head_id"
+expect_value "$bundle_export_dir_output" "payload_files" "5"
+expect_value "$bundle_export_dir_output" "payload_references" "15"
+expect_value "$bundle_export_dir_output" "payload_files_match_expected" "true"
+expect_value "$bundle_export_dir_output" "payload_references_match_expected" "true"
+
+bundle_validate_output="$(run_workvcs \
+    bundle validate-dir "$bundle_source_store" \
+    --commit "$bundle_head_id" \
+    --input-dir "$bundle_dir" \
+    --require-valid \
+    --expected-payload-files 5 \
+    --expected-payload-references 15)"
+expect_value "$bundle_validate_output" "commit_id" "$bundle_head_id"
+expect_value "$bundle_validate_output" "valid" "true"
+expect_value "$bundle_validate_output" "valid_required" "true"
+expect_value "$bundle_validate_output" "expected_payload_files" "5"
+expect_value "$bundle_validate_output" "actual_payload_files" "5"
+expect_value "$bundle_validate_output" "expected_payload_references" "15"
+expect_value "$bundle_validate_output" "payload_files_match_expected" "true"
+expect_value "$bundle_validate_output" "payload_references_match_expected" "true"
+expect_value "$bundle_validate_output" "problem" "none"
+
+bundle_preflight_output="$(run_workvcs \
+    bundle preflight-dir "$bundle_target_store" \
+    --input-dir "$bundle_dir" \
+    --require-valid \
+    --require-can-apply \
+    --expected-payload-files 5 \
+    --expected-payload-references 15 \
+    --expected-exported-branch-heads 1 \
+    --expected-branch-heads-already-present 0 \
+    --expected-branch-heads-missing 0 \
+    --expected-branch-heads-fast-forward 1 \
+    --expected-branch-heads-diverged 0)"
+expect_value "$bundle_preflight_output" "valid" "true"
+expect_value "$bundle_preflight_output" "valid_required" "true"
+expect_value "$bundle_preflight_output" "can_apply" "true"
+expect_value "$bundle_preflight_output" "can_apply_required" "true"
+expect_value "$bundle_preflight_output" "action" "same_store_fast_forward_ready"
+expect_value "$bundle_preflight_output" "source_store_relation" "same_store"
+expect_value "$bundle_preflight_output" "incoming_commit_present" "false"
+expect_value "$bundle_preflight_output" "import_required" "true"
+expect_value "$bundle_preflight_output" "payload_files_match_expected" "true"
+expect_value "$bundle_preflight_output" "payload_references_match_expected" "true"
+expect_value "$bundle_preflight_output" "exported_branch_heads_match_expected" "true"
+expect_value "$bundle_preflight_output" "branch_heads_already_present_match_expected" "true"
+expect_value "$bundle_preflight_output" "branch_heads_missing_match_expected" "true"
+expect_value "$bundle_preflight_output" "branch_heads_fast_forward_match_expected" "true"
+expect_value "$bundle_preflight_output" "branch_heads_diverged_match_expected" "true"
+
+bundle_apply_output="$(run_workvcs \
+    bundle apply-dir "$bundle_target_store" \
+    --input-dir "$bundle_dir" \
+    --require-applied \
+    --expected-outcome same_store_fast_forward_applied \
+    --expected-imported-commits 1 \
+    --expected-imported-entity-versions 1 \
+    --expected-updated-branch-heads 1)"
+bundle_import_id="$(value "$bundle_apply_output" "import_id")"
+bundle_digest="$(value "$bundle_apply_output" "bundle_digest")"
+expect_value "$bundle_apply_output" "applied" "true"
+expect_value "$bundle_apply_output" "applied_required" "true"
+expect_value "$bundle_apply_output" "outcome" "same_store_fast_forward_applied"
+expect_value "$bundle_apply_output" "imported_commits" "1"
+expect_value "$bundle_apply_output" "imported_entity_versions" "1"
+expect_value "$bundle_apply_output" "updated_branch_heads" "1"
+expect_value "$bundle_apply_output" "outcome_matches_expected" "true"
+expect_value "$bundle_apply_output" "imported_commits_match_expected" "true"
+expect_value "$bundle_apply_output" "imported_entity_versions_match_expected" "true"
+expect_value "$bundle_apply_output" "updated_branch_heads_match_expected" "true"
+
+bundle_target_head_output="$(run_workvcs \
+    branch head "$bundle_target_store" \
+    --branch "$bundle_branch_id" \
+    --expected-state-digest "$bundle_state_digest")"
+expect_value "$bundle_target_head_output" "head_commit_id" "$bundle_head_id"
+expect_value "$bundle_target_head_output" "state_digest" "$bundle_state_digest"
+expect_value "$bundle_target_head_output" "matches_expected" "true"
+
+bundle_imported_task_output="$(run_workvcs \
+    task show "$bundle_target_store" \
+    --branch "$bundle_branch_id" \
+    --task "$bundle_task_id")"
+expect_value "$bundle_imported_task_output" "task_entity_id" "$bundle_task_id"
+expect_value "$bundle_imported_task_output" "status" "pending"
+expect_value "$bundle_imported_task_output" "priority" "5"
+
+bundle_import_show_output="$(run_workvcs \
+    bundle import-show "$bundle_target_store" \
+    --import "$bundle_import_id" \
+    --expected-bundle-digest "$bundle_digest" \
+    --expected-outcome same_store_fast_forward_applied)"
+expect_value "$bundle_import_show_output" "import_id" "$bundle_import_id"
+expect_value "$bundle_import_show_output" "outcome" "same_store_fast_forward_applied"
+expect_value "$bundle_import_show_output" "bundle_matches_expected" "true"
+expect_value "$bundle_import_show_output" "outcome_matches_expected" "true"
+
+bundle_import_list_output="$(run_workvcs \
+    bundle import-list "$bundle_target_store" \
+    --bundle-digest "$bundle_digest" \
+    --outcome same_store_fast_forward_applied \
+    --expected-imports 1)"
+expect_value "$bundle_import_list_output" "imports" "1"
+expect_value "$bundle_import_list_output" "imports_match_expected" "true"
+expect_value "$bundle_import_list_output" "import[0].import_id" "$bundle_import_id"
+expect_value "$bundle_import_list_output" "import[0].outcome" "same_store_fast_forward_applied"
+
 step "runtime closeout"
 session_end_output="$(run_workvcs \
     session end "$store" \
@@ -1020,4 +1199,5 @@ printf 'source_branch_id=%s\n' "$source_branch_id"
 printf 'merge_id=%s\n' "$merge_id"
 printf 'merge_result_commit_id=%s\n' "$result_commit_id"
 printf 'checkpoint_id=%s\n' "$checkpoint_id"
+printf 'bundle_import_id=%s\n' "$bundle_import_id"
 printf 'session_diff_id=%s\n' "$session_diff_id"

@@ -74,6 +74,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0401: Phase 4KL CLI Smoke Scheduling Claim Next Gate](decisions/adr/0401-phase-4kl-cli-smoke-scheduling-claim-next-gate.md)
 - [ADR-0402: Phase 4KM Merge Action Expectations Smoke Gate](decisions/adr/0402-phase-4km-merge-action-expectations-smoke-gate.md)
 - [ADR-0403: Phase 4KN Checkpoint Smoke Gate](decisions/adr/0403-phase-4kn-checkpoint-smoke-gate.md)
+- [ADR-0404: Phase 4KO Bundle Smoke Gate](decisions/adr/0404-phase-4ko-bundle-smoke-gate.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

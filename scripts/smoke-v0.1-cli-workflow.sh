@@ -75,6 +75,19 @@ expect_failure_contains() {
     [[ "$output" == *"$needle"* ]] || die "expected failure fragment ${needle}, got ${output}"
 }
 
+expect_integrity_matches() {
+    local output="$1"
+    expect_value "$output" "valid_required" "true"
+    expect_value "$output" "checked_branches_match_expected" "true"
+    expect_value "$output" "checked_commits_match_expected" "true"
+    expect_value "$output" "checked_changesets_match_expected" "true"
+    expect_value "$output" "checked_change_operations_match_expected" "true"
+    expect_value "$output" "checked_changeset_causal_anchors_match_expected" "true"
+    expect_value "$output" "checked_events_match_expected" "true"
+    expect_value "$output" "checked_checkpoints_match_expected" "true"
+    expect_value "$output" "invalid_checkpoints_match_expected" "true"
+}
+
 step "init"
 init_output="$(run_workvcs \
     init "$store" \
@@ -490,6 +503,43 @@ expect_value "$session_end_output" "lifecycle_state" "ended"
 expect_value "$session_end_output" "session_match_expected" "true"
 expect_value "$session_end_output" "lifecycle_state_match_expected" "true"
 expect_nonempty "$session_end_output" "session_diff_id"
+
+step "integrity gate"
+store_integrity_output="$(run_workvcs \
+    store integrity "$store" \
+    --require-valid \
+    --expected-checked-branches 1 \
+    --expected-checked-commits 5 \
+    --expected-checked-changesets 5 \
+    --expected-checked-change-operations 7 \
+    --expected-checked-changeset-causal-anchors 0 \
+    --expected-checked-events 10 \
+    --expected-checked-checkpoints 0 \
+    --expected-invalid-checkpoints 0)"
+expect_value "$store_integrity_output" "checked_branches" "1"
+expect_value "$store_integrity_output" "checked_commits" "5"
+expect_value "$store_integrity_output" "checked_changesets" "5"
+expect_value "$store_integrity_output" "checked_change_operations" "7"
+expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
+expect_value "$store_integrity_output" "checked_events" "10"
+expect_value "$store_integrity_output" "checked_checkpoints" "0"
+expect_value "$store_integrity_output" "invalid_checkpoints" "0"
+expect_integrity_matches "$store_integrity_output"
+
+doctor_output="$(run_workvcs \
+    doctor "$store" \
+    --require-valid \
+    --expected-checked-branches 1 \
+    --expected-checked-commits 5 \
+    --expected-checked-changesets 5 \
+    --expected-checked-change-operations 7 \
+    --expected-checked-changeset-causal-anchors 0 \
+    --expected-checked-events 10 \
+    --expected-checked-checkpoints 0 \
+    --expected-invalid-checkpoints 0)"
+expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
+expect_contains "$doctor_output" "checked_branches=1 checked_commits=5 checked_changesets=5 checked_change_operations=7 checked_changeset_causal_anchors=0 checked_events=10 checked_checkpoints=0 invalid_checkpoints=0"
+expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'
 printf 'store_id=%s\n' "$store_id"

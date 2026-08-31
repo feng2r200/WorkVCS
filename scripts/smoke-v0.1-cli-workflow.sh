@@ -1480,6 +1480,11 @@ expect_value "$bundle_divergence_import_list_output" "imports" "1"
 expect_value "$bundle_divergence_import_list_output" "imports_match_expected" "true"
 expect_value "$bundle_divergence_import_list_output" "import[0].import_id" "$bundle_divergence_import_id"
 expect_value "$bundle_divergence_import_list_output" "import[0].outcome" "same_store_divergence_detected"
+expect_value "$bundle_divergence_import_list_output" "import[0].branch_head_detail_count" "1"
+expect_value "$bundle_divergence_import_list_output" "import[0].branch_head_detail.0.status" "diverged"
+expect_value "$bundle_divergence_import_list_output" "import[0].branch_head_detail.0.source_head_commit_id" "$bundle_divergence_source_head_id"
+expect_value "$bundle_divergence_import_list_output" "import[0].branch_head_detail.0.target_head_commit_id" "$bundle_divergence_target_head_id"
+expect_value "$bundle_divergence_import_list_output" "import[0].branch_head_detail.0.merge_base_commit_id" "$bundle_divergence_first_commit_id"
 
 step "runtime closeout"
 session_end_output="$(run_workvcs \

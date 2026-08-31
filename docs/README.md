@@ -79,6 +79,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0406: Phase 4KQ Bundle Divergence Smoke Gate](decisions/adr/0406-phase-4kq-bundle-divergence-smoke-gate.md)
 - [ADR-0407: Phase 4KR Bundle Branch Preflight Detail](decisions/adr/0407-phase-4kr-bundle-branch-preflight-detail.md)
 - [ADR-0408: Phase 4KS Bundle Import Show Branch Detail](decisions/adr/0408-phase-4ks-bundle-import-show-branch-detail.md)
+- [ADR-0409: Phase 4KT Bundle Import List Branch Detail](decisions/adr/0409-phase-4kt-bundle-import-list-branch-detail.md)
 
 These documents specify what WorkVCS currently means. They do not claim that
 the described runtime has been implemented.

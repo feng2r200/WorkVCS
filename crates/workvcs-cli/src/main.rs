@@ -16708,48 +16708,67 @@ fn append_branch_head_detail_expectations(
 
 fn write_branch_head_preflight_details(
     output: &mut String,
+    prefix: Option<&str>,
     details: &[BundleBranchHeadPreflightDetail],
 ) {
-    writeln!(output, "branch_head_detail_count={}", details.len()).expect("write to String");
+    let key = |name: &str| {
+        prefix
+            .map(|prefix| format!("{prefix}.{name}"))
+            .unwrap_or_else(|| name.to_owned())
+    };
+    writeln!(
+        output,
+        "{}={}",
+        key("branch_head_detail_count"),
+        details.len()
+    )
+    .expect("write to String");
     for (index, detail) in details.iter().enumerate() {
-        let prefix = format!("branch_head_detail.{index}");
-        writeln!(output, "{prefix}.workspace_id={}", detail.workspace_id).expect("write to String");
-        writeln!(output, "{prefix}.branch_id={}", detail.branch_id).expect("write to String");
-        writeln!(output, "{prefix}.branch_name={}", detail.branch_name).expect("write to String");
+        let detail_prefix = key(&format!("branch_head_detail.{index}"));
         writeln!(
             output,
-            "{prefix}.source_head_commit_id={}",
+            "{detail_prefix}.workspace_id={}",
+            detail.workspace_id
+        )
+        .expect("write to String");
+        writeln!(output, "{detail_prefix}.branch_id={}", detail.branch_id)
+            .expect("write to String");
+        writeln!(output, "{detail_prefix}.branch_name={}", detail.branch_name)
+            .expect("write to String");
+        writeln!(
+            output,
+            "{detail_prefix}.source_head_commit_id={}",
             detail.source_head_commit_id
         )
         .expect("write to String");
         writeln!(
             output,
-            "{prefix}.source_head_state_digest={}",
+            "{detail_prefix}.source_head_state_digest={}",
             detail.source_head_state_digest
         )
         .expect("write to String");
         writeln!(
             output,
-            "{prefix}.target_workspace_id={}",
+            "{detail_prefix}.target_workspace_id={}",
             render_optional_display_or_none(detail.target_workspace_id.as_ref())
         )
         .expect("write to String");
         writeln!(
             output,
-            "{prefix}.target_head_commit_id={}",
+            "{detail_prefix}.target_head_commit_id={}",
             render_optional_display_or_none(detail.target_head_commit_id.as_ref())
         )
         .expect("write to String");
         writeln!(
             output,
-            "{prefix}.target_head_state_digest={}",
+            "{detail_prefix}.target_head_state_digest={}",
             render_optional_display_or_none(detail.target_head_state_digest.as_ref())
         )
         .expect("write to String");
-        writeln!(output, "{prefix}.status={}", detail.status).expect("write to String");
+        writeln!(output, "{detail_prefix}.status={}", detail.status).expect("write to String");
         writeln!(
             output,
-            "{prefix}.merge_base_commit_id={}",
+            "{detail_prefix}.merge_base_commit_id={}",
             render_optional_display_or_none(detail.merge_base_commit_id.as_ref())
         )
         .expect("write to String");
@@ -16793,7 +16812,7 @@ fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> Strin
         result.branch_heads_diverged,
         result.problem.as_deref().unwrap_or("none")
     );
-    write_branch_head_preflight_details(&mut output, &result.branch_head_details);
+    write_branch_head_preflight_details(&mut output, None, &result.branch_head_details);
     output
 }
 
@@ -16824,7 +16843,7 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
         result.preflight.branch_heads_diverged,
         result.preflight.problem.as_deref().unwrap_or("none")
     );
-    write_branch_head_preflight_details(&mut output, &result.preflight.branch_head_details);
+    write_branch_head_preflight_details(&mut output, None, &result.preflight.branch_head_details);
     output
 }
 
@@ -16877,7 +16896,7 @@ fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
         result.updated_branch_heads,
         result.preflight.problem.as_deref().unwrap_or("none")
     );
-    write_branch_head_preflight_details(&mut output, &result.preflight.branch_head_details);
+    write_branch_head_preflight_details(&mut output, None, &result.preflight.branch_head_details);
     output
 }
 
@@ -16889,18 +16908,21 @@ fn render_bundle_import_attempt_snapshot(snapshot: &BundleImportAttemptSnapshot)
         .as_ref()
         .map(|outcome| outcome.branch_head_details.as_slice())
         .unwrap_or(&[]);
-    write_branch_head_preflight_details(&mut output, branch_head_details);
+    write_branch_head_preflight_details(&mut output, None, branch_head_details);
     output
 }
 
 fn render_bundle_import_attempt_list(result: &BundleImportAttemptListResult) -> String {
     let mut output = format!("imports={}\n", result.attempts.len());
     for (index, snapshot) in result.attempts.iter().enumerate() {
-        write_bundle_import_attempt_snapshot_fields(
-            &mut output,
-            Some(&format!("import[{index}]")),
-            snapshot,
-        );
+        let prefix = format!("import[{index}]");
+        write_bundle_import_attempt_snapshot_fields(&mut output, Some(&prefix), snapshot);
+        let branch_head_details = snapshot
+            .outcome
+            .as_ref()
+            .map(|outcome| outcome.branch_head_details.as_slice())
+            .unwrap_or(&[]);
+        write_branch_head_preflight_details(&mut output, Some(&prefix), branch_head_details);
     }
     output
 }
@@ -26018,6 +26040,56 @@ mod tests {
         assert_eq!(
             value(&shown_import, "first_branch_head_merge_base_match_expected"),
             "true"
+        );
+        let listed_imports = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-list",
+            target_store,
+            "--bundle-digest",
+            &value(&shown_import, "bundle_digest"),
+            "--outcome",
+            "same_store_divergence_detected",
+            "--expected-imports",
+            "1",
+        ])
+        .expect("parse divergent bundle import-list"))
+        .expect("list persisted divergent bundle import attempts");
+        assert_eq!(value(&listed_imports, "imports"), "1");
+        assert_eq!(value(&listed_imports, "imports_match_expected"), "true");
+        assert_eq!(value(&listed_imports, "import[0].import_id"), import_id);
+        assert_eq!(
+            value(&listed_imports, "import[0].outcome"),
+            "same_store_divergence_detected"
+        );
+        assert_eq!(
+            value(&listed_imports, "import[0].branch_head_detail_count"),
+            "1"
+        );
+        assert_eq!(
+            value(&listed_imports, "import[0].branch_head_detail.0.status"),
+            "diverged"
+        );
+        assert_eq!(
+            value(
+                &listed_imports,
+                "import[0].branch_head_detail.0.source_head_commit_id"
+            ),
+            source_second_commit
+        );
+        assert_eq!(
+            value(
+                &listed_imports,
+                "import[0].branch_head_detail.0.target_head_commit_id"
+            ),
+            target_diverged_commit
+        );
+        assert_eq!(
+            value(
+                &listed_imports,
+                "import[0].branch_head_detail.0.merge_base_commit_id"
+            ),
+            first_commit
         );
 
         let apply = run(Cli::try_parse_from([

@@ -693,7 +693,7 @@ expect_value "$completion_history_output" "entries" "10"
 expect_value "$completion_history_output" "entries_match_expected" "true"
 expect_contains "$completion_history_output" "operation=entity.transition"
 
-step "runtime closeout"
+step "task claim release before merge"
 claim_release_output="$(run_workvcs \
     claim release "$store" \
     --session "$session_id" \
@@ -706,6 +706,201 @@ expect_value "$claim_release_output" "lifecycle_state" "released"
 expect_value "$claim_release_output" "session_match_expected" "true"
 expect_value "$claim_release_output" "lifecycle_state_match_expected" "true"
 
+step "merge lifecycle"
+merge_base_commit_id="$head_commit_id"
+source_branch_output="$(run_workvcs \
+    branch fork "$store" \
+    --from-branch "$branch_id" \
+    --name "smoke-source")"
+source_branch_id="$(value "$source_branch_output" "branch_id")"
+expect_value "$source_branch_output" "workspace_id" "$workspace_id"
+expect_value "$source_branch_output" "source_branch_id" "$branch_id"
+expect_value "$source_branch_output" "head_commit_id" "$merge_base_commit_id"
+
+branch_list_output="$(run_workvcs \
+    branch list "$store" \
+    --workspace "$workspace_id" \
+    --expected-branches 2)"
+expect_value "$branch_list_output" "branches" "2"
+expect_value "$branch_list_output" "branches_match_expected" "true"
+
+target_merge_task_output="$(run_workvcs \
+    task create "$store" \
+    --branch "$branch_id" \
+    --head "$merge_base_commit_id" \
+    --description "Smoke CLI target merge marker" \
+    --priority 3)"
+target_merge_task_id="$(value "$target_merge_task_output" "task_entity_id")"
+target_merge_head_id="$(value "$target_merge_task_output" "commit_id")"
+head_commit_id="$target_merge_head_id"
+expect_value "$target_merge_task_output" "status" "pending"
+expect_nonempty "$target_merge_task_output" "changeset_id"
+
+source_merge_task_output="$(run_workvcs \
+    task create "$store" \
+    --branch "$source_branch_id" \
+    --head "$merge_base_commit_id" \
+    --description "Smoke CLI source merge task" \
+    --priority 2)"
+source_merge_task_id="$(value "$source_merge_task_output" "task_entity_id")"
+source_merge_head_id="$(value "$source_merge_task_output" "commit_id")"
+expect_value "$source_merge_task_output" "status" "pending"
+expect_nonempty "$source_merge_task_output" "changeset_id"
+
+merge_start_output="$(run_workvcs \
+    merge start "$store" \
+    --target-branch "$branch_id" \
+    --source-branch "$source_branch_id" \
+    --session "$session_id" \
+    --expected-runtime-state active \
+    --expected-merge-base "$merge_base_commit_id" \
+    --expected-target-head "$target_merge_head_id" \
+    --expected-source-head "$source_merge_head_id" \
+    --expected-origin-session "$session_id")"
+merge_id="$(value "$merge_start_output" "merge_id")"
+expect_value "$merge_start_output" "runtime_state" "active"
+expect_value "$merge_start_output" "runtime_state_matches_expected" "true"
+expect_value "$merge_start_output" "merge_base_matches_expected" "true"
+expect_value "$merge_start_output" "target_head_matches_expected" "true"
+expect_value "$merge_start_output" "source_head_matches_expected" "true"
+expect_value "$merge_start_output" "origin_session_matches_expected" "true"
+
+merge_show_output="$(run_workvcs \
+    merge show "$store" \
+    --merge "$merge_id" \
+    --expected-runtime-state active \
+    --expected-outcome none)"
+merge_item_id="$(value "$merge_show_output" "item.0.merge_item_id")"
+expect_value "$merge_show_output" "items" "1"
+expect_value "$merge_show_output" "item.0.classification" "AUTO"
+expect_value "$merge_show_output" "item.0.subject_id" "$source_merge_task_id"
+expect_value "$merge_show_output" "item.0.resolution" "none"
+expect_value "$merge_show_output" "runtime_state_matches_expected" "true"
+expect_value "$merge_show_output" "outcome_matches_expected" "true"
+
+merge_resolve_output="$(run_workvcs \
+    merge resolve "$store" \
+    --item "$merge_item_id" \
+    --kind theirs \
+    --session "$session_id" \
+    --rationale-json '{"reason":"accept smoke source task"}' \
+    --expected-merge "$merge_id" \
+    --expected-resolution theirs \
+    --expected-resolved-by-session "$session_id")"
+expect_value "$merge_resolve_output" "merge_matches_expected" "true"
+expect_value "$merge_resolve_output" "resolution_matches_expected" "true"
+expect_value "$merge_resolve_output" "resolved_by_session_matches_expected" "true"
+
+merge_freeze_output="$(run_workvcs \
+    merge freeze "$store" \
+    --merge "$merge_id" \
+    --expected-merge "$merge_id" \
+    --expected-frozen-items 1)"
+expect_value "$merge_freeze_output" "merge_matches_expected" "true"
+expect_value "$merge_freeze_output" "frozen_items_match_expected" "true"
+
+merge_active_list_output="$(run_workvcs \
+    merge list "$store" \
+    --workspace "$workspace_id" \
+    --target-branch "$branch_id" \
+    --expected-merges 1)"
+expect_value "$merge_active_list_output" "merges" "1"
+expect_value "$merge_active_list_output" "merge.0.merge_id" "$merge_id"
+expect_value "$merge_active_list_output" "merge.0.runtime_state" "active"
+expect_value "$merge_active_list_output" "merges_match_expected" "true"
+
+merge_continue_output="$(run_workvcs \
+    merge continue "$store" \
+    --merge "$merge_id" \
+    --session "$session_id" \
+    --detail-json '{"reason":"complete smoke merge"}' \
+    --expected-runtime-state completed \
+    --expected-target-branch "$branch_id" \
+    --expected-source-branch "$source_branch_id" \
+    --expected-continued-by-session "$session_id")"
+result_commit_id="$(value "$merge_continue_output" "result_commit_id")"
+head_commit_id="$result_commit_id"
+expect_value "$merge_continue_output" "runtime_state" "completed"
+expect_value "$merge_continue_output" "runtime_state_matches_expected" "true"
+expect_value "$merge_continue_output" "target_branch_matches_expected" "true"
+expect_value "$merge_continue_output" "source_branch_matches_expected" "true"
+expect_value "$merge_continue_output" "continued_by_session_matches_expected" "true"
+expect_nonempty "$merge_continue_output" "changeset_id"
+
+merge_head_output="$(run_workvcs \
+    branch head "$store" \
+    --branch "$branch_id")"
+merge_state_digest="$(value "$merge_head_output" "state_digest")"
+expect_value "$merge_head_output" "head_commit_id" "$result_commit_id"
+expect_value "$merge_head_output" "head_commit_kind" "merge"
+expect_value "$merge_head_output" "head_operation_type" "merge.continue"
+
+merge_commit_output="$(run_workvcs \
+    commit show "$store" \
+    --commit "$result_commit_id")"
+expect_value "$merge_commit_output" "commit_kind" "merge"
+expect_value "$merge_commit_output" "operation_type" "merge.continue"
+expect_value "$merge_commit_output" "parents" "2"
+expect_value "$merge_commit_output" "parent[0].role" "primary"
+expect_value "$merge_commit_output" "parent[0].commit_id" "$target_merge_head_id"
+expect_value "$merge_commit_output" "parent[1].role" "secondary"
+expect_value "$merge_commit_output" "parent[1].commit_id" "$source_merge_head_id"
+
+merge_closed_show_output="$(run_workvcs \
+    merge show "$store" \
+    --merge "$merge_id" \
+    --expected-runtime-state completed \
+    --expected-outcome completed)"
+expect_value "$merge_closed_show_output" "runtime_state" "completed"
+expect_value "$merge_closed_show_output" "outcome" "completed"
+expect_value "$merge_closed_show_output" "outcome.result_commit_id" "$result_commit_id"
+expect_value "$merge_closed_show_output" "runtime_state_matches_expected" "true"
+expect_value "$merge_closed_show_output" "outcome_matches_expected" "true"
+
+merge_hidden_list_output="$(run_workvcs \
+    merge list "$store" \
+    --workspace "$workspace_id" \
+    --target-branch "$branch_id" \
+    --expected-merges 0)"
+expect_value "$merge_hidden_list_output" "merges" "0"
+expect_value "$merge_hidden_list_output" "merges_match_expected" "true"
+
+merge_closed_list_output="$(run_workvcs \
+    merge list "$store" \
+    --workspace "$workspace_id" \
+    --target-branch "$branch_id" \
+    --include-closed \
+    --expected-merges 1)"
+expect_value "$merge_closed_list_output" "merges" "1"
+expect_value "$merge_closed_list_output" "merge.0.merge_id" "$merge_id"
+expect_value "$merge_closed_list_output" "merge.0.runtime_state" "completed"
+expect_value "$merge_closed_list_output" "merge.0.outcome" "completed"
+expect_value "$merge_closed_list_output" "merges_match_expected" "true"
+
+merge_history_output="$(run_workvcs \
+    history "$store" \
+    --branch "$branch_id" \
+    --expected-entries 12)"
+expect_value "$merge_history_output" "start_commit_id" "$result_commit_id"
+expect_value "$merge_history_output" "entries" "12"
+expect_value "$merge_history_output" "entries_match_expected" "true"
+expect_contains "$merge_history_output" "operation=merge.continue"
+
+merge_show_at_output="$(run_workvcs \
+    show-at "$store" \
+    --branch "$branch_id")"
+expect_value "$merge_show_at_output" "commit_id" "$result_commit_id"
+expect_value "$merge_show_at_output" "state_digest" "$merge_state_digest"
+expect_contains "$merge_show_at_output" "$target_merge_task_id"
+expect_contains "$merge_show_at_output" "$source_merge_task_id"
+
+merge_show_at_expected_output="$(run_workvcs \
+    show-at "$store" \
+    --commit "$result_commit_id" \
+    --expected-state-digest "$merge_state_digest")"
+expect_value "$merge_show_at_expected_output" "matches_expected" "true"
+
+step "runtime closeout"
 session_end_output="$(run_workvcs \
     session end "$store" \
     --session "$session_id" \
@@ -723,20 +918,20 @@ step "integrity gate"
 store_integrity_output="$(run_workvcs \
     store integrity "$store" \
     --require-valid \
-    --expected-checked-branches 1 \
-    --expected-checked-commits 10 \
-    --expected-checked-changesets 10 \
-    --expected-checked-change-operations 14 \
+    --expected-checked-branches 2 \
+    --expected-checked-commits 13 \
+    --expected-checked-changesets 13 \
+    --expected-checked-change-operations 17 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 19 \
+    --expected-checked-events 24 \
     --expected-checked-checkpoints 0 \
     --expected-invalid-checkpoints 0)"
-expect_value "$store_integrity_output" "checked_branches" "1"
-expect_value "$store_integrity_output" "checked_commits" "10"
-expect_value "$store_integrity_output" "checked_changesets" "10"
-expect_value "$store_integrity_output" "checked_change_operations" "14"
+expect_value "$store_integrity_output" "checked_branches" "2"
+expect_value "$store_integrity_output" "checked_commits" "13"
+expect_value "$store_integrity_output" "checked_changesets" "13"
+expect_value "$store_integrity_output" "checked_change_operations" "17"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "19"
+expect_value "$store_integrity_output" "checked_events" "24"
 expect_value "$store_integrity_output" "checked_checkpoints" "0"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -744,16 +939,16 @@ expect_integrity_matches "$store_integrity_output"
 doctor_output="$(run_workvcs \
     doctor "$store" \
     --require-valid \
-    --expected-checked-branches 1 \
-    --expected-checked-commits 10 \
-    --expected-checked-changesets 10 \
-    --expected-checked-change-operations 14 \
+    --expected-checked-branches 2 \
+    --expected-checked-commits 13 \
+    --expected-checked-changesets 13 \
+    --expected-checked-change-operations 17 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 19 \
+    --expected-checked-events 24 \
     --expected-checked-checkpoints 0 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=1 checked_commits=10 checked_changesets=10 checked_change_operations=14 checked_changeset_causal_anchors=0 checked_events=19 checked_checkpoints=0 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=13 checked_changesets=13 checked_change_operations=17 checked_changeset_causal_anchors=0 checked_events=24 checked_checkpoints=0 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'
@@ -764,4 +959,7 @@ printf 'genesis_state_digest=%s\n' "$genesis_state_digest"
 printf 'task_entity_id=%s\n' "$task_id"
 printf 'verification_entity_id=%s\n' "$verification_id"
 printf 'claim_id=%s\n' "$claim_id"
+printf 'source_branch_id=%s\n' "$source_branch_id"
+printf 'merge_id=%s\n' "$merge_id"
+printf 'merge_result_commit_id=%s\n' "$result_commit_id"
 printf 'session_diff_id=%s\n' "$session_diff_id"

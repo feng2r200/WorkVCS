@@ -1675,6 +1675,21 @@ enum MergeCommand {
 
         #[arg(long)]
         session: Option<String>,
+
+        #[arg(long)]
+        expected_runtime_state: Option<String>,
+
+        #[arg(long)]
+        expected_merge_base: Option<String>,
+
+        #[arg(long)]
+        expected_target_head: Option<String>,
+
+        #[arg(long)]
+        expected_source_head: Option<String>,
+
+        #[arg(long)]
+        expected_origin_session: Option<String>,
     },
     Abort {
         #[arg(value_name = "STORE")]
@@ -1707,6 +1722,15 @@ enum MergeCommand {
 
         #[arg(long, default_value = "{}")]
         rationale_json: String,
+
+        #[arg(long)]
+        expected_merge: Option<String>,
+
+        #[arg(long)]
+        expected_resolution: Option<String>,
+
+        #[arg(long)]
+        expected_resolved_by_session: Option<String>,
     },
     Freeze {
         #[arg(value_name = "STORE")]
@@ -1714,6 +1738,12 @@ enum MergeCommand {
 
         #[arg(long)]
         merge: String,
+
+        #[arg(long)]
+        expected_merge: Option<String>,
+
+        #[arg(long)]
+        expected_frozen_items: Option<usize>,
     },
     Continue {
         #[arg(value_name = "STORE")]
@@ -1727,6 +1757,18 @@ enum MergeCommand {
 
         #[arg(long, default_value = "{}")]
         detail_json: String,
+
+        #[arg(long)]
+        expected_runtime_state: Option<String>,
+
+        #[arg(long)]
+        expected_target_branch: Option<String>,
+
+        #[arg(long)]
+        expected_source_branch: Option<String>,
+
+        #[arg(long)]
+        expected_continued_by_session: Option<String>,
     },
     Show {
         #[arg(value_name = "STORE")]
@@ -10446,6 +10488,11 @@ fn run(cli: Cli) -> Result<String> {
                     target_branch,
                     source_branch,
                     session,
+                    expected_runtime_state,
+                    expected_merge_base,
+                    expected_target_head,
+                    expected_source_head,
+                    expected_origin_session,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -10456,7 +10503,20 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(session) = session {
                 options = options.with_origin_session_id(SessionId::parse_canonical(&session)?);
             }
-            Ok(render_merge_start(&engine.start_merge(options)?))
+            let result = engine.start_merge(options)?;
+            let mut output = render_merge_start(&result);
+            append_merge_start_expectations(
+                &mut output,
+                &result,
+                MergeStartExpectationArgs {
+                    expected_runtime_state,
+                    expected_merge_base,
+                    expected_target_head,
+                    expected_source_head,
+                    expected_origin_session,
+                },
+            )?;
+            Ok(output)
         }
         Command::Merge {
             command:
@@ -10484,6 +10544,9 @@ fn run(cli: Cli) -> Result<String> {
                     session,
                     custom_payload_json,
                     rationale_json,
+                    expected_merge,
+                    expected_resolution,
+                    expected_resolved_by_session,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -10518,16 +10581,42 @@ fn run(cli: Cli) -> Result<String> {
                 options =
                     options.with_resolved_by_session_id(SessionId::parse_canonical(&session)?);
             }
-            Ok(render_merge_resolve(&engine.resolve_merge_item(options)?)?)
+            let result = engine.resolve_merge_item(options)?;
+            let mut output = render_merge_resolve(&result)?;
+            append_merge_resolve_expectations(
+                &mut output,
+                &result,
+                MergeResolveExpectationArgs {
+                    expected_merge,
+                    expected_resolution,
+                    expected_resolved_by_session,
+                },
+            )?;
+            Ok(output)
         }
         Command::Merge {
-            command: MergeCommand::Freeze { store, merge },
+            command:
+                MergeCommand::Freeze {
+                    store,
+                    merge,
+                    expected_merge,
+                    expected_frozen_items,
+                },
         } => {
             let mut engine = Engine::open(store)?;
             let frozen = engine.freeze_merge_resolutions(MergeFreezeResolutionsOptions::new(
                 MergeId::parse_canonical(&merge)?,
             ))?;
-            Ok(render_merge_freeze(&frozen))
+            let mut output = render_merge_freeze(&frozen);
+            append_merge_freeze_expectations(
+                &mut output,
+                &frozen,
+                MergeFreezeExpectationArgs {
+                    expected_merge,
+                    expected_frozen_items,
+                },
+            )?;
+            Ok(output)
         }
         Command::Merge {
             command:
@@ -10536,6 +10625,10 @@ fn run(cli: Cli) -> Result<String> {
                     merge,
                     session,
                     detail_json,
+                    expected_runtime_state,
+                    expected_target_branch,
+                    expected_source_branch,
+                    expected_continued_by_session,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -10544,7 +10637,19 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(session) = session {
                 options = options.with_continue_session_id(SessionId::parse_canonical(&session)?);
             }
-            Ok(render_merge_continue(&engine.continue_merge(options)?))
+            let result = engine.continue_merge(options)?;
+            let mut output = render_merge_continue(&result);
+            append_merge_continue_expectations(
+                &mut output,
+                &result,
+                MergeContinueExpectationArgs {
+                    expected_runtime_state,
+                    expected_target_branch,
+                    expected_source_branch,
+                    expected_continued_by_session,
+                },
+            )?;
+            Ok(output)
         }
         Command::Merge {
             command:
@@ -14639,6 +14744,188 @@ fn render_merge_continue(result: &MergeContinueResult) -> String {
     )
 }
 
+struct MergeStartExpectationArgs {
+    expected_runtime_state: Option<String>,
+    expected_merge_base: Option<String>,
+    expected_target_head: Option<String>,
+    expected_source_head: Option<String>,
+    expected_origin_session: Option<String>,
+}
+
+fn append_merge_start_expectations(
+    output: &mut String,
+    result: &MergeStartResult,
+    expectations: MergeStartExpectationArgs,
+) -> Result<()> {
+    let MergeStartExpectationArgs {
+        expected_runtime_state,
+        expected_merge_base,
+        expected_target_head,
+        expected_source_head,
+        expected_origin_session,
+    } = expectations;
+    append_expected_text_match(
+        output,
+        "merge start runtime state",
+        result.runtime_state.as_str(),
+        expected_runtime_state.as_deref(),
+        "runtime_state_matches_expected",
+    )?;
+    append_expected_commit_id_match(
+        output,
+        "merge start merge base",
+        &result.merge_base_commit_id,
+        expected_merge_base.as_deref(),
+        "merge_base_matches_expected",
+    )?;
+    append_expected_commit_id_match(
+        output,
+        "merge start target head",
+        &result.target_head_commit_id,
+        expected_target_head.as_deref(),
+        "target_head_matches_expected",
+    )?;
+    append_expected_commit_id_match(
+        output,
+        "merge start source head",
+        &result.source_head_commit_id,
+        expected_source_head.as_deref(),
+        "source_head_matches_expected",
+    )?;
+    append_expected_optional_session_id_match(
+        output,
+        "merge start origin session",
+        result.origin_session_id,
+        expected_origin_session.as_deref(),
+        "origin_session_matches_expected",
+    )?;
+    Ok(())
+}
+
+struct MergeResolveExpectationArgs {
+    expected_merge: Option<String>,
+    expected_resolution: Option<String>,
+    expected_resolved_by_session: Option<String>,
+}
+
+fn append_merge_resolve_expectations(
+    output: &mut String,
+    result: &MergeResolveResult,
+    expectations: MergeResolveExpectationArgs,
+) -> Result<()> {
+    let MergeResolveExpectationArgs {
+        expected_merge,
+        expected_resolution,
+        expected_resolved_by_session,
+    } = expectations;
+    append_expected_merge_id_match(
+        output,
+        "merge resolve merge",
+        &result.merge_id,
+        expected_merge.as_deref(),
+        "merge_matches_expected",
+    )?;
+    if let Some(expected_resolution) = expected_resolution {
+        let expected_resolution = parse_merge_resolution_kind(&expected_resolution)?;
+        if result.resolution.resolution_kind != expected_resolution {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "merge resolve resolution {} does not match expected {}",
+                result.resolution.resolution_kind.as_str(),
+                expected_resolution.as_str()
+            )));
+        }
+        output.push_str("resolution_matches_expected=true\n");
+    }
+    append_expected_optional_session_id_match(
+        output,
+        "merge resolve resolved-by session",
+        result.resolution.resolved_by_session_id,
+        expected_resolved_by_session.as_deref(),
+        "resolved_by_session_matches_expected",
+    )?;
+    Ok(())
+}
+
+struct MergeFreezeExpectationArgs {
+    expected_merge: Option<String>,
+    expected_frozen_items: Option<usize>,
+}
+
+fn append_merge_freeze_expectations(
+    output: &mut String,
+    result: &MergeFreezeResolutionsResult,
+    expectations: MergeFreezeExpectationArgs,
+) -> Result<()> {
+    let MergeFreezeExpectationArgs {
+        expected_merge,
+        expected_frozen_items,
+    } = expectations;
+    append_expected_merge_id_match(
+        output,
+        "merge freeze merge",
+        &result.merge_id,
+        expected_merge.as_deref(),
+        "merge_matches_expected",
+    )?;
+    append_expected_count_match(
+        output,
+        "merge freeze frozen items",
+        result.frozen_items,
+        expected_frozen_items,
+        "frozen_items_match_expected",
+    )?;
+    Ok(())
+}
+
+struct MergeContinueExpectationArgs {
+    expected_runtime_state: Option<String>,
+    expected_target_branch: Option<String>,
+    expected_source_branch: Option<String>,
+    expected_continued_by_session: Option<String>,
+}
+
+fn append_merge_continue_expectations(
+    output: &mut String,
+    result: &MergeContinueResult,
+    expectations: MergeContinueExpectationArgs,
+) -> Result<()> {
+    let MergeContinueExpectationArgs {
+        expected_runtime_state,
+        expected_target_branch,
+        expected_source_branch,
+        expected_continued_by_session,
+    } = expectations;
+    append_expected_text_match(
+        output,
+        "merge continue runtime state",
+        result.runtime_state.as_str(),
+        expected_runtime_state.as_deref(),
+        "runtime_state_matches_expected",
+    )?;
+    append_expected_branch_id_match(
+        output,
+        "merge continue target branch",
+        &result.target_branch_id,
+        expected_target_branch.as_deref(),
+        "target_branch_matches_expected",
+    )?;
+    append_expected_branch_id_match(
+        output,
+        "merge continue source branch",
+        &result.source_branch_id,
+        expected_source_branch.as_deref(),
+        "source_branch_matches_expected",
+    )?;
+    append_expected_optional_session_id_match(
+        output,
+        "merge continue continued-by session",
+        result.continued_by_session_id,
+        expected_continued_by_session.as_deref(),
+        "continued_by_session_matches_expected",
+    )?;
+    Ok(())
+}
+
 fn render_merge_attempt(merge: &MergeAttemptSnapshot) -> Result<String> {
     let origin_session_id = merge
         .origin_session_id
@@ -16125,6 +16412,91 @@ fn append_expected_text_match(
         if actual != expected {
             return Err(WorkVcsError::QueryInvalid(format!(
                 "{label} {actual:?} does not match expected {expected:?}"
+            )));
+        }
+        output.push_str(marker);
+        output.push_str("=true\n");
+    }
+    Ok(())
+}
+
+fn append_expected_commit_id_match(
+    output: &mut String,
+    label: &str,
+    actual: &CommitId,
+    expected: Option<&str>,
+    marker: &str,
+) -> Result<()> {
+    if let Some(expected) = expected {
+        let expected = CommitId::parse_canonical(expected)?;
+        if actual != &expected {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {actual} does not match expected {expected}"
+            )));
+        }
+        output.push_str(marker);
+        output.push_str("=true\n");
+    }
+    Ok(())
+}
+
+fn append_expected_branch_id_match(
+    output: &mut String,
+    label: &str,
+    actual: &BranchId,
+    expected: Option<&str>,
+    marker: &str,
+) -> Result<()> {
+    if let Some(expected) = expected {
+        let expected = BranchId::parse_canonical(expected)?;
+        if actual != &expected {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {actual} does not match expected {expected}"
+            )));
+        }
+        output.push_str(marker);
+        output.push_str("=true\n");
+    }
+    Ok(())
+}
+
+fn append_expected_merge_id_match(
+    output: &mut String,
+    label: &str,
+    actual: &MergeId,
+    expected: Option<&str>,
+    marker: &str,
+) -> Result<()> {
+    if let Some(expected) = expected {
+        let expected = MergeId::parse_canonical(expected)?;
+        if actual != &expected {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {actual} does not match expected {expected}"
+            )));
+        }
+        output.push_str(marker);
+        output.push_str("=true\n");
+    }
+    Ok(())
+}
+
+fn append_expected_optional_session_id_match(
+    output: &mut String,
+    label: &str,
+    actual: Option<SessionId>,
+    expected: Option<&str>,
+    marker: &str,
+) -> Result<()> {
+    if let Some(expected) = expected {
+        if expected != "none" {
+            SessionId::parse_canonical(expected)?;
+        }
+        let actual = actual
+            .map(|session_id| session_id.to_string())
+            .unwrap_or_else(|| "none".to_owned());
+        if actual != expected {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {actual} does not match expected {expected}"
             )));
         }
         output.push_str(marker);
@@ -38572,6 +38944,398 @@ mod tests {
             value(&listed, "relation.0.relation_id"),
             value(&relation, "relation_id")
         );
+    }
+
+    struct CliMergeFixture {
+        _tempdir: tempfile::TempDir,
+        store: String,
+        workspace_id: String,
+        target_branch: String,
+        source_branch: String,
+        base_commit: String,
+        target_head: String,
+        source_head: String,
+        source_task_id: String,
+        session_id: String,
+    }
+
+    fn cli_merge_fixture() -> CliMergeFixture {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text").to_owned();
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", &store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            &store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let target_branch = value(&workspace, "branch_id");
+        let genesis_head = value(&workspace, "genesis_commit_id");
+
+        let base = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            &store,
+            "--branch",
+            &target_branch,
+            "--head",
+            &genesis_head,
+            "--description",
+            "Base task",
+        ])
+        .expect("parse base task"))
+        .expect("create base task");
+        let base_commit = value(&base, "commit_id");
+
+        let source = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "fork",
+            &store,
+            "--from-branch",
+            &target_branch,
+            "--name",
+            "source",
+        ])
+        .expect("parse source branch"))
+        .expect("fork source branch");
+        let source_branch = value(&source, "branch_id");
+
+        let target = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            &store,
+            "--branch",
+            &target_branch,
+            "--head",
+            &base_commit,
+            "--description",
+            "Target work",
+        ])
+        .expect("parse target task"))
+        .expect("create target task");
+        let target_head = value(&target, "commit_id");
+
+        let source_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            &store,
+            "--branch",
+            &source_branch,
+            "--head",
+            &base_commit,
+            "--description",
+            "Source work",
+        ])
+        .expect("parse source task"))
+        .expect("create source task");
+        let source_task_id = value(&source_task, "task_entity_id");
+        let source_head = value(&source_task, "commit_id");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            &store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &target_branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        CliMergeFixture {
+            _tempdir: tempdir,
+            store,
+            workspace_id,
+            target_branch,
+            source_branch,
+            base_commit,
+            target_head,
+            source_head,
+            source_task_id,
+            session_id,
+        }
+    }
+
+    fn cli_start_merge(fixture: &CliMergeFixture) -> String {
+        let merge = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "start",
+            &fixture.store,
+            "--target-branch",
+            &fixture.target_branch,
+            "--source-branch",
+            &fixture.source_branch,
+            "--session",
+            &fixture.session_id,
+        ])
+        .expect("parse merge start"))
+        .expect("start merge");
+        value(&merge, "merge_id")
+    }
+
+    fn cli_merge_item(fixture: &CliMergeFixture, merge_id: &str) -> String {
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "show",
+            &fixture.store,
+            "--merge",
+            merge_id,
+        ])
+        .expect("parse merge show"))
+        .expect("show merge");
+        assert_eq!(value(&shown, "items"), "1");
+        assert_eq!(value(&shown, "item.0.subject_id"), fixture.source_task_id);
+        value(&shown, "item.0.merge_item_id")
+    }
+
+    fn cli_resolve_merge_item(fixture: &CliMergeFixture, merge_item_id: &str) {
+        run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "resolve",
+            &fixture.store,
+            "--item",
+            merge_item_id,
+            "--kind",
+            "theirs",
+            "--session",
+            &fixture.session_id,
+            "--rationale-json",
+            "{\"reason\":\"take source\"}",
+        ])
+        .expect("parse merge resolve"))
+        .expect("resolve merge item");
+    }
+
+    #[test]
+    fn cli_validates_merge_action_expectations() {
+        let fixture = cli_merge_fixture();
+
+        let merge = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "start",
+            &fixture.store,
+            "--target-branch",
+            &fixture.target_branch,
+            "--source-branch",
+            &fixture.source_branch,
+            "--session",
+            &fixture.session_id,
+            "--expected-runtime-state",
+            "active",
+            "--expected-merge-base",
+            &fixture.base_commit,
+            "--expected-target-head",
+            &fixture.target_head,
+            "--expected-source-head",
+            &fixture.source_head,
+            "--expected-origin-session",
+            &fixture.session_id,
+        ])
+        .expect("parse expected merge start"))
+        .expect("start merge with expectations");
+        let merge_id = value(&merge, "merge_id");
+        assert_eq!(value(&merge, "workspace_id"), fixture.workspace_id);
+        assert_eq!(value(&merge, "runtime_state_matches_expected"), "true");
+        assert_eq!(value(&merge, "merge_base_matches_expected"), "true");
+        assert_eq!(value(&merge, "target_head_matches_expected"), "true");
+        assert_eq!(value(&merge, "source_head_matches_expected"), "true");
+        assert_eq!(value(&merge, "origin_session_matches_expected"), "true");
+
+        let merge_item_id = cli_merge_item(&fixture, &merge_id);
+        let resolved = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "resolve",
+            &fixture.store,
+            "--item",
+            &merge_item_id,
+            "--kind",
+            "theirs",
+            "--session",
+            &fixture.session_id,
+            "--rationale-json",
+            "{\"reason\":\"take source\"}",
+            "--expected-merge",
+            &merge_id,
+            "--expected-resolution",
+            "theirs",
+            "--expected-resolved-by-session",
+            &fixture.session_id,
+        ])
+        .expect("parse expected merge resolve"))
+        .expect("resolve merge item with expectations");
+        assert_eq!(value(&resolved, "merge_matches_expected"), "true");
+        assert_eq!(value(&resolved, "resolution_matches_expected"), "true");
+        assert_eq!(
+            value(&resolved, "resolved_by_session_matches_expected"),
+            "true"
+        );
+
+        let frozen = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "freeze",
+            &fixture.store,
+            "--merge",
+            &merge_id,
+            "--expected-merge",
+            &merge_id,
+            "--expected-frozen-items",
+            "1",
+        ])
+        .expect("parse expected merge freeze"))
+        .expect("freeze merge with expectations");
+        assert_eq!(value(&frozen, "merge_matches_expected"), "true");
+        assert_eq!(value(&frozen, "frozen_items_match_expected"), "true");
+
+        let continued = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "continue",
+            &fixture.store,
+            "--merge",
+            &merge_id,
+            "--session",
+            &fixture.session_id,
+            "--detail-json",
+            "{\"reason\":\"complete merge\"}",
+            "--expected-runtime-state",
+            "completed",
+            "--expected-target-branch",
+            &fixture.target_branch,
+            "--expected-source-branch",
+            &fixture.source_branch,
+            "--expected-continued-by-session",
+            &fixture.session_id,
+        ])
+        .expect("parse expected merge continue"))
+        .expect("continue merge with expectations");
+        assert_eq!(value(&continued, "runtime_state_matches_expected"), "true");
+        assert_eq!(value(&continued, "target_branch_matches_expected"), "true");
+        assert_eq!(value(&continued, "source_branch_matches_expected"), "true");
+        assert_eq!(
+            value(&continued, "continued_by_session_matches_expected"),
+            "true"
+        );
+        let result_commit = value(&continued, "result_commit_id");
+
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.target_branch,
+        ])
+        .expect("parse continued branch head"))
+        .expect("continued branch head");
+        assert_eq!(value(&head, "head_commit_id"), result_commit);
+    }
+
+    #[test]
+    fn cli_rejects_mismatched_merge_action_expectations() {
+        let fixture = cli_merge_fixture();
+        let expected_other_head = CommitId::new_v7().to_string();
+        let mismatched_start = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "start",
+            &fixture.store,
+            "--target-branch",
+            &fixture.target_branch,
+            "--source-branch",
+            &fixture.source_branch,
+            "--session",
+            &fixture.session_id,
+            "--expected-source-head",
+            &expected_other_head,
+        ])
+        .expect("parse mismatched merge start"));
+        assert!(mismatched_start.is_err());
+
+        let fixture = cli_merge_fixture();
+        let merge_id = cli_start_merge(&fixture);
+        let merge_item_id = cli_merge_item(&fixture, &merge_id);
+        let mismatched_resolve = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "resolve",
+            &fixture.store,
+            "--item",
+            &merge_item_id,
+            "--kind",
+            "theirs",
+            "--expected-resolution",
+            "ours",
+        ])
+        .expect("parse mismatched merge resolve"));
+        assert!(mismatched_resolve.is_err());
+
+        let fixture = cli_merge_fixture();
+        let merge_id = cli_start_merge(&fixture);
+        let merge_item_id = cli_merge_item(&fixture, &merge_id);
+        cli_resolve_merge_item(&fixture, &merge_item_id);
+        let mismatched_freeze = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "freeze",
+            &fixture.store,
+            "--merge",
+            &merge_id,
+            "--expected-frozen-items",
+            "2",
+        ])
+        .expect("parse mismatched merge freeze"));
+        assert!(mismatched_freeze.is_err());
+
+        let fixture = cli_merge_fixture();
+        let merge_id = cli_start_merge(&fixture);
+        let merge_item_id = cli_merge_item(&fixture, &merge_id);
+        cli_resolve_merge_item(&fixture, &merge_item_id);
+        run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "freeze",
+            &fixture.store,
+            "--merge",
+            &merge_id,
+        ])
+        .expect("parse merge freeze"))
+        .expect("freeze merge");
+        let mismatched_continue = run(Cli::try_parse_from([
+            "workvcs",
+            "merge",
+            "continue",
+            &fixture.store,
+            "--merge",
+            &merge_id,
+            "--expected-runtime-state",
+            "active",
+        ])
+        .expect("parse mismatched merge continue"));
+        assert!(mismatched_continue.is_err());
     }
 
     #[test]

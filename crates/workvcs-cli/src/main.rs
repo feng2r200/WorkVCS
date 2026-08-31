@@ -3671,6 +3671,12 @@ enum SessionCommand {
 
         #[arg(long, default_value = "{}")]
         summary_json: String,
+
+        #[arg(long)]
+        expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
     },
 }
 
@@ -9781,6 +9787,8 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     session,
                     summary_json,
+                    expected_session,
+                    expected_lifecycle_state,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -9788,7 +9796,30 @@ fn run(cli: Cli) -> Result<String> {
                 SessionEndOptions::new(SessionId::parse_canonical(&session)?)?
                     .with_summary(parse_cli_object("session summary", &summary_json)?)?,
             )?;
-            Ok(render_session_end(&ended))
+            let mut output = render_session_end(&ended);
+            if let Some(expected_session) = expected_session {
+                let expected_session = SessionId::parse_canonical(&expected_session)?;
+                if ended.session_id != expected_session {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session end session {} does not match expected {}",
+                        ended.session_id, expected_session
+                    )));
+                }
+                output.push_str("session_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+                let expected_lifecycle_state =
+                    parse_session_lifecycle_state(&expected_lifecycle_state)?;
+                if ended.state.lifecycle_state != expected_lifecycle_state {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session end lifecycle state {} does not match expected {}",
+                        session_lifecycle_state(ended.state.lifecycle_state),
+                        session_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Claim {
             command:
@@ -31317,6 +31348,69 @@ mod tests {
         assert_eq!(value(&release, "session_match_expected"), "true");
         assert_eq!(value(&release, "lifecycle_state_match_expected"), "true");
 
+        let lifecycle_mismatch_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse lifecycle mismatch end session start"))
+        .expect("start lifecycle mismatch end session");
+        let lifecycle_mismatch_session_id = value(&lifecycle_mismatch_session, "session_id");
+        let lifecycle_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "end",
+            store,
+            "--session",
+            &lifecycle_mismatch_session_id,
+            "--expected-lifecycle-state",
+            "active",
+        ])
+        .expect("parse lifecycle mismatched session end"));
+        assert!(matches!(
+            lifecycle_mismatch,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == "session end lifecycle state ended does not match expected active"
+        ));
+
+        let session_mismatch_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session mismatch end session start"))
+        .expect("start session mismatch end session");
+        let session_mismatch_session_id = value(&session_mismatch_session, "session_id");
+        let expected_other_session = SessionId::new_v7().to_string();
+        let expected_message = format!(
+            "session end session {session_mismatch_session_id} does not match expected {expected_other_session}"
+        );
+        let session_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "end",
+            store,
+            "--session",
+            &session_mismatch_session_id,
+            "--expected-session",
+            &expected_other_session,
+        ])
+        .expect("parse session mismatched session end"));
+        assert!(matches!(
+            session_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
         let ended = run(Cli::try_parse_from([
             "workvcs",
             "session",
@@ -31324,10 +31418,17 @@ mod tests {
             store,
             "--session",
             &session_id,
+            "--expected-session",
+            &session_id,
+            "--expected-lifecycle-state",
+            "ended",
         ])
         .expect("parse session end"))
         .expect("end session");
+        assert_eq!(value(&ended, "session_id"), session_id);
         assert!(ended.contains("lifecycle_state=ended"));
+        assert_eq!(value(&ended, "session_match_expected"), "true");
+        assert_eq!(value(&ended, "lifecycle_state_match_expected"), "true");
     }
 
     #[test]

@@ -3897,6 +3897,7 @@ enum RunnableCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum VerificationCommand {
     #[command(group(
         ArgGroup::new("verification-target")
@@ -3952,6 +3953,24 @@ enum VerificationCommand {
 
         #[arg(long)]
         baseline_observation: Option<String>,
+
+        #[arg(long)]
+        expected_branch: Option<String>,
+
+        #[arg(long)]
+        expected_head: Option<String>,
+
+        #[arg(long)]
+        expected_target_kind: Option<String>,
+
+        #[arg(long)]
+        expected_target: Option<String>,
+
+        #[arg(long)]
+        expected_result: Option<String>,
+
+        #[arg(long)]
+        expected_evidence_relations: Option<usize>,
     },
     #[command(group(
         ArgGroup::new("verification-show-target")
@@ -8405,6 +8424,12 @@ fn run(cli: Cli) -> Result<String> {
                     scope_payload_json,
                     baseline_fingerprint,
                     baseline_observation,
+                    expected_branch,
+                    expected_head,
+                    expected_target_kind,
+                    expected_target,
+                    expected_result,
+                    expected_evidence_relations,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -8462,7 +8487,20 @@ fn run(cli: Cli) -> Result<String> {
                 )?])?;
             }
             let verification = engine.create_verification(options)?;
-            Ok(render_verification_create(&verification))
+            let mut output = render_verification_create(&verification);
+            append_verification_record_expectations(
+                &mut output,
+                &verification,
+                VerificationRecordExpectationArgs {
+                    expected_branch,
+                    expected_head,
+                    expected_target_kind,
+                    expected_target,
+                    expected_result,
+                    expected_evidence_relations,
+                },
+            )?;
+            Ok(output)
         }
         Command::Verification {
             command:
@@ -12764,6 +12802,90 @@ fn render_verification_create(verification: &VerificationCreateCommit) -> String
         verification.work_state_digest,
         verification.state.result
     )
+}
+
+struct VerificationRecordExpectationArgs {
+    expected_branch: Option<String>,
+    expected_head: Option<String>,
+    expected_target_kind: Option<String>,
+    expected_target: Option<String>,
+    expected_result: Option<String>,
+    expected_evidence_relations: Option<usize>,
+}
+
+fn append_verification_record_expectations(
+    output: &mut String,
+    verification: &VerificationCreateCommit,
+    expectations: VerificationRecordExpectationArgs,
+) -> Result<()> {
+    let VerificationRecordExpectationArgs {
+        expected_branch,
+        expected_head,
+        expected_target_kind,
+        expected_target,
+        expected_result,
+        expected_evidence_relations,
+    } = expectations;
+    if let Some(expected_branch) = expected_branch {
+        let expected_branch = BranchId::parse_canonical(&expected_branch)?;
+        if verification.branch_id != expected_branch {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification record branch {} does not match expected {}",
+                verification.branch_id, expected_branch
+            )));
+        }
+        output.push_str("branch_match_expected=true\n");
+    }
+    if let Some(expected_head) = expected_head {
+        let expected_head = CommitId::parse_canonical(&expected_head)?;
+        if verification.previous_head_commit_id != expected_head {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification record head {} does not match expected {}",
+                verification.previous_head_commit_id, expected_head
+            )));
+        }
+        output.push_str("head_match_expected=true\n");
+    }
+    if let Some(expected_target_kind) = expected_target_kind {
+        let expected_target_kind = parse_verification_target_kind(&expected_target_kind)?;
+        let actual_target_kind = verification_target_kind(verification.target);
+        if actual_target_kind != expected_target_kind {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification record target kind {actual_target_kind} does not match expected {expected_target_kind}"
+            )));
+        }
+        output.push_str("target_kind_match_expected=true\n");
+    }
+    if let Some(expected_target) = expected_target {
+        let expected_target = EntityId::parse_canonical(&expected_target)?;
+        let actual_target = verification.target.entity_id();
+        if actual_target != expected_target {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification record target {actual_target} does not match expected {expected_target}"
+            )));
+        }
+        output.push_str("target_match_expected=true\n");
+    }
+    if let Some(expected_result) = expected_result {
+        let expected_result = parse_verification_result(&expected_result)?;
+        if verification.state.result != expected_result {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification record result {} does not match expected {}",
+                verification.state.result, expected_result
+            )));
+        }
+        output.push_str("result_match_expected=true\n");
+    }
+    if let Some(expected_evidence_relations) = expected_evidence_relations {
+        let actual_evidence_relations = verification.evidenced_by_relations.len();
+        if actual_evidence_relations != expected_evidence_relations {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "verification record evidence relations {actual_evidence_relations} does not match expected {expected_evidence_relations}"
+            )));
+        }
+        output.push_str("evidence_relations_match_expected=true\n");
+    }
+    Ok(())
 }
 
 fn verification_target_kind(target: VerificationTarget) -> &'static str {
@@ -28122,6 +28244,72 @@ mod tests {
             "true"
         );
 
+        let create_verification_record_fixture = || {
+            let workspace = run(Cli::try_parse_from([
+                "workvcs",
+                "workspace",
+                "create",
+                store,
+                "--display-name",
+                "verification record expectation fixture",
+            ])
+            .expect("parse verification expectation workspace create"))
+            .expect("create verification expectation workspace");
+            let fixture_branch = value(&workspace, "branch_id");
+            let fixture_genesis = value(&workspace, "genesis_commit_id");
+            let task = run(Cli::try_parse_from([
+                "workvcs",
+                "task",
+                "create",
+                store,
+                "--branch",
+                &fixture_branch,
+                "--head",
+                &fixture_genesis,
+                "--description",
+                "Verification expectation mismatch fixture",
+            ])
+            .expect("parse verification expectation task create"))
+            .expect("create verification expectation task");
+            let criterion = run(Cli::try_parse_from([
+                "workvcs",
+                "ac",
+                "create",
+                store,
+                "--branch",
+                &fixture_branch,
+                "--head",
+                &value(&task, "commit_id"),
+                "--task",
+                &value(&task, "task_entity_id"),
+                "--task-version",
+                &value(&task, "task_entity_version_id"),
+                "--local-key",
+                "AC-1",
+                "--statement",
+                "The isolated verification expectation fixture is visible.",
+            ])
+            .expect("parse verification expectation ac create"))
+            .expect("create verification expectation ac");
+            let evidence = run(Cli::try_parse_from([
+                "workvcs",
+                "evidence",
+                "create",
+                store,
+                "--kind",
+                "manual-review",
+            ])
+            .expect("parse verification expectation evidence create"))
+            .expect("create verification expectation evidence");
+            (
+                fixture_branch,
+                value(&criterion, "commit_id"),
+                value(&criterion, "acceptance_criterion_entity_id"),
+                value(&evidence, "evidence_id"),
+            )
+        };
+
+        let criterion_head = value(&criterion, "commit_id");
         let verification = run(Cli::try_parse_from([
             "workvcs",
             "verification",
@@ -28130,7 +28318,7 @@ mod tests {
             "--branch",
             &branch,
             "--head",
-            &value(&criterion, "commit_id"),
+            &criterion_head,
             "--result",
             "passed",
             "--method",
@@ -28139,10 +28327,202 @@ mod tests {
             &evidence_id,
             "--acceptance-criterion",
             &criterion_id,
+            "--expected-branch",
+            &branch,
+            "--expected-head",
+            &criterion_head,
+            "--expected-target-kind",
+            "acceptance_criterion",
+            "--expected-target",
+            &criterion_id,
+            "--expected-result",
+            "passed",
+            "--expected-evidence-relations",
+            "1",
         ])
         .expect("parse verification record"))
         .expect("record verification");
         let verification_id = value(&verification, "verification_entity_id");
+        assert_eq!(value(&verification, "branch_match_expected"), "true");
+        assert_eq!(value(&verification, "head_match_expected"), "true");
+        assert_eq!(value(&verification, "target_kind_match_expected"), "true");
+        assert_eq!(value(&verification, "target_match_expected"), "true");
+        assert_eq!(value(&verification, "result_match_expected"), "true");
+        assert_eq!(
+            value(&verification, "evidence_relations_match_expected"),
+            "true"
+        );
+
+        let (fixture_branch, fixture_head, fixture_criterion, fixture_evidence) =
+            create_verification_record_fixture();
+        let expected_other_branch = BranchId::new_v7().to_string();
+        let expected_message = format!(
+            "verification record branch {fixture_branch} does not match expected {expected_other_branch}"
+        );
+        let branch_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &fixture_branch,
+            "--head",
+            &fixture_head,
+            "--result",
+            "passed",
+            "--evidence",
+            &fixture_evidence,
+            "--acceptance-criterion",
+            &fixture_criterion,
+            "--expected-branch",
+            &expected_other_branch,
+        ])
+        .expect("parse verification record branch mismatch"));
+        assert!(matches!(
+            branch_mismatch,
+            Err(WorkVcsError::TaskInvalid(message)) if message == expected_message
+        ));
+
+        let (fixture_branch, fixture_head, fixture_criterion, fixture_evidence) =
+            create_verification_record_fixture();
+        let expected_other_head = CommitId::new_v7().to_string();
+        let expected_message = format!(
+            "verification record head {fixture_head} does not match expected {expected_other_head}"
+        );
+        let head_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &fixture_branch,
+            "--head",
+            &fixture_head,
+            "--result",
+            "passed",
+            "--evidence",
+            &fixture_evidence,
+            "--acceptance-criterion",
+            &fixture_criterion,
+            "--expected-head",
+            &expected_other_head,
+        ])
+        .expect("parse verification record head mismatch"));
+        assert!(matches!(
+            head_mismatch,
+            Err(WorkVcsError::TaskInvalid(message)) if message == expected_message
+        ));
+
+        let (fixture_branch, fixture_head, fixture_criterion, fixture_evidence) =
+            create_verification_record_fixture();
+        let target_kind_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &fixture_branch,
+            "--head",
+            &fixture_head,
+            "--result",
+            "passed",
+            "--evidence",
+            &fixture_evidence,
+            "--acceptance-criterion",
+            &fixture_criterion,
+            "--expected-target-kind",
+            "verification_requirement",
+        ])
+        .expect("parse verification record target kind mismatch"));
+        assert!(matches!(
+            target_kind_mismatch,
+            Err(WorkVcsError::TaskInvalid(message))
+                if message == "verification record target kind acceptance_criterion does not match expected verification_requirement"
+        ));
+
+        let (fixture_branch, fixture_head, fixture_criterion, fixture_evidence) =
+            create_verification_record_fixture();
+        let expected_other_target = EntityId::new_v7().to_string();
+        let expected_message = format!(
+            "verification record target {fixture_criterion} does not match expected {expected_other_target}"
+        );
+        let target_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &fixture_branch,
+            "--head",
+            &fixture_head,
+            "--result",
+            "passed",
+            "--evidence",
+            &fixture_evidence,
+            "--acceptance-criterion",
+            &fixture_criterion,
+            "--expected-target",
+            &expected_other_target,
+        ])
+        .expect("parse verification record target mismatch"));
+        assert!(matches!(
+            target_mismatch,
+            Err(WorkVcsError::TaskInvalid(message)) if message == expected_message
+        ));
+
+        let (fixture_branch, fixture_head, fixture_criterion, fixture_evidence) =
+            create_verification_record_fixture();
+        let result_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &fixture_branch,
+            "--head",
+            &fixture_head,
+            "--result",
+            "passed",
+            "--evidence",
+            &fixture_evidence,
+            "--acceptance-criterion",
+            &fixture_criterion,
+            "--expected-result",
+            "failed",
+        ])
+        .expect("parse verification record result mismatch"));
+        assert!(matches!(
+            result_mismatch,
+            Err(WorkVcsError::TaskInvalid(message))
+                if message == "verification record result passed does not match expected failed"
+        ));
+
+        let (fixture_branch, fixture_head, fixture_criterion, fixture_evidence) =
+            create_verification_record_fixture();
+        let evidence_relations_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &fixture_branch,
+            "--head",
+            &fixture_head,
+            "--result",
+            "passed",
+            "--evidence",
+            &fixture_evidence,
+            "--acceptance-criterion",
+            &fixture_criterion,
+            "--expected-evidence-relations",
+            "0",
+        ])
+        .expect("parse verification record evidence relations mismatch"));
+        assert!(matches!(
+            evidence_relations_mismatch,
+            Err(WorkVcsError::TaskInvalid(message))
+                if message == "verification record evidence relations 1 does not match expected 0"
+        ));
 
         let verification_at_branch = run(Cli::try_parse_from([
             "workvcs",
@@ -28175,7 +28555,7 @@ mod tests {
         assert_eq!(value(&verification_at_branch, "result"), "passed");
         assert_eq!(
             value(&verification_at_branch, "verified_at_commit_id"),
-            value(&criterion, "commit_id")
+            criterion_head
         );
         assert_eq!(
             value(&verification_at_branch, "method_json"),

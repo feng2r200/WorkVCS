@@ -418,6 +418,81 @@ fn context_packet_includes_current_task_verification_obligations() {
 }
 
 #[test]
+fn context_packet_explains_blocked_dependency_tasks() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let dependent = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Blocked dependent task")
+                .expect("dependent task options"),
+        )
+        .expect("create dependent task");
+    head = dependent.commit_id;
+    let prerequisite = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Ready prerequisite task")
+                .expect("prerequisite task options"),
+        )
+        .expect("create prerequisite task");
+    head = prerequisite.commit_id;
+    let relation = engine
+        .create_task_scheduling_relation(
+            TaskSchedulingRelationCreateOptions::depends_on(
+                branch_id,
+                head,
+                dependent.task_entity_id,
+                prerequisite.task_entity_id,
+            )
+            .expect("dependency options"),
+        )
+        .expect("create dependency");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let packet = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+        )
+        .expect("brief context packet");
+
+    assert_eq!(packet.envelope.head_commit_id, relation.commit_id);
+    let blocker = packet
+        .items
+        .iter()
+        .find(|item| item.category == ContextItemCategory::BlockedDependency)
+        .expect("blocked dependency item");
+    assert_eq!(blocker.priority, ContextPriority::P2);
+    assert_eq!(
+        blocker.subject.as_ref_string(),
+        format!(
+            "blocked_dependency:{}:{}",
+            dependent.task_entity_id, prerequisite.task_entity_id
+        )
+    );
+    assert!(
+        blocker
+            .summary
+            .contains(&format!("task={}", dependent.task_entity_id))
+    );
+    assert!(
+        blocker
+            .summary
+            .contains(&format!("dependency={}", prerequisite.task_entity_id))
+    );
+    assert!(blocker.summary.contains("dependency_status=pending"));
+    assert!(blocker.summary.contains("dependency_priority=0"));
+    assert!(blocker.summary.contains("Ready prerequisite task"));
+}
+
+#[test]
 fn context_packet_budget_preserves_runnable_order_within_current_tasks() {
     let (_tempdir, path) = store_path();
     let (mut engine, workspace) = create_workspace(&path);
@@ -480,6 +555,16 @@ fn context_packet_budget_preserves_runnable_order_within_current_tasks() {
             .iter()
             .any(
                 |bucket| bucket.category == ContextItemCategory::CurrentTask && bucket.omitted == 1
+            )
+    );
+    assert!(
+        packet
+            .omission_summary
+            .by_category
+            .iter()
+            .any(
+                |bucket| bucket.category == ContextItemCategory::BlockedDependency
+                    && bucket.omitted == 1
             )
     );
 }

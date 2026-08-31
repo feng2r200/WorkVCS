@@ -6,7 +6,7 @@ use crate::history::{
     KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
     KnowledgeRelationListResult, KnowledgeStatus, RecordKind, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordListOptions, RecordListResult,
-    RecordRelationListOptions, RecordRelationListResult, RecordStatus,
+    RecordRelationListOptions, RecordRelationListResult, RecordStatus, TaskSnapshot,
     VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget, WhyRelationEdge,
     WhyRelationKind,
 };
@@ -143,6 +143,7 @@ pub enum ContextItemCategory {
     AcceptanceCriterion,
     VerificationRequirement,
     TaskReadiness,
+    BlockedDependency,
     DirectCausalChain,
     ActiveDecision,
     ActiveAssumption,
@@ -164,6 +165,7 @@ impl ContextItemCategory {
             Self::AcceptanceCriterion => "acceptance_criterion",
             Self::VerificationRequirement => "verification_requirement",
             Self::TaskReadiness => "task_readiness",
+            Self::BlockedDependency => "blocked_dependency",
             Self::DirectCausalChain => "direct_causal_chain",
             Self::ActiveDecision => "active_decision",
             Self::ActiveAssumption => "active_assumption",
@@ -202,6 +204,10 @@ pub enum ContextItemSubject {
     TaskReadiness {
         task_entity_id: EntityId,
     },
+    BlockedDependency {
+        task_entity_id: EntityId,
+        dependency_task_entity_id: EntityId,
+    },
     Record {
         record_entity_id: EntityId,
     },
@@ -232,6 +238,10 @@ impl ContextItemSubject {
             Self::TaskReadiness { task_entity_id } => {
                 format!("task_readiness:{task_entity_id}")
             }
+            Self::BlockedDependency {
+                task_entity_id,
+                dependency_task_entity_id,
+            } => format!("blocked_dependency:{task_entity_id}:{dependency_task_entity_id}"),
             Self::Record { record_entity_id } => format!("record:{record_entity_id}"),
             Self::Knowledge {
                 knowledge_entity_id,
@@ -341,6 +351,7 @@ pub struct ContextOverview {
     pub session: SessionSnapshot,
     pub branch: BranchHead,
     pub runnable_tasks: RunnableTasksProjection,
+    pub tasks: Vec<TaskSnapshot>,
     pub acceptance_criteria: Vec<ContextAcceptanceCriterionSnapshot>,
     pub verification_requirements: Vec<VerificationRequirementSnapshot>,
     pub knowledge: KnowledgeListResult,
@@ -390,6 +401,15 @@ pub(crate) fn context_overview(
     {
         return Err(WorkVcsError::SessionInvalid(format!(
             "session {} context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
+    let tasks = history::tasks_at(connection, branch.head_commit_id)?;
+    if tasks.iter().any(|task| {
+        task.workspace_id != active_workspace_id || task.commit_id != branch.head_commit_id
+    }) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} task context anchor changed while resolving overview",
             options.session_id()
         )));
     }
@@ -471,6 +491,7 @@ pub(crate) fn context_overview(
         session,
         branch,
         runnable_tasks,
+        tasks,
         acceptance_criteria,
         verification_requirements,
         knowledge,
@@ -558,6 +579,11 @@ fn collect_context_items(
         .verification_requirements
         .iter()
         .map(|requirement| (requirement.verification_requirement_entity_id, requirement))
+        .collect::<BTreeMap<_, _>>();
+    let tasks_by_id = context
+        .tasks
+        .iter()
+        .map(|task| (task.task_entity_id, task))
         .collect::<BTreeMap<_, _>>();
     push_context_item(
         &mut items,
@@ -707,6 +733,32 @@ fn collect_context_items(
                 entity_id_list_summary(&candidate.unsatisfied_dependency_entity_ids)
             ),
         );
+        for dependency_task_entity_id in &candidate.unsatisfied_dependency_entity_ids {
+            let dependency_task = tasks_by_id.get(dependency_task_entity_id).ok_or_else(|| {
+                WorkVcsError::TaskInvalid(format!(
+                    "task {} references missing dependency task {}",
+                    candidate.task.task_entity_id, dependency_task_entity_id
+                ))
+            })?;
+            push_context_item(
+                &mut items,
+                profile,
+                ContextPriority::P2,
+                ContextItemCategory::BlockedDependency,
+                ContextItemSubject::BlockedDependency {
+                    task_entity_id: candidate.task.task_entity_id,
+                    dependency_task_entity_id: *dependency_task_entity_id,
+                },
+                format!(
+                    "blocked dependency task={} dependency={} dependency_status={} dependency_priority={}: {}",
+                    candidate.task.task_entity_id,
+                    dependency_task.task_entity_id,
+                    dependency_task.state.status,
+                    dependency_task.state.priority,
+                    dependency_task.state.description
+                ),
+            );
+        }
     }
     for relation in &context.knowledge_relations.relations {
         push_context_item(
@@ -845,6 +897,7 @@ fn profile_allows_category(profile: ContextProfile, category: ContextItemCategor
                 | ContextItemCategory::AcceptanceCriterion
                 | ContextItemCategory::VerificationRequirement
                 | ContextItemCategory::TaskReadiness
+                | ContextItemCategory::BlockedDependency
                 | ContextItemCategory::ActiveDecision
                 | ContextItemCategory::ActiveAssumption
                 | ContextItemCategory::FailedAttempt

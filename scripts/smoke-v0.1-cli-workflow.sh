@@ -270,9 +270,9 @@ context_packet_output="$(run_workvcs \
     --expected-state-digest "$context_state_digest")"
 expect_value "$context_packet_output" "context_profile" "brief"
 expect_value "$context_packet_output" "context_budget_items" "5"
-expect_value "$context_packet_output" "context_available_items" "7"
+expect_value "$context_packet_output" "context_available_items" "8"
 expect_value "$context_packet_output" "context_items" "5"
-expect_value "$context_packet_output" "context_omitted_items" "2"
+expect_value "$context_packet_output" "context_omitted_items" "3"
 expect_value "$context_packet_output" "context_item.0.priority" "P0"
 expect_value "$context_packet_output" "context_item.0.category" "session_anchor"
 expect_value "$context_packet_output" "context_item.4.priority" "P1"
@@ -280,6 +280,7 @@ expect_value "$context_packet_output" "context_item.4.category" "acceptance_crit
 expect_value "$context_packet_output" "context_item.4.subject" "acceptance_criterion:$criterion_id"
 expect_value "$context_packet_output" "context_omission_priority.0.priority" "P2"
 expect_value "$context_packet_output" "context_omission_category.0.category" "task_readiness"
+expect_value "$context_packet_output" "context_omission_category.1.category" "blocked_dependency"
 expect_value "$context_packet_output" "matches_expected" "true"
 
 expect_failure_contains \

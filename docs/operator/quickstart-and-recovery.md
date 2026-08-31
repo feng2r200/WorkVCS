@@ -256,6 +256,86 @@ workvcs handoff consume "$STORE" \
 Inspect Context and `next` after consuming the Handoff. The Session focus should
 match the Handoff focus before work is claimed.
 
+## Bundle Portability And Restore
+
+For local copied-target portability, create and validate a Checkpoint for the
+source commit before exporting the Bundle directory:
+
+```bash
+workvcs checkpoint create "$SOURCE_STORE" \
+  --commit "$EXPORT_HEAD_COMMIT_ID"
+
+workvcs checkpoint validate "$SOURCE_STORE" \
+  --checkpoint "$CHECKPOINT_ID" \
+  --require-valid
+
+workvcs bundle export-dir "$SOURCE_STORE" \
+  --commit "$EXPORT_HEAD_COMMIT_ID" \
+  --output-dir "$BUNDLE_DIR"
+
+workvcs bundle validate-dir "$SOURCE_STORE" \
+  --commit "$EXPORT_HEAD_COMMIT_ID" \
+  --input-dir "$BUNDLE_DIR" \
+  --require-valid
+```
+
+The current local directory profile emits `manifest.json`,
+`payload-index.json`, and content-addressed payload files. The observed payload
+index profile is `workvcs-local-payload-index-v1` with version `1`; the
+packaged Bundle container/profile contract remains Open for V1.
+
+Before applying to a target Store, preflight and require that the target can
+apply the Bundle:
+
+```bash
+workvcs bundle preflight-dir "$TARGET_STORE" \
+  --input-dir "$BUNDLE_DIR" \
+  --require-valid \
+  --require-can-apply
+
+workvcs bundle apply-dir "$TARGET_STORE" \
+  --input-dir "$BUNDLE_DIR" \
+  --require-applied
+```
+
+After apply, validate the imported Checkpoint and inspect the target Branch
+head:
+
+```bash
+workvcs branch head "$TARGET_STORE" \
+  --branch "$BRANCH_ID"
+
+workvcs checkpoint latest "$TARGET_STORE" \
+  --commit "$EXPORT_HEAD_COMMIT_ID" \
+  --require-found
+
+workvcs checkpoint show "$TARGET_STORE" \
+  --checkpoint "$CHECKPOINT_ID"
+
+workvcs checkpoint validate "$TARGET_STORE" \
+  --checkpoint "$CHECKPOINT_ID" \
+  --require-valid
+```
+
+If target-local work must be rolled back to the imported Bundle head, restore
+the Branch and inspect the restored Work State:
+
+```bash
+workvcs restore "$TARGET_STORE" \
+  --branch "$BRANCH_ID" \
+  --head "$CURRENT_HEAD_COMMIT_ID" \
+  --target-commit "$EXPORT_HEAD_COMMIT_ID" \
+  --rationale-json '{"reason":"return to imported bundle head"}'
+
+workvcs show-at "$TARGET_STORE" \
+  --commit "$RESTORE_COMMIT_ID"
+```
+
+`checkpoint latest` is a commit-anchored selector. Query it against the commit
+that owns the Checkpoint candidate, such as the imported Bundle head. Do not
+use it as a state-digest lookup for a later restore commit that happens to have
+the same Work State.
+
 ## Common Recovery Actions
 
 When a Store fails integrity or doctor checks, stop using it as an authority
@@ -324,6 +404,14 @@ workvcs merge continue "$STORE" \
   --merge "$NEW_MERGE_ID" \
   --session "$SESSION_ID"
 ```
+
+When `bundle preflight-dir --require-can-apply` reports
+`same_store_divergence_detected`, do not force the Bundle onto the target
+Branch. Inspect the reported source head, target head, and merge base, then
+resolve the divergence through the merge workflow or export a new Bundle from a
+compatible head. `bundle apply-dir` without `--require-applied` records the
+non-applied outcome and leaves the target Branch head unchanged; with
+`--require-applied`, it fails.
 
 When an active Claim blocks another active Session and the claimant can hand
 work over, transfer the Claim:
@@ -411,4 +499,7 @@ intended state transition.
 - Automatic stale detection remains open.
 - Merge lifecycle is locally dogfood-proven, but not yet another-project or
   larger-Store proven.
+- Bundle portability is locally dogfood-proven for copied-target same-Store
+  operation, but the formal Bundle container/profile contract and external
+  Store import/apply semantics remain open.
 - Larger Store validation has not yet been run.

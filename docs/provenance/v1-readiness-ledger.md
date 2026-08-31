@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0429 / Phase 4LN
+Last refreshed: 2026-09-01 by ADR-0430 / Phase 4LO
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -31,7 +31,7 @@ not complete.
 | --- | --- | --- | --- | --- | --- |
 | Canonical IDs, digests, and WorkState hashing | Yes | Yes | Partial | No | Keep as regression foundation; no further work unless another V1 slice exposes a concrete compatibility gap. |
 | Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | Partial | Phase 4LE creates a durable local dogfood Store for a full implementation closeout; next prove the path with a larger Store validation run. |
-| Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | No | Create a real dogfood walkthrough that branches and restores Work State for an implementation slice. |
+| Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | Partial | Phase 4LO dogfoods post-Bundle `restore` and `show-at` against a target Store; still prove Branch/diff workflows in a real implementation slice. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Yes | Yes | Partial | Partial | Phase 4LE uses a real WorkVCS Task through implementation closeout; still use WorkVCS itself to manage a nontrivial Goal/Plan. |
 | Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Yes | Phase 4LE dogfoods AC/VR/Verification for an implementation closeout; repeat this in recovery and handoff-consumption scenarios. |
 | Verification command wrapper | Yes | Yes | Yes | Partial | Extend beyond caller-supplied observation data only after Resource adapter/path normalization is confirmed; keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
@@ -42,9 +42,9 @@ not complete.
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics; next prove broader causal/evolution and real-project explanation paths. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover; repeat on another real project before claiming broad dogfood maturity. |
 | Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Repeat on another real project or larger Store before release maturity claims. |
-| Checkpoint and Bundle portability | Yes | Yes | Yes | No | Validate a real export/import/restore path and record Bundle container/profile details still Open for V1. |
+| Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Remaining V1 gaps: formal Bundle container/profile contract and external Store import/apply semantics. |
 | CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`; continue reducing manual key-value capture only where dogfood shows repeated friction. |
-| Actionable errors and recovery | Yes | Partial | Partial | Partial | Phase 4LN documents merge unresolved and moved-head recovery actions; CLI failure output is still mostly text, so stable key-value `error_code` output remains Open. |
+| Actionable errors and recovery | Yes | Partial | Partial | Partial | Phase 4LN documents merge unresolved and moved-head recovery; Phase 4LO documents Bundle divergence refusal and restore/checkpoint selector boundaries. Stable key-value `error_code` output remains Open. |
 | Larger Store and performance evidence | Partial | No | No | No | Run a representative larger Store workload before adding indexes or claiming scale readiness. |
 
 ## Dogfood-Biased Next Queue
@@ -52,14 +52,17 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Complete the remaining V1 Context Resolver gaps: path-sensitive Knowledge
+1. Formalize the remaining V1 Bundle container/profile contract and decide
+   whether external Store import/apply semantics are V1-required or explicitly
+   deferred.
+2. Complete the remaining V1 Context Resolver gaps: path-sensitive Knowledge
    policy, context packet persistence, and the transition-rationale projection
    decision.
-2. Reduce manual key-value capture in the operator CLI only where the dogfood
+3. Reduce manual key-value capture in the operator CLI only where the dogfood
    evidence shows repeated friction.
-3. Run larger Store validation before designing performance indexes.
-4. Use WorkVCS on another real project before claiming broad dogfood maturity.
-5. Dogfood broader `why` paths, including causal/evolution explanation gaps,
+4. Run larger Store validation before designing performance indexes.
+5. Use WorkVCS on another real project before claiming broad dogfood maturity.
+6. Dogfood broader `why` paths, including causal/evolution explanation gaps,
    before expanding explanation output again.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
@@ -136,4 +139,8 @@ The following remain beyond V1 even if they would make dogfood easier:
   Branches produce `CONFLICT` and `AUTO` items, unresolved items block freeze,
   target/source moved heads block continue, abort/restart recovery succeeds, and
   the successful restarts create two-parent `merge.continue` commits. WorkVCS
-  has still not been used for another real project.
+  has still not been used for another real project. Phase 4LO dogfoods local
+  copied-target Bundle portability with source Checkpoint creation, Bundle
+  directory export/validation, target preflight/apply, imported Checkpoint
+  validation, post-apply restore/show-at inspection, and explicit same-Store
+  divergence refusal.

@@ -97,8 +97,9 @@ use crate::runtime::{
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
     SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionLifecycleState,
-    SessionListOptions, SessionListResult, SessionSnapshot, SessionStartOptions,
-    SessionStartResult, SessionSwitchOptions, SessionSwitchResult, VerifyOptions, VerifyResult,
+    SessionListOptions, SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -1523,6 +1524,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::clear_session_focus(&mut self.connection, session_id)
+    }
+
+    pub(crate) fn mark_session_potentially_stale(
+        &mut self,
+        options: &SessionMarkStaleOptions,
+    ) -> Result<SessionMarkStaleResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::mark_session_potentially_stale(&mut self.connection, options)
     }
 
     pub(crate) fn switch_session(

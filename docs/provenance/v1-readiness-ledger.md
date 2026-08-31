@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0418 / Phase 4LC
+Last refreshed: 2026-09-01 by ADR-0419 / Phase 4LD
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -36,8 +36,8 @@ not complete.
 | Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Partial | Use the `verify` wrapper and explicit cache refresh in more durable implementation handoffs; the next missing loop is focused handoff authoring/reading. |
 | Verification command wrapper | Yes | Yes | Yes | Partial | Extend beyond caller-supplied observation data only after Resource adapter/path normalization is confirmed; keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Resource-backed stale-cache recovery from baseline observations is implemented; Resource path/glob normalization and adapter-backed re-observation remain Open. |
-| Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | No | Dogfood the select-and-continue loop with real implementation work instead of only script-generated Tasks. |
-| Claim modes and guard behavior | Yes | Partial | Partial | No | Transfer and forced takeover now have explicit runtime replacement and smoke coverage; stale takeover remains blocked on `potentially_stale` Session state and durable dogfood. |
+| Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | No | Explicit `potentially_stale` marking is implemented and smoke-proven; dogfood the select-and-continue loop with real implementation work instead of only script-generated Tasks. |
+| Claim modes and guard behavior | Yes | Partial | Partial | No | Transfer and forced takeover now have explicit runtime replacement and smoke coverage; stale-gated takeover policy and durable dogfood remain Open. |
 | Context resolver | Yes | Partial | Yes | Partial | Complete the remaining V1 context categories and dogfood flow: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | No | Use real Findings/Decisions/Handoffs during implementation and inspect `why` output for continuation quality. |
 | Handoff | Yes | Yes | Yes | No | Use focused Handoff in a durable implementation handoff, then decide whether typed relations or context packets are needed for V1. |
@@ -54,9 +54,9 @@ current user request supplies a narrower priority.
 
 1. Use the local operator guide to run a durable WorkVCS-managed implementation
    slice and record missing ergonomics.
-2. Implement real `potentially_stale` Session state before adding stale Claim
-   takeover policy.
-3. Dogfood Claim transfer / forced takeover in a durable implementation recovery
+2. Add stale-gated Claim takeover policy on top of the explicit
+   `potentially_stale` Session state.
+3. Dogfood Claim transfer, forced takeover, and stale marking in a durable implementation recovery
    path and record missing ergonomics.
 4. Complete the remaining V1 Context Resolver categories when the verify and
    handoff surfaces can supply real packet content.
@@ -112,5 +112,7 @@ The following remain beyond V1 even if they would make dogfood easier:
   existing Claim occurrence/runtime/Event tables; smoke now proves a blocked
   guard, transfer recovery, and forced takeover recovery loop. Phase 4LC adds a
   local operator quickstart and recovery guide tied to the current CLI surface.
-  WorkVCS has still not been used as the durable state system for a complete
-  implementation slice or for another real project.
+  Phase 4LD adds explicit `session mark-stale` support and smoke-proves
+  `potentially_stale` show/list behavior. WorkVCS has still not been used as
+  the durable state system for a complete implementation slice or for another
+  real project.

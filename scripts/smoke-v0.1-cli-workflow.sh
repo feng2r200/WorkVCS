@@ -1901,6 +1901,54 @@ expect_value "$claim_takeover_guard_output" "allowed_match_expected" "true"
 expect_value "$claim_takeover_guard_output" "reason_match_expected" "true"
 expect_value "$claim_takeover_guard_output" "active_claims_match_expected" "true"
 
+step "session potentially stale"
+stale_session_output="$(run_workvcs \
+    session start "$store" \
+    --workspace "$workspace_id" \
+    --branch "$branch_id" \
+    --expected-workspace "$workspace_id" \
+    --expected-branch "$branch_id" \
+    --expected-lifecycle-state active)"
+stale_session_id="$(value "$stale_session_output" "session_id")"
+
+stale_mark_output="$(run_workvcs \
+    session mark-stale "$store" \
+    --session "$stale_session_id" \
+    --rationale "operator observed no heartbeat" \
+    --expected-session "$stale_session_id" \
+    --expected-lifecycle-state potentially_stale \
+    --expected-active-workspace "$workspace_id" \
+    --expected-active-branch "$branch_id")"
+expect_value "$stale_mark_output" "session_id" "$stale_session_id"
+expect_value "$stale_mark_output" "lifecycle_state" "potentially_stale"
+expect_value "$stale_mark_output" "rationale" "operator observed no heartbeat"
+expect_value "$stale_mark_output" "session_match_expected" "true"
+expect_value "$stale_mark_output" "lifecycle_state_match_expected" "true"
+expect_value "$stale_mark_output" "active_workspace_match_expected" "true"
+expect_value "$stale_mark_output" "active_branch_match_expected" "true"
+
+stale_show_output="$(run_workvcs \
+    session show "$store" \
+    --session "$stale_session_id" \
+    --expected-lifecycle-state potentially_stale \
+    --expected-active-workspace "$workspace_id" \
+    --expected-active-branch "$branch_id")"
+expect_value "$stale_show_output" "lifecycle_state" "potentially_stale"
+expect_value "$stale_show_output" "lifecycle_state_matches_expected" "true"
+expect_value "$stale_show_output" "active_workspace_matches_expected" "true"
+expect_value "$stale_show_output" "active_branch_matches_expected" "true"
+
+stale_list_output="$(run_workvcs \
+    session list "$store" \
+    --lifecycle potentially_stale \
+    --workspace "$workspace_id" \
+    --branch "$branch_id" \
+    --expected-sessions 1)"
+expect_value "$stale_list_output" "sessions" "1"
+expect_value "$stale_list_output" "session.0.session_id" "$stale_session_id"
+expect_value "$stale_list_output" "session.0.lifecycle_state" "potentially_stale"
+expect_value "$stale_list_output" "sessions_match_expected" "true"
+
 step "integrity gate"
 store_integrity_output="$(run_workvcs \
     store integrity "$store" \
@@ -1910,7 +1958,7 @@ store_integrity_output="$(run_workvcs \
     --expected-checked-changesets 19 \
     --expected-checked-change-operations 27 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 38 \
+    --expected-checked-events 40 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "2"
@@ -1918,7 +1966,7 @@ expect_value "$store_integrity_output" "checked_commits" "19"
 expect_value "$store_integrity_output" "checked_changesets" "19"
 expect_value "$store_integrity_output" "checked_change_operations" "27"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "38"
+expect_value "$store_integrity_output" "checked_events" "40"
 expect_value "$store_integrity_output" "checked_checkpoints" "1"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -1931,11 +1979,11 @@ doctor_output="$(run_workvcs \
     --expected-checked-changesets 19 \
     --expected-checked-change-operations 27 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 38 \
+    --expected-checked-events 40 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=2 checked_commits=19 checked_changesets=19 checked_change_operations=27 checked_changeset_causal_anchors=0 checked_events=38 checked_checkpoints=1 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=19 checked_changesets=19 checked_change_operations=27 checked_changeset_causal_anchors=0 checked_events=40 checked_checkpoints=1 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'
@@ -1960,3 +2008,4 @@ printf 'session_diff_id=%s\n' "$session_diff_id"
 printf 'handoff_record_id=%s\n' "$handoff_record_id"
 printf 'claim_transfer_id=%s\n' "$claim_transfer_id"
 printf 'claim_takeover_id=%s\n' "$claim_takeover_id"
+printf 'stale_session_id=%s\n' "$stale_session_id"

@@ -80,14 +80,15 @@ use workvcs_core::{
     RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
     RunnableTasksOptions, RunnableTasksProjection, SessionDiffId, SessionDiffSnapshot,
     SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
-    SessionLifecycleState, SessionListOptions, SessionListResult, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInfo, StoreInitOptions, StoreLineageListOptions, StoreLineageListResult,
-    StoreLineageRecordOptions, StoreLineageRecordResult, StoreLineageSnapshot,
-    StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
-    StoreMigrationRecordOptions, StoreMigrationRecordResult, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    SessionLifecycleState, SessionListOptions, SessionListResult, SessionMarkStaleOptions,
+    SessionMarkStaleResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInfo, StoreInitOptions,
+    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
+    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
+    StoreMigrationRecordResult, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, VerificationApplicability, VerificationApplicabilityCacheListOptions,
     VerificationApplicabilityCacheListResult, VerificationApplicabilityCacheSnapshot,
@@ -4023,6 +4024,28 @@ enum SessionCommand {
 
         #[arg(long)]
         expected_lifecycle_state: Option<String>,
+    },
+    MarkStale {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        rationale: String,
+
+        #[arg(long)]
+        expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
+
+        #[arg(long)]
+        expected_active_workspace: Option<String>,
+
+        #[arg(long)]
+        expected_active_branch: Option<String>,
     },
     Switch {
         #[arg(value_name = "STORE")]
@@ -9699,6 +9722,85 @@ fn run(cli: Cli) -> Result<String> {
                     expected_lifecycle_state,
                 },
             )?;
+            Ok(output)
+        }
+        Command::Session {
+            command:
+                SessionCommand::MarkStale {
+                    store,
+                    session,
+                    rationale,
+                    expected_session,
+                    expected_lifecycle_state,
+                    expected_active_workspace,
+                    expected_active_branch,
+                },
+        } => {
+            let mut engine = Engine::open(store)?;
+            let marked = engine.mark_session_potentially_stale(SessionMarkStaleOptions::new(
+                SessionId::parse_canonical(&session)?,
+                rationale,
+            )?)?;
+            let mut output = render_session_mark_stale(&marked);
+            if let Some(expected_session) = expected_session {
+                let expected_session = SessionId::parse_canonical(&expected_session)?;
+                if marked.session_id != expected_session {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session mark-stale session {} does not match expected {}",
+                        marked.session_id, expected_session
+                    )));
+                }
+                output.push_str("session_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+                let expected_lifecycle_state =
+                    parse_session_lifecycle_state(&expected_lifecycle_state)?;
+                if marked.state.lifecycle_state != expected_lifecycle_state {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session mark-stale lifecycle state {} does not match expected {}",
+                        session_lifecycle_state(marked.state.lifecycle_state),
+                        session_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            if let Some(expected_active_workspace) = expected_active_workspace {
+                let expected_active_workspace =
+                    workvcs_core::WorkspaceId::parse_canonical(&expected_active_workspace)?;
+                match marked.state.active_workspace_id {
+                    Some(actual) if actual == expected_active_workspace => {
+                        output.push_str("active_workspace_match_expected=true\n");
+                    }
+                    Some(actual) => {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session mark-stale active workspace {actual} does not match expected {expected_active_workspace}"
+                        )));
+                    }
+                    None => {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session mark-stale active workspace none does not match expected {expected_active_workspace}"
+                        )));
+                    }
+                }
+            }
+            if let Some(expected_active_branch) = expected_active_branch {
+                let expected_active_branch = BranchId::parse_canonical(&expected_active_branch)?;
+                match marked.state.active_branch_id {
+                    Some(actual) if actual == expected_active_branch => {
+                        output.push_str("active_branch_match_expected=true\n");
+                    }
+                    Some(actual) => {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session mark-stale active branch {actual} does not match expected {expected_active_branch}"
+                        )));
+                    }
+                    None => {
+                        return Err(WorkVcsError::SessionInvalid(format!(
+                            "session mark-stale active branch none does not match expected {expected_active_branch}"
+                        )));
+                    }
+                }
+            }
             Ok(output)
         }
         Command::Session {
@@ -15920,6 +16022,25 @@ fn append_session_focus_expectations(
     Ok(())
 }
 
+fn render_session_mark_stale(session: &SessionMarkStaleResult) -> String {
+    format!(
+        "session_id={}\nmarked_at_us={}\nprevious_last_activity_at_us={}\nrationale={}\nlifecycle_state={}\nactive_workspace_id={}\nactive_branch_id={}\nfocus_entity_id={}\n",
+        session.session_id,
+        session.marked_at_us,
+        session.previous_last_activity_at_us,
+        session.rationale,
+        session_lifecycle_state(session.state.lifecycle_state),
+        render_optional_display_or_none(session.state.active_workspace_id.as_ref()),
+        render_optional_display_or_none(session.state.active_branch_id.as_ref()),
+        session
+            .state
+            .focus
+            .as_ref()
+            .map(|focus| focus.focus_entity_id.to_string())
+            .unwrap_or_else(|| "none".to_owned())
+    )
+}
+
 fn render_session_switch(session: &SessionSwitchResult) -> String {
     let focus_entity_id = session
         .state
@@ -17491,6 +17612,7 @@ fn render_runnable_candidate(output: &mut String, index: usize, candidate: &Runn
 fn session_lifecycle_state(state: SessionLifecycleState) -> &'static str {
     match state {
         SessionLifecycleState::Active => "active",
+        SessionLifecycleState::PotentiallyStale => "potentially_stale",
         SessionLifecycleState::Ended => "ended",
     }
 }
@@ -17498,6 +17620,7 @@ fn session_lifecycle_state(state: SessionLifecycleState) -> &'static str {
 fn parse_session_lifecycle_state(value: &str) -> Result<SessionLifecycleState> {
     match value {
         "active" => Ok(SessionLifecycleState::Active),
+        "potentially_stale" => Ok(SessionLifecycleState::PotentiallyStale),
         "ended" => Ok(SessionLifecycleState::Ended),
         other => Err(WorkVcsError::SessionInvalid(format!(
             "unknown session lifecycle state {other:?}"
@@ -29163,6 +29286,166 @@ mod tests {
             Err(WorkVcsError::SessionInvalid(message))
                 if message == "session focus-set lifecycle state active does not match expected ended"
         ));
+    }
+
+    #[test]
+    fn cli_marks_session_potentially_stale_and_preserves_recovery_path() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Stale session task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let marked = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "mark-stale",
+            store,
+            "--session",
+            &session_id,
+            "--rationale",
+            "operator observed no heartbeat",
+            "--expected-session",
+            &session_id,
+            "--expected-lifecycle-state",
+            "potentially_stale",
+            "--expected-active-workspace",
+            &workspace_id,
+            "--expected-active-branch",
+            &branch,
+        ])
+        .expect("parse session mark-stale"))
+        .expect("mark session stale");
+        assert_eq!(value(&marked, "session_id"), session_id);
+        assert_eq!(value(&marked, "lifecycle_state"), "potentially_stale");
+        assert_eq!(
+            value(&marked, "rationale"),
+            "operator observed no heartbeat"
+        );
+        assert_eq!(value(&marked, "session_match_expected"), "true");
+        assert_eq!(value(&marked, "lifecycle_state_match_expected"), "true");
+        assert_eq!(value(&marked, "active_workspace_match_expected"), "true");
+        assert_eq!(value(&marked, "active_branch_match_expected"), "true");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+            "--expected-lifecycle-state",
+            "potentially_stale",
+            "--expected-active-workspace",
+            &workspace_id,
+            "--expected-active-branch",
+            &branch,
+        ])
+        .expect("parse stale session show"))
+        .expect("show stale session");
+        assert_eq!(value(&shown, "lifecycle_state"), "potentially_stale");
+        assert_eq!(value(&shown, "lifecycle_state_matches_expected"), "true");
+        assert_eq!(value(&shown, "active_workspace_matches_expected"), "true");
+        assert_eq!(value(&shown, "active_branch_matches_expected"), "true");
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "list",
+            store,
+            "--lifecycle",
+            "potentially_stale",
+            "--expected-sessions",
+            "1",
+        ])
+        .expect("parse stale session list"))
+        .expect("list stale sessions");
+        assert_eq!(value(&listed, "sessions"), "1");
+        assert_eq!(value(&listed, "session.0.session_id"), session_id);
+        assert_eq!(
+            value(&listed, "session.0.lifecycle_state"),
+            "potentially_stale"
+        );
+        assert_eq!(value(&listed, "sessions_match_expected"), "true");
+
+        let stale_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &session_id,
+            "--task",
+            &task_id,
+        ])
+        .expect("parse stale claim"));
+        assert!(matches!(
+            stale_claim,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == format!("session {session_id} is not active")
+        ));
+
+        let ended = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "end",
+            store,
+            "--session",
+            &session_id,
+            "--expected-lifecycle-state",
+            "ended",
+        ])
+        .expect("parse stale session end"))
+        .expect("end stale session");
+        assert_eq!(value(&ended, "lifecycle_state"), "ended");
+        assert_eq!(value(&ended, "lifecycle_state_match_expected"), "true");
     }
 
     #[test]

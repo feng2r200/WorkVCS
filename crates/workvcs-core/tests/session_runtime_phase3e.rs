@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, BranchId, CanonicalValue,
-    Engine, EntityId, ErrorCategory, ErrorCode, RelationId, SessionEndOptions, SessionFocusOptions,
-    SessionFocusPathEntry, SessionId, SessionLifecycleState, SessionStartOptions, StoreInitOptions,
-    TaskCreateOptions, VerificationCreateOptions, VerificationResult, VerificationTarget,
-    WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    ClaimLifecycleState, ClaimListOptions, ClaimTaskOptions, Engine, EntityId, ErrorCategory,
+    ErrorCode, RelationId, SessionEndOptions, SessionFocusOptions, SessionFocusPathEntry,
+    SessionId, SessionLifecycleState, SessionMarkStaleOptions, SessionStartOptions,
+    StoreInitOptions, TaskCreateOptions, VerificationCreateOptions, VerificationResult,
+    VerificationTarget, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,6 +19,8 @@ struct RuntimeCounts {
     session_focus: i64,
     session_focus_path: i64,
     session_diff: i64,
+    claim: i64,
+    claim_runtime: i64,
     changeset: i64,
     workstate_commit: i64,
     event: i64,
@@ -70,6 +73,8 @@ fn runtime_counts(connection: &Connection) -> RuntimeCounts {
         session_focus: count_rows(connection, "session_focus"),
         session_focus_path: count_rows(connection, "session_focus_path"),
         session_diff: count_rows(connection, "session_diff"),
+        claim: count_rows(connection, "claim"),
+        claim_runtime: count_rows(connection, "claim_runtime"),
         changeset: count_rows(connection, "changeset"),
         workstate_commit: count_rows(connection, "workstate_commit"),
         event: count_rows(connection, "event"),
@@ -104,6 +109,68 @@ fn event_count(connection: &Connection, session_id: SessionId, event_kind: &str)
             |row| row.get(0),
         )
         .expect("event count")
+}
+
+fn latest_event_payload(
+    connection: &Connection,
+    session_id: SessionId,
+    event_kind: &str,
+) -> String {
+    let session_id = session_id.raw_bytes();
+    connection
+        .query_row(
+            "SELECT payload_json
+             FROM event
+             WHERE session_id = ?1
+               AND changeset_id IS NULL
+               AND event_kind = ?2
+             ORDER BY occurred_at_us DESC
+             LIMIT 1",
+            params![&session_id[..], event_kind],
+            |row| row.get(0),
+        )
+        .expect("latest event payload")
+}
+
+fn session_marked_potentially_stale_payload(
+    session_id: SessionId,
+    workspace: &WorkspaceInfo,
+    previous_last_activity_at_us: i64,
+    rationale: &str,
+) -> String {
+    canonical_json(
+        &CanonicalValue::object(vec![
+            (
+                "active_branch_id".to_owned(),
+                CanonicalValue::String(workspace.initial_branch_id.to_string()),
+            ),
+            (
+                "active_workspace_id".to_owned(),
+                CanonicalValue::String(workspace.workspace_id.to_string()),
+            ),
+            (
+                "lifecycle_state".to_owned(),
+                CanonicalValue::String("potentially_stale".to_owned()),
+            ),
+            (
+                "previous_last_activity_at_us".to_owned(),
+                CanonicalValue::safe_integer(previous_last_activity_at_us).expect("safe integer"),
+            ),
+            (
+                "previous_lifecycle_state".to_owned(),
+                CanonicalValue::String("active".to_owned()),
+            ),
+            (
+                "rationale".to_owned(),
+                CanonicalValue::String(rationale.to_owned()),
+            ),
+            (
+                "session_id".to_owned(),
+                CanonicalValue::String(session_id.to_string()),
+            ),
+        ])
+        .expect("payload"),
+    )
 }
 
 #[test]
@@ -483,6 +550,207 @@ fn set_focus_rejects_absent_entities_and_relations_without_partial_rows() {
     assert_eq!(missing_relation.code(), ErrorCode::SessionInvalid);
 
     assert_eq!(runtime_counts(&connection), before);
+}
+
+#[test]
+fn mark_session_potentially_stale_preserves_context_and_blocks_active_work() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Potentially stale runtime task",
+            )
+            .expect("task options"),
+        )
+        .expect("create task");
+    let started = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    engine
+        .set_session_focus(SessionFocusOptions::new(
+            started.session_id,
+            task.task_entity_id,
+        ))
+        .expect("set focus");
+    let claimed = engine
+        .claim_task(ClaimTaskOptions::new(
+            started.session_id,
+            task.task_entity_id,
+        ))
+        .expect("claim task");
+    let connection = raw_connection(&path);
+    let before = runtime_counts(&connection);
+    let before_head = engine
+        .branch_head(workspace.initial_branch_id)
+        .expect("branch head before mark-stale");
+    let rationale = "operator observed no heartbeat";
+
+    let marked = engine
+        .mark_session_potentially_stale(
+            SessionMarkStaleOptions::new(started.session_id, rationale).expect("stale options"),
+        )
+        .expect("mark session stale");
+
+    assert_eq!(marked.session_id, started.session_id);
+    assert!(marked.marked_at_us >= claimed.claimed_at_us);
+    assert_eq!(marked.previous_last_activity_at_us, claimed.claimed_at_us);
+    assert_eq!(marked.rationale, rationale);
+    assert_eq!(
+        marked.state.lifecycle_state,
+        SessionLifecycleState::PotentiallyStale
+    );
+    assert_eq!(
+        marked.state.last_activity_at_us,
+        Some(claimed.claimed_at_us)
+    );
+    assert_eq!(
+        marked.state.active_workspace_id,
+        Some(workspace.workspace_id)
+    );
+    assert_eq!(
+        marked.state.active_branch_id,
+        Some(workspace.initial_branch_id)
+    );
+    assert_eq!(
+        marked.state.focus.as_ref().expect("focus").focus_entity_id,
+        task.task_entity_id
+    );
+
+    let stored_runtime: String = connection
+        .query_row(
+            "SELECT runtime_json
+             FROM session_runtime
+             WHERE session_id = ?1",
+            params![&started.session_id.raw_bytes()[..]],
+            |row| row.get(0),
+        )
+        .expect("session runtime");
+    assert_eq!(stored_runtime, r#"{"lifecycle_state":"potentially_stale"}"#);
+
+    let after_mark = runtime_counts(&connection);
+    assert_eq!(after_mark.session, before.session);
+    assert_eq!(after_mark.session_runtime, before.session_runtime);
+    assert_eq!(
+        after_mark.session_context_workspace,
+        before.session_context_workspace
+    );
+    assert_eq!(after_mark.session_focus, before.session_focus);
+    assert_eq!(after_mark.session_focus_path, before.session_focus_path);
+    assert_eq!(after_mark.session_diff, before.session_diff);
+    assert_eq!(after_mark.claim, before.claim);
+    assert_eq!(after_mark.claim_runtime, before.claim_runtime);
+    assert_eq!(after_mark.changeset, before.changeset);
+    assert_eq!(after_mark.workstate_commit, before.workstate_commit);
+    assert_eq!(after_mark.event, before.event + 1);
+    assert_eq!(
+        event_count(&connection, started.session_id, "session.potentially_stale"),
+        1
+    );
+    assert_eq!(
+        latest_event_payload(&connection, started.session_id, "session.potentially_stale"),
+        session_marked_potentially_stale_payload(
+            started.session_id,
+            &workspace,
+            marked.previous_last_activity_at_us,
+            rationale,
+        )
+    );
+    let after_head = engine
+        .branch_head(workspace.initial_branch_id)
+        .expect("branch head after mark-stale");
+    assert_eq!(after_head.head_commit_id, before_head.head_commit_id);
+    assert_eq!(after_head.state_digest, before_head.state_digest);
+    assert_eq!(
+        engine
+            .active_claims_for_session(ClaimListOptions::for_session(started.session_id))
+            .expect("active claims")
+            .claims
+            .len(),
+        1
+    );
+
+    let stale_focus = engine
+        .clear_session_focus(started.session_id)
+        .expect_err("stale session cannot clear focus");
+    assert_eq!(stale_focus.code(), ErrorCode::SessionInvalid);
+    let stale_claim = engine
+        .claim_task(ClaimTaskOptions::new(
+            started.session_id,
+            task.task_entity_id,
+        ))
+        .expect_err("stale session cannot claim task");
+    assert_eq!(stale_claim.code(), ErrorCode::SessionInvalid);
+    assert_eq!(runtime_counts(&connection), after_mark);
+
+    let ended = engine
+        .end_session(SessionEndOptions::new(started.session_id).expect("end options"))
+        .expect("end stale session");
+    assert_eq!(ended.state.lifecycle_state, SessionLifecycleState::Ended);
+    assert_eq!(
+        engine
+            .claim_snapshot(claimed.claim_id)
+            .expect("released claim snapshot")
+            .lifecycle_state,
+        ClaimLifecycleState::Released
+    );
+}
+
+#[test]
+fn mark_session_potentially_stale_rejects_invalid_transitions_without_partial_rows() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let started = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    let connection = raw_connection(&path);
+    let before = runtime_counts(&connection);
+
+    let blank = SessionMarkStaleOptions::new(started.session_id, "   ")
+        .expect_err("blank rationale should fail");
+    assert_eq!(blank.code(), ErrorCode::SessionInvalid);
+    assert_eq!(blank.category(), ErrorCategory::Runtime);
+    assert_eq!(runtime_counts(&connection), before);
+
+    engine
+        .mark_session_potentially_stale(
+            SessionMarkStaleOptions::new(started.session_id, "first stale marker")
+                .expect("stale options"),
+        )
+        .expect("mark stale");
+    let after_mark = runtime_counts(&connection);
+
+    let duplicate = engine
+        .mark_session_potentially_stale(
+            SessionMarkStaleOptions::new(started.session_id, "second stale marker")
+                .expect("stale options"),
+        )
+        .expect_err("already stale session should fail");
+    assert_eq!(duplicate.code(), ErrorCode::SessionInvalid);
+    assert_eq!(duplicate.category(), ErrorCategory::Runtime);
+    assert_eq!(runtime_counts(&connection), after_mark);
+
+    engine
+        .end_session(SessionEndOptions::new(started.session_id).expect("end options"))
+        .expect("end stale session");
+    let after_end = runtime_counts(&connection);
+    let ended = engine
+        .mark_session_potentially_stale(
+            SessionMarkStaleOptions::new(started.session_id, "ended stale marker")
+                .expect("stale options"),
+        )
+        .expect_err("ended session should fail");
+    assert_eq!(ended.code(), ErrorCode::SessionInvalid);
+    assert_eq!(ended.category(), ErrorCategory::Runtime);
+    assert_eq!(runtime_counts(&connection), after_end);
 }
 
 #[test]

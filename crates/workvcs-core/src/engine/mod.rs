@@ -112,8 +112,9 @@ use crate::{
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
     SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionListOptions,
-    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult, VerifyOptions, VerifyResult,
+    SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    VerifyOptions, VerifyResult,
 };
 use std::path::Path;
 
@@ -991,6 +992,13 @@ impl Engine {
         session_id: SessionId,
     ) -> Result<SessionFocusUpdateResult> {
         self.store.clear_session_focus(session_id)
+    }
+
+    pub fn mark_session_potentially_stale(
+        &mut self,
+        options: SessionMarkStaleOptions,
+    ) -> Result<SessionMarkStaleResult> {
+        self.store.mark_session_potentially_stale(&options)
     }
 
     pub fn switch_session(&mut self, options: SessionSwitchOptions) -> Result<SessionSwitchResult> {

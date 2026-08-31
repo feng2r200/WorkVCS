@@ -149,8 +149,8 @@ pub use runtime::{
 pub use runtime::{
     SessionDiffSnapshot, SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions,
     SessionFocusPathEntry, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
-    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult,
+    SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 pub use store::{StoreInfo, StoreInitOptions, StoreManifest};

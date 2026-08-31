@@ -12,17 +12,20 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 const ACTIVE_BRANCH_LIFECYCLE_STATE: &str = "active";
 const SESSION_OBJECT_KIND: &str = "session";
 const ACTIVE_SESSION_LIFECYCLE_STATE: &str = "active";
+const POTENTIALLY_STALE_SESSION_LIFECYCLE_STATE: &str = "potentially_stale";
 const ENDED_SESSION_LIFECYCLE_STATE: &str = "ended";
 const SESSION_STARTED_EVENT_KIND: &str = "session.started";
 const SESSION_FOCUS_SET_EVENT_KIND: &str = "session.focus_set";
 const SESSION_FOCUS_CLEARED_EVENT_KIND: &str = "session.focus_cleared";
 const SESSION_SWITCHED_EVENT_KIND: &str = "session.switched";
+const SESSION_MARKED_POTENTIALLY_STALE_EVENT_KIND: &str = "session.potentially_stale";
 const SESSION_ENDED_EVENT_KIND: &str = "session.ended";
 const SESSION_DIFF_OBJECT_KIND: &str = "session_diff";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionLifecycleState {
     Active,
+    PotentiallyStale,
     Ended,
 }
 
@@ -146,6 +149,35 @@ impl SessionEndOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionMarkStaleOptions {
+    session_id: SessionId,
+    rationale: String,
+}
+
+impl SessionMarkStaleOptions {
+    pub fn new(session_id: SessionId, rationale: impl Into<String>) -> Result<Self> {
+        let rationale = rationale.into();
+        if rationale.trim().is_empty() {
+            return Err(WorkVcsError::SessionInvalid(
+                "session mark-stale rationale must not be empty".to_owned(),
+            ));
+        }
+        Ok(Self {
+            session_id,
+            rationale,
+        })
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn rationale(&self) -> &str {
+        &self.rationale
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSwitchOptions {
     session_id: SessionId,
     active_workspace_id: WorkspaceId,
@@ -238,6 +270,15 @@ pub struct SessionEndResult {
     pub session_diff_id: SessionDiffId,
     pub ended_at_us: i64,
     pub summary: CanonicalValue,
+    pub state: SessionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionMarkStaleResult {
+    pub session_id: SessionId,
+    pub marked_at_us: i64,
+    pub previous_last_activity_at_us: i64,
+    pub rationale: String,
     pub state: SessionSnapshot,
 }
 
@@ -705,6 +746,81 @@ pub(crate) fn switch_session(
     })
 }
 
+pub(crate) fn mark_session_potentially_stale(
+    connection: &mut StoreConnection,
+    options: &SessionMarkStaleOptions,
+) -> Result<SessionMarkStaleResult> {
+    connection.verify_foreign_keys()?;
+    let runtime_json = potentially_stale_runtime_json()?;
+    let event_id = EventId::new_v7();
+    let now_us = current_epoch_micros()?;
+    let session_id_bytes = options.session_id().raw_bytes();
+    let event_id_bytes = event_id.raw_bytes();
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let current_runtime = load_live_session_runtime_for_update(&transaction, options.session_id())?;
+    if current_runtime.lifecycle_state != SessionLifecycleState::Active {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} is not active",
+            options.session_id()
+        )));
+    }
+    ensure_no_session_diff(&transaction, options.session_id())?;
+    let workspace_id_bytes = current_runtime.active_workspace_id.raw_bytes();
+    let event_payload_json =
+        session_marked_potentially_stale_payload_json(options, &current_runtime)?;
+
+    let updated = transaction
+        .execute(
+            "UPDATE session_runtime
+             SET runtime_json = ?1
+             WHERE session_id = ?2",
+            params![runtime_json, &session_id_bytes[..]],
+        )
+        .map_err(storage_error)?;
+    if updated != 1 {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} mark-stale update affected {updated} rows",
+            options.session_id()
+        )));
+    }
+    transaction
+        .execute(
+            "INSERT INTO event(
+                event_id,
+                workspace_id,
+                changeset_id,
+                session_id,
+                event_kind,
+                occurred_at_us,
+                payload_json
+             )
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
+            params![
+                &event_id_bytes[..],
+                &workspace_id_bytes[..],
+                &session_id_bytes[..],
+                SESSION_MARKED_POTENTIALLY_STALE_EVENT_KIND,
+                now_us,
+                event_payload_json
+            ],
+        )
+        .map_err(storage_error)?;
+
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(SessionMarkStaleResult {
+        session_id: options.session_id(),
+        marked_at_us: now_us,
+        previous_last_activity_at_us: current_runtime.last_activity_at_us,
+        rationale: options.rationale().to_owned(),
+        state: session_snapshot(connection, options.session_id())?,
+    })
+}
+
 pub(crate) fn end_session(
     connection: &mut StoreConnection,
     options: &SessionEndOptions,
@@ -723,8 +839,7 @@ pub(crate) fn end_session(
         .inner_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage_error)?;
-    let current_runtime =
-        load_active_session_runtime_for_update(&transaction, options.session_id())?;
+    let current_runtime = load_live_session_runtime_for_update(&transaction, options.session_id())?;
     ensure_no_session_diff(&transaction, options.session_id())?;
     let workspace_id_bytes = current_runtime.active_workspace_id.raw_bytes();
 
@@ -914,15 +1029,16 @@ fn session_snapshot_from_connection(
     let session_diff_id = load_session_diff_id(connection, session_id)?;
     match (runtime, session_diff_id) {
         (Some(runtime), None) => {
-            validate_active_runtime_json(&runtime.runtime_json, session_id)?;
+            let lifecycle_state =
+                session_runtime_lifecycle_state(&runtime.runtime_json, session_id)?;
             let active_workspace_id = runtime.active_workspace_id.ok_or_else(|| {
                 WorkVcsError::SessionInvalid(format!(
-                    "active session {session_id} has no active workspace"
+                    "live session {session_id} has no active workspace"
                 ))
             })?;
             let active_branch_id = runtime.active_branch_id.ok_or_else(|| {
                 WorkVcsError::SessionInvalid(format!(
-                    "active session {session_id} has no active branch"
+                    "live session {session_id} has no active branch"
                 ))
             })?;
             let context_workspaces = load_context_workspaces(connection, session_id)?;
@@ -933,7 +1049,7 @@ fn session_snapshot_from_connection(
             }
             Ok(SessionSnapshot {
                 session_id,
-                lifecycle_state: SessionLifecycleState::Active,
+                lifecycle_state,
                 started_at_us: session.started_at_us,
                 last_activity_at_us: Some(runtime.last_activity_at_us),
                 metadata: session.metadata,
@@ -957,10 +1073,10 @@ fn session_snapshot_from_connection(
             session_diff_id: Some(session_diff_id),
         }),
         (Some(_), Some(session_diff_id)) => Err(WorkVcsError::SessionInvalid(format!(
-            "session {session_id} has active runtime and final session diff {session_diff_id}"
+            "session {session_id} has live runtime and final session diff {session_diff_id}"
         ))),
         (None, None) => Err(WorkVcsError::SessionInvalid(format!(
-            "session {session_id} has no active runtime or final session diff"
+            "session {session_id} has no live runtime or final session diff"
         ))),
     }
 }
@@ -980,6 +1096,13 @@ struct SessionRuntimeRow {
     active_branch_id: Option<BranchId>,
     last_activity_at_us: i64,
     runtime_json: String,
+}
+
+struct LiveSessionRuntimeProjection {
+    active_workspace_id: WorkspaceId,
+    active_branch_id: BranchId,
+    last_activity_at_us: i64,
+    lifecycle_state: SessionLifecycleState,
 }
 
 pub(super) struct ActiveSessionProjection {
@@ -1073,10 +1196,28 @@ pub(super) fn load_active_session_runtime_for_update(
     transaction: &Transaction<'_>,
     session_id: SessionId,
 ) -> Result<ActiveSessionProjection> {
+    let runtime = load_live_session_runtime_for_update(transaction, session_id)?;
+    if runtime.lifecycle_state != SessionLifecycleState::Active {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {session_id} is not active"
+        )));
+    }
+
+    Ok(ActiveSessionProjection {
+        active_workspace_id: runtime.active_workspace_id,
+        active_branch_id: runtime.active_branch_id,
+    })
+}
+
+fn load_live_session_runtime_for_update(
+    transaction: &Transaction<'_>,
+    session_id: SessionId,
+) -> Result<LiveSessionRuntimeProjection> {
     let row = transaction
         .query_row(
             "SELECT active_workspace_id,
                     active_branch_id,
+                    last_activity_at_us,
                     runtime_json
              FROM session_runtime
              WHERE session_id = ?1",
@@ -1085,14 +1226,16 @@ pub(super) fn load_active_session_runtime_for_update(
                 Ok((
                     row.get::<_, Option<Vec<u8>>>(0)?,
                     row.get::<_, Option<Vec<u8>>>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             },
         )
         .optional()
         .map_err(storage_error)?;
 
-    let Some((active_workspace_id, active_branch_id, runtime_json)) = row else {
+    let Some((active_workspace_id, active_branch_id, last_activity_at_us, runtime_json)) = row
+    else {
         if session_exists(transaction, session_id)? {
             return Err(WorkVcsError::SessionInvalid(format!(
                 "session {session_id} is not active"
@@ -1102,27 +1245,27 @@ pub(super) fn load_active_session_runtime_for_update(
             "session {session_id} does not exist"
         )));
     };
-    validate_active_runtime_json(&runtime_json, session_id)?;
+    let lifecycle_state = session_runtime_lifecycle_state(&runtime_json, session_id)?;
     let active_workspace_id = active_workspace_id
         .map(|bytes| decode_workspace_id("session_runtime.active_workspace_id", bytes))
         .transpose()?
         .ok_or_else(|| {
             WorkVcsError::SessionInvalid(format!(
-                "active session {session_id} has no active workspace"
+                "live session {session_id} has no active workspace"
             ))
         })?;
     let active_branch_id = active_branch_id
         .map(|bytes| decode_branch_id("session_runtime.active_branch_id", bytes))
         .transpose()?
         .ok_or_else(|| {
-            WorkVcsError::SessionInvalid(format!(
-                "active session {session_id} has no active branch"
-            ))
+            WorkVcsError::SessionInvalid(format!("live session {session_id} has no active branch"))
         })?;
 
-    Ok(ActiveSessionProjection {
+    Ok(LiveSessionRuntimeProjection {
         active_workspace_id,
         active_branch_id,
+        last_activity_at_us,
+        lifecycle_state,
     })
 }
 
@@ -1474,13 +1617,24 @@ pub(super) fn replace_session_focus_with_event(
 }
 
 fn active_runtime_json() -> Result<String> {
+    session_runtime_json(SessionLifecycleState::Active)
+}
+
+fn potentially_stale_runtime_json() -> Result<String> {
+    session_runtime_json(SessionLifecycleState::PotentiallyStale)
+}
+
+fn session_runtime_json(lifecycle_state: SessionLifecycleState) -> Result<String> {
     canonical_json_string(&CanonicalValue::object(vec![(
         "lifecycle_state".to_owned(),
-        CanonicalValue::String(ACTIVE_SESSION_LIFECYCLE_STATE.to_owned()),
+        CanonicalValue::String(session_lifecycle_state_label(lifecycle_state).to_owned()),
     )])?)
 }
 
-fn validate_active_runtime_json(runtime_json: &str, session_id: SessionId) -> Result<()> {
+fn session_runtime_lifecycle_state(
+    runtime_json: &str,
+    session_id: SessionId,
+) -> Result<SessionLifecycleState> {
     let value = parse_canonical_object_json("session_runtime.runtime_json", runtime_json)?;
     let CanonicalValue::Object(entries) = value else {
         unreachable!("parse_canonical_object_json returns only objects");
@@ -1490,15 +1644,31 @@ fn validate_active_runtime_json(runtime_json: &str, session_id: SessionId) -> Re
             "active session {session_id} runtime_json must contain only lifecycle_state"
         )));
     }
-    match &entries[0] {
-        (key, CanonicalValue::String(value))
-            if key == "lifecycle_state" && value == ACTIVE_SESSION_LIFECYCLE_STATE =>
-        {
-            Ok(())
-        }
+    let (key, value) = &entries[0];
+    let CanonicalValue::String(value) = value else {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {session_id} runtime_json lifecycle_state must be a string"
+        )));
+    };
+    if key != "lifecycle_state" {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {session_id} runtime_json must project lifecycle_state"
+        )));
+    }
+    match value.as_str() {
+        ACTIVE_SESSION_LIFECYCLE_STATE => Ok(SessionLifecycleState::Active),
+        POTENTIALLY_STALE_SESSION_LIFECYCLE_STATE => Ok(SessionLifecycleState::PotentiallyStale),
         _ => Err(WorkVcsError::SessionInvalid(format!(
-            "active session {session_id} runtime_json must project lifecycle_state active"
+            "session {session_id} runtime_json has unsupported lifecycle_state {value:?}"
         ))),
+    }
+}
+
+fn session_lifecycle_state_label(lifecycle_state: SessionLifecycleState) -> &'static str {
+    match lifecycle_state {
+        SessionLifecycleState::Active => ACTIVE_SESSION_LIFECYCLE_STATE,
+        SessionLifecycleState::PotentiallyStale => POTENTIALLY_STALE_SESSION_LIFECYCLE_STATE,
+        SessionLifecycleState::Ended => ENDED_SESSION_LIFECYCLE_STATE,
     }
 }
 
@@ -1588,6 +1758,44 @@ fn session_switched_payload_json(
         (
             "released_claims".to_owned(),
             CanonicalValue::safe_integer(released_claims)?,
+        ),
+        (
+            "session_id".to_owned(),
+            CanonicalValue::String(options.session_id().to_string()),
+        ),
+    ])?)
+}
+
+fn session_marked_potentially_stale_payload_json(
+    options: &SessionMarkStaleOptions,
+    runtime: &LiveSessionRuntimeProjection,
+) -> Result<String> {
+    canonical_json_string(&CanonicalValue::object(vec![
+        (
+            "active_branch_id".to_owned(),
+            CanonicalValue::String(runtime.active_branch_id.to_string()),
+        ),
+        (
+            "active_workspace_id".to_owned(),
+            CanonicalValue::String(runtime.active_workspace_id.to_string()),
+        ),
+        (
+            "lifecycle_state".to_owned(),
+            CanonicalValue::String(POTENTIALLY_STALE_SESSION_LIFECYCLE_STATE.to_owned()),
+        ),
+        (
+            "previous_last_activity_at_us".to_owned(),
+            CanonicalValue::safe_integer(runtime.last_activity_at_us)?,
+        ),
+        (
+            "previous_lifecycle_state".to_owned(),
+            CanonicalValue::String(
+                session_lifecycle_state_label(runtime.lifecycle_state).to_owned(),
+            ),
+        ),
+        (
+            "rationale".to_owned(),
+            CanonicalValue::String(options.rationale().to_owned()),
         ),
         (
             "session_id".to_owned(),

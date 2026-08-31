@@ -14,9 +14,9 @@ deployment, and plugin activation remain separate workflows.
 
 Current V0.1 does not include a daemon, GUI, TUI, cloud sync, remote
 collaboration, automatic transcript parsing, LLM extraction, or Agent
-orchestration. Claim takeover is explicit and requires `--force` plus a
-rationale; automated stale takeover remains blocked until a real
-`potentially_stale` Session state exists.
+orchestration. A Session can be explicitly marked `potentially_stale`, but
+automatic stale detection and stale-gated Claim takeover remain Open. Claim
+takeover is explicit and still requires `--force` plus a rationale.
 
 ## Build Or Install
 
@@ -205,6 +205,10 @@ When an operator must override a blocked active Claim, use forced takeover with
 a rationale and inspect the guard afterward:
 
 ```bash
+workvcs session mark-stale "$STORE" \
+  --session "$PREVIOUS_SESSION_ID" \
+  --rationale "operator recovery: previous session cannot continue"
+
 workvcs claim takeover "$STORE" \
   --session "$TAKING_SESSION_ID" \
   --claim "$CLAIM_ID" \
@@ -237,6 +241,5 @@ intended state transition.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
 - Context packets still need more V1 categories and persistence decisions.
-- `potentially_stale` Session state and stale Claim takeover policy remain
-  open.
+- Automatic stale detection and stale-gated Claim takeover policy remain open.
 - Larger Store validation has not yet been run.

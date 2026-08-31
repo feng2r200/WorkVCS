@@ -3585,6 +3585,15 @@ enum SessionCommand {
         #[arg(long)]
         branch: String,
 
+        #[arg(long)]
+        expected_workspace: Option<String>,
+
+        #[arg(long)]
+        expected_branch: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
+
         #[arg(long, default_value = "{}")]
         metadata_json: String,
     },
@@ -9575,6 +9584,9 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     workspace,
                     branch,
+                    expected_workspace,
+                    expected_branch,
+                    expected_lifecycle_state,
                     metadata_json,
                 },
         } => {
@@ -9586,7 +9598,41 @@ fn run(cli: Cli) -> Result<String> {
                 )?
                 .with_metadata(parse_cli_object("session metadata", &metadata_json)?)?,
             )?;
-            Ok(render_session_start(&session))
+            let mut output = render_session_start(&session);
+            if let Some(expected_workspace) = expected_workspace {
+                let expected_workspace =
+                    workvcs_core::WorkspaceId::parse_canonical(&expected_workspace)?;
+                if session.workspace_id != expected_workspace {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session start workspace {} does not match expected {}",
+                        session.workspace_id, expected_workspace
+                    )));
+                }
+                output.push_str("workspace_match_expected=true\n");
+            }
+            if let Some(expected_branch) = expected_branch {
+                let expected_branch = BranchId::parse_canonical(&expected_branch)?;
+                if session.branch_id != expected_branch {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session start branch {} does not match expected {}",
+                        session.branch_id, expected_branch
+                    )));
+                }
+                output.push_str("branch_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+                let expected_lifecycle_state =
+                    parse_session_lifecycle_state(&expected_lifecycle_state)?;
+                if session.state.lifecycle_state != expected_lifecycle_state {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session start lifecycle state {} does not match expected {}",
+                        session_lifecycle_state(session.state.lifecycle_state),
+                        session_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            Ok(output)
         }
         Command::Session {
             command:
@@ -31053,11 +31099,83 @@ mod tests {
             &workspace_id,
             "--branch",
             &branch,
+            "--expected-workspace",
+            &workspace_id,
+            "--expected-branch",
+            &branch,
+            "--expected-lifecycle-state",
+            "active",
         ])
         .expect("parse session start"))
         .expect("start session");
         let session_id = value(&session, "session_id");
         assert!(session.contains("lifecycle_state=active"));
+        assert_eq!(value(&session, "workspace_match_expected"), "true");
+        assert_eq!(value(&session, "branch_match_expected"), "true");
+        assert_eq!(value(&session, "lifecycle_state_match_expected"), "true");
+
+        let expected_other_workspace = WorkspaceId::new_v7().to_string();
+        let expected_message = format!(
+            "session start workspace {workspace_id} does not match expected {expected_other_workspace}"
+        );
+        let workspace_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+            "--expected-workspace",
+            &expected_other_workspace,
+        ])
+        .expect("parse workspace mismatched session start"));
+        assert!(matches!(
+            workspace_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let expected_other_branch = BranchId::new_v7().to_string();
+        let expected_message = format!(
+            "session start branch {branch} does not match expected {expected_other_branch}"
+        );
+        let branch_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+            "--expected-branch",
+            &expected_other_branch,
+        ])
+        .expect("parse branch mismatched session start"));
+        assert!(matches!(
+            branch_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let lifecycle_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+            "--expected-lifecycle-state",
+            "ended",
+        ])
+        .expect("parse lifecycle mismatched session start"));
+        assert!(matches!(
+            lifecycle_mismatch,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == "session start lifecycle state active does not match expected ended"
+        ));
 
         let context =
             run(

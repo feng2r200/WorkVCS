@@ -105,9 +105,58 @@ use workvcs_core::{
     work_state_mapping_digest,
 };
 
+const TOP_LEVEL_HELP: &str = "\
+WorkVCS v0.1 thin command shell
+
+Usage: workvcs <COMMAND>
+
+Commands:
+  init          Initialize a WorkVCS Store
+  doctor        Check Store integrity and expected counts
+  canonical     Encode and digest canonical JSON values
+  id            Generate and validate typed WorkVCS identifiers
+  store         Inspect Store metadata, lineage, and migrations
+  history       List commit history from a branch or commit
+  changeset     Inspect changesets and change operations
+  commit        Inspect commit metadata and causal anchors
+  event         Inspect persisted semantic events
+  show-at       Show WorkState at a branch or commit
+  diff          Compare WorkState between two targets
+  entity        Create, show, list, and transition entities
+  reference     Inspect structural references
+  restore       Restore a branch to an earlier commit
+  why           Explain structural, verification, and knowledge neighborhoods
+  workspace     Manage workspaces and workspace resources
+  branch        Inspect, fork, and switch branches
+  knowledge     Manage knowledge statements, relations, and exposures
+  goal          Create, show, list, and transition goals
+  plan          Create, show, list, and transition plans
+  task          Create, schedule, show, and transition tasks
+  ac            Manage acceptance criteria
+  vr            Manage verification requirements
+  evidence      Record and inspect verification evidence
+  resource      Register and inspect resources
+  record        Record assumptions, decisions, findings, attempts, and relations
+  session       Manage sessions and focus
+  claim         Claim and release runtime work
+  context       Show the current session context
+  next          Select next runnable work for a session
+  runnable      Inspect runnable task projections
+  verification  Record and inspect verifications
+  projection    Refresh and inspect runtime projections
+  bundle        Export, validate, import, and apply bundles
+  checkpoint    Create, validate, list, and restore checkpoints
+  merge         Start, inspect, continue, and abort merges
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+";
+
 #[derive(Debug, Parser)]
 #[command(name = "workvcs")]
 #[command(about = "WorkVCS v0.1 thin command shell")]
+#[command(override_help = TOP_LEVEL_HELP)]
 struct Cli {
     #[command(subcommand)]
     command: Box<Command>,
@@ -18332,6 +18381,85 @@ mod tests {
                 "merge"
             ]
         );
+    }
+
+    #[test]
+    fn cli_top_level_commands_have_help_summaries() {
+        let result = std::thread::Builder::new()
+            .name("cli-help-summary-test".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(assert_cli_top_level_commands_have_help_summaries)
+            .expect("spawn CLI help summary test")
+            .join();
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn assert_cli_top_level_commands_have_help_summaries() {
+        let help = Cli::command().render_long_help().to_string();
+        let expected = [
+            ("init", "Initialize a WorkVCS Store"),
+            ("doctor", "Check Store integrity and expected counts"),
+            ("canonical", "Encode and digest canonical JSON values"),
+            ("id", "Generate and validate typed WorkVCS identifiers"),
+            ("store", "Inspect Store metadata, lineage, and migrations"),
+            ("history", "List commit history from a branch or commit"),
+            ("changeset", "Inspect changesets and change operations"),
+            ("commit", "Inspect commit metadata and causal anchors"),
+            ("event", "Inspect persisted semantic events"),
+            ("show-at", "Show WorkState at a branch or commit"),
+            ("diff", "Compare WorkState between two targets"),
+            ("entity", "Create, show, list, and transition entities"),
+            ("reference", "Inspect structural references"),
+            ("restore", "Restore a branch to an earlier commit"),
+            (
+                "why",
+                "Explain structural, verification, and knowledge neighborhoods",
+            ),
+            ("workspace", "Manage workspaces and workspace resources"),
+            ("branch", "Inspect, fork, and switch branches"),
+            (
+                "knowledge",
+                "Manage knowledge statements, relations, and exposures",
+            ),
+            ("goal", "Create, show, list, and transition goals"),
+            ("plan", "Create, show, list, and transition plans"),
+            ("task", "Create, schedule, show, and transition tasks"),
+            ("ac", "Manage acceptance criteria"),
+            ("vr", "Manage verification requirements"),
+            ("evidence", "Record and inspect verification evidence"),
+            ("resource", "Register and inspect resources"),
+            (
+                "record",
+                "Record assumptions, decisions, findings, attempts, and relations",
+            ),
+            ("session", "Manage sessions and focus"),
+            ("claim", "Claim and release runtime work"),
+            ("context", "Show the current session context"),
+            ("next", "Select next runnable work for a session"),
+            ("runnable", "Inspect runnable task projections"),
+            ("verification", "Record and inspect verifications"),
+            ("projection", "Refresh and inspect runtime projections"),
+            ("bundle", "Export, validate, import, and apply bundles"),
+            (
+                "checkpoint",
+                "Create, validate, list, and restore checkpoints",
+            ),
+            ("merge", "Start, inspect, continue, and abort merges"),
+        ];
+        for (name, summary) in expected {
+            let expected_line = format!("  {name:<12}  {summary}");
+            let blank_line = format!("  {name:<12}  ");
+            assert!(
+                help.contains(&expected_line),
+                "missing top-level help summary line: {expected_line}"
+            );
+            assert!(
+                !help.lines().any(|line| line == blank_line),
+                "top-level command has blank help summary: {name}"
+            );
+        }
     }
 
     #[test]

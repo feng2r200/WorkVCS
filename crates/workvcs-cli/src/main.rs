@@ -4073,6 +4073,18 @@ enum VerificationCommand {
 
         #[arg(long, default_value = "{}")]
         detail_json: String,
+
+        #[arg(long)]
+        expected_evaluated_commit: Option<String>,
+
+        #[arg(long)]
+        expected_applicability: Option<String>,
+
+        #[arg(long)]
+        expected_reason_code: Option<String>,
+
+        #[arg(long)]
+        expected_resource_stamps: Option<usize>,
     },
     CacheShow {
         #[arg(value_name = "STORE")]
@@ -8643,6 +8655,10 @@ fn run(cli: Cli) -> Result<String> {
                     observed_fingerprint,
                     observation,
                     detail_json,
+                    expected_evaluated_commit,
+                    expected_applicability,
+                    expected_reason_code,
+                    expected_resource_stamps,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -8667,7 +8683,18 @@ fn run(cli: Cli) -> Result<String> {
                     &detail_json,
                 )?)?,
             )?;
-            Ok(render_verification_applicability_cache(&snapshot))
+            let mut output = render_verification_applicability_cache(&snapshot);
+            append_verification_cache_record_expectations(
+                &mut output,
+                &snapshot,
+                VerificationCacheRecordExpectationArgs {
+                    expected_evaluated_commit,
+                    expected_applicability,
+                    expected_reason_code,
+                    expected_resource_stamps,
+                },
+            )?;
+            Ok(output)
         }
         Command::Verification {
             command:
@@ -13525,6 +13552,63 @@ fn render_verification_applicability_cache(
         snapshot.evaluated_at_us,
         snapshot.resource_stamps.len()
     )
+}
+
+struct VerificationCacheRecordExpectationArgs {
+    expected_evaluated_commit: Option<String>,
+    expected_applicability: Option<String>,
+    expected_reason_code: Option<String>,
+    expected_resource_stamps: Option<usize>,
+}
+
+fn append_verification_cache_record_expectations(
+    output: &mut String,
+    snapshot: &VerificationApplicabilityCacheSnapshot,
+    expectations: VerificationCacheRecordExpectationArgs,
+) -> Result<()> {
+    let VerificationCacheRecordExpectationArgs {
+        expected_evaluated_commit,
+        expected_applicability,
+        expected_reason_code,
+        expected_resource_stamps,
+    } = expectations;
+    if let Some(expected_evaluated_commit) = expected_evaluated_commit {
+        let expected_evaluated_commit = CommitId::parse_canonical(&expected_evaluated_commit)?;
+        if snapshot.evaluated_commit_id != expected_evaluated_commit {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "verification cache record evaluated commit {} does not match expected {}",
+                snapshot.evaluated_commit_id, expected_evaluated_commit
+            )));
+        }
+        output.push_str("evaluated_commit_matches_expected=true\n");
+    }
+    if let Some(expected_applicability) = expected_applicability {
+        let expected_applicability = parse_verification_applicability(&expected_applicability)?;
+        if snapshot.applicability != expected_applicability {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "verification cache record applicability {} does not match expected {}",
+                snapshot.applicability, expected_applicability
+            )));
+        }
+        output.push_str("applicability_matches_expected=true\n");
+    }
+    if let Some(expected_reason_code) = expected_reason_code {
+        if snapshot.reason_code != expected_reason_code {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "verification cache record reason code {} does not match expected {}",
+                snapshot.reason_code, expected_reason_code
+            )));
+        }
+        output.push_str("reason_code_matches_expected=true\n");
+    }
+    append_expected_count_match(
+        output,
+        "verification cache record resource stamps",
+        snapshot.resource_stamps.len(),
+        expected_resource_stamps,
+        "resource_stamps_match_expected",
+    )?;
+    Ok(())
 }
 
 fn render_verification_applicability_cache_lookup(
@@ -31746,11 +31830,158 @@ mod tests {
             &fingerprint,
             "--observation",
             &observation_id,
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+            "--expected-resource-stamps",
+            "1",
         ])
         .expect("parse cache"))
         .expect("record cache");
         assert!(cache.contains("applicability=applicable"));
         assert!(cache.contains("reason_code=all_basis_applicable"));
+        assert_eq!(value(&cache, "evaluated_commit_matches_expected"), "true");
+        assert_eq!(value(&cache, "applicability_matches_expected"), "true");
+        assert_eq!(value(&cache, "reason_code_matches_expected"), "true");
+        assert_eq!(value(&cache, "resource_stamps_match_expected"), "true");
+
+        let expected_other_commit = CommitId::new_v7().to_string();
+        let expected_message = format!(
+            "verification cache record evaluated commit {head} does not match expected {expected_other_commit}"
+        );
+        let mismatched_cache_record_commit = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification",
+            &verification_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--scope-schema-version",
+            "1",
+            "--observation-status",
+            "observed",
+            "--observed-fingerprint",
+            &fingerprint,
+            "--observation",
+            &observation_id,
+            "--expected-evaluated-commit",
+            &expected_other_commit,
+        ])
+        .expect("parse mismatched cache record commit"));
+        assert!(matches!(
+            mismatched_cache_record_commit,
+            Err(WorkVcsError::QueryInvalid(message)) if message == expected_message
+        ));
+
+        let mismatched_cache_record_applicability = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification",
+            &verification_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--scope-schema-version",
+            "1",
+            "--observation-status",
+            "observed",
+            "--observed-fingerprint",
+            &fingerprint,
+            "--observation",
+            &observation_id,
+            "--expected-applicability",
+            "stale",
+        ])
+        .expect("parse mismatched cache record applicability"));
+        assert!(matches!(
+            mismatched_cache_record_applicability,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "verification cache record applicability applicable does not match expected stale"
+        ));
+
+        let mismatched_cache_record_reason = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification",
+            &verification_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--scope-schema-version",
+            "1",
+            "--observation-status",
+            "observed",
+            "--observed-fingerprint",
+            &fingerprint,
+            "--observation",
+            &observation_id,
+            "--expected-reason-code",
+            "missing_basis",
+        ])
+        .expect("parse mismatched cache record reason"));
+        assert!(matches!(
+            mismatched_cache_record_reason,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "verification cache record reason code all_basis_applicable does not match expected missing_basis"
+        ));
+
+        let mismatched_cache_record_resource_stamps = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification",
+            &verification_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--scope-schema-version",
+            "1",
+            "--observation-status",
+            "observed",
+            "--observed-fingerprint",
+            &fingerprint,
+            "--observation",
+            &observation_id,
+            "--expected-resource-stamps",
+            "0",
+        ])
+        .expect("parse mismatched cache record resource stamps"));
+        assert!(matches!(
+            mismatched_cache_record_resource_stamps,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "verification cache record resource stamps 1 does not match expected 0"
+        ));
 
         let shown_cache = run(Cli::try_parse_from([
             "workvcs",

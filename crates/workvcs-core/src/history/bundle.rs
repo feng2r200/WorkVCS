@@ -10735,7 +10735,7 @@ fn parse_bundle_same_store_apply_document(
     let summary = parse_bundle_manifest_summary(value).map_err(WorkVcsError::QueryInvalid)?;
     if !summary.same_store_apply_supported {
         return Err(WorkVcsError::QueryInvalid(
-            "bundle manifest is outside same-Store task-only apply scope".to_owned(),
+            "bundle manifest is outside the current same-Store apply scope".to_owned(),
         ));
     }
     let commits = array_field_ref(value, "bundle manifest", "commit_closure")

@@ -279,10 +279,10 @@ workvcs bundle validate-dir "$SOURCE_STORE" \
   --require-valid
 ```
 
-The current local directory profile emits `manifest.json`,
-`payload-index.json`, and content-addressed payload files. The observed payload
-index profile is `workvcs-local-payload-index-v1` with version `1`; the
-packaged Bundle container/profile contract remains Open for V1.
+The current V1-local directory profile emits `manifest.json`,
+`payload-index.json`, and content-addressed payload files. The payload index
+profile is `workvcs-local-payload-index-v1` with version `1`; packaged archive
+or exchange containers remain Open.
 
 Before applying to a target Store, preflight and require that the target can
 apply the Bundle:
@@ -500,6 +500,6 @@ intended state transition.
 - Merge lifecycle is locally dogfood-proven, but not yet another-project or
   larger-Store proven.
 - Bundle portability is locally dogfood-proven for copied-target same-Store
-  operation, but the formal Bundle container/profile contract and external
-  Store import/apply semantics remain open.
+  operation. The V1-local directory profile is defined, but packaged archives,
+  exchange APIs, and external Store canonical DAG activation remain open.
 - Larger Store validation has not yet been run.

@@ -37,7 +37,9 @@ the first executable schema assembly is closed by
 Rust, `rusqlite`, the `workvcs-jcs-v1` canonical JSON profile, and the initial
 Store/bootstrap implementation boundary are closed by the implementation ADRs
 and [Implementation Contract v0.1](../architecture/implementation-contract-v0.1.md).
-Final object layout and Bundle container/profile details remain Open.
+The current V1-local Bundle directory profile is closed by
+[Bundle Local Directory Profile v0.1](../architecture/bundle-local-profile-v0.1.md);
+packaged Bundle archive/container details remain Open.
 
 The confirmed logical persistence model is commit/delta-based: immutable
 EntityVersion and RelationVersion state; canonical WorkStateCommit + ChangeSet
@@ -244,7 +246,8 @@ byte order. The following remain deliberately unresolved:
 - exact Resource path/glob normalization and persisted observation capture
   policy outside Verification/explicit snapshots;
 - source-stale Context policy, access/security model, exchange API,
-  Bundle container/profile details, and import recovery-state vocabulary;
+  packaged Bundle archive/container details, and import recovery-state
+  vocabulary;
 - any cross-Store live federation or distributed synchronization protocol.
 
 ## Scope-control rule

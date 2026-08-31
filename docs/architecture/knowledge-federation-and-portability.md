@@ -119,8 +119,10 @@ V1 need not implement automatic distributed merge or live synchronization.
 ### Content-addressed objects
 
 Imported objects are deduplicated by declared content hash and accepted only
-when the bytes match that hash. V1 Store content/state digest uses BLAKE3-256;
-Bundle container/archive encoding remains Open.
+when the bytes match that hash. V1 Store content/state digest uses BLAKE3-256.
+The current local directory profile is defined in
+[Bundle Local Directory Profile v0.1](bundle-local-profile-v0.1.md); packaged
+archive/container encoding remains Open.
 
 ### Resource bindings
 
@@ -163,5 +165,6 @@ identity/digest/FK boundaries are fixed by
 ADR-0009 and [Implementation Contract v0.1](implementation-contract-v0.1.md)
 close the executable schema assembly and `workvcs-jcs-v1` canonical JSON
 profile. Performance indexes, exchange/access API, authorization model,
-source-stale Context policy, Bundle container/profile, streaming/compression,
-runtime recovery vocabulary, and cross-Store live protocol remain unfixed.
+source-stale Context policy, packaged Bundle archive/container,
+streaming/compression, runtime recovery vocabulary, and cross-Store live
+protocol remain unfixed.

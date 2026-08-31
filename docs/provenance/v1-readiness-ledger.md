@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0430 / Phase 4LO
+Last refreshed: 2026-09-01 by ADR-0431 / Phase 4LP
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -42,7 +42,7 @@ not complete.
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics; next prove broader causal/evolution and real-project explanation paths. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover; repeat on another real project before claiming broad dogfood maturity. |
 | Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Repeat on another real project or larger Store before release maturity claims. |
-| Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Remaining V1 gaps: formal Bundle container/profile contract and external Store import/apply semantics. |
+| Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Phase 4LP defines the V1-local directory profile and keeps external Store canonical DAG activation outside the current profile; next prove larger Store portability. |
 | CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`; continue reducing manual key-value capture only where dogfood shows repeated friction. |
 | Actionable errors and recovery | Yes | Partial | Partial | Partial | Phase 4LN documents merge unresolved and moved-head recovery; Phase 4LO documents Bundle divergence refusal and restore/checkpoint selector boundaries. Stable key-value `error_code` output remains Open. |
 | Larger Store and performance evidence | Partial | No | No | No | Run a representative larger Store workload before adding indexes or claiming scale readiness. |
@@ -52,9 +52,8 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Formalize the remaining V1 Bundle container/profile contract and decide
-   whether external Store import/apply semantics are V1-required or explicitly
-   deferred.
+1. Run larger Store portability validation before designing performance indexes
+   or claiming release maturity.
 2. Complete the remaining V1 Context Resolver gaps: path-sensitive Knowledge
    policy, context packet persistence, and the transition-rationale projection
    decision.
@@ -143,4 +142,8 @@ The following remain beyond V1 even if they would make dogfood easier:
   copied-target Bundle portability with source Checkpoint creation, Bundle
   directory export/validation, target preflight/apply, imported Checkpoint
   validation, post-apply restore/show-at inspection, and explicit same-Store
-  divergence refusal.
+  divergence refusal. Phase 4LP defines the V1-local Bundle directory profile
+  as `manifest.json`, `payload-index.json`, and content-addressed JSON payload
+  files under `payloads/`, with profile `workvcs-local-payload-index-v1`
+  version `1`; external Store canonical DAG activation remains unsupported by
+  this profile.

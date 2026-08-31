@@ -26,6 +26,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4LM Context Attempt Detail Packet Evidence](provenance/phase-4lm-context-attempt-detail-packet.md)
 - [Phase 4LN Merge Lifecycle Dogfood Evidence](provenance/phase-4ln-merge-lifecycle-dogfood.md)
 - [Phase 4LO Bundle Portability Dogfood Evidence](provenance/phase-4lo-bundle-portability-dogfood.md)
+- [Phase 4LP Bundle Profile Contract Evidence](provenance/phase-4lp-bundle-profile-contract.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -45,6 +46,7 @@ The confirmed baseline contains:
 - [Verification and resource drift](architecture/verification-and-resource-drift.md)
 - [Versioned-state persistence model](architecture/persistence-model.md)
 - [Knowledge federation and Store portability](architecture/knowledge-federation-and-portability.md)
+- [Bundle Local Directory Profile v0.1](architecture/bundle-local-profile-v0.1.md)
 - [Logical schema boundaries](architecture/logical-schema-boundaries.md)
 - [Physical Schema v0.1 contract](architecture/physical-schema-v0.1.md)
 - [Implementation Contract v0.1](architecture/implementation-contract-v0.1.md)
@@ -128,6 +130,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0428: Phase 4LM Context Attempt Detail Packet Items](decisions/adr/0428-phase-4lm-context-attempt-detail-packet.md)
 - [ADR-0429: Phase 4LN Merge Lifecycle Dogfood](decisions/adr/0429-phase-4ln-merge-lifecycle-dogfood.md)
 - [ADR-0430: Phase 4LO Bundle Portability Dogfood](decisions/adr/0430-phase-4lo-bundle-portability-dogfood.md)
+- [ADR-0431: Phase 4LP Bundle Profile Contract](decisions/adr/0431-phase-4lp-bundle-profile-contract.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

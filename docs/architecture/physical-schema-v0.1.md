@@ -341,7 +341,7 @@ an availability condition, not by itself a canonical integrity failure.
 - the workload-driven set of typed current projections;
 - Resource path/glob/symlink normalization details beyond the confirmed
   versioned Adapter/Scope contract;
-- Bundle container/profile/compression details, Knowledge access/security and
+- packaged Bundle container/compression details, Knowledge access/security and
   exchange APIs, and cross-Store live federation;
 - final CLI/protocol spelling and unrelated Open product decisions.
 

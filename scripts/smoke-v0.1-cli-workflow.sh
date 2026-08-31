@@ -62,6 +62,19 @@ expect_contains() {
     [[ "$output" == *"$needle"* ]] || die "missing output fragment ${needle}"
 }
 
+expect_failure_contains() {
+    local needle="$1"
+    shift
+    local output
+    local status
+    set +e
+    output="$(run_workvcs "$@" 2>&1)"
+    status=$?
+    set -e
+    [[ "$status" -ne 0 ]] || die "command unexpectedly succeeded: $*"
+    [[ "$output" == *"$needle"* ]] || die "expected failure fragment ${needle}, got ${output}"
+}
+
 step "init"
 init_output="$(run_workvcs \
     init "$store" \
@@ -141,6 +154,17 @@ status_output="$(run_workvcs \
     --branch "$branch_id" \
     --criterion "$criterion_id")"
 expect_value "$status_output" "status" "unverified"
+
+step "task completion gate before verification"
+expect_failure_contains \
+    "unverified" \
+    task transition "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --task "$task_id" \
+    --task-version "$task_version_id" \
+    --status done \
+    --outcome completed
 
 step "session start"
 session_output="$(run_workvcs \
@@ -308,6 +332,13 @@ expect_value "$cache_list_output" "caches" "1"
 expect_value "$cache_list_output" "caches_match_expected" "true"
 expect_value "$cache_list_output" "cache.0.verification_entity_id" "$verification_id"
 
+step "acceptance criterion status after applicable cache"
+verified_status_output="$(run_workvcs \
+    ac status "$store" \
+    --branch "$branch_id" \
+    --criterion "$criterion_id")"
+expect_value "$verified_status_output" "status" "verified"
+
 step "history and show-at"
 history_output="$(run_workvcs \
     history "$store" \
@@ -387,6 +418,52 @@ claimed_runnable_output="$(run_workvcs \
     --expected-candidates 1)"
 expect_value "$claimed_runnable_output" "candidate.0.claim" "claimed_by_session:${claim_id}"
 expect_value "$claimed_runnable_output" "candidates_match_expected" "true"
+
+step "task completion after verification"
+completion_output="$(run_workvcs \
+    task transition "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --task "$task_id" \
+    --task-version "$task_version_id" \
+    --status done \
+    --outcome completed \
+    --session "$session_id")"
+completed_task_state_digest="$(value "$completion_output" "task_state_digest")"
+head_commit_id="$(value "$completion_output" "commit_id")"
+task_version_id="$(value "$completion_output" "task_entity_version_id")"
+expect_value "$completion_output" "status" "done"
+
+completed_task_output="$(run_workvcs \
+    task show "$store" \
+    --branch "$branch_id" \
+    --task "$task_id" \
+    --expected-state-digest "$completed_task_state_digest")"
+expect_value "$completed_task_output" "task_entity_version_id" "$task_version_id"
+expect_value "$completed_task_output" "status" "done"
+expect_value "$completed_task_output" "matches_expected" "true"
+
+completed_runnable_output="$(run_workvcs \
+    runnable tasks "$store" \
+    --session "$session_id" \
+    --task "$task_id" \
+    --expected-head "$head_commit_id" \
+    --expected-candidates 1)"
+expect_value "$completed_runnable_output" "candidate.0.task_entity_id" "$task_id"
+expect_value "$completed_runnable_output" "candidate.0.status" "done"
+expect_value "$completed_runnable_output" "candidate.0.runnable" "false"
+expect_value "$completed_runnable_output" "candidate.0.lifecycle_eligible" "false"
+expect_value "$completed_runnable_output" "head_matches_expected" "true"
+expect_value "$completed_runnable_output" "candidates_match_expected" "true"
+
+completion_history_output="$(run_workvcs \
+    history "$store" \
+    --branch "$branch_id" \
+    --expected-entries 5)"
+expect_value "$completion_history_output" "start_commit_id" "$head_commit_id"
+expect_value "$completion_history_output" "entries" "5"
+expect_value "$completion_history_output" "entries_match_expected" "true"
+expect_contains "$completion_history_output" "operation=entity.transition"
 
 printf 'smoke_result=passed\n'
 printf 'store_id=%s\n' "$store_id"

@@ -10,6 +10,9 @@ store="$tmp_dir/workvcs.sqlite"
 bundle_source_store="$tmp_dir/bundle-source.sqlite"
 bundle_target_store="$tmp_dir/bundle-target.sqlite"
 bundle_dir="$tmp_dir/bundle-export"
+bundle_divergence_source_store="$tmp_dir/bundle-divergence-source.sqlite"
+bundle_divergence_target_store="$tmp_dir/bundle-divergence-target.sqlite"
+bundle_divergence_dir="$tmp_dir/bundle-divergence-export"
 observation_file="$tmp_dir/observation.bin"
 observation_detail_file="$tmp_dir/observation-detail.txt"
 printf 'baseline bytes' >"$observation_file"
@@ -1191,6 +1194,223 @@ expect_value "$bundle_import_list_output" "imports_match_expected" "true"
 expect_value "$bundle_import_list_output" "import[0].import_id" "$bundle_import_id"
 expect_value "$bundle_import_list_output" "import[0].outcome" "same_store_fast_forward_applied"
 
+step "bundle divergence gate"
+bundle_divergence_init_output="$(run_workvcs \
+    init "$bundle_divergence_source_store" \
+    --display-name "bundle-divergence-smoke-source")"
+expect_contains "$bundle_divergence_init_output" "initialized store_id="
+
+bundle_divergence_workspace_output="$(run_workvcs \
+    workspace create "$bundle_divergence_source_store" \
+    --display-name "bundle-divergence-smoke-workspace")"
+bundle_divergence_branch_id="$(value "$bundle_divergence_workspace_output" "branch_id")"
+bundle_divergence_genesis_commit_id="$(value "$bundle_divergence_workspace_output" "genesis_commit_id")"
+expect_value "$bundle_divergence_workspace_output" "branch_name" "main"
+
+bundle_divergence_first_task_output="$(run_workvcs \
+    task create "$bundle_divergence_source_store" \
+    --branch "$bundle_divergence_branch_id" \
+    --head "$bundle_divergence_genesis_commit_id" \
+    --description "Bundle divergence shared older task" \
+    --priority 6)"
+bundle_divergence_first_commit_id="$(value "$bundle_divergence_first_task_output" "commit_id")"
+expect_value "$bundle_divergence_first_task_output" "status" "pending"
+
+cp "$bundle_divergence_source_store" "$bundle_divergence_target_store"
+
+bundle_divergence_source_task_output="$(run_workvcs \
+    task create "$bundle_divergence_source_store" \
+    --branch "$bundle_divergence_branch_id" \
+    --head "$bundle_divergence_first_commit_id" \
+    --description "Bundle divergence exported source task" \
+    --priority 7)"
+bundle_divergence_source_head_id="$(value "$bundle_divergence_source_task_output" "commit_id")"
+expect_value "$bundle_divergence_source_task_output" "status" "pending"
+
+bundle_divergence_target_task_output="$(run_workvcs \
+    task create "$bundle_divergence_target_store" \
+    --branch "$bundle_divergence_branch_id" \
+    --head "$bundle_divergence_first_commit_id" \
+    --description "Bundle divergence target-only task" \
+    --priority 8)"
+bundle_divergence_target_task_id="$(value "$bundle_divergence_target_task_output" "task_entity_id")"
+bundle_divergence_target_head_id="$(value "$bundle_divergence_target_task_output" "commit_id")"
+expect_value "$bundle_divergence_target_task_output" "status" "pending"
+
+bundle_divergence_target_head_before_output="$(run_workvcs \
+    branch head "$bundle_divergence_target_store" \
+    --branch "$bundle_divergence_branch_id")"
+bundle_divergence_target_state_digest="$(value "$bundle_divergence_target_head_before_output" "state_digest")"
+expect_value "$bundle_divergence_target_head_before_output" "head_commit_id" "$bundle_divergence_target_head_id"
+
+bundle_divergence_export_output="$(run_workvcs \
+    bundle export "$bundle_divergence_source_store" \
+    --commit "$bundle_divergence_source_head_id" \
+    --expected-commits 3 \
+    --expected-exported-branch-heads 1 \
+    --expected-entities 2 \
+    --expected-relations 0 \
+    --expected-checkpoint-candidates 0)"
+expect_value "$bundle_divergence_export_output" "commit_id" "$bundle_divergence_source_head_id"
+expect_value "$bundle_divergence_export_output" "commits" "3"
+expect_value "$bundle_divergence_export_output" "exported_branch_heads" "1"
+expect_value "$bundle_divergence_export_output" "entities" "2"
+expect_value "$bundle_divergence_export_output" "relations" "0"
+expect_value "$bundle_divergence_export_output" "checkpoint_candidates" "0"
+expect_value "$bundle_divergence_export_output" "commits_match_expected" "true"
+expect_value "$bundle_divergence_export_output" "exported_branch_heads_match_expected" "true"
+expect_value "$bundle_divergence_export_output" "entities_match_expected" "true"
+expect_value "$bundle_divergence_export_output" "relations_match_expected" "true"
+expect_value "$bundle_divergence_export_output" "checkpoint_candidates_match_expected" "true"
+
+bundle_divergence_export_dir_output="$(run_workvcs \
+    bundle export-dir "$bundle_divergence_source_store" \
+    --commit "$bundle_divergence_source_head_id" \
+    --output-dir "$bundle_divergence_dir" \
+    --expected-payload-files 5 \
+    --expected-payload-references 15)"
+expect_value "$bundle_divergence_export_dir_output" "commit_id" "$bundle_divergence_source_head_id"
+expect_value "$bundle_divergence_export_dir_output" "payload_files" "5"
+expect_value "$bundle_divergence_export_dir_output" "payload_references" "15"
+expect_value "$bundle_divergence_export_dir_output" "payload_files_match_expected" "true"
+expect_value "$bundle_divergence_export_dir_output" "payload_references_match_expected" "true"
+
+bundle_divergence_validate_output="$(run_workvcs \
+    bundle validate-dir "$bundle_divergence_source_store" \
+    --commit "$bundle_divergence_source_head_id" \
+    --input-dir "$bundle_divergence_dir" \
+    --require-valid \
+    --expected-payload-files 5 \
+    --expected-payload-references 15)"
+expect_value "$bundle_divergence_validate_output" "commit_id" "$bundle_divergence_source_head_id"
+expect_value "$bundle_divergence_validate_output" "valid" "true"
+expect_value "$bundle_divergence_validate_output" "valid_required" "true"
+expect_value "$bundle_divergence_validate_output" "payload_files_match_expected" "true"
+expect_value "$bundle_divergence_validate_output" "payload_references_match_expected" "true"
+expect_value "$bundle_divergence_validate_output" "problem" "none"
+
+bundle_divergence_preflight_output="$(run_workvcs \
+    bundle preflight-dir "$bundle_divergence_target_store" \
+    --input-dir "$bundle_divergence_dir" \
+    --require-valid \
+    --expected-payload-files 5 \
+    --expected-payload-references 15 \
+    --expected-exported-branch-heads 1 \
+    --expected-branch-heads-already-present 0 \
+    --expected-branch-heads-missing 0 \
+    --expected-branch-heads-fast-forward 0 \
+    --expected-branch-heads-diverged 1)"
+expect_value "$bundle_divergence_preflight_output" "valid" "true"
+expect_value "$bundle_divergence_preflight_output" "valid_required" "true"
+expect_value "$bundle_divergence_preflight_output" "can_apply" "false"
+expect_value "$bundle_divergence_preflight_output" "action" "same_store_divergence_detected"
+expect_value "$bundle_divergence_preflight_output" "source_store_relation" "same_store"
+expect_value "$bundle_divergence_preflight_output" "incoming_commit_present" "false"
+expect_value "$bundle_divergence_preflight_output" "import_required" "true"
+expect_value "$bundle_divergence_preflight_output" "payload_files_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "payload_references_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "exported_branch_heads_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "branch_heads_already_present_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "branch_heads_missing_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "branch_heads_fast_forward_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "branch_heads_diverged_match_expected" "true"
+expect_value "$bundle_divergence_preflight_output" "problem" "none"
+
+expect_failure_contains \
+    "bundle preflight cannot apply: action=same_store_divergence_detected" \
+    bundle preflight-dir "$bundle_divergence_target_store" \
+    --input-dir "$bundle_divergence_dir" \
+    --require-can-apply
+
+bundle_divergence_import_output="$(run_workvcs \
+    bundle import-dir "$bundle_divergence_target_store" \
+    --input-dir "$bundle_divergence_dir" \
+    --require-valid \
+    --expected-outcome same_store_divergence_detected \
+    --expected-payload-files 5 \
+    --expected-payload-references 15 \
+    --expected-exported-branch-heads 1 \
+    --expected-branch-heads-already-present 0 \
+    --expected-branch-heads-missing 0 \
+    --expected-branch-heads-fast-forward 0 \
+    --expected-branch-heads-diverged 1)"
+bundle_divergence_import_id="$(value "$bundle_divergence_import_output" "import_id")"
+bundle_divergence_digest="$(value "$bundle_divergence_import_output" "bundle_digest")"
+expect_value "$bundle_divergence_import_output" "recorded" "true"
+expect_value "$bundle_divergence_import_output" "valid_required" "true"
+expect_value "$bundle_divergence_import_output" "outcome" "same_store_divergence_detected"
+expect_value "$bundle_divergence_import_output" "can_apply" "false"
+expect_value "$bundle_divergence_import_output" "outcome_matches_expected" "true"
+expect_value "$bundle_divergence_import_output" "branch_heads_diverged_match_expected" "true"
+expect_nonempty "$bundle_divergence_import_output" "import_id"
+
+bundle_divergence_apply_output="$(run_workvcs \
+    bundle apply-dir "$bundle_divergence_target_store" \
+    --input-dir "$bundle_divergence_dir" \
+    --expected-outcome same_store_divergence_detected \
+    --expected-imported-commits 0 \
+    --expected-imported-entity-versions 0 \
+    --expected-imported-checkpoints 0 \
+    --expected-imported-checkpoint-statuses 0 \
+    --expected-updated-branch-heads 0)"
+expect_value "$bundle_divergence_apply_output" "applied" "false"
+expect_value "$bundle_divergence_apply_output" "import_id" "none"
+expect_value "$bundle_divergence_apply_output" "outcome" "same_store_divergence_detected"
+expect_value "$bundle_divergence_apply_output" "can_apply" "false"
+expect_value "$bundle_divergence_apply_output" "imported_commits" "0"
+expect_value "$bundle_divergence_apply_output" "imported_entity_versions" "0"
+expect_value "$bundle_divergence_apply_output" "imported_checkpoints" "0"
+expect_value "$bundle_divergence_apply_output" "imported_checkpoint_statuses" "0"
+expect_value "$bundle_divergence_apply_output" "updated_branch_heads" "0"
+expect_value "$bundle_divergence_apply_output" "outcome_matches_expected" "true"
+expect_value "$bundle_divergence_apply_output" "imported_commits_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "imported_entity_versions_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "imported_checkpoints_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "imported_checkpoint_statuses_match_expected" "true"
+expect_value "$bundle_divergence_apply_output" "updated_branch_heads_match_expected" "true"
+
+expect_failure_contains \
+    "bundle apply did not apply: outcome=same_store_divergence_detected" \
+    bundle apply-dir "$bundle_divergence_target_store" \
+    --input-dir "$bundle_divergence_dir" \
+    --require-applied
+
+bundle_divergence_target_head_after_output="$(run_workvcs \
+    branch head "$bundle_divergence_target_store" \
+    --branch "$bundle_divergence_branch_id" \
+    --expected-state-digest "$bundle_divergence_target_state_digest")"
+expect_value "$bundle_divergence_target_head_after_output" "head_commit_id" "$bundle_divergence_target_head_id"
+expect_value "$bundle_divergence_target_head_after_output" "state_digest" "$bundle_divergence_target_state_digest"
+expect_value "$bundle_divergence_target_head_after_output" "matches_expected" "true"
+
+bundle_divergence_target_task_show_output="$(run_workvcs \
+    task show "$bundle_divergence_target_store" \
+    --branch "$bundle_divergence_branch_id" \
+    --task "$bundle_divergence_target_task_id")"
+expect_value "$bundle_divergence_target_task_show_output" "task_entity_id" "$bundle_divergence_target_task_id"
+expect_value "$bundle_divergence_target_task_show_output" "status" "pending"
+expect_value "$bundle_divergence_target_task_show_output" "priority" "8"
+
+bundle_divergence_import_show_output="$(run_workvcs \
+    bundle import-show "$bundle_divergence_target_store" \
+    --import "$bundle_divergence_import_id" \
+    --expected-bundle-digest "$bundle_divergence_digest" \
+    --expected-outcome same_store_divergence_detected)"
+expect_value "$bundle_divergence_import_show_output" "import_id" "$bundle_divergence_import_id"
+expect_value "$bundle_divergence_import_show_output" "outcome" "same_store_divergence_detected"
+expect_value "$bundle_divergence_import_show_output" "bundle_matches_expected" "true"
+expect_value "$bundle_divergence_import_show_output" "outcome_matches_expected" "true"
+
+bundle_divergence_import_list_output="$(run_workvcs \
+    bundle import-list "$bundle_divergence_target_store" \
+    --bundle-digest "$bundle_divergence_digest" \
+    --outcome same_store_divergence_detected \
+    --expected-imports 1)"
+expect_value "$bundle_divergence_import_list_output" "imports" "1"
+expect_value "$bundle_divergence_import_list_output" "imports_match_expected" "true"
+expect_value "$bundle_divergence_import_list_output" "import[0].import_id" "$bundle_divergence_import_id"
+expect_value "$bundle_divergence_import_list_output" "import[0].outcome" "same_store_divergence_detected"
+
 step "runtime closeout"
 session_end_output="$(run_workvcs \
     session end "$store" \
@@ -1256,4 +1476,5 @@ printf 'merge_result_commit_id=%s\n' "$result_commit_id"
 printf 'checkpoint_id=%s\n' "$checkpoint_id"
 printf 'bundle_checkpoint_id=%s\n' "$bundle_checkpoint_id"
 printf 'bundle_import_id=%s\n' "$bundle_import_id"
+printf 'bundle_divergence_import_id=%s\n' "$bundle_divergence_import_id"
 printf 'session_diff_id=%s\n' "$session_diff_id"

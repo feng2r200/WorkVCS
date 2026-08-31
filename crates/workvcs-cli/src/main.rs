@@ -25423,6 +25423,274 @@ mod tests {
     }
 
     #[test]
+    fn cli_reports_same_store_bundle_divergence_without_applying() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let source_path = tempdir.path().join("source.sqlite");
+        let target_path = tempdir.path().join("target.sqlite");
+        let source_store = source_path.to_str().expect("source path text");
+        let target_store = target_path.to_str().expect("target path text");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            source_store,
+            "--display-name",
+            "cli-divergence-source-store",
+        ])
+        .expect("parse init"))
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            source_store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let first = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            source_store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Shared old branch head task",
+        ])
+        .expect("parse first task"))
+        .expect("create first task");
+        let first_commit = value(&first, "commit_id");
+        fs::copy(&source_path, &target_path).expect("copy target store");
+
+        let source_second = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            source_store,
+            "--branch",
+            &branch,
+            "--head",
+            &first_commit,
+            "--description",
+            "Source exported branch head task",
+            "--priority",
+            "2",
+        ])
+        .expect("parse source task"))
+        .expect("create source task");
+        let source_second_commit = value(&source_second, "commit_id");
+
+        let target_diverged = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            target_store,
+            "--branch",
+            &branch,
+            "--head",
+            &first_commit,
+            "--description",
+            "Target divergent branch head task",
+            "--priority",
+            "3",
+        ])
+        .expect("parse target divergent task"))
+        .expect("create target divergent task");
+        let target_diverged_task = value(&target_diverged, "task_entity_id");
+        let target_diverged_commit = value(&target_diverged, "commit_id");
+
+        let export_dir = tempdir.path().join("same-store-divergent-bundle");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "export-dir",
+            source_store,
+            "--commit",
+            &source_second_commit,
+            "--output-dir",
+            export_dir.to_str().expect("export dir path"),
+        ])
+        .expect("parse bundle export-dir"))
+        .expect("export bundle directory");
+
+        let preflight = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "preflight-dir",
+            target_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-valid",
+            "--expected-exported-branch-heads",
+            "1",
+            "--expected-branch-heads-already-present",
+            "0",
+            "--expected-branch-heads-missing",
+            "0",
+            "--expected-branch-heads-fast-forward",
+            "0",
+            "--expected-branch-heads-diverged",
+            "1",
+        ])
+        .expect("parse divergent bundle preflight-dir"))
+        .expect("preflight divergent bundle directory");
+        assert_eq!(value(&preflight, "valid"), "true");
+        assert_eq!(value(&preflight, "valid_required"), "true");
+        assert_eq!(value(&preflight, "source_store_relation"), "same_store");
+        assert_eq!(value(&preflight, "incoming_commit_present"), "false");
+        assert_eq!(value(&preflight, "import_required"), "true");
+        assert_eq!(value(&preflight, "can_apply"), "false");
+        assert_eq!(
+            value(&preflight, "action"),
+            "same_store_divergence_detected"
+        );
+        assert_eq!(value(&preflight, "branch_heads_diverged"), "1");
+        assert_eq!(
+            value(&preflight, "branch_heads_diverged_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&preflight, "problem"), "none");
+
+        let required_apply_preflight = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "preflight-dir",
+            target_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-can-apply",
+        ])
+        .expect("parse required apply divergent preflight-dir"));
+        assert!(required_apply_preflight.is_err());
+
+        let import_attempt = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "import-dir",
+            target_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-valid",
+            "--expected-outcome",
+            "same_store_divergence_detected",
+            "--expected-exported-branch-heads",
+            "1",
+            "--expected-branch-heads-already-present",
+            "0",
+            "--expected-branch-heads-missing",
+            "0",
+            "--expected-branch-heads-fast-forward",
+            "0",
+            "--expected-branch-heads-diverged",
+            "1",
+        ])
+        .expect("parse divergent bundle import-dir"))
+        .expect("record divergent bundle import attempt");
+        assert_eq!(value(&import_attempt, "recorded"), "true");
+        assert_eq!(
+            value(&import_attempt, "outcome"),
+            "same_store_divergence_detected"
+        );
+        assert_eq!(value(&import_attempt, "can_apply"), "false");
+        assert_eq!(value(&import_attempt, "outcome_matches_expected"), "true");
+        assert_eq!(
+            value(&import_attempt, "branch_heads_diverged_match_expected"),
+            "true"
+        );
+
+        let apply = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "apply-dir",
+            target_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--expected-outcome",
+            "same_store_divergence_detected",
+            "--expected-imported-commits",
+            "0",
+            "--expected-imported-entity-versions",
+            "0",
+            "--expected-imported-checkpoints",
+            "0",
+            "--expected-imported-checkpoint-statuses",
+            "0",
+            "--expected-updated-branch-heads",
+            "0",
+        ])
+        .expect("parse divergent bundle apply-dir"))
+        .expect("report non-applied divergent bundle");
+        assert_eq!(value(&apply, "applied"), "false");
+        assert_eq!(value(&apply, "import_id"), "none");
+        assert_eq!(value(&apply, "outcome"), "same_store_divergence_detected");
+        assert_eq!(value(&apply, "can_apply"), "false");
+        assert_eq!(value(&apply, "imported_commits"), "0");
+        assert_eq!(value(&apply, "updated_branch_heads"), "0");
+        assert_eq!(value(&apply, "outcome_matches_expected"), "true");
+        assert_eq!(value(&apply, "imported_commits_match_expected"), "true");
+        assert_eq!(
+            value(&apply, "imported_entity_versions_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&apply, "imported_checkpoints_match_expected"), "true");
+        assert_eq!(
+            value(&apply, "imported_checkpoint_statuses_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&apply, "updated_branch_heads_match_expected"), "true");
+
+        let required_apply = run(Cli::try_parse_from([
+            "workvcs",
+            "bundle",
+            "apply-dir",
+            target_store,
+            "--input-dir",
+            export_dir.to_str().expect("export dir path"),
+            "--require-applied",
+        ])
+        .expect("parse required divergent bundle apply-dir"));
+        assert!(required_apply.is_err());
+
+        let branch_head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            target_store,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse branch head"))
+        .expect("branch head");
+        assert_eq!(
+            value(&branch_head, "head_commit_id"),
+            target_diverged_commit
+        );
+
+        let target_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "show",
+            target_store,
+            "--branch",
+            &branch,
+            "--task",
+            &target_diverged_task,
+        ])
+        .expect("parse target task show"))
+        .expect("show target divergent task");
+        assert_eq!(value(&target_task, "task_entity_id"), target_diverged_task);
+        assert_eq!(value(&target_task, "status"), "pending");
+        assert_eq!(value(&target_task, "priority"), "3");
+    }
+
+    #[test]
     fn cli_runs_branch_head_and_fork_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

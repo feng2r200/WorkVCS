@@ -1431,6 +1431,8 @@ pub(crate) fn preflight_bundle_import(
         (false, false, "already_present")
     } else if same_store_fast_forward_ready {
         (true, true, "same_store_fast_forward_ready")
+    } else if source_store_relation == "same_store" && branch_preflight.diverged > 0 {
+        (true, false, "same_store_divergence_detected")
     } else if source_store_relation == "same_store" {
         (true, false, "same_store_import_not_implemented")
     } else {

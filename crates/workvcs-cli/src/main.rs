@@ -3647,6 +3647,18 @@ enum SessionCommand {
 
         #[arg(long)]
         focus: String,
+
+        #[arg(long)]
+        expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_focus: Option<String>,
+
+        #[arg(long)]
+        expected_focus_path_entries: Option<usize>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
     },
     FocusClear {
         #[arg(value_name = "STORE")]
@@ -3654,6 +3666,18 @@ enum SessionCommand {
 
         #[arg(long)]
         session: String,
+
+        #[arg(long)]
+        expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_focus: Option<String>,
+
+        #[arg(long)]
+        expected_focus_path_entries: Option<usize>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
     },
     Switch {
         #[arg(value_name = "STORE")]
@@ -9813,6 +9837,10 @@ fn run(cli: Cli) -> Result<String> {
                     store,
                     session,
                     focus,
+                    expected_session,
+                    expected_focus,
+                    expected_focus_path_entries,
+                    expected_lifecycle_state,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -9820,14 +9848,46 @@ fn run(cli: Cli) -> Result<String> {
                 SessionId::parse_canonical(&session)?,
                 EntityId::parse_canonical(&focus)?,
             ))?;
-            Ok(render_session_focus_update(&updated))
+            let mut output = render_session_focus_update(&updated);
+            append_session_focus_expectations(
+                &mut output,
+                &updated,
+                "session focus-set",
+                SessionFocusExpectationArgs {
+                    expected_session,
+                    expected_focus,
+                    expected_focus_path_entries,
+                    expected_lifecycle_state,
+                },
+            )?;
+            Ok(output)
         }
         Command::Session {
-            command: SessionCommand::FocusClear { store, session },
+            command:
+                SessionCommand::FocusClear {
+                    store,
+                    session,
+                    expected_session,
+                    expected_focus,
+                    expected_focus_path_entries,
+                    expected_lifecycle_state,
+                },
         } => {
             let mut engine = Engine::open(store)?;
             let updated = engine.clear_session_focus(SessionId::parse_canonical(&session)?)?;
-            Ok(render_session_focus_update(&updated))
+            let mut output = render_session_focus_update(&updated);
+            append_session_focus_expectations(
+                &mut output,
+                &updated,
+                "session focus-clear",
+                SessionFocusExpectationArgs {
+                    expected_session,
+                    expected_focus,
+                    expected_focus_path_entries,
+                    expected_lifecycle_state,
+                },
+            )?;
+            Ok(output)
         }
         Command::Session {
             command:
@@ -14038,6 +14098,92 @@ fn render_session_focus_update(result: &SessionFocusUpdateResult) -> String {
         focus_entity_id,
         focus_path_entries
     )
+}
+
+struct SessionFocusExpectationArgs {
+    expected_session: Option<String>,
+    expected_focus: Option<String>,
+    expected_focus_path_entries: Option<usize>,
+    expected_lifecycle_state: Option<String>,
+}
+
+fn append_session_focus_expectations(
+    output: &mut String,
+    result: &SessionFocusUpdateResult,
+    operation: &str,
+    expectations: SessionFocusExpectationArgs,
+) -> Result<()> {
+    let SessionFocusExpectationArgs {
+        expected_session,
+        expected_focus,
+        expected_focus_path_entries,
+        expected_lifecycle_state,
+    } = expectations;
+    if let Some(expected_session) = expected_session {
+        let expected_session = SessionId::parse_canonical(&expected_session)?;
+        if result.session_id != expected_session {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "{operation} session {} does not match expected {}",
+                result.session_id, expected_session
+            )));
+        }
+        output.push_str("session_match_expected=true\n");
+    }
+    if let Some(expected_focus) = expected_focus {
+        if expected_focus == "none" {
+            if let Some(actual_focus) = result.state.focus.as_ref() {
+                return Err(WorkVcsError::SessionInvalid(format!(
+                    "{operation} focus {} does not match expected none",
+                    actual_focus.focus_entity_id
+                )));
+            }
+            output.push_str("focus_match_expected=true\n");
+        } else {
+            let expected_focus = EntityId::parse_canonical(&expected_focus)?;
+            match result.state.focus.as_ref() {
+                Some(actual_focus) if actual_focus.focus_entity_id == expected_focus => {
+                    output.push_str("focus_match_expected=true\n");
+                }
+                Some(actual_focus) => {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "{operation} focus {} does not match expected {expected_focus}",
+                        actual_focus.focus_entity_id
+                    )));
+                }
+                None => {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "{operation} focus none does not match expected {expected_focus}"
+                    )));
+                }
+            }
+        }
+    }
+    if let Some(expected_focus_path_entries) = expected_focus_path_entries {
+        let actual_focus_path_entries = result
+            .state
+            .focus
+            .as_ref()
+            .map(|focus| focus.path.len())
+            .unwrap_or(0);
+        if actual_focus_path_entries != expected_focus_path_entries {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "{operation} focus path entries {actual_focus_path_entries} does not match expected {expected_focus_path_entries}"
+            )));
+        }
+        output.push_str("focus_path_entries_match_expected=true\n");
+    }
+    if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+        let expected_lifecycle_state = parse_session_lifecycle_state(&expected_lifecycle_state)?;
+        if result.state.lifecycle_state != expected_lifecycle_state {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "{operation} lifecycle state {} does not match expected {}",
+                session_lifecycle_state(result.state.lifecycle_state),
+                session_lifecycle_state(expected_lifecycle_state)
+            )));
+        }
+        output.push_str("lifecycle_state_match_expected=true\n");
+    }
+    Ok(())
 }
 
 fn render_session_switch(session: &SessionSwitchResult) -> String {
@@ -25313,11 +25459,29 @@ mod tests {
             store,
             "--session",
             &session_id,
+            "--expected-session",
+            &session_id,
+            "--expected-focus",
+            "none",
+            "--expected-focus-path-entries",
+            "0",
+            "--expected-lifecycle-state",
+            "active",
         ])
         .expect("parse focus clear"))
         .expect("clear session focus");
         assert_eq!(value(&cleared_focus, "session_id"), session_id);
         assert_eq!(value(&cleared_focus, "focus_entity_id"), "none");
+        assert_eq!(value(&cleared_focus, "session_match_expected"), "true");
+        assert_eq!(value(&cleared_focus, "focus_match_expected"), "true");
+        assert_eq!(
+            value(&cleared_focus, "focus_path_entries_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&cleared_focus, "lifecycle_state_match_expected"),
+            "true"
+        );
 
         let shown_cleared_session = run(Cli::try_parse_from([
             "workvcs",
@@ -25357,11 +25521,29 @@ mod tests {
             &session_id,
             "--focus",
             &task_id,
+            "--expected-session",
+            &session_id,
+            "--expected-focus",
+            &task_id,
+            "--expected-focus-path-entries",
+            "0",
+            "--expected-lifecycle-state",
+            "active",
         ])
         .expect("parse focus set"))
         .expect("set session focus");
         assert_eq!(value(&focused_session, "session_id"), session_id);
         assert_eq!(value(&focused_session, "focus_entity_id"), task_id);
+        assert_eq!(value(&focused_session, "session_match_expected"), "true");
+        assert_eq!(value(&focused_session, "focus_match_expected"), "true");
+        assert_eq!(
+            value(&focused_session, "focus_path_entries_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&focused_session, "lifecycle_state_match_expected"),
+            "true"
+        );
 
         let runnable = run(Cli::try_parse_from([
             "workvcs",
@@ -25594,6 +25776,166 @@ mod tests {
             lifecycle_mismatch,
             Err(WorkVcsError::SessionInvalid(message))
                 if message == "session switch lifecycle state active does not match expected ended"
+        ));
+
+        let focus_clear_session_mismatch_id = start_source_session();
+        let expected_other_session = SessionId::new_v7().to_string();
+        let expected_message = format!(
+            "session focus-clear session {focus_clear_session_mismatch_id} does not match expected {expected_other_session}"
+        );
+        let focus_clear_session_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-clear",
+            store,
+            "--session",
+            &focus_clear_session_mismatch_id,
+            "--expected-session",
+            &expected_other_session,
+        ])
+        .expect("parse focus clear session mismatch"));
+        assert!(matches!(
+            focus_clear_session_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let focus_clear_focus_mismatch_id = start_source_session();
+        let expected_message =
+            format!("session focus-clear focus none does not match expected {task_id}");
+        let focus_clear_focus_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-clear",
+            store,
+            "--session",
+            &focus_clear_focus_mismatch_id,
+            "--expected-focus",
+            &task_id,
+        ])
+        .expect("parse focus clear focus mismatch"));
+        assert!(matches!(
+            focus_clear_focus_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let focus_clear_path_mismatch_id = start_source_session();
+        let focus_clear_path_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-clear",
+            store,
+            "--session",
+            &focus_clear_path_mismatch_id,
+            "--expected-focus-path-entries",
+            "1",
+        ])
+        .expect("parse focus clear path mismatch"));
+        assert!(matches!(
+            focus_clear_path_mismatch,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == "session focus-clear focus path entries 0 does not match expected 1"
+        ));
+
+        let focus_clear_lifecycle_mismatch_id = start_source_session();
+        let focus_clear_lifecycle_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-clear",
+            store,
+            "--session",
+            &focus_clear_lifecycle_mismatch_id,
+            "--expected-lifecycle-state",
+            "ended",
+        ])
+        .expect("parse focus clear lifecycle mismatch"));
+        assert!(matches!(
+            focus_clear_lifecycle_mismatch,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == "session focus-clear lifecycle state active does not match expected ended"
+        ));
+
+        let focus_set_session_mismatch_id = start_source_session();
+        let expected_other_session = SessionId::new_v7().to_string();
+        let expected_message = format!(
+            "session focus-set session {focus_set_session_mismatch_id} does not match expected {expected_other_session}"
+        );
+        let focus_set_session_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &focus_set_session_mismatch_id,
+            "--focus",
+            &task_id,
+            "--expected-session",
+            &expected_other_session,
+        ])
+        .expect("parse focus set session mismatch"));
+        assert!(matches!(
+            focus_set_session_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let focus_set_focus_mismatch_id = start_source_session();
+        let expected_message =
+            format!("session focus-set focus {task_id} does not match expected none");
+        let focus_set_focus_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &focus_set_focus_mismatch_id,
+            "--focus",
+            &task_id,
+            "--expected-focus",
+            "none",
+        ])
+        .expect("parse focus set focus mismatch"));
+        assert!(matches!(
+            focus_set_focus_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let focus_set_path_mismatch_id = start_source_session();
+        let focus_set_path_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &focus_set_path_mismatch_id,
+            "--focus",
+            &task_id,
+            "--expected-focus-path-entries",
+            "1",
+        ])
+        .expect("parse focus set path mismatch"));
+        assert!(matches!(
+            focus_set_path_mismatch,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == "session focus-set focus path entries 0 does not match expected 1"
+        ));
+
+        let focus_set_lifecycle_mismatch_id = start_source_session();
+        let focus_set_lifecycle_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &focus_set_lifecycle_mismatch_id,
+            "--focus",
+            &task_id,
+            "--expected-lifecycle-state",
+            "ended",
+        ])
+        .expect("parse focus set lifecycle mismatch"));
+        assert!(matches!(
+            focus_set_lifecycle_mismatch,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == "session focus-set lifecycle state active does not match expected ended"
         ));
     }
 

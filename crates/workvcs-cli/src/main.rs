@@ -3670,6 +3670,30 @@ enum SessionCommand {
 
         #[arg(long)]
         focus: Option<String>,
+
+        #[arg(long)]
+        expected_session: Option<String>,
+
+        #[arg(long)]
+        expected_previous_workspace: Option<String>,
+
+        #[arg(long)]
+        expected_previous_branch: Option<String>,
+
+        #[arg(long)]
+        expected_workspace: Option<String>,
+
+        #[arg(long)]
+        expected_branch: Option<String>,
+
+        #[arg(long)]
+        expected_released_claims: Option<usize>,
+
+        #[arg(long)]
+        expected_focus: Option<String>,
+
+        #[arg(long)]
+        expected_lifecycle_state: Option<String>,
     },
     End {
         #[arg(value_name = "STORE")]
@@ -9813,6 +9837,14 @@ fn run(cli: Cli) -> Result<String> {
                     workspace,
                     branch,
                     focus,
+                    expected_session,
+                    expected_previous_workspace,
+                    expected_previous_branch,
+                    expected_workspace,
+                    expected_branch,
+                    expected_released_claims,
+                    expected_focus,
+                    expected_lifecycle_state,
                 },
         } => {
             let mut engine = Engine::open(store)?;
@@ -9825,7 +9857,22 @@ fn run(cli: Cli) -> Result<String> {
                 options = options.with_focus(EntityId::parse_canonical(&focus)?);
             }
             let switched = engine.switch_session(options)?;
-            Ok(render_session_switch(&switched))
+            let mut output = render_session_switch(&switched);
+            append_session_switch_expectations(
+                &mut output,
+                &switched,
+                SessionSwitchExpectationArgs {
+                    expected_session,
+                    expected_previous_workspace,
+                    expected_previous_branch,
+                    expected_workspace,
+                    expected_branch,
+                    expected_released_claims,
+                    expected_focus,
+                    expected_lifecycle_state,
+                },
+            )?;
+            Ok(output)
         }
         Command::Session {
             command:
@@ -14012,6 +14059,135 @@ fn render_session_switch(session: &SessionSwitchResult) -> String {
         session.occurred_at_us,
         session_lifecycle_state(session.state.lifecycle_state)
     )
+}
+
+struct SessionSwitchExpectationArgs {
+    expected_session: Option<String>,
+    expected_previous_workspace: Option<String>,
+    expected_previous_branch: Option<String>,
+    expected_workspace: Option<String>,
+    expected_branch: Option<String>,
+    expected_released_claims: Option<usize>,
+    expected_focus: Option<String>,
+    expected_lifecycle_state: Option<String>,
+}
+
+fn append_session_switch_expectations(
+    output: &mut String,
+    session: &SessionSwitchResult,
+    expectations: SessionSwitchExpectationArgs,
+) -> Result<()> {
+    let SessionSwitchExpectationArgs {
+        expected_session,
+        expected_previous_workspace,
+        expected_previous_branch,
+        expected_workspace,
+        expected_branch,
+        expected_released_claims,
+        expected_focus,
+        expected_lifecycle_state,
+    } = expectations;
+    if let Some(expected_session) = expected_session {
+        let expected_session = SessionId::parse_canonical(&expected_session)?;
+        if session.session_id != expected_session {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session switch session {} does not match expected {}",
+                session.session_id, expected_session
+            )));
+        }
+        output.push_str("session_match_expected=true\n");
+    }
+    if let Some(expected_previous_workspace) = expected_previous_workspace {
+        let expected_previous_workspace =
+            workvcs_core::WorkspaceId::parse_canonical(&expected_previous_workspace)?;
+        if session.previous_workspace_id != expected_previous_workspace {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session switch previous workspace {} does not match expected {}",
+                session.previous_workspace_id, expected_previous_workspace
+            )));
+        }
+        output.push_str("previous_workspace_match_expected=true\n");
+    }
+    if let Some(expected_previous_branch) = expected_previous_branch {
+        let expected_previous_branch = BranchId::parse_canonical(&expected_previous_branch)?;
+        if session.previous_branch_id != expected_previous_branch {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session switch previous branch {} does not match expected {}",
+                session.previous_branch_id, expected_previous_branch
+            )));
+        }
+        output.push_str("previous_branch_match_expected=true\n");
+    }
+    if let Some(expected_workspace) = expected_workspace {
+        let expected_workspace = workvcs_core::WorkspaceId::parse_canonical(&expected_workspace)?;
+        if session.active_workspace_id != expected_workspace {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session switch workspace {} does not match expected {}",
+                session.active_workspace_id, expected_workspace
+            )));
+        }
+        output.push_str("workspace_match_expected=true\n");
+    }
+    if let Some(expected_branch) = expected_branch {
+        let expected_branch = BranchId::parse_canonical(&expected_branch)?;
+        if session.active_branch_id != expected_branch {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session switch branch {} does not match expected {}",
+                session.active_branch_id, expected_branch
+            )));
+        }
+        output.push_str("branch_match_expected=true\n");
+    }
+    if let Some(expected_released_claims) = expected_released_claims {
+        if session.released_claims != expected_released_claims {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session switch released claims {} does not match expected {}",
+                session.released_claims, expected_released_claims
+            )));
+        }
+        output.push_str("released_claims_match_expected=true\n");
+    }
+    if let Some(expected_focus) = expected_focus {
+        if expected_focus == "none" {
+            if let Some(actual_focus) = session.state.focus.as_ref() {
+                return Err(WorkVcsError::SessionInvalid(format!(
+                    "session switch focus {} does not match expected none",
+                    actual_focus.focus_entity_id
+                )));
+            }
+            output.push_str("focus_match_expected=true\n");
+        } else {
+            let expected_focus = EntityId::parse_canonical(&expected_focus)?;
+            match session.state.focus.as_ref() {
+                Some(actual_focus) if actual_focus.focus_entity_id == expected_focus => {
+                    output.push_str("focus_match_expected=true\n");
+                }
+                Some(actual_focus) => {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session switch focus {} does not match expected {expected_focus}",
+                        actual_focus.focus_entity_id
+                    )));
+                }
+                None => {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session switch focus none does not match expected {expected_focus}"
+                    )));
+                }
+            }
+        }
+    }
+    if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+        let expected_lifecycle_state = parse_session_lifecycle_state(&expected_lifecycle_state)?;
+        if session.state.lifecycle_state != expected_lifecycle_state {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session switch lifecycle state {} does not match expected {}",
+                session_lifecycle_state(session.state.lifecycle_state),
+                session_lifecycle_state(expected_lifecycle_state)
+            )));
+        }
+        output.push_str("lifecycle_state_match_expected=true\n");
+    }
+    Ok(())
 }
 
 fn render_session_end(session: &SessionEndResult) -> String {
@@ -24851,9 +25027,36 @@ mod tests {
             &fork_branch,
             "--focus",
             &task_id,
+            "--expected-session",
+            &session_id,
+            "--expected-previous-workspace",
+            &workspace_id,
+            "--expected-previous-branch",
+            &source_branch,
+            "--expected-workspace",
+            &workspace_id,
+            "--expected-branch",
+            &fork_branch,
+            "--expected-released-claims",
+            "1",
+            "--expected-focus",
+            &task_id,
+            "--expected-lifecycle-state",
+            "active",
         ])
         .expect("parse switch"))
         .expect("switch session");
+        assert_eq!(value(&switched, "session_match_expected"), "true");
+        assert_eq!(
+            value(&switched, "previous_workspace_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&switched, "previous_branch_match_expected"), "true");
+        assert_eq!(value(&switched, "workspace_match_expected"), "true");
+        assert_eq!(value(&switched, "branch_match_expected"), "true");
+        assert_eq!(value(&switched, "released_claims_match_expected"), "true");
+        assert_eq!(value(&switched, "focus_match_expected"), "true");
+        assert_eq!(value(&switched, "lifecycle_state_match_expected"), "true");
         assert_eq!(value(&switched, "previous_branch_id"), source_branch);
         assert_eq!(value(&switched, "branch_id"), fork_branch);
         assert_eq!(value(&switched, "released_claims"), "1");
@@ -25173,6 +25376,225 @@ mod tests {
         assert!(runnable.contains("candidates=1"));
         assert!(runnable.contains(&format!("candidate.0.task_entity_id={task_id}")));
         assert!(runnable.contains("candidate.0.claim=unclaimed"));
+
+        let start_source_session = || {
+            let session = run(Cli::try_parse_from([
+                "workvcs",
+                "session",
+                "start",
+                store,
+                "--workspace",
+                &workspace_id,
+                "--branch",
+                &source_branch,
+            ])
+            .expect("parse mismatch source session start"))
+            .expect("start mismatch source session");
+            value(&session, "session_id")
+        };
+
+        let session_mismatch_id = start_source_session();
+        let expected_other_session = SessionId::new_v7().to_string();
+        let expected_message = format!(
+            "session switch session {session_mismatch_id} does not match expected {expected_other_session}"
+        );
+        let session_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &session_mismatch_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--expected-session",
+            &expected_other_session,
+        ])
+        .expect("parse session mismatched switch"));
+        assert!(matches!(
+            session_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let previous_workspace_mismatch_id = start_source_session();
+        let expected_other_workspace = WorkspaceId::new_v7().to_string();
+        let expected_message = format!(
+            "session switch previous workspace {workspace_id} does not match expected {expected_other_workspace}"
+        );
+        let previous_workspace_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &previous_workspace_mismatch_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--expected-previous-workspace",
+            &expected_other_workspace,
+        ])
+        .expect("parse previous workspace mismatched switch"));
+        assert!(matches!(
+            previous_workspace_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let previous_branch_mismatch_id = start_source_session();
+        let expected_message = format!(
+            "session switch previous branch {source_branch} does not match expected {fork_branch}"
+        );
+        let previous_branch_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &previous_branch_mismatch_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--expected-previous-branch",
+            &fork_branch,
+        ])
+        .expect("parse previous branch mismatched switch"));
+        assert!(matches!(
+            previous_branch_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let workspace_mismatch_id = start_source_session();
+        let expected_other_workspace = WorkspaceId::new_v7().to_string();
+        let expected_message = format!(
+            "session switch workspace {workspace_id} does not match expected {expected_other_workspace}"
+        );
+        let workspace_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &workspace_mismatch_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--expected-workspace",
+            &expected_other_workspace,
+        ])
+        .expect("parse workspace mismatched switch"));
+        assert!(matches!(
+            workspace_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let branch_mismatch_id = start_source_session();
+        let expected_message =
+            format!("session switch branch {fork_branch} does not match expected {source_branch}");
+        let branch_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &branch_mismatch_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--expected-branch",
+            &source_branch,
+        ])
+        .expect("parse branch mismatched switch"));
+        assert!(matches!(
+            branch_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let released_claims_mismatch_id = start_source_session();
+        run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            store,
+            "--session",
+            &released_claims_mismatch_id,
+            "--task",
+            &task_id,
+        ])
+        .expect("parse mismatch claim"))
+        .expect("claim mismatch task");
+        let released_claims_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &released_claims_mismatch_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--expected-released-claims",
+            "0",
+        ])
+        .expect("parse released claims mismatched switch"));
+        assert!(matches!(
+            released_claims_mismatch,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == "session switch released claims 1 does not match expected 0"
+        ));
+
+        let focus_mismatch_id = start_source_session();
+        let expected_message =
+            format!("session switch focus {task_id} does not match expected none");
+        let focus_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &focus_mismatch_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--focus",
+            &task_id,
+            "--expected-focus",
+            "none",
+        ])
+        .expect("parse focus mismatched switch"));
+        assert!(matches!(
+            focus_mismatch,
+            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
+        ));
+
+        let lifecycle_mismatch_id = start_source_session();
+        let lifecycle_mismatch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "switch",
+            store,
+            "--session",
+            &lifecycle_mismatch_id,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &fork_branch,
+            "--expected-lifecycle-state",
+            "ended",
+        ])
+        .expect("parse lifecycle mismatched switch"));
+        assert!(matches!(
+            lifecycle_mismatch,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message == "session switch lifecycle state active does not match expected ended"
+        ));
     }
 
     #[test]

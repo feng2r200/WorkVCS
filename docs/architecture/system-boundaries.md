@@ -111,9 +111,10 @@ Knowledge Space uses an immutable linear Exposure-transition history plus a
 current availability projection and has no independent V1 branch/merge/restore
 DAG. V1 semantic state is `active`/`withdrawn`; source drift creates a derived
 `current`/`stale`/`unknown`/`unresolved` source status rather than silently
-withdrawing an Exposure. Source-stale Context policy, access control, the
-complete executable schema, and exchange API remain Open. Cross-Store live
-federation is outside V1.
+withdrawing an Exposure. Source-stale Context policy, access control, and
+exchange API remain Open. The executable schema assembly is closed by
+[ADR-0007](../decisions/adr/0007-schema-v0.1-assembly-install-and-integrity.md).
+Cross-Store live federation is outside V1.
 
 ## Session and Context Set
 

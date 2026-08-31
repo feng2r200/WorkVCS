@@ -121,15 +121,21 @@ records from a transcript.
 
 ## Current product stage
 
-This repository currently contains a confirmed design baseline, not an
-implemented WorkVCS runtime. The logical schema family and authority boundaries
-are now confirmed, but language selection, Logical DDL, physical database
-schema, and the final CLI command surface remain later work unless a confirmed
-document says otherwise.
+This repository contains the confirmed WorkVCS design baseline and an
+in-progress local Rust V0.1 implementation. Accepted ADRs have since closed the
+initial Rust workspace, canonical encoding, executable SQLite schema,
+Store/bootstrap, Work-State history, Runtime Coordination, Verification,
+Merge, Checkpoint, Bundle, and CLI smoke slices.
 
-The confirmed logical persistence architecture now defines canonical
+Implementation readiness is tracked in
+[V1 Readiness Ledger](../provenance/v1-readiness-ledger.md). That ledger
+distinguishes implemented behavior, smoke proof, dogfood proof, and remaining
+V1 Open work. The current implementation is not release-ready, the final Agent
+protocol and full CLI spelling remain subject to accepted decisions, and smoke
+coverage does not by itself prove dogfood readiness.
+
+The confirmed logical persistence architecture defines canonical
 Commit/ChangeSet history, immutable Entity/Relation versions, rebuildable
 projections, checkpoints, KnowledgeExposure, and portable Bundle semantics. It
 also defines ObjectIdentity/typed-family ownership and Runtime/Provenance/
-Resource/Federation infrastructure boundaries. It does not yet define complete
-SQLite DDL or a runtime implementation.
+Resource/Federation infrastructure boundaries.

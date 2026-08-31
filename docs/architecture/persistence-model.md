@@ -184,7 +184,9 @@ Logical table-family responsibilities are confirmed in
 [Logical Schema Boundaries](logical-schema-boundaries.md). The later
 [Physical Schema v0.1 Contract](physical-schema-v0.1.md) closes UUIDv7/BLOB ID
 encoding, BLAKE3-256 digests, JSON/timestamp/vocabulary storage, core SQLite
-foreign-key policy, and the writer-transaction baseline. The complete
-executable schema and creation order, performance indexes, exact canonical JSON
-profile rules, programming language/binding, object layout, ordering
-representation, checkpoint policy, and typed-projection count remain Open.
+foreign-key policy, and the writer-transaction baseline. ADR-0007 through
+ADR-0009 and [Implementation Contract v0.1](implementation-contract-v0.1.md)
+close the executable schema assembly, Rust implementation language, `rusqlite`,
+and the `workvcs-jcs-v1` canonical JSON profile. Performance indexes, final
+object layout, ordering representation beyond current behavior, checkpoint
+policy, and typed-projection count remain Open.

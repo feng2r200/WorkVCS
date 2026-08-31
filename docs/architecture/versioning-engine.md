@@ -212,10 +212,10 @@ active Workspace and Work Branch
 
 Priority and explicit manual order are separate scheduling dimensions;
 priority is evaluated first. Manual order cannot make a dependency-blocked or
-lifecycle-ineligible Task runnable. The stable tie-breaker among otherwise
-equal candidates is not fixed by this baseline. An atomic “claim next”
-operation selects, claims, focuses, and returns context without a race between
-separate read and claim steps.
+lifecycle-ineligible Task runnable. ADR-0175 fixes the stable tie-breaker among
+otherwise equal `next` candidates as ascending Task EntityId byte order. An
+atomic “claim next” operation selects, claims, focuses, and returns context
+without a race between separate read and claim steps.
 
 Claim-next does not imply TaskStart. For a Task/Branch, active Claims are none,
 exactly one exclusive, or one-or-more shared; exclusive and shared cannot

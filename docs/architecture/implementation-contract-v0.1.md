@@ -2,16 +2,19 @@
 
 This document records the frozen development-entry contract for the first
 WorkVCS implementation slice. It extends the confirmed product, domain,
-architecture, physical schema, and schema assembly documents. It does not
-change the domain model and does not start SQLite Store/bootstrap, Genesis, or
-upper-domain runtime features.
+architecture, physical schema, and schema assembly documents. It defines the
+Phase 1 starting boundary; later accepted ADRs govern later implementation
+slices.
 
 ## Status
 
 - Implementation Ready = YES.
 - Development prerequisites = 0.
-- Current implementation scope = Phase 1: typed IDs, digest, canonical semantic
-  JSON, domain-separated version/state hashing, and raw ContentObject digest.
+- This document remains the authority for the Phase 1 canonical core and first
+  vertical-slice contract.
+- Current implementation readiness is tracked in
+  [V1 Readiness Ledger](../provenance/v1-readiness-ledger.md). Do not use this
+  document as a live progress ledger for later phases.
 
 If implementation exposes a conflict inside this contract, record it as an
 implementation finding. Do not silently expand architecture or reopen closed

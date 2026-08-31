@@ -239,8 +239,9 @@ projections and caches remain rebuildable; Runtime and immutable provenance
 remain separate; Verification target/Evidence retain one Relation authority;
 and cross-Store canonical-history import remains prohibited.
 
-The next stage is complete `schema-v0.1.sql` Assembly, not another round of
-isolated table additions. That stage must:
+The subsequent stage assembled the full `schema-v0.1.sql`, instead of adding
+another round of isolated tables. ADR-0007 closed that stage. The assembly
+closure had to:
 
 1. assemble every confirmed physical family into one SQLite schema;
 2. resolve creation order and the deferred Workspace/Genesis cycle;
@@ -334,8 +335,8 @@ an availability condition, not by itself a canonical integrity failure.
 ## Still Open
 
 - performance/query indexes and workload evidence;
-- the exact canonical JSON profile rules, serializer implementation, and
-  programming language/SQLite binding;
+- final object layout and serializer replacement policy beyond the accepted
+  `workvcs-jcs-v1` Rust implementation;
 - checkpoint scheduling, retention, selection, and eviction policy;
 - the workload-driven set of typed current projections;
 - Resource path/glob/symlink normalization details beyond the confirmed
@@ -343,3 +344,8 @@ an availability condition, not by itself a canonical integrity failure.
 - Bundle container/profile/compression details, Knowledge access/security and
   exchange APIs, and cross-Store live federation;
 - final CLI/protocol spelling and unrelated Open product decisions.
+
+Rust, `rusqlite`, the `workvcs-jcs-v1` canonical JSON profile, and executable
+schema assembly are no longer Open implementation choices; they are closed by
+ADR-0007 through ADR-0009 and
+[Implementation Contract v0.1](implementation-contract-v0.1.md).

@@ -387,15 +387,19 @@ integrity classification. ADR-0175 closes the final equal-candidate stable
 tie-breaker for `next` as EntityId byte order. The following remain Open:
 
 - final CLI spelling and protocol encoding;
-- implementation language;
 - concrete performance indexes and query plans;
-- the exact canonical JSON profile rules and serializer implementation;
+- serializer replacement policy beyond the accepted `workvcs-jcs-v1` Rust
+  implementation;
 - checkpoint creation, retention, selection, and eviction strategy;
 - the exact number and shape of typed projection tables;
 - Knowledge exchange/access API and authorization protocol;
 - cross-Store live federation, subscriptions, and distributed synchronization;
 - storage-layout tuning beyond the confirmed `BEGIN IMMEDIATE`, WAL-policy,
   and controlled-writer baseline.
+
+Rust, `rusqlite`, and the `workvcs-jcs-v1` canonical JSON profile are closed by
+ADR-0008, ADR-0009, and
+[Implementation Contract v0.1](implementation-contract-v0.1.md).
 
 The closed physical contract and its remaining boundary are authoritative in
 [Physical Schema v0.1 Contract](physical-schema-v0.1.md).

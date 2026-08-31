@@ -34,7 +34,10 @@ repository policy may record as an accepted ADR. The Physical DDL contract is
 fixed by [ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md), and
 the first executable schema assembly is closed by
 [ADR-0007](../decisions/adr/0007-schema-v0.1-assembly-install-and-integrity.md).
-Object layout and implementation language are not yet fixed.
+Rust, `rusqlite`, the `workvcs-jcs-v1` canonical JSON profile, and the initial
+Store/bootstrap implementation boundary are closed by the implementation ADRs
+and [Implementation Contract v0.1](../architecture/implementation-contract-v0.1.md).
+Final object layout and Bundle container/profile details remain Open.
 
 The confirmed logical persistence model is commit/delta-based: immutable
 EntityVersion and RelationVersion state; canonical WorkStateCommit + ChangeSet
@@ -224,19 +227,20 @@ and projections may be regenerated and garbage-collected.
 ## Open implementation and later-architecture boundary
 
 The earlier Verification-representation and cross-Workspace Handoff questions
-are closed by Accepted ADRs 0001 and 0002. The following remain deliberately
-unresolved:
+are closed by Accepted ADRs 0001 and 0002. ADR-0175 closes the V0.1 stable
+tie-breaker for otherwise equal `next` candidates as ascending Task EntityId
+byte order. The following remain deliberately unresolved:
 
-- final equal-candidate tie-breaker for `next`;
 - final CLI spelling, protocol encoding, complete operation/error catalogue,
   and any future semantic AC-waiver operation;
-- concrete performance indexes, programming language/SQLite binding, exact
-  canonical JSON profile, object layout, physical sibling-order
-  representation, checkpoint strategy, and typed-projection count/shape;
-  UUIDv7/BLOB IDs, BLAKE3-256 digests, JSON/timestamp storage, core
-  FK/transaction policy, and executable schema assembly are closed by
-  [ADR-0006](../decisions/adr/0006-sqlite-physical-schema-v0.1.md) and
-  [ADR-0007](../decisions/adr/0007-schema-v0.1-assembly-install-and-integrity.md);
+- concrete performance indexes, final object layout, physical sibling-order
+  representation beyond current behavior, final checkpoint strategy, and
+  typed-projection count/shape; UUIDv7/BLOB IDs, BLAKE3-256 digests,
+  JSON/timestamp storage, core FK/transaction policy, executable schema
+  assembly, Rust implementation language, `rusqlite`, and the
+  `workvcs-jcs-v1` canonical JSON profile are closed by ADR-0006 through
+  ADR-0009 and
+  [Implementation Contract v0.1](../architecture/implementation-contract-v0.1.md);
 - exact Resource path/glob normalization and persisted observation capture
   policy outside Verification/explicit snapshots;
 - source-stale Context policy, access/security model, exchange API,
@@ -246,11 +250,12 @@ unresolved:
 ## Scope-control rule
 
 A concept appearing in the V1 model does not authorize an unconfirmed
-implementation choice. Detailed database schema, programming language,
-identity scheme, protocol encoding, exact Resource Adapter rules, specific CLI
-spelling, sync transport, UI, and deployment model require later planning and
-explicit confirmation when they become material decisions. Current repository
-policy may record such a decision as an ADR.
+implementation choice. Detailed database changes beyond the accepted v0.1
+schema, protocol encoding, exact Resource Adapter rules, specific CLI spelling,
+sync transport, UI, deployment model, and any replacement for already accepted
+language, identity, digest, canonical encoding, or SQLite binding choices
+require later planning and explicit confirmation when they become material
+decisions. Current repository policy may record such a decision as an ADR.
 
 The broader Record taxonomy remains Open only for `Blocker`, `Review`, and
 `Note`; no current confirmed requirement makes them distinct V1 Record kinds.

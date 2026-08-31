@@ -3,6 +3,15 @@
 This directory is the repository-native source of truth for WorkVCS's
 confirmed product, domain, and architecture state.
 
+## Implementation readiness
+
+The current V1 implementation-readiness and dogfood gap ledger is:
+
+- [V1 Readiness Ledger](provenance/v1-readiness-ledger.md)
+
+The ledger maps current evidence. It does not replace the confirmed product,
+domain, architecture, schema, or ADR authorities.
+
 ## Current baseline
 
 The confirmed baseline contains:
@@ -82,9 +91,12 @@ Recent repository-level CLI smoke gates:
 - [ADR-0409: Phase 4KT Bundle Import List Branch Detail](decisions/adr/0409-phase-4kt-bundle-import-list-branch-detail.md)
 - [ADR-0410: Phase 4KU CLI Smoke Verification Requirement Closure](decisions/adr/0410-phase-4ku-cli-smoke-verification-requirement-closure.md)
 - [ADR-0411: Phase 4KV CLI Help Summaries](decisions/adr/0411-phase-4kv-cli-help-summaries.md)
+- [ADR-0412: Phase 4KW V1 Readiness Ledger](decisions/adr/0412-phase-4kw-v1-readiness-ledger.md)
 
-These documents specify what WorkVCS currently means. They do not claim that
-the described runtime has been implemented.
+These documents specify what WorkVCS currently means. Implementation readiness
+is tracked separately in the V1 readiness ledger. The local Rust V0.1
+implementation is in progress and has smoke-proven coverage for several V1
+areas, but it is not release-ready and is not dogfood-complete.
 
 Detailed promotion evidence and the confirmation ledger are retained in
 [Confirmed State v0.1 Provenance](provenance/confirmed-state-v0.1.md) and

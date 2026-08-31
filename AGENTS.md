@@ -2,9 +2,15 @@
 
 ## Current Stage
 
-WorkVCS is in the confirmed-design specification stage. Do not implement
-runtime code, choose a programming language, or freeze a database schema unless
-the current user request explicitly opens that scope.
+WorkVCS has moved from design-only specification into an in-progress local
+Rust V0.1 implementation. Do not implement new runtime behavior, command
+behavior, schema behavior, release behavior, or V2 scope unless the current
+user request and active governed Plan explicitly open that scope.
+
+Use `docs/provenance/v1-readiness-ledger.md` for current implementation
+readiness and dogfood gaps. Product, architecture, schema, and accepted ADRs
+remain the authority for confirmed WorkVCS semantics. Smoke coverage does not
+by itself imply release readiness or dogfood completion.
 
 ## Source of Truth
 

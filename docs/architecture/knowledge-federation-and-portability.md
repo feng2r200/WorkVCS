@@ -159,8 +159,9 @@ only. A different Store is opened separately, explicitly forked, or selectively
 adopted through Knowledge/Evidence and ExternalObjectRef provenance; its
 canonical DAG is never merged directly into the local namespace. The physical
 identity/digest/FK boundaries are fixed by
-[Physical Schema v0.1 Contract](physical-schema-v0.1.md). The complete
-executable schema, performance indexes, exchange/access API, authorization
-model, source-stale Context policy, Bundle container/profile,
-streaming/compression, runtime recovery vocabulary, exact canonical JSON
-profile, and cross-Store live protocol remain unfixed.
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md). ADR-0007 through
+ADR-0009 and [Implementation Contract v0.1](implementation-contract-v0.1.md)
+close the executable schema assembly and `workvcs-jcs-v1` canonical JSON
+profile. Performance indexes, exchange/access API, authorization model,
+source-stale Context policy, Bundle container/profile, streaming/compression,
+runtime recovery vocabulary, and cross-Store live protocol remain unfixed.

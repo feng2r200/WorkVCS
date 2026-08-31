@@ -172,6 +172,7 @@ Verification target/Evidence keep one Relation authority and Applicability
 uses the confirmed physical constraints in
 [Physical Schema v0.1 Contract](physical-schema-v0.1.md). Final CLI names,
 adapter implementations shipped first, exact path normalization,
-non-Verification observation capture policy, the complete executable schema,
-performance indexes, exact canonical JSON profile rules, and a possible future
-AC waiver operation remain unfixed.
+non-Verification observation capture policy, performance indexes, and a
+possible future AC waiver operation remain unfixed. The executable schema,
+Rust implementation language, `rusqlite`, and the `workvcs-jcs-v1` canonical
+JSON profile are now closed by accepted implementation ADRs.

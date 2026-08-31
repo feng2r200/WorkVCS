@@ -18,6 +18,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4LE Dogfood and Stale-Gated Takeover Evidence](provenance/phase-4le-dogfood-and-stale-gated-takeover.md)
 - [Phase 4LF Handoff Consumption Dogfood Evidence](provenance/phase-4lf-handoff-consumption-dogfood.md)
 - [Phase 4LG Blocked Handoff Recovery Dogfood Evidence](provenance/phase-4lg-blocked-handoff-recovery-dogfood.md)
+- [Phase 4LH Handoff Focus Why Evidence](provenance/phase-4lh-handoff-focus-why.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -112,6 +113,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0420: Phase 4LE Stale-Gated Claim Takeover](decisions/adr/0420-phase-4le-stale-gated-claim-takeover.md)
 - [ADR-0421: Phase 4LF Handoff Consumption Dogfood](decisions/adr/0421-phase-4lf-handoff-consumption-dogfood.md)
 - [ADR-0422: Phase 4LG Blocked Handoff Recovery Dogfood](decisions/adr/0422-phase-4lg-blocked-handoff-recovery-dogfood.md)
+- [ADR-0423: Phase 4LH Handoff Focus Why](decisions/adr/0423-phase-4lh-handoff-focus-why.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

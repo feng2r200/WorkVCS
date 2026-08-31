@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0422 / Phase 4LG
+Last refreshed: 2026-09-01 by ADR-0423 / Phase 4LH
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -39,7 +39,7 @@ not complete.
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. |
 | Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LG dogfoods the blocked Handoff takeover recovery path with guard failure, explicit stale marking, stale-gated forced takeover, and recovered guard success; Claim transfer remains smoke-proven but not yet real-project dogfooded. |
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LF proves current Context is sufficient for focused Handoff continuation; complete remaining V1 categories: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
-| Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LF inspects `why` during Handoff continuation and finds zero relation edges for the Handoff focus link; decide that relation semantics before adding `why` output. |
+| Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics; next prove broader causal/evolution and real-project explanation paths. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover; repeat on another real project before claiming broad dogfood maturity. |
 | Merge lifecycle | Yes | Yes | Yes | No | Dogfood divergent Work Branch resolution and document recovery behavior for moved heads or unresolved items. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | No | Validate a real export/import/restore path and record Bundle container/profile details still Open for V1. |
@@ -52,14 +52,14 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Decide whether Handoff focus belongs in `why` as a relation, using the Phase
-   4LF zero-edge evidence before changing explanation semantics.
-2. Complete the remaining V1 Context Resolver categories when the verify and
+1. Complete the remaining V1 Context Resolver categories when the verify and
    handoff surfaces can supply real packet content.
-3. Reduce manual key-value capture in the operator CLI only where the dogfood
+2. Reduce manual key-value capture in the operator CLI only where the dogfood
    evidence shows repeated friction.
-4. Run larger Store validation before designing performance indexes.
-5. Use WorkVCS on another real project before claiming broad dogfood maturity.
+3. Run larger Store validation before designing performance indexes.
+4. Use WorkVCS on another real project before claiming broad dogfood maturity.
+5. Dogfood broader `why` paths, including causal/evolution explanation gaps,
+   before expanding explanation output again.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the
@@ -117,5 +117,8 @@ The following remain beyond V1 even if they would make dogfood easier:
   adds `handoff consume`, and records that `why` still does not expose the
   Handoff focus link as a relation. Phase 4LG dogfoods a focused Handoff
   continuation blocked by another Session's active Claim, then recovers it with
-  explicit stale marking and stale-gated forced takeover. WorkVCS has still not
-  been used for another real project.
+  explicit stale marking and stale-gated forced takeover. Phase 4LH adds
+  read-only `why` scope links for recognized focused Handoff focus, proving the
+  Handoff side as outgoing and the focused Task side as incoming while keeping
+  stored `relation_edges=0`. WorkVCS has still not been used for another real
+  project.

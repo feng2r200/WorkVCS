@@ -192,6 +192,24 @@ workvcs handoff show "$STORE" \
   --handoff "$HANDOFF_RECORD_ID"
 ```
 
+Review the Handoff focus link from either endpoint:
+
+```bash
+workvcs why "$STORE" \
+  --commit "$HANDOFF_COMMIT_ID" \
+  --entity "$HANDOFF_RECORD_ID"
+
+workvcs why "$STORE" \
+  --commit "$HANDOFF_COMMIT_ID" \
+  --entity "$TASK_ENTITY_ID"
+```
+
+For a focused Handoff, the Handoff Record reports
+`scope_link.0.direction=outgoing` and the focused Task reports
+`scope_link.0.direction=incoming`. Stored `relation_edges` remain separate from
+these read-only scope links; existing relation filters and limits apply to
+`relation_edges`, not to scope links.
+
 Start a continuation Session, then consume the Handoff into that Session's
 focus:
 

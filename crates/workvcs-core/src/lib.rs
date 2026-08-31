@@ -109,11 +109,12 @@ pub use history::{
     VerificationSemanticDependency, VerificationSnapshot, VerificationState, VerificationTarget,
     WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQuerySubject,
     WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind,
-    WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
-    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkspaceInfo, WorkspaceInitOptions,
-    WorkspaceListOptions, WorkspaceListResult, WorkspaceResourceAssociationListOptions,
-    WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
-    WorkspaceResourceAssociationResult, WorkspaceResourceAssociationSnapshot,
+    WhyScopeLink, WhyScopeLinkKind, WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions,
+    WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkspaceInfo,
+    WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult,
+    WorkspaceResourceAssociationSnapshot,
 };
 pub use identity::{
     BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, Digest, EntityId, EntityVersionId,

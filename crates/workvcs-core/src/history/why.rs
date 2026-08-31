@@ -1,7 +1,7 @@
 use super::goal::GOAL_ENTITY_KIND;
 use super::knowledge::KNOWLEDGE_ENTITY_KIND;
 use super::plan::PLAN_ENTITY_KIND;
-use super::record::RECORD_ENTITY_KIND;
+use super::record::{RECORD_ENTITY_KIND, RecordKind, record_at};
 use super::task::{
     ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_ENTITY_KIND,
     VERIFICATION_REQUIREMENT_ENTITY_KIND,
@@ -14,6 +14,7 @@ use super::{
     record_relations_at, state_at, structural_references_at, verification_evidence_relations_at,
     verification_relations_at,
 };
+use crate::canonical::CanonicalValue;
 use crate::error::{Result, WorkVcsError};
 use crate::identity::{
     BranchId, CommitId, Digest, EntityId, EntityVersionId, EvidenceId, ExposureId, RelationId,
@@ -131,6 +132,7 @@ pub struct WhyQueryResult {
     pub target: ResolvedWhyQueryTarget,
     pub subject: ResolvedWhyQuerySubject,
     pub relation_edges: Vec<WhyRelationEdge>,
+    pub scope_links: Vec<WhyScopeLink>,
     pub deferred_relation_families: Vec<WhyDeferredRelationFamily>,
 }
 
@@ -215,6 +217,11 @@ pub enum WhyRelationKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WhyScopeLinkKind {
+    HandoffFocus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WhyRelationDirection {
     Incoming,
     Outgoing,
@@ -279,6 +286,17 @@ pub struct WhyRelationEdge {
     pub source: WhyRelationEndpoint,
     pub target: WhyRelationEndpoint,
     pub state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhyScopeLink {
+    pub link_kind: WhyScopeLinkKind,
+    pub direction: WhyRelationDirection,
+    pub source: WhyRelationEndpoint,
+    pub target: WhyRelationEndpoint,
+    pub source_entity_version_id: EntityVersionId,
+    pub target_entity_version_id: EntityVersionId,
+    pub source_state_digest: Digest,
 }
 
 pub(crate) fn explain_why(
@@ -474,6 +492,7 @@ pub(crate) fn explain_why(
             });
         }
     }
+    let mut scope_links = handoff_focus_scope_links(connection, &resolved, options.subject())?;
     relation_edges.sort_by(|left, right| {
         left.relation_kind
             .cmp(&right.relation_kind)
@@ -483,13 +502,128 @@ pub(crate) fn explain_why(
             .then_with(|| left.relation_label.cmp(&right.relation_label))
             .then_with(|| left.relation_id.cmp(&right.relation_id))
     });
+    scope_links.sort_by(|left, right| {
+        left.link_kind
+            .cmp(&right.link_kind)
+            .then_with(|| left.direction.cmp(&right.direction))
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.target.cmp(&right.target))
+            .then_with(|| {
+                left.source_entity_version_id
+                    .cmp(&right.source_entity_version_id)
+            })
+    });
 
     Ok(WhyQueryResult {
         target: resolved.target,
         subject,
         relation_edges,
+        scope_links,
         deferred_relation_families: Vec::new(),
     })
+}
+
+fn handoff_focus_scope_links(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    subject: WhyQuerySubject,
+) -> Result<Vec<WhyScopeLink>> {
+    if !matches!(subject, WhyQuerySubject::Entity(_)) {
+        return Ok(Vec::new());
+    }
+    let mut links = Vec::new();
+    for (entity_id, entity_version_id) in resolved.state.entities() {
+        if !is_record_entity(connection, resolved.target.workspace_id, *entity_id)? {
+            continue;
+        }
+        let record = record_at(connection, resolved.target.commit_id, *entity_id)?;
+        if record.state.kind != RecordKind::Handoff {
+            continue;
+        }
+        let Some(focus_entity_id) = focused_handoff_scope_entity(&record.state.scope) else {
+            continue;
+        };
+        let Some(focus_entity_version_id) =
+            current_entity_version_id(&resolved.state, focus_entity_id)
+        else {
+            continue;
+        };
+        let focus_kind =
+            load_subject_entity_kind(connection, resolved.target.workspace_id, focus_entity_id)?;
+        let source = WhyRelationEndpoint::entity(record.record_entity_id, WhyEntityKind::Record);
+        let target = WhyRelationEndpoint::entity(focus_entity_id, focus_kind);
+        if endpoint_matches_subject(subject, source) || endpoint_matches_subject(subject, target) {
+            links.push(WhyScopeLink {
+                link_kind: WhyScopeLinkKind::HandoffFocus,
+                direction: relation_direction(subject, source, target),
+                source,
+                target,
+                source_entity_version_id: *entity_version_id,
+                target_entity_version_id: focus_entity_version_id,
+                source_state_digest: record.state_digest,
+            });
+        }
+    }
+    Ok(links)
+}
+
+fn is_record_entity(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    entity_id: EntityId,
+) -> Result<bool> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT entity_kind
+             FROM entity
+             WHERE object_id = ?1
+               AND workspace_id = ?2",
+            params![&entity_id.raw_bytes()[..], &workspace_id.raw_bytes()[..]],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(crate::error::storage_error)?;
+    Ok(row.is_some_and(|entity_kind| entity_kind == RECORD_ENTITY_KIND))
+}
+
+fn current_entity_version_id(
+    state: &crate::canonical::WorkState,
+    entity_id: EntityId,
+) -> Option<EntityVersionId> {
+    state
+        .entities()
+        .iter()
+        .find_map(|(current_entity_id, entity_version_id)| {
+            (*current_entity_id == entity_id).then_some(*entity_version_id)
+        })
+}
+
+fn focused_handoff_scope_entity(scope: &CanonicalValue) -> Option<EntityId> {
+    let CanonicalValue::Object(entries) = scope else {
+        return None;
+    };
+    let schema_version = handoff_scope_field(entries, "handoff_scope_schema_version")?;
+    let CanonicalValue::Integer(schema_version) = schema_version else {
+        return None;
+    };
+    if schema_version.get() != 1 {
+        return None;
+    }
+    let value = handoff_scope_field(entries, "focus_entity_id")?;
+    match value {
+        CanonicalValue::String(value) => EntityId::parse_canonical(value).ok(),
+        _ => None,
+    }
+}
+
+fn handoff_scope_field<'a>(
+    entries: &'a [(String, CanonicalValue)],
+    key: &str,
+) -> Option<&'a CanonicalValue> {
+    entries
+        .iter()
+        .find_map(|(entry_key, value)| (entry_key == key).then_some(value))
 }
 
 struct KnowledgeExposureDerivedFromRelationRow {

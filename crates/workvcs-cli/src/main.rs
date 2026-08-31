@@ -99,10 +99,10 @@ use workvcs_core::{
     VerificationResourceBasis, VerificationResult, VerificationSnapshot, VerificationTarget,
     VerifyOptions, VerifyResourceObservationInput, VerifyResult, WhyDeferredRelationFamily,
     WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WorkState, WorkStateDiff, WorkStateDiffChangeKind,
-    WorkStateDiffOptions, WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions,
-    WorkVcsError, WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions,
-    WorkspaceListResult, WorkspaceResourceAssociationListOptions,
+    WhyRelationEndpoint, WhyRelationKind, WhyScopeLinkKind, WorkState, WorkStateDiff,
+    WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget, WorkStateRestoreCommit,
+    WorkStateRestoreOptions, WorkVcsError, WorkspaceId, WorkspaceInfo, WorkspaceInitOptions,
+    WorkspaceListOptions, WorkspaceListResult, WorkspaceResourceAssociationListOptions,
     WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
     WorkspaceResourceAssociationResult, canonical_bytes, content_object_digest,
     entity_version_digest, parse_canonical_json, relation_version_digest,
@@ -444,6 +444,9 @@ enum Command {
 
         #[arg(long)]
         expected_relation_edges: Option<usize>,
+
+        #[arg(long)]
+        expected_scope_links: Option<usize>,
     },
     Workspace {
         #[command(subcommand)]
@@ -7217,6 +7220,7 @@ fn run(cli: Cli) -> Result<String> {
             target_entity_kind,
             relation_limit,
             expected_relation_edges,
+            expected_scope_links,
         } => {
             if matches!(relation_limit, Some(0)) {
                 return Err(WorkVcsError::QueryInvalid(
@@ -7339,6 +7343,15 @@ fn run(cli: Cli) -> Result<String> {
                     )));
                 }
                 output.push_str("relation_edges_match_expected=true\n");
+            }
+            if let Some(expected_scope_links) = expected_scope_links {
+                let actual_scope_links = result.scope_links.len();
+                if actual_scope_links != expected_scope_links {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "why scope links {actual_scope_links} does not match expected {expected_scope_links}"
+                    )));
+                }
+                output.push_str("scope_links_match_expected=true\n");
             }
             Ok(output)
         }
@@ -19819,6 +19832,41 @@ fn render_why(result: &WhyQueryResult) -> String {
         )
         .expect("write to String");
     }
+    writeln!(output, "scope_links={}", result.scope_links.len()).expect("write to String");
+    for (index, link) in result.scope_links.iter().enumerate() {
+        writeln!(
+            output,
+            "scope_link.{index}.link_kind={}",
+            why_scope_link_kind(link.link_kind)
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "scope_link.{index}.direction={}",
+            why_relation_direction(link.direction)
+        )
+        .expect("write to String");
+        render_why_scope_link_endpoint(&mut output, index, "source", link.source);
+        render_why_scope_link_endpoint(&mut output, index, "target", link.target);
+        writeln!(
+            output,
+            "scope_link.{index}.source_entity_version_id={}",
+            link.source_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "scope_link.{index}.target_entity_version_id={}",
+            link.target_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "scope_link.{index}.source_state_digest={}",
+            link.source_state_digest
+        )
+        .expect("write to String");
+    }
     writeln!(
         output,
         "deferred_relation_families={}",
@@ -19834,6 +19882,47 @@ fn render_why(result: &WhyQueryResult) -> String {
         .expect("write to String");
     }
     output
+}
+
+fn render_why_scope_link_endpoint(
+    output: &mut String,
+    index: usize,
+    side: &str,
+    endpoint: WhyRelationEndpoint,
+) {
+    match endpoint {
+        WhyRelationEndpoint::Entity {
+            entity_kind,
+            entity_id,
+        } => {
+            writeln!(output, "scope_link.{index}.{side}_kind=entity").expect("write to String");
+            writeln!(
+                output,
+                "scope_link.{index}.{side}_entity_kind={}",
+                why_entity_kind(entity_kind)
+            )
+            .expect("write to String");
+            writeln!(output, "scope_link.{index}.{side}_entity_id={entity_id}")
+                .expect("write to String");
+        }
+        WhyRelationEndpoint::Evidence { evidence_id } => {
+            writeln!(output, "scope_link.{index}.{side}_kind=evidence").expect("write to String");
+            writeln!(
+                output,
+                "scope_link.{index}.{side}_evidence_id={evidence_id}"
+            )
+            .expect("write to String");
+        }
+        WhyRelationEndpoint::KnowledgeExposure { exposure_id } => {
+            writeln!(output, "scope_link.{index}.{side}_kind=knowledge_exposure")
+                .expect("write to String");
+            writeln!(
+                output,
+                "scope_link.{index}.{side}_exposure_id={exposure_id}"
+            )
+            .expect("write to String");
+        }
+    }
 }
 
 fn render_why_endpoint(
@@ -19886,6 +19975,12 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::RecordValidates => "record_validates",
         WhyRelationKind::KnowledgeExposureDerivedFrom => "knowledge_exposure_derived_from",
         WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
+    }
+}
+
+fn why_scope_link_kind(kind: WhyScopeLinkKind) -> &'static str {
+    match kind {
+        WhyScopeLinkKind::HandoffFocus => "handoff_focus",
     }
 }
 
@@ -29856,6 +29951,83 @@ mod tests {
         assert_eq!(value(&shown, "session_matches_expected"), "true");
         assert_eq!(value(&shown, "session_diff_matches_expected"), "true");
         assert_eq!(value(&shown, "focus_matches_expected"), "true");
+
+        let handoff_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &handoff_commit,
+            "--entity",
+            &handoff_id,
+            "--expected-relation-edges",
+            "0",
+            "--expected-scope-links",
+            "1",
+        ])
+        .expect("parse handoff why"))
+        .expect("why focused handoff");
+        assert_eq!(value(&handoff_why, "relation_edges"), "0");
+        assert_eq!(value(&handoff_why, "relation_edges_match_expected"), "true");
+        assert_eq!(value(&handoff_why, "scope_links"), "1");
+        assert_eq!(value(&handoff_why, "scope_links_match_expected"), "true");
+        assert_eq!(
+            value(&handoff_why, "scope_link.0.link_kind"),
+            "handoff_focus"
+        );
+        assert_eq!(value(&handoff_why, "scope_link.0.direction"), "outgoing");
+        assert_eq!(value(&handoff_why, "scope_link.0.source_kind"), "entity");
+        assert_eq!(
+            value(&handoff_why, "scope_link.0.source_entity_kind"),
+            "record"
+        );
+        assert_eq!(
+            value(&handoff_why, "scope_link.0.source_entity_id"),
+            handoff_id
+        );
+        assert_eq!(value(&handoff_why, "scope_link.0.target_kind"), "entity");
+        assert_eq!(
+            value(&handoff_why, "scope_link.0.target_entity_kind"),
+            "task"
+        );
+        assert_eq!(
+            value(&handoff_why, "scope_link.0.target_entity_id"),
+            task_id
+        );
+
+        let focus_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &handoff_commit,
+            "--entity",
+            &task_id,
+            "--expected-relation-edges",
+            "0",
+            "--expected-scope-links",
+            "1",
+        ])
+        .expect("parse focus why"))
+        .expect("why handoff focus task");
+        assert_eq!(value(&focus_why, "relation_edges"), "0");
+        assert_eq!(value(&focus_why, "relation_edges_match_expected"), "true");
+        assert_eq!(value(&focus_why, "scope_links"), "1");
+        assert_eq!(value(&focus_why, "scope_links_match_expected"), "true");
+        assert_eq!(value(&focus_why, "scope_link.0.link_kind"), "handoff_focus");
+        assert_eq!(value(&focus_why, "scope_link.0.direction"), "incoming");
+        assert_eq!(value(&focus_why, "scope_link.0.source_kind"), "entity");
+        assert_eq!(
+            value(&focus_why, "scope_link.0.source_entity_kind"),
+            "record"
+        );
+        assert_eq!(
+            value(&focus_why, "scope_link.0.source_entity_id"),
+            handoff_id
+        );
+        assert_eq!(value(&focus_why, "scope_link.0.target_kind"), "entity");
+        assert_eq!(value(&focus_why, "scope_link.0.target_entity_kind"), "task");
+        assert_eq!(value(&focus_why, "scope_link.0.target_entity_id"), task_id);
 
         let continuation = run(Cli::try_parse_from([
             "workvcs",

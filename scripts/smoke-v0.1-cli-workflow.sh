@@ -1748,24 +1748,66 @@ expect_value "$session_end_output" "session_match_expected" "true"
 expect_value "$session_end_output" "lifecycle_state_match_expected" "true"
 expect_nonempty "$session_end_output" "session_diff_id"
 
+step "focused handoff"
+handoff_create_output="$(run_workvcs \
+    handoff create "$store" \
+    --branch "$branch_id" \
+    --head "$head_commit_id" \
+    --session "$session_id" \
+    --statement "Continue from smoke session" \
+    --session-diff "$session_diff_id" \
+    --focus "$task_id" \
+    --expected-session-diff "$session_diff_id" \
+    --expected-focus "$task_id")"
+handoff_record_id="$(value "$handoff_create_output" "record_entity_id")"
+head_commit_id="$(value "$handoff_create_output" "commit_id")"
+expect_value "$handoff_create_output" "record_kind" "handoff"
+expect_value "$handoff_create_output" "handoff_scope_recognized" "true"
+expect_value "$handoff_create_output" "session_id" "$session_id"
+expect_value "$handoff_create_output" "session_lifecycle_state" "ended"
+expect_value "$handoff_create_output" "session_diff_id" "$session_diff_id"
+expect_value "$handoff_create_output" "focus_entity_id" "$task_id"
+expect_value "$handoff_create_output" "session_diff_found" "true"
+expect_value "$handoff_create_output" "session_diff_summary_json" '{"outcome":"smoke-complete"}'
+expect_value "$handoff_create_output" "session_diff_matches_expected" "true"
+expect_value "$handoff_create_output" "focus_matches_expected" "true"
+
+handoff_show_output="$(run_workvcs \
+    handoff show "$store" \
+    --commit "$head_commit_id" \
+    --handoff "$handoff_record_id" \
+    --expected-session "$session_id" \
+    --expected-session-diff "$session_diff_id" \
+    --expected-focus "$task_id")"
+expect_value "$handoff_show_output" "record_kind" "handoff"
+expect_value "$handoff_show_output" "handoff_scope_recognized" "true"
+expect_value "$handoff_show_output" "session_id" "$session_id"
+expect_value "$handoff_show_output" "session_lifecycle_state" "ended"
+expect_value "$handoff_show_output" "session_diff_id" "$session_diff_id"
+expect_value "$handoff_show_output" "focus_entity_id" "$task_id"
+expect_value "$handoff_show_output" "session_diff_found" "true"
+expect_value "$handoff_show_output" "session_matches_expected" "true"
+expect_value "$handoff_show_output" "session_diff_matches_expected" "true"
+expect_value "$handoff_show_output" "focus_matches_expected" "true"
+
 step "integrity gate"
 store_integrity_output="$(run_workvcs \
     store integrity "$store" \
     --require-valid \
     --expected-checked-branches 2 \
-    --expected-checked-commits 18 \
-    --expected-checked-changesets 18 \
-    --expected-checked-change-operations 26 \
+    --expected-checked-commits 19 \
+    --expected-checked-changesets 19 \
+    --expected-checked-change-operations 27 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 31 \
+    --expected-checked-events 32 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_value "$store_integrity_output" "checked_branches" "2"
-expect_value "$store_integrity_output" "checked_commits" "18"
-expect_value "$store_integrity_output" "checked_changesets" "18"
-expect_value "$store_integrity_output" "checked_change_operations" "26"
+expect_value "$store_integrity_output" "checked_commits" "19"
+expect_value "$store_integrity_output" "checked_changesets" "19"
+expect_value "$store_integrity_output" "checked_change_operations" "27"
 expect_value "$store_integrity_output" "checked_changeset_causal_anchors" "0"
-expect_value "$store_integrity_output" "checked_events" "31"
+expect_value "$store_integrity_output" "checked_events" "32"
 expect_value "$store_integrity_output" "checked_checkpoints" "1"
 expect_value "$store_integrity_output" "invalid_checkpoints" "0"
 expect_integrity_matches "$store_integrity_output"
@@ -1774,15 +1816,15 @@ doctor_output="$(run_workvcs \
     doctor "$store" \
     --require-valid \
     --expected-checked-branches 2 \
-    --expected-checked-commits 18 \
-    --expected-checked-changesets 18 \
-    --expected-checked-change-operations 26 \
+    --expected-checked-commits 19 \
+    --expected-checked-changesets 19 \
+    --expected-checked-change-operations 27 \
     --expected-checked-changeset-causal-anchors 0 \
-    --expected-checked-events 31 \
+    --expected-checked-events 32 \
     --expected-checked-checkpoints 1 \
     --expected-invalid-checkpoints 0)"
 expect_contains "$doctor_output" "ok store_id=$store_id schema_version=1 canonical_json_profile=workvcs-jcs-v1"
-expect_contains "$doctor_output" "checked_branches=2 checked_commits=18 checked_changesets=18 checked_change_operations=26 checked_changeset_causal_anchors=0 checked_events=31 checked_checkpoints=1 invalid_checkpoints=0"
+expect_contains "$doctor_output" "checked_branches=2 checked_commits=19 checked_changesets=19 checked_change_operations=27 checked_changeset_causal_anchors=0 checked_events=32 checked_checkpoints=1 invalid_checkpoints=0"
 expect_integrity_matches "$doctor_output"
 
 printf 'smoke_result=passed\n'
@@ -1804,3 +1846,4 @@ printf 'bundle_checkpoint_id=%s\n' "$bundle_checkpoint_id"
 printf 'bundle_import_id=%s\n' "$bundle_import_id"
 printf 'bundle_divergence_import_id=%s\n' "$bundle_divergence_import_id"
 printf 'session_diff_id=%s\n' "$session_diff_id"
+printf 'handoff_record_id=%s\n' "$handoff_record_id"

@@ -11,6 +11,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Context Profile Budget Dogfood Evidence](provenance/context-profile-budget-dogfood.md)
 - [Verify Wrapper Dogfood Evidence](provenance/verify-wrapper-dogfood.md)
 - [Verification Cache Refresh Dogfood Evidence](provenance/verification-cache-refresh-dogfood.md)
+- [Focused Handoff Smoke Evidence](provenance/focused-handoff-smoke-evidence.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -98,6 +99,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0413: Phase 4KX Context Profile Budget](decisions/adr/0413-phase-4kx-context-profile-budget.md)
 - [ADR-0414: Phase 4KY Verification Wrapper](decisions/adr/0414-phase-4ky-verification-wrapper.md)
 - [ADR-0415: Phase 4KZ Verification Cache Refresh Recovery](decisions/adr/0415-phase-4kz-verification-cache-refresh.md)
+- [ADR-0416: Phase 4LA Focused Handoff](decisions/adr/0416-phase-4la-focused-handoff.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

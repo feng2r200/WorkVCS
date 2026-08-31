@@ -3,7 +3,8 @@ use crate::canonical::{CanonicalValue, WorkState, canonical_bytes, parse_canonic
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history;
 use crate::identity::{
-    BranchId, CommitId, EntityId, EventId, RelationId, SessionDiffId, SessionId, WorkspaceId,
+    BranchId, CommitId, Digest, EntityId, EventId, RelationId, SessionDiffId, SessionId,
+    WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -238,6 +239,15 @@ pub struct SessionEndResult {
     pub ended_at_us: i64,
     pub summary: CanonicalValue,
     pub state: SessionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionDiffSnapshot {
+    pub session_diff_id: SessionDiffId,
+    pub session_id: SessionId,
+    pub created_at_us: i64,
+    pub summary: CanonicalValue,
+    pub detail_content_digest: Option<Digest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -818,6 +828,50 @@ pub(crate) fn session_snapshot(
     let snapshot = session_snapshot_from_connection(&transaction, session_id)?;
     transaction.commit().map_err(storage_error)?;
     Ok(snapshot)
+}
+
+pub(crate) fn session_diff(
+    connection: &StoreConnection,
+    session_diff_id: SessionDiffId,
+) -> Result<SessionDiffSnapshot> {
+    connection.verify_foreign_keys()?;
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT session_id,
+                    created_at_us,
+                    summary_json,
+                    detail_content_digest
+             FROM session_diff
+             WHERE session_diff_id = ?1",
+            params![&session_diff_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((session_id, created_at_us, summary_json, detail_content_digest)) = row else {
+        return Err(WorkVcsError::SessionNotFound(format!(
+            "session diff {session_diff_id} does not exist"
+        )));
+    };
+
+    Ok(SessionDiffSnapshot {
+        session_diff_id,
+        session_id: decode_session_id("session_diff.session_id", session_id)?,
+        created_at_us,
+        summary: parse_canonical_object_json("session_diff.summary_json", &summary_json)?,
+        detail_content_digest: detail_content_digest
+            .map(|bytes| decode_digest("session_diff.detail_content_digest", bytes))
+            .transpose()?,
+    })
 }
 
 pub(crate) fn sessions(
@@ -1722,6 +1776,13 @@ fn decode_session_diff_id(column: &str, bytes: Vec<u8>) -> Result<SessionDiffId>
     SessionDiffId::from_bytes(bytes).map_err(|error| {
         WorkVcsError::SessionInvalid(format!("{column} is not a UUIDv7 value: {error}"))
     })
+}
+
+fn decode_digest(column: &str, bytes: Vec<u8>) -> Result<Digest> {
+    let bytes = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        WorkVcsError::SessionInvalid(format!("{column} must be 32 bytes, found {}", bytes.len()))
+    })?;
+    Ok(Digest::from_bytes(bytes))
 }
 
 fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {

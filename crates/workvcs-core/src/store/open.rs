@@ -94,10 +94,10 @@ use crate::runtime::{
     MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult,
     MergeListOptions, MergeListResult, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
     MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
-    SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions, SessionListResult,
-    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, VerifyOptions, VerifyResult,
+    RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions, SessionEndResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
+    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use crate::store::bootstrap::{
     StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
@@ -106,7 +106,7 @@ use crate::store::connection::StoreConnection;
 use crate::store::schema;
 use crate::{
     BranchId, ClaimId, CommitId, EntityId, EventId, EvidenceId, ImportId, ResourceId,
-    ResourceObservationId, SessionId, WorkVcsError, WorkspaceId, history, runtime,
+    ResourceObservationId, SessionDiffId, SessionId, WorkVcsError, WorkspaceId, history, runtime,
 };
 use std::path::Path;
 
@@ -1489,6 +1489,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::session_snapshot(&self.connection, session_id)
+    }
+
+    pub(crate) fn session_diff(
+        &self,
+        session_diff_id: SessionDiffId,
+    ) -> Result<SessionDiffSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::session_diff(&self.connection, session_diff_id)
     }
 
     pub(crate) fn sessions(&self, options: &SessionListOptions) -> Result<SessionListResult> {

@@ -30,10 +30,10 @@ pub use runnable::{
     RunnableTaskProjectionDimension, RunnableTasksOptions, RunnableTasksProjection,
 };
 pub use session::{
-    SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions, SessionFocusPathEntry,
-    SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions, SessionListResult,
-    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult,
+    SessionDiffSnapshot, SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions,
+    SessionFocusPathEntry, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
+    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult,
 };
 pub use verify::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 
@@ -49,7 +49,7 @@ pub(crate) use merge::{
 pub(crate) use next::next_work;
 pub(crate) use runnable::runnable_tasks;
 pub(crate) use session::{
-    clear_session_focus, end_session, session_snapshot, sessions, set_session_focus, start_session,
-    switch_session,
+    clear_session_focus, end_session, session_diff, session_snapshot, sessions, set_session_focus,
+    start_session, switch_session,
 };
 pub(crate) use verify::verify;

@@ -576,6 +576,18 @@ fn end_session_creates_session_diff_and_cleans_runtime_without_workstate_commit(
         .expect("session diff summary");
     assert_eq!(stored_summary, canonical_json(&summary));
 
+    let diff_snapshot = engine
+        .session_diff(ended.session_diff_id)
+        .expect("session diff snapshot");
+    assert_eq!(diff_snapshot.session_diff_id, ended.session_diff_id);
+    assert_eq!(diff_snapshot.session_id, started.session_id);
+    assert!(diff_snapshot.created_at_us >= started.started_at_us);
+    assert_eq!(
+        canonical_json(&diff_snapshot.summary),
+        canonical_json(&summary)
+    );
+    assert_eq!(diff_snapshot.detail_content_digest, None);
+
     drop(engine);
     let reopened = Engine::open(&path).expect("reopen engine");
     let snapshot = reopened

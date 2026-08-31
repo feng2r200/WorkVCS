@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0415 / Phase 4KZ
+Last refreshed: 2026-09-01 by ADR-0416 / Phase 4LA
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -38,9 +38,9 @@ not complete.
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Resource-backed stale-cache recovery from baseline observations is implemented; Resource path/glob normalization and adapter-backed re-observation remain Open. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | No | Dogfood the select-and-continue loop with real implementation work instead of only script-generated Tasks. |
 | Claim modes and guard behavior | Yes | Partial | Partial | No | Shared claims exist; stale takeover, transfer, and force provenance remain V1 gaps. |
-| Context resolver | Yes | Partial | Yes | Partial | Complete the remaining V1 context categories and dogfood flow: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, focused Handoff reading, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
+| Context resolver | Yes | Partial | Yes | Partial | Complete the remaining V1 context categories and dogfood flow: AC packets, Goal/Plan path packets, richer blocker context, Attempt details, path-sensitive Knowledge policy, packet persistence, and claim-next packet rendering. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | No | Use real Findings/Decisions/Handoffs during implementation and inspect `why` output for continuation quality. |
-| Handoff | Yes | Partial | No | No | Move beyond explicit `Record(kind=handoff)` creation toward Session-end diff plus focused handoff authoring/reading. |
+| Handoff | Yes | Yes | Yes | No | Use focused Handoff in a durable implementation handoff, then decide whether typed relations or context packets are needed for V1. |
 | Merge lifecycle | Yes | Yes | Yes | No | Dogfood divergent Work Branch resolution and document recovery behavior for moved heads or unresolved items. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | No | Validate a real export/import/restore path and record Bundle container/profile details still Open for V1. |
 | CLI discoverability and operator use | Partial | Partial | Partial | No | Add install, quickstart, and common recovery documentation tied to the current runnable command surface. |
@@ -52,13 +52,13 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Close Handoff beyond `Record(kind=handoff)`: Session-end diff, focused
-   handoff creation, and handoff consumption.
-2. Add stale Claim takeover, transfer, and force provenance, then dogfood a
+1. Add stale Claim takeover, transfer, and force provenance, then dogfood a
    blocked-claim recovery path.
-3. Add install, quickstart, and recovery documentation for a local operator.
-4. Complete the remaining V1 Context Resolver categories when the verify and
+2. Add install, quickstart, and recovery documentation for a local operator.
+3. Complete the remaining V1 Context Resolver categories when the verify and
    handoff surfaces can supply real packet content.
+4. Dogfood focused Handoff in a durable implementation handoff and record the
+   missing consumption ergonomics.
 5. Run larger Store validation before designing performance indexes.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
@@ -102,5 +102,8 @@ The following remain beyond V1 even if they would make dogfood easier:
   Verification applicability is stale until the cache is refreshed for the new
   head. Phase 4KZ adds explicit `verification cache-refresh` recovery for the
   baseline-observation case and replaces the manual `cache-record` recovery step
-  in repository smoke. WorkVCS has still not been used as the durable state
-  system for a complete implementation slice or for another real project.
+  in repository smoke. Phase 4LA adds focused `handoff create/show` commands
+  over existing SessionDiff and `Record(kind=handoff)` semantics, and smoke now
+  proves an end-session, handoff-author, handoff-consume loop. WorkVCS has still
+  not been used as the durable state system for a complete implementation slice
+  or for another real project.

@@ -146,10 +146,10 @@ pub use runtime::{
     RunnableTaskProjectionDimension, RunnableTasksOptions, RunnableTasksProjection,
 };
 pub use runtime::{
-    SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions, SessionFocusPathEntry,
-    SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions, SessionListResult,
-    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult,
+    SessionDiffSnapshot, SessionEndOptions, SessionEndResult, SessionFocus, SessionFocusOptions,
+    SessionFocusPathEntry, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
+    SessionListResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult,
 };
 pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 pub use store::{StoreInfo, StoreInitOptions, StoreManifest};

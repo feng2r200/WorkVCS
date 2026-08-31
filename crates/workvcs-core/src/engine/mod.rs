@@ -15,6 +15,7 @@ use crate::MigrationId;
 use crate::RelationId;
 use crate::ResourceId;
 use crate::ResourceObservationId;
+use crate::SessionDiffId;
 use crate::SessionId;
 use crate::WorkspaceId;
 use crate::error::Result;
@@ -108,10 +109,10 @@ use crate::{
     MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult,
     MergeListOptions, MergeListResult, MergeResolveOptions, MergeResolveResult, MergeStartOptions,
     MergeStartResult, NextWorkOptions, NextWorkResult, RunnableTasksOptions,
-    RunnableTasksProjection, SessionEndOptions, SessionEndResult, SessionFocusOptions,
-    SessionFocusUpdateResult, SessionListOptions, SessionListResult, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    VerifyOptions, VerifyResult,
+    RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions, SessionEndResult,
+    SessionFocusOptions, SessionFocusUpdateResult, SessionListOptions, SessionListResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use std::path::Path;
 
@@ -967,6 +968,10 @@ impl Engine {
 
     pub fn session_snapshot(&self, session_id: SessionId) -> Result<SessionSnapshot> {
         self.store.session_snapshot(session_id)
+    }
+
+    pub fn session_diff(&self, session_diff_id: SessionDiffId) -> Result<SessionDiffSnapshot> {
+        self.store.session_diff(session_diff_id)
     }
 
     pub fn sessions(&self, options: SessionListOptions) -> Result<SessionListResult> {

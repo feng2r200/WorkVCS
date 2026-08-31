@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0417 / Phase 4LB
+Last refreshed: 2026-09-01 by ADR-0418 / Phase 4LC
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -30,7 +30,7 @@ not complete.
 | V1 area | Design confirmed | Implemented | Smoke proven | Dogfood proven | Open / next action |
 | --- | --- | --- | --- | --- | --- |
 | Canonical IDs, digests, and WorkState hashing | Yes | Yes | Partial | No | Keep as regression foundation; no further work unless another V1 slice exposes a concrete compatibility gap. |
-| Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | No | Add install/use documentation and a larger Store validation run so the operator path is not only a temporary smoke Store. |
+| Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | No | Phase 4LC adds local install/use documentation; next prove the path with a larger Store validation run so the operator path is not only a temporary smoke Store. |
 | Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | No | Create a real dogfood walkthrough that branches and restores Work State for an implementation slice. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Yes | Yes | Partial | No | Use WorkVCS itself to manage a nontrivial implementation Plan, then record the missing ergonomics. |
 | Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Partial | Use the `verify` wrapper and explicit cache refresh in more durable implementation handoffs; the next missing loop is focused handoff authoring/reading. |
@@ -43,7 +43,7 @@ not complete.
 | Handoff | Yes | Yes | Yes | No | Use focused Handoff in a durable implementation handoff, then decide whether typed relations or context packets are needed for V1. |
 | Merge lifecycle | Yes | Yes | Yes | No | Dogfood divergent Work Branch resolution and document recovery behavior for moved heads or unresolved items. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | No | Validate a real export/import/restore path and record Bundle container/profile details still Open for V1. |
-| CLI discoverability and operator use | Partial | Partial | Partial | No | Add install, quickstart, and common recovery documentation tied to the current runnable command surface. |
+| CLI discoverability and operator use | Partial | Partial | Partial | No | Phase 4LC adds install, quickstart, validation, and common recovery documentation tied to the current runnable command surface; next dogfood the guide in a durable implementation slice. |
 | Actionable errors and recovery | Yes | Partial | Partial | No | Audit common failures and document safe next actions; add behavior only where current errors block dogfood. |
 | Larger Store and performance evidence | Partial | No | No | No | Run a representative larger Store workload before adding indexes or claiming scale readiness. |
 
@@ -52,7 +52,8 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Add install, quickstart, and recovery documentation for a local operator.
+1. Use the local operator guide to run a durable WorkVCS-managed implementation
+   slice and record missing ergonomics.
 2. Implement real `potentially_stale` Session state before adding stale Claim
    takeover policy.
 3. Dogfood Claim transfer / forced takeover in a durable implementation recovery
@@ -109,6 +110,7 @@ The following remain beyond V1 even if they would make dogfood easier:
   proves an end-session, handoff-author, handoff-consume loop. Phase 4LB adds
   explicit Claim transfer and forced takeover replacement operations over
   existing Claim occurrence/runtime/Event tables; smoke now proves a blocked
-  guard, transfer recovery, and forced takeover recovery loop. WorkVCS has still
-  not been used as the durable state system for a complete implementation slice
-  or for another real project.
+  guard, transfer recovery, and forced takeover recovery loop. Phase 4LC adds a
+  local operator quickstart and recovery guide tied to the current CLI surface.
+  WorkVCS has still not been used as the durable state system for a complete
+  implementation slice or for another real project.

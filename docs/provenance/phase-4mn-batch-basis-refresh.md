@@ -124,4 +124,11 @@ scripts/smoke-v0.1-cli-workflow.sh
 
 ## Delivery Closeout
 
-Pending.
+- Implementation commit:
+  `0005a6b74466f2ba517649287eb1179a2133d549`.
+- Fast-forward merged to `main`.
+- Worktree cleanup proof:
+  `/tmp/workvcs-4mn-cleanup-20260901T103650Z`.
+- Cleanup proof fields:
+  `clean=yes`, `attached=yes`, `unlocked=yes`, `covered_by_main=yes`,
+  `removed=yes`, `branch_retained=yes`.

@@ -1,4 +1,5 @@
 use clap::{ArgGroup, Parser, Subcommand, error::ErrorKind};
+use glob::{MatchOptions, Pattern, glob_with};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -665,6 +666,7 @@ enum ContextPacketCommand {
             "resource_content_file",
             "resource_content_from_scope_path",
             "resource_content_from_scope_path_prefix",
+            "resource_content_from_scope_glob",
         ])
 ))]
 #[command(group(
@@ -675,7 +677,7 @@ enum ContextPacketCommand {
 #[command(group(
     ArgGroup::new("verify-resource-scope-payload-source")
         .multiple(false)
-        .args(["scope_payload_json", "scope_path", "scope_path_prefix"])
+        .args(["scope_payload_json", "scope_path", "scope_path_prefix", "scope_glob"])
 ))]
 struct VerifyArgs {
     #[arg(value_name = "STORE")]
@@ -753,6 +755,9 @@ struct VerifyArgs {
     #[arg(long, value_name = "PATH")]
     scope_path_prefix: Option<PathBuf>,
 
+    #[arg(long, value_name = "GLOB")]
+    scope_glob: Option<String>,
+
     #[arg(long)]
     resource_fingerprint: Option<String>,
 
@@ -767,6 +772,9 @@ struct VerifyArgs {
 
     #[arg(long)]
     resource_content_from_scope_path_prefix: bool,
+
+    #[arg(long)]
+    resource_content_from_scope_glob: bool,
 
     #[arg(long, default_value = "{}")]
     resource_summary_json: String,
@@ -4757,6 +4765,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         resource_content_from_scope_path_prefix: bool,
+
+        #[arg(long)]
+        resource_content_from_scope_glob: bool,
 
         #[arg(long, default_value = "{}")]
         detail_json: String,
@@ -9125,8 +9136,10 @@ fn run(cli: Cli) -> Result<String> {
                 content_file,
                 content_from_scope_path: false,
                 content_from_scope_path_prefix: false,
+                content_from_scope_glob: false,
                 scope_path: None,
                 scope_path_prefix: None,
+                scope_glob: None,
             })?;
             let mut options = ResourceObservationCreateOptions::new(
                 ResourceId::parse_canonical(&resource)?,
@@ -9531,6 +9544,7 @@ fn run(cli: Cli) -> Result<String> {
                 verification,
                 resource_content_from_scope_path,
                 resource_content_from_scope_path_prefix,
+                resource_content_from_scope_glob,
                 detail_json,
                 expected_evaluated_commit,
                 expected_applicability,
@@ -9555,32 +9569,43 @@ fn run(cli: Cli) -> Result<String> {
                     options =
                         options.with_expected_evaluated_commit_id(expected_evaluated_commit_id);
                 }
-                let snapshot = match (
-                    resource_content_from_scope_path,
-                    resource_content_from_scope_path_prefix,
-                ) {
-                    (true, false) => refresh_verification_applicability_from_local_file_scope(
+                let resource_content_scope_sources = usize::from(resource_content_from_scope_path)
+                    + usize::from(resource_content_from_scope_path_prefix)
+                    + usize::from(resource_content_from_scope_glob);
+                if resource_content_scope_sources > 1 {
+                    return Err(WorkVcsError::TaskInvalid(
+                        "verification cache-refresh requires at most one resource content scope source".to_owned(),
+                    ));
+                }
+                let snapshot = if resource_content_from_scope_path {
+                    refresh_verification_applicability_from_local_file_scope(
                         &mut engine,
                         branch_id,
                         verification_entity_id,
                         expected_evaluated_commit_id,
                         detail,
                         LocalFileScopeMode::Path,
-                    )?,
-                    (false, true) => refresh_verification_applicability_from_local_file_scope(
+                    )?
+                } else if resource_content_from_scope_path_prefix {
+                    refresh_verification_applicability_from_local_file_scope(
                         &mut engine,
                         branch_id,
                         verification_entity_id,
                         expected_evaluated_commit_id,
                         detail,
                         LocalFileScopeMode::PathPrefix,
-                    )?,
-                    (false, false) => engine.refresh_verification_applicability(options)?,
-                    (true, true) => {
-                        return Err(WorkVcsError::TaskInvalid(
-                            "verification cache-refresh requires at most one resource content scope source".to_owned(),
-                        ));
-                    }
+                    )?
+                } else if resource_content_from_scope_glob {
+                    refresh_verification_applicability_from_local_file_scope(
+                        &mut engine,
+                        branch_id,
+                        verification_entity_id,
+                        expected_evaluated_commit_id,
+                        detail,
+                        LocalFileScopeMode::Glob,
+                    )?
+                } else {
+                    engine.refresh_verification_applicability(options)?
                 };
                 let mut output = render_verification_applicability_cache(&snapshot);
                 append_verification_cache_record_expectations(
@@ -12068,11 +12093,13 @@ fn run_verify(args: Vec<String>) -> Result<String> {
         scope_payload_json,
         scope_path,
         scope_path_prefix,
+        scope_glob,
         resource_fingerprint,
         resource_content,
         resource_content_file,
         resource_content_from_scope_path,
         resource_content_from_scope_path_prefix,
+        resource_content_from_scope_glob,
         resource_summary_json,
         resource_detail_content,
         resource_detail_content_file,
@@ -12138,11 +12165,13 @@ fn run_verify(args: Vec<String>) -> Result<String> {
             scope_payload_json,
             scope_path,
             scope_path_prefix,
+            scope_glob,
             resource_fingerprint,
             resource_content,
             resource_content_file,
             resource_content_from_scope_path,
             resource_content_from_scope_path_prefix,
+            resource_content_from_scope_glob,
             resource_summary_json,
             resource_detail_content,
             resource_detail_content_file,
@@ -12607,6 +12636,7 @@ enum CliScopeSource {
     Json,
     Path,
     PathPrefix,
+    Glob,
 }
 
 #[derive(Debug)]
@@ -12623,7 +12653,7 @@ impl CliScope {
     fn is_path_shorthand(&self) -> bool {
         matches!(
             self.source,
-            CliScopeSource::Path | CliScopeSource::PathPrefix
+            CliScopeSource::Path | CliScopeSource::PathPrefix | CliScopeSource::Glob
         )
     }
 }
@@ -12674,8 +12704,62 @@ fn path_scope_value(key: &str, path: PathBuf) -> Result<CanonicalValue> {
     )])
 }
 
+fn glob_scope_value(glob: String) -> Result<CanonicalValue> {
+    let scope = local_file_glob_scope_from_pattern(&glob)?;
+    CanonicalValue::object(vec![(
+        "glob".to_owned(),
+        CanonicalValue::String(scope.pattern),
+    )])
+}
+
+fn verify_resource_scope_from_cli(
+    scope_json: Option<String>,
+    scope_path: Option<PathBuf>,
+    scope_path_prefix: Option<PathBuf>,
+    scope_glob: Option<String>,
+) -> Result<Option<CliScope>> {
+    let sources = usize::from(scope_json.is_some())
+        + usize::from(scope_path.is_some())
+        + usize::from(scope_path_prefix.is_some())
+        + usize::from(scope_glob.is_some());
+    if sources > 1 {
+        return Err(WorkVcsError::QueryInvalid(
+            "verify resource scope payload requires at most one of --scope-payload-json, --scope-path, --scope-path-prefix, or --scope-glob".to_owned(),
+        ));
+    }
+    if let Some(scope_json) = scope_json {
+        return Ok(Some(CliScope {
+            value: parse_cli_object("verify resource scope payload", &scope_json)?,
+            source: CliScopeSource::Json,
+        }));
+    }
+    if let Some(path) = scope_path {
+        return Ok(Some(CliScope {
+            value: path_scope_value("path", path)?,
+            source: CliScopeSource::Path,
+        }));
+    }
+    if let Some(path_prefix) = scope_path_prefix {
+        return Ok(Some(CliScope {
+            value: path_scope_value("path_prefix", path_prefix)?,
+            source: CliScopeSource::PathPrefix,
+        }));
+    }
+    if let Some(glob) = scope_glob {
+        return Ok(Some(CliScope {
+            value: glob_scope_value(glob)?,
+            source: CliScopeSource::Glob,
+        }));
+    }
+    Ok(None)
+}
+
 fn normalize_cli_scope_path(path: PathBuf) -> Result<String> {
     normalize_cli_scope_path_components(&path)
+}
+
+fn normalize_cli_scope_glob(pattern: &str) -> Result<String> {
+    normalize_cli_scope_path_components(Path::new(pattern))
 }
 
 fn normalize_cli_scope_path_components(path: &Path) -> Result<String> {
@@ -13164,8 +13248,10 @@ struct ResourceFingerprintArgs {
     content_file: Option<PathBuf>,
     content_from_scope_path: bool,
     content_from_scope_path_prefix: bool,
+    content_from_scope_glob: bool,
     scope_path: Option<PathBuf>,
     scope_path_prefix: Option<PathBuf>,
+    scope_glob: Option<String>,
 }
 
 fn fingerprint_from_cli(args: ResourceFingerprintArgs) -> Result<Digest> {
@@ -13175,19 +13261,22 @@ fn fingerprint_from_cli(args: ResourceFingerprintArgs) -> Result<Digest> {
         args.content_file,
         args.content_from_scope_path,
         args.content_from_scope_path_prefix,
+        args.content_from_scope_glob,
     ) {
-        (Some(fingerprint), None, None, false, false) => Digest::from_hex(&fingerprint),
-        (None, Some(content), None, false, false) => Ok(content_object_digest(content.as_bytes())),
-        (None, None, Some(path), false, false) => {
+        (Some(fingerprint), None, None, false, false, false) => Digest::from_hex(&fingerprint),
+        (None, Some(content), None, false, false, false) => {
+            Ok(content_object_digest(content.as_bytes()))
+        }
+        (None, None, Some(path), false, false, false) => {
             let bytes = read_cli_file("resource observation content", &path)?;
             Ok(content_object_digest(&bytes))
         }
-        (None, None, None, true, false) => {
+        (None, None, None, true, false, false) => {
             let path = required_arg("--scope-path", args.scope_path)?;
             let bytes = read_cli_file("resource observation content from scope path", &path)?;
             Ok(content_object_digest(&bytes))
         }
-        (None, None, None, false, true) => {
+        (None, None, None, false, true, false) => {
             let path_prefix = required_arg("--scope-path-prefix", args.scope_path_prefix)?;
             local_file_path_prefix_snapshot(&path_prefix)
                 .map(|snapshot| snapshot.fingerprint)
@@ -13195,6 +13284,17 @@ fn fingerprint_from_cli(args: ResourceFingerprintArgs) -> Result<Digest> {
                     WorkVcsError::QueryInvalid(format!(
                         "failed to read resource observation content from scope path prefix {}: {}",
                         path_prefix.display(),
+                        failure.message()
+                    ))
+                })
+        }
+        (None, None, None, false, false, true) => {
+            let glob = required_arg("--scope-glob", args.scope_glob)?;
+            local_file_glob_snapshot(&glob)
+                .map(|snapshot| snapshot.fingerprint)
+                .map_err(|failure| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "failed to read resource observation content from scope glob {glob:?}: {}",
                         failure.message()
                     ))
                 })
@@ -13311,11 +13411,13 @@ struct VerifyResourceObservationArgs {
     scope_payload_json: Option<String>,
     scope_path: Option<PathBuf>,
     scope_path_prefix: Option<PathBuf>,
+    scope_glob: Option<String>,
     resource_fingerprint: Option<String>,
     resource_content: Option<String>,
     resource_content_file: Option<PathBuf>,
     resource_content_from_scope_path: bool,
     resource_content_from_scope_path_prefix: bool,
+    resource_content_from_scope_glob: bool,
     resource_summary_json: String,
     resource_detail_content: Option<String>,
     resource_detail_content_file: Option<PathBuf>,
@@ -13337,11 +13439,13 @@ fn verify_resource_observation_from_cli(
         || args.scope_payload_json.is_some()
         || args.scope_path.is_some()
         || args.scope_path_prefix.is_some()
+        || args.scope_glob.is_some()
         || args.resource_fingerprint.is_some()
         || args.resource_content.is_some()
         || args.resource_content_file.is_some()
         || args.resource_content_from_scope_path
         || args.resource_content_from_scope_path_prefix
+        || args.resource_content_from_scope_glob
         || args.resource_summary_json != "{}"
         || args.resource_detail_content.is_some()
         || args.resource_detail_content_file.is_some()
@@ -13359,8 +13463,10 @@ fn verify_resource_observation_from_cli(
         content_file: args.resource_content_file,
         content_from_scope_path: args.resource_content_from_scope_path,
         content_from_scope_path_prefix: args.resource_content_from_scope_path_prefix,
+        content_from_scope_glob: args.resource_content_from_scope_glob,
         scope_path: args.scope_path.clone(),
         scope_path_prefix: args.scope_path_prefix.clone(),
+        scope_glob: args.scope_glob.clone(),
     })?;
     let mut observation = ResourceObservationCreateOptions::new(
         ResourceId::parse_canonical(&required_arg("--resource", args.resource)?)?,
@@ -13389,18 +13495,15 @@ fn verify_resource_observation_from_cli(
         observation = observation.with_source_session_id(source_session_id);
     }
 
-    let scope = scope_from_cli(
-        "verify resource scope payload",
-        "--scope-payload-json",
-        "--scope-path",
-        "--scope-path-prefix",
+    let scope = verify_resource_scope_from_cli(
         args.scope_payload_json,
         args.scope_path,
         args.scope_path_prefix,
+        args.scope_glob,
     )?
     .ok_or_else(|| {
         WorkVcsError::TaskInvalid(
-            "verify resource observation requires one of --scope-payload-json, --scope-path, or --scope-path-prefix"
+            "verify resource observation requires one of --scope-payload-json, --scope-path, --scope-path-prefix, or --scope-glob"
                 .to_owned(),
         )
     })?;
@@ -13492,6 +13595,7 @@ fn applicability_stamp_from_cli(
 enum LocalFileScopeMode {
     Path,
     PathPrefix,
+    Glob,
 }
 
 impl LocalFileScopeMode {
@@ -13499,6 +13603,7 @@ impl LocalFileScopeMode {
         match self {
             Self::Path => "--resource-content-from-scope-path",
             Self::PathPrefix => "--resource-content-from-scope-path-prefix",
+            Self::Glob => "--resource-content-from-scope-glob",
         }
     }
 
@@ -13506,6 +13611,7 @@ impl LocalFileScopeMode {
         match self {
             Self::Path => "path",
             Self::PathPrefix => "path_prefix",
+            Self::Glob => "glob",
         }
     }
 
@@ -13513,6 +13619,7 @@ impl LocalFileScopeMode {
         match self {
             Self::Path => "scope-path",
             Self::PathPrefix => "scope-path-prefix",
+            Self::Glob => "scope-glob",
         }
     }
 }
@@ -13521,6 +13628,7 @@ impl LocalFileScopeMode {
 enum LocalFileScopeInput {
     Path(PathBuf),
     PathPrefix(PathBuf),
+    Glob(LocalFileGlobScope),
 }
 
 struct LocalFileScopeObserved {
@@ -13535,6 +13643,17 @@ enum LocalFileScopeObservation {
 }
 
 struct LocalFilePathPrefixSnapshot {
+    fingerprint: Digest,
+    summary: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalFileGlobScope {
+    pattern: String,
+    root: PathBuf,
+}
+
+struct LocalFileGlobSnapshot {
     fingerprint: Digest,
     summary: CanonicalValue,
 }
@@ -13556,6 +13675,28 @@ impl LocalFilePathPrefixReadFailure {
     fn message(&self) -> &str {
         match self {
             Self::Unavailable => "path prefix is unavailable",
+            Self::Error(message) => message,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalFileGlobEntry {
+    path: String,
+    fingerprint: Digest,
+    size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LocalFileGlobReadFailure {
+    Unavailable,
+    Error(String),
+}
+
+impl LocalFileGlobReadFailure {
+    fn message(&self) -> &str {
+        match self {
+            Self::Unavailable => "glob root is unavailable",
             Self::Error(message) => message,
         }
     }
@@ -13699,6 +13840,9 @@ fn local_file_scope_from_basis(
     Ok(match mode {
         LocalFileScopeMode::Path => LocalFileScopeInput::Path(PathBuf::from(path)),
         LocalFileScopeMode::PathPrefix => LocalFileScopeInput::PathPrefix(PathBuf::from(path)),
+        LocalFileScopeMode::Glob => {
+            LocalFileScopeInput::Glob(local_file_glob_scope_from_pattern(path)?)
+        }
     })
 }
 
@@ -13732,6 +13876,18 @@ fn observe_local_file_scope(input: &LocalFileScopeInput) -> Result<LocalFileScop
                 }
             }
         }
+        LocalFileScopeInput::Glob(scope) => match local_file_glob_snapshot(&scope.pattern) {
+            Ok(snapshot) => Ok(LocalFileScopeObservation::Observed(
+                LocalFileScopeObserved {
+                    fingerprint: snapshot.fingerprint,
+                    summary: snapshot.summary,
+                },
+            )),
+            Err(LocalFileGlobReadFailure::Unavailable) => {
+                Ok(LocalFileScopeObservation::Unavailable)
+            }
+            Err(LocalFileGlobReadFailure::Error(_)) => Ok(LocalFileScopeObservation::Error),
+        },
     }
 }
 
@@ -13884,6 +14040,262 @@ fn local_file_path_prefix_fingerprint(
     let manifest_bytes = canonical_bytes(&manifest)
         .map_err(|error| LocalFilePathPrefixReadFailure::Error(error.to_string()))?;
     Ok(content_object_digest(&manifest_bytes))
+}
+
+fn local_file_glob_scope_from_pattern(pattern: &str) -> Result<LocalFileGlobScope> {
+    let normalized_pattern = normalize_cli_scope_glob(pattern)?;
+    Pattern::new(&normalized_pattern).map_err(|error| {
+        WorkVcsError::TaskInvalid(format!("scope glob pattern is invalid: {error}"))
+    })?;
+    if !local_file_glob_has_wildcard(&normalized_pattern) {
+        return Err(WorkVcsError::TaskInvalid(
+            "scope glob requires at least one wildcard; use --scope-path for exact files"
+                .to_owned(),
+        ));
+    }
+    let root = local_file_glob_fixed_root(&normalized_pattern)?;
+    Ok(LocalFileGlobScope {
+        pattern: normalized_pattern,
+        root,
+    })
+}
+
+fn local_file_glob_has_wildcard(pattern: &str) -> bool {
+    pattern
+        .bytes()
+        .any(|byte| matches!(byte, b'*' | b'?' | b'['))
+}
+
+fn local_file_glob_segment_has_wildcard(segment: &str) -> bool {
+    segment
+        .bytes()
+        .any(|byte| matches!(byte, b'*' | b'?' | b'['))
+}
+
+fn local_file_glob_fixed_root(pattern: &str) -> Result<PathBuf> {
+    let mut root = PathBuf::new();
+    let mut fixed_normal_segments = 0_usize;
+    for component in Path::new(pattern).components() {
+        match component {
+            Component::Prefix(path_prefix) => root.push(path_prefix.as_os_str()),
+            Component::RootDir => root.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(WorkVcsError::TaskInvalid(
+                    "scope glob fixed root must not contain parent directory segments".to_owned(),
+                ));
+            }
+            Component::Normal(segment) => {
+                let text = segment.to_str().ok_or_else(|| {
+                    WorkVcsError::TaskInvalid("scope glob must be valid UTF-8".to_owned())
+                })?;
+                if local_file_glob_segment_has_wildcard(text) {
+                    break;
+                }
+                root.push(segment);
+                fixed_normal_segments += 1;
+            }
+        }
+    }
+    if fixed_normal_segments == 0 {
+        return Err(WorkVcsError::TaskInvalid(
+            "scope glob requires a fixed non-wildcard root before the first wildcard segment"
+                .to_owned(),
+        ));
+    }
+    Ok(root)
+}
+
+fn local_file_glob_match_options() -> MatchOptions {
+    MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: true,
+    }
+}
+
+fn local_file_glob_snapshot(
+    pattern: &str,
+) -> std::result::Result<LocalFileGlobSnapshot, LocalFileGlobReadFailure> {
+    let scope = local_file_glob_scope_from_pattern(pattern)
+        .map_err(|error| LocalFileGlobReadFailure::Error(error.to_string()))?;
+    let root_metadata = fs::symlink_metadata(&scope.root).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            LocalFileGlobReadFailure::Unavailable
+        } else {
+            LocalFileGlobReadFailure::Error(format!(
+                "failed to inspect glob root {}: {error}",
+                scope.root.display()
+            ))
+        }
+    })?;
+    if !root_metadata.is_dir() {
+        return Err(LocalFileGlobReadFailure::Error(format!(
+            "glob root {} is not a directory",
+            scope.root.display()
+        )));
+    }
+
+    let mut files = Vec::new();
+    let paths = glob_with(&scope.pattern, local_file_glob_match_options()).map_err(|error| {
+        LocalFileGlobReadFailure::Error(format!(
+            "failed to compile glob pattern {:?}: {error}",
+            scope.pattern
+        ))
+    })?;
+    for entry in paths {
+        let entry_path = entry.map_err(|error| {
+            LocalFileGlobReadFailure::Error(format!(
+                "failed to read glob match for {:?}: {error}",
+                scope.pattern
+            ))
+        })?;
+        let metadata = fs::symlink_metadata(&entry_path).map_err(|error| {
+            LocalFileGlobReadFailure::Error(format!(
+                "failed to inspect glob match {}: {error}",
+                entry_path.display()
+            ))
+        })?;
+        if !metadata.is_file() {
+            return Err(LocalFileGlobReadFailure::Error(format!(
+                "unsupported glob match {}",
+                entry_path.display()
+            )));
+        }
+        let relative_path = local_file_glob_relative_path(&scope, &entry_path)?;
+        let bytes = fs::read(&entry_path).map_err(|error| {
+            LocalFileGlobReadFailure::Error(format!(
+                "failed to read glob file {}: {error}",
+                entry_path.display()
+            ))
+        })?;
+        let size_bytes = i64::try_from(bytes.len()).map_err(|_| {
+            LocalFileGlobReadFailure::Error(format!(
+                "glob file {} is too large",
+                entry_path.display()
+            ))
+        })?;
+        files.push(LocalFileGlobEntry {
+            path: relative_path,
+            fingerprint: content_object_digest(&bytes),
+            size_bytes,
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let mut total_size_bytes = 0_i64;
+    for file in &files {
+        total_size_bytes = total_size_bytes
+            .checked_add(file.size_bytes)
+            .ok_or_else(|| {
+                LocalFileGlobReadFailure::Error(format!(
+                    "glob pattern {:?} total size is too large",
+                    scope.pattern
+                ))
+            })?;
+    }
+    let fingerprint = local_file_glob_fingerprint(&files)?;
+    Ok(LocalFileGlobSnapshot {
+        fingerprint,
+        summary: local_file_scope_glob_observation_summary(&scope, files.len(), total_size_bytes)
+            .map_err(|error| LocalFileGlobReadFailure::Error(error.to_string()))?,
+    })
+}
+
+fn local_file_glob_relative_path(
+    scope: &LocalFileGlobScope,
+    path: &Path,
+) -> std::result::Result<String, LocalFileGlobReadFailure> {
+    let relative = if scope.root == Path::new(".") {
+        path
+    } else {
+        path.strip_prefix(&scope.root).map_err(|error| {
+            LocalFileGlobReadFailure::Error(format!(
+                "failed to derive relative path for {} under {}: {error}",
+                path.display(),
+                scope.root.display()
+            ))
+        })?
+    };
+    normalize_cli_scope_path_components(relative).map_err(|error| {
+        LocalFileGlobReadFailure::Error(format!(
+            "failed to normalize relative path for {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn local_file_glob_fingerprint(
+    files: &[LocalFileGlobEntry],
+) -> std::result::Result<Digest, LocalFileGlobReadFailure> {
+    let entries = files
+        .iter()
+        .map(|file| {
+            CanonicalValue::object(vec![
+                ("path".to_owned(), CanonicalValue::String(file.path.clone())),
+                (
+                    "fingerprint".to_owned(),
+                    CanonicalValue::String(file.fingerprint.to_string()),
+                ),
+                (
+                    "size_bytes".to_owned(),
+                    CanonicalValue::safe_integer(file.size_bytes)
+                        .map_err(|error| LocalFileGlobReadFailure::Error(error.to_string()))?,
+                ),
+            ])
+            .map_err(|error| LocalFileGlobReadFailure::Error(error.to_string()))
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let manifest = CanonicalValue::object(vec![
+        (
+            "manifest_profile".to_owned(),
+            CanonicalValue::String("local-file-glob-manifest-v1".to_owned()),
+        ),
+        ("files".to_owned(), CanonicalValue::Array(entries)),
+    ])
+    .map_err(|error| LocalFileGlobReadFailure::Error(error.to_string()))?;
+    let manifest_bytes = canonical_bytes(&manifest)
+        .map_err(|error| LocalFileGlobReadFailure::Error(error.to_string()))?;
+    Ok(content_object_digest(&manifest_bytes))
+}
+
+fn local_file_scope_glob_observation_summary(
+    scope: &LocalFileGlobScope,
+    file_count: usize,
+    size_bytes: i64,
+) -> Result<CanonicalValue> {
+    let file_count = i64::try_from(file_count)
+        .map_err(|_| WorkVcsError::TaskInvalid("glob file count is too large".to_owned()))?;
+    CanonicalValue::object(vec![
+        (
+            "adapter_contract".to_owned(),
+            CanonicalValue::String("local-file-scope-glob-v1".to_owned()),
+        ),
+        (
+            "manifest_profile".to_owned(),
+            CanonicalValue::String("local-file-glob-manifest-v1".to_owned()),
+        ),
+        (
+            "source".to_owned(),
+            CanonicalValue::String("verification cache-refresh".to_owned()),
+        ),
+        (
+            "glob".to_owned(),
+            CanonicalValue::String(scope.pattern.clone()),
+        ),
+        (
+            "root".to_owned(),
+            CanonicalValue::String(scope.root.display().to_string()),
+        ),
+        (
+            "files".to_owned(),
+            CanonicalValue::safe_integer(file_count)?,
+        ),
+        (
+            "size_bytes".to_owned(),
+            CanonicalValue::safe_integer(size_bytes)?,
+        ),
+    ])
 }
 
 fn local_file_scope_path_prefix_observation_summary(
@@ -21625,8 +22037,10 @@ mod tests {
         assert!(verify_help.contains("Run a single-target verification wrapper"));
         assert!(verify_help.contains("--evidence-content-role"));
         assert!(verify_help.contains("--scope-path"));
+        assert!(verify_help.contains("--scope-glob"));
         assert!(verify_help.contains("--resource-content-from-scope-path"));
         assert!(verify_help.contains("--resource-content-from-scope-path-prefix"));
+        assert!(verify_help.contains("--resource-content-from-scope-glob"));
         assert!(verify_help.contains("--resource-detail-content-file"));
     }
 
@@ -21668,8 +22082,10 @@ mod tests {
             content_file: None,
             content_from_scope_path: true,
             content_from_scope_path_prefix: false,
+            content_from_scope_glob: false,
             scope_path: None,
             scope_path_prefix: None,
+            scope_glob: None,
         })
         .expect_err("scope path content source without scope path should fail");
         assert!(format!("{scope_path_error}").contains("--scope-path"));
@@ -21680,11 +22096,65 @@ mod tests {
             content_file: None,
             content_from_scope_path: false,
             content_from_scope_path_prefix: true,
+            content_from_scope_glob: false,
             scope_path: None,
             scope_path_prefix: None,
+            scope_glob: None,
         })
         .expect_err("scope path prefix content source without scope path prefix should fail");
         assert!(format!("{scope_path_prefix_error}").contains("--scope-path-prefix"));
+
+        let scope_glob_error = fingerprint_from_cli(ResourceFingerprintArgs {
+            fingerprint: None,
+            content: None,
+            content_file: None,
+            content_from_scope_path: false,
+            content_from_scope_path_prefix: false,
+            content_from_scope_glob: true,
+            scope_path: None,
+            scope_path_prefix: None,
+            scope_glob: None,
+        })
+        .expect_err("scope glob content source without scope glob should fail");
+        assert!(format!("{scope_glob_error}").contains("--scope-glob"));
+    }
+
+    #[test]
+    fn cli_scope_glob_requires_fixed_non_parent_root() {
+        for pattern in ["**/*.rs", "*.md", "/**/*.rs"] {
+            let error = local_file_glob_scope_from_pattern(pattern)
+                .expect_err("unbounded glob root should fail");
+            assert!(format!("{error}").contains("fixed non-wildcard root"));
+            let shorthand_error =
+                verify_resource_scope_from_cli(None, None, None, Some(pattern.to_owned()))
+                    .expect_err("unbounded verify scope glob should fail");
+            assert!(format!("{shorthand_error}").contains("fixed non-wildcard root"));
+        }
+
+        let parent_error = local_file_glob_scope_from_pattern("../project/**/*.rs")
+            .expect_err("parent-root glob should fail");
+        assert!(format!("{parent_error}").contains("parent directory"));
+        let parent_shorthand_error =
+            verify_resource_scope_from_cli(None, None, None, Some("../project/**/*.rs".to_owned()))
+                .expect_err("parent-root verify scope glob should fail");
+        assert!(format!("{parent_shorthand_error}").contains("parent directory"));
+
+        let scope = local_file_glob_scope_from_pattern("src/**/*.rs")
+            .expect("fixed relative glob root should pass");
+        assert_eq!(scope.pattern, "src/**/*.rs");
+        assert_eq!(scope.root, PathBuf::from("src"));
+        let shorthand =
+            verify_resource_scope_from_cli(None, None, None, Some("src/**/*.rs".to_owned()))
+                .expect("fixed verify scope glob should pass")
+                .expect("scope should be present");
+        assert_eq!(
+            shorthand.into_value(),
+            CanonicalValue::object(vec![(
+                "glob".to_owned(),
+                CanonicalValue::String("src/**/*.rs".to_owned()),
+            )])
+            .expect("glob scope object")
+        );
     }
 
     #[test]
@@ -39252,6 +39722,333 @@ mod tests {
         ])
         .expect("parse error prefix refresh"))
         .expect("refresh error prefix cache");
+        assert_eq!(value(&error, "applicability"), "unknown");
+        assert_eq!(value(&error, "reason_code"), "resource_error");
+    }
+
+    #[test]
+    fn cli_refreshes_local_file_scope_glob_applicability_cache() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = store_path.to_str().expect("store path text");
+        let project = tempdir.path().join("project");
+        let project_src = project.join("src");
+        let nested = project_src.join("nested");
+        fs::create_dir_all(&nested).expect("create project src");
+        fs::write(project_src.join("lib.rs"), b"baseline lib").expect("write lib");
+        fs::write(nested.join("mod.rs"), b"baseline mod").expect("write nested");
+        fs::write(nested.join("note.txt"), b"ignored note").expect("write ignored note");
+        let scope_glob = project.join("src").join("**").join("*.rs");
+        let scope_glob = scope_glob.to_str().expect("scope glob text");
+        let baseline_fingerprint = local_file_glob_snapshot(scope_glob)
+            .expect("baseline glob snapshot")
+            .fingerprint
+            .to_string();
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "test local-file glob refresh",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let task_version = value(&task, "task_entity_version_id");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &task_version,
+            "--local-key",
+            "AC-LOCAL-FILE-GLOB-REFRESH",
+            "--statement",
+            "local file glob cache refresh tracks current matched content",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+        head = value(&criterion, "commit_id");
+
+        let resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse resource"))
+        .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let verified = run(Cli::try_parse_from([
+            "workvcs",
+            "verify",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--acceptance-criterion",
+            &criterion_id,
+            "--result",
+            "passed",
+            "--method",
+            "cli-smoke",
+            "--evidence-kind",
+            "cli-smoke",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--scope-glob",
+            scope_glob,
+            "--resource-content-from-scope-glob",
+            "--expected-resource-basis",
+            "1",
+            "--expected-cache-applicability",
+            "applicable",
+            "--expected-cache-reason-code",
+            "all_basis_applicable",
+        ])
+        .expect("parse glob verify"))
+        .expect("verify glob resource");
+        assert_eq!(value(&verified, "resource_observation_recorded"), "true");
+        assert_eq!(
+            value(&verified, "resource_fingerprint"),
+            baseline_fingerprint
+        );
+        assert_eq!(value(&verified, "applicability_cache_recorded"), "true");
+        assert_eq!(value(&verified, "applicability"), "applicable");
+        assert_eq!(value(&verified, "reason_code"), "all_basis_applicable");
+        assert_eq!(value(&verified, "resource_basis_match_expected"), "true");
+        assert_eq!(value(&verified, "applicability_matches_expected"), "true");
+        assert_eq!(value(&verified, "reason_code_matches_expected"), "true");
+        let verification_id = value(&verified, "verification_entity_id");
+        let baseline_observation_id = value(&verified, "observation_id");
+        head = value(&verified, "commit_id");
+
+        let verification_show = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse verification show"))
+        .expect("show verification");
+        assert_eq!(
+            value(&verification_show, "resource_basis.0.scope_payload_json"),
+            format!(r#"{{"glob":"{scope_glob}"}}"#)
+        );
+
+        let applicable = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-glob",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse applicable glob refresh"))
+        .expect("refresh applicable glob cache");
+        assert_eq!(value(&applicable, "applicability"), "applicable");
+        assert_eq!(value(&applicable, "reason_code"), "all_basis_applicable");
+
+        let applicable_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse applicable glob cache show"))
+        .expect("show applicable glob cache");
+        assert_eq!(
+            value(&applicable_cache, "resource_stamp.0.observation_status"),
+            "observed"
+        );
+        assert_eq!(
+            value(&applicable_cache, "resource_stamp.0.observed_fingerprint"),
+            baseline_fingerprint
+        );
+        assert_ne!(
+            value(&applicable_cache, "resource_stamp.0.observation_id"),
+            baseline_observation_id
+        );
+
+        fs::write(nested.join("mod.rs"), b"changed mod").expect("write changed nested");
+        let changed_fingerprint = local_file_glob_snapshot(scope_glob)
+            .expect("changed glob snapshot")
+            .fingerprint
+            .to_string();
+        let stale = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-glob",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "stale",
+            "--expected-reason-code",
+            "resource_drift",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse stale glob refresh"))
+        .expect("refresh stale glob cache");
+        assert_eq!(value(&stale, "applicability"), "stale");
+        assert_eq!(value(&stale, "reason_code"), "resource_drift");
+
+        let stale_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse stale glob cache show"))
+        .expect("show stale glob cache");
+        assert_eq!(
+            value(&stale_cache, "resource_stamp.0.observed_fingerprint"),
+            changed_fingerprint
+        );
+
+        fs::remove_dir_all(&project_src).expect("remove glob root");
+        let unavailable = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-glob",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "unknown",
+            "--expected-reason-code",
+            "resource_unavailable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse unavailable glob refresh"))
+        .expect("refresh unavailable glob cache");
+        assert_eq!(value(&unavailable, "applicability"), "unknown");
+        assert_eq!(value(&unavailable, "reason_code"), "resource_unavailable");
+
+        fs::create_dir_all(&project_src).expect("recreate empty glob root");
+        let empty = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-glob",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "stale",
+            "--expected-reason-code",
+            "resource_drift",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse empty glob refresh"))
+        .expect("refresh empty glob cache");
+        assert_eq!(value(&empty, "applicability"), "stale");
+        assert_eq!(value(&empty, "reason_code"), "resource_drift");
+
+        fs::create_dir(project_src.join("bad.rs")).expect("create matching directory");
+        let error = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-glob",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "unknown",
+            "--expected-reason-code",
+            "resource_error",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse error glob refresh"))
+        .expect("refresh error glob cache");
         assert_eq!(value(&error, "applicability"), "unknown");
         assert_eq!(value(&error, "reason_code"), "resource_error");
     }

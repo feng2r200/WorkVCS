@@ -228,13 +228,14 @@ workvcs verify "$STORE" \
   --evidence-content-role log \
   --evidence-content "validation command passed" \
   --resource "$RESOURCE_ID" \
-  --adapter-kind git \
+  --adapter-kind local-file \
   --adapter-schema-version 1 \
   --scope-path crates/workvcs-core/src/runtime/context.rs \
   --resource-content-from-scope-path
 ```
 
-`verify --scope-path` and `verify --scope-path-prefix` default to
+`verify --scope-path`, `verify --scope-path-prefix`, and `verify --scope-glob`
+default to
 `scope_kind=path` and `scope_schema_version=1`. Keep using
 `--scope-payload-json` with explicit `--scope-kind` and
 `--scope-schema-version` for advanced non-path payloads. The opt-in
@@ -242,10 +243,13 @@ workvcs verify "$STORE" \
 uses its content digest as the ResourceObservation fingerprint. For a local-file
 directory prefix, use `--scope-path-prefix` with
 `--resource-content-from-scope-path-prefix`; it fingerprints a deterministic
-manifest of regular files under the prefix. Use the older
+manifest of regular files under the prefix. For a local-file glob, use
+`--scope-glob` with `--resource-content-from-scope-glob`; it fingerprints a
+deterministic manifest of regular matched files under the glob's fixed root.
+Use the older
 `--resource-fingerprint`, `--resource-content`, or `--resource-content-file`
 inputs when the observed content is not exactly the scoped local file or
-path-prefix manifest.
+path-prefix or glob manifest.
 
 Capture the emitted `verification_entity_id` and `commit_id`. Use that
 `commit_id` as the next `HEAD_COMMIT_ID`. Before marking the Task done, inspect
@@ -510,6 +514,29 @@ a missing prefix becomes `reason_code=resource_unavailable`; a non-directory,
 symlink, special file, or traversal/read failure becomes
 `reason_code=resource_error`.
 
+For a local-file glob Resource basis, use the explicit glob refresh mode:
+
+```bash
+workvcs verification cache-refresh "$STORE" \
+  --branch "$BRANCH_ID" \
+  --verification "$VERIFICATION_ID" \
+  --resource-content-from-scope-glob \
+  --expected-evaluated-commit "$HEAD_COMMIT_ID"
+```
+
+This mode supports only `adapter_kind=local-file`, `scope_kind=path`,
+`scope_schema_version=1`, and `scope_payload={"glob":"..."}`. The glob must
+have a fixed non-wildcard root before the first wildcard segment; absolute
+filesystem-root scans, patterns such as `*.md` or `**/*.rs`, and fixed roots
+that retain parent-directory traversal are rejected. It fingerprints sorted regular-file matches
+using the `local-file-glob-manifest-v1` profile. Unchanged matches remain
+`applicability=applicable`; changed matched files, added matches, removed
+matches, or an existing root with no matches become
+`reason_code=resource_drift`; a missing fixed root becomes
+`reason_code=resource_unavailable`; matched directories, symlinks, special
+files, pattern errors, or traversal/read failures become
+`reason_code=resource_error`.
+
 When a Resource-backed Verification cannot be re-observed because the Resource
 is temporarily unavailable, record that state explicitly and keep the AC stale:
 
@@ -711,9 +738,11 @@ intended state transition.
   `verification cache-refresh --resource-content-from-scope-path`; local-file
   path-prefix cache refresh is implemented behind
   `verification cache-refresh --resource-content-from-scope-path-prefix`.
+  Local-file glob cache refresh is implemented behind
+  `verification cache-refresh --resource-content-from-scope-glob`.
   Explicit unavailable/error applicability stamps are dogfood-proven. Resource
-  glob semantics, Git working-tree adapters, broader symlink/case/rename policy,
-  and automatic re-observation scheduling remain open.
+  Git working-tree adapters, broader symlink/case/rename policy, and automatic
+  re-observation scheduling remain open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.

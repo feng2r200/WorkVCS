@@ -139,8 +139,10 @@ Resource Adapter to:
   that scope.
 
 An adapter must define deterministic scope matching and normalization. The
-exact glob, path, symlink, case, rename, and deletion rules remain an
-implementation specification, not a confirmed choice here.
+current implementation confirms narrow executable local-file contracts for
+exact path, path-prefix, and glob Resource observations. Broader symlink, case,
+rename, deletion, and non-local-file adapter rules remain implementation
+specifications, not confirmed choices here.
 
 For Git-backed Resources, an observation used for Verification must represent
 the actually verified state, including relevant index or working-tree changes;
@@ -176,8 +178,10 @@ Resource basis entries can be re-observed through
 `verification cache-refresh --resource-content-from-scope-path`. ADR-0445 adds
 the second executable local-file contract: path-prefix Resource basis entries
 can be observed and re-observed through a deterministic
-`local-file-path-prefix-manifest-v1` fingerprint. Final CLI names, broader
-adapter implementations, glob semantics, Git working-tree observation,
+`local-file-path-prefix-manifest-v1` fingerprint. ADR-0446 adds the third
+executable local-file contract: glob Resource basis entries can be observed and
+re-observed through a deterministic `local-file-glob-manifest-v1` fingerprint.
+Final CLI names, broader adapter implementations, Git working-tree observation,
 symlink/case/rename and deletion policy, non-Verification observation capture
 policy, performance indexes, and a possible future AC waiver operation remain
 unfixed.

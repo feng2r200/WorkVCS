@@ -41,6 +41,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4MB Resource Unavailable Error Dogfood Evidence](provenance/phase-4mb-resource-unavailable-error-dogfood.md)
 - [Phase 4MC Local File Cache Refresh Evidence](provenance/phase-4mc-local-file-cache-refresh.md)
 - [Phase 4MD Local File Path Prefix Refresh Evidence](provenance/phase-4md-local-file-path-prefix-refresh.md)
+- [Phase 4ME Local File Glob Refresh Evidence](provenance/phase-4me-local-file-glob-refresh.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.

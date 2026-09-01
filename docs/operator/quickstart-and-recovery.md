@@ -565,13 +565,16 @@ intended state transition.
 
 ## Still Open For V1
 
-- The documented loop has been dogfooded for one implementation closeout, but
-  has not yet been repeated on another real project.
+- The documented loop has been repeated once against another real local
+  project in read-only mode. It is not yet broad write-mode or multi-project
+  maturity evidence.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.
+- Claim transfer/takeover still needs realistic continuation dogfood beyond
+  smoke and the stale-gated recovery run.
 - Automatic stale detection remains open.
 - Merge lifecycle is locally dogfood-proven, but not yet another-project or
   larger-Store proven.

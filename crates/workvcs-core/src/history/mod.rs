@@ -172,9 +172,9 @@ pub use task::{
 };
 pub use why::{
     ResolvedWhyQuerySubject, ResolvedWhyQueryTarget, WhyCausalAnchorChangeSet,
-    WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQuerySubject,
-    WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind,
-    WhyScopeLink, WhyScopeLinkKind,
+    WhyDeferredRelationFamily, WhyEntityKind, WhyEpistemicExplanation, WhyQueryOptions,
+    WhyQueryResult, WhyQuerySubject, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge,
+    WhyRelationEndpoint, WhyRelationKind, WhyScopeLink, WhyScopeLinkKind,
 };
 
 pub(crate) use branch::{fork_branch, list_branches};

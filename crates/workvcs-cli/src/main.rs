@@ -103,14 +103,14 @@ use workvcs_core::{
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot,
     VerificationResourceBasis, VerificationResult, VerificationSnapshot, VerificationTarget,
     VerifyOptions, VerifyResourceObservationInput, VerifyResult, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEndpoint, WhyRelationKind, WhyScopeLinkKind, WorkState, WorkStateDiff,
-    WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget, WorkStateRestoreCommit,
-    WorkStateRestoreOptions, WorkVcsError, WorkspaceId, WorkspaceInfo, WorkspaceInitOptions,
-    WorkspaceListOptions, WorkspaceListResult, WorkspaceResourceAssociationListOptions,
-    WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
-    WorkspaceResourceAssociationResult, canonical_bytes, content_object_digest,
-    entity_version_digest, parse_canonical_json, relation_version_digest,
+    WhyEntityKind, WhyEpistemicExplanation, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
+    WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WhyScopeLinkKind, WorkState,
+    WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
+    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceId, WorkspaceInfo,
+    WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
+    WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
+    content_object_digest, entity_version_digest, parse_canonical_json, relation_version_digest,
     work_state_mapping_digest,
 };
 
@@ -460,6 +460,9 @@ enum Command {
 
         #[arg(long)]
         expected_relation_edges: Option<usize>,
+
+        #[arg(long)]
+        expected_epistemic_explanations: Option<usize>,
 
         #[arg(long)]
         expected_scope_links: Option<usize>,
@@ -7559,6 +7562,7 @@ fn run(cli: Cli) -> Result<String> {
             target_entity_kind,
             relation_limit,
             expected_relation_edges,
+            expected_epistemic_explanations,
             expected_scope_links,
         } => {
             if matches!(relation_limit, Some(0)) {
@@ -7673,6 +7677,7 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(relation_limit) = relation_limit {
                 result.relation_edges.truncate(relation_limit);
             }
+            retain_why_epistemic_explanations_for_relation_edges(&mut result);
             let mut output = render_why(&result);
             if let Some(expected_relation_edges) = expected_relation_edges {
                 let actual_relation_edges = result.relation_edges.len();
@@ -7682,6 +7687,15 @@ fn run(cli: Cli) -> Result<String> {
                     )));
                 }
                 output.push_str("relation_edges_match_expected=true\n");
+            }
+            if let Some(expected_epistemic_explanations) = expected_epistemic_explanations {
+                let actual_epistemic_explanations = result.epistemic_explanations.len();
+                if actual_epistemic_explanations != expected_epistemic_explanations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "why epistemic explanations {actual_epistemic_explanations} does not match expected {expected_epistemic_explanations}"
+                    )));
+                }
+                output.push_str("epistemic_explanations_match_expected=true\n");
             }
             if let Some(expected_scope_links) = expected_scope_links {
                 let actual_scope_links = result.scope_links.len();
@@ -22578,6 +22592,15 @@ fn render_why(result: &WhyQueryResult) -> String {
         )
         .expect("write to String");
     }
+    writeln!(
+        output,
+        "epistemic_explanations={}",
+        result.epistemic_explanations.len()
+    )
+    .expect("write to String");
+    for (index, explanation) in result.epistemic_explanations.iter().enumerate() {
+        render_why_epistemic_explanation(&mut output, index, explanation);
+    }
     writeln!(output, "scope_links={}", result.scope_links.len()).expect("write to String");
     for (index, link) in result.scope_links.iter().enumerate() {
         writeln!(
@@ -22684,6 +22707,119 @@ fn render_why(result: &WhyQueryResult) -> String {
         .expect("write to String");
     }
     output
+}
+
+fn retain_why_epistemic_explanations_for_relation_edges(result: &mut WhyQueryResult) {
+    let retained_relations: Vec<(RelationId, RelationVersionId)> = result
+        .relation_edges
+        .iter()
+        .map(|edge| (edge.relation_id, edge.relation_version_id))
+        .collect();
+    result.epistemic_explanations.retain(|explanation| {
+        retained_relations.contains(&(explanation.relation_id, explanation.relation_version_id))
+    });
+}
+
+fn render_why_epistemic_explanation(
+    output: &mut String,
+    index: usize,
+    explanation: &WhyEpistemicExplanation,
+) {
+    writeln!(
+        output,
+        "epistemic_explanation.{index}.relation_kind={}",
+        why_relation_kind(explanation.relation_kind)
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "epistemic_explanation.{index}.direction={}",
+        why_relation_direction(explanation.direction)
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "epistemic_explanation.{index}.relation_id={}",
+        explanation.relation_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "epistemic_explanation.{index}.relation_version_id={}",
+        explanation.relation_version_id
+    )
+    .expect("write to String");
+    render_why_epistemic_endpoint(output, index, "source", explanation.source);
+    let source_statement_json = serde_json::to_string(&explanation.source_statement)
+        .expect("epistemic source statement encodes as JSON string");
+    writeln!(
+        output,
+        "epistemic_explanation.{index}.source_statement_json={source_statement_json}"
+    )
+    .expect("write to String");
+    render_why_epistemic_endpoint(output, index, "target", explanation.target);
+    let target_statement_json = serde_json::to_string(&explanation.target_statement)
+        .expect("epistemic target statement encodes as JSON string");
+    writeln!(
+        output,
+        "epistemic_explanation.{index}.target_statement_json={target_statement_json}"
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "epistemic_explanation.{index}.relation_state_digest={}",
+        explanation.state_digest
+    )
+    .expect("write to String");
+}
+
+fn render_why_epistemic_endpoint(
+    output: &mut String,
+    index: usize,
+    side: &str,
+    endpoint: WhyRelationEndpoint,
+) {
+    match endpoint {
+        WhyRelationEndpoint::Entity {
+            entity_kind,
+            entity_id,
+        } => {
+            writeln!(output, "epistemic_explanation.{index}.{side}_kind=entity")
+                .expect("write to String");
+            writeln!(
+                output,
+                "epistemic_explanation.{index}.{side}_entity_kind={}",
+                why_entity_kind(entity_kind)
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "epistemic_explanation.{index}.{side}_entity_id={entity_id}"
+            )
+            .expect("write to String");
+        }
+        WhyRelationEndpoint::Evidence { evidence_id } => {
+            writeln!(output, "epistemic_explanation.{index}.{side}_kind=evidence")
+                .expect("write to String");
+            writeln!(
+                output,
+                "epistemic_explanation.{index}.{side}_evidence_id={evidence_id}"
+            )
+            .expect("write to String");
+        }
+        WhyRelationEndpoint::KnowledgeExposure { exposure_id } => {
+            writeln!(
+                output,
+                "epistemic_explanation.{index}.{side}_kind=knowledge_exposure"
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "epistemic_explanation.{index}.{side}_exposure_id={exposure_id}"
+            )
+            .expect("write to String");
+        }
+    }
 }
 
 fn render_why_scope_link_endpoint(
@@ -49595,11 +49731,15 @@ mod tests {
             &value(&relation, "commit_id"),
             "--entity",
             &value(&prior, "knowledge_entity_id"),
+            "--expected-epistemic-explanations",
+            "0",
         ])
         .expect("parse why prior knowledge"))
         .expect("why prior knowledge");
         assert_eq!(value(&why, "subject_entity_kind"), "knowledge");
         assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(value(&why, "epistemic_explanations"), "0");
+        assert_eq!(value(&why, "epistemic_explanations_match_expected"), "true");
         assert_eq!(
             value(&why, "relation.0.relation_kind"),
             "knowledge_supersedes"
@@ -49813,15 +49953,247 @@ mod tests {
             &value(&relation, "commit_id"),
             "--entity",
             &value(&knowledge, "knowledge_entity_id"),
+            "--expected-relation-edges",
+            "1",
+            "--expected-epistemic-explanations",
+            "1",
         ])
         .expect("parse why knowledge"))
         .expect("why knowledge");
         assert_eq!(value(&why, "subject_entity_kind"), "knowledge");
         assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(value(&why, "relation_edges_match_expected"), "true");
+        assert_eq!(value(&why, "epistemic_explanations"), "1");
+        assert_eq!(value(&why, "epistemic_explanations_match_expected"), "true");
         assert_eq!(value(&why, "relation.0.relation_kind"), "record_supports");
         assert_eq!(value(&why, "relation.0.direction"), "incoming");
         assert_eq!(value(&why, "relation.0.source_entity_kind"), "record");
         assert_eq!(value(&why, "relation.0.target_entity_kind"), "knowledge");
+        assert_eq!(
+            value(&why, "epistemic_explanation.0.relation_kind"),
+            "record_supports"
+        );
+        assert_eq!(value(&why, "epistemic_explanation.0.direction"), "incoming");
+        assert_eq!(
+            value(&why, "epistemic_explanation.0.relation_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&why, "epistemic_explanation.0.source_entity_kind"),
+            "record"
+        );
+        assert_eq!(
+            value(&why, "epistemic_explanation.0.source_entity_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(&why, "epistemic_explanation.0.source_statement_json"),
+            "\"The context command prints context_knowledge rows\""
+        );
+        assert_eq!(
+            value(&why, "epistemic_explanation.0.target_entity_kind"),
+            "knowledge"
+        );
+        assert_eq!(
+            value(&why, "epistemic_explanation.0.target_entity_id"),
+            value(&knowledge, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(&why, "epistemic_explanation.0.target_statement_json"),
+            "\"Context summaries expose active Knowledge\""
+        );
+    }
+
+    #[test]
+    fn cli_why_epistemic_explanations_follow_relation_filters_and_limit() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Why output should show direct epistemic explanations",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let supporting = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--statement",
+            "Support evidence names the missing statement lookup",
+        ])
+        .expect("parse supporting finding"))
+        .expect("create supporting finding");
+        let support_relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports-knowledge",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&supporting, "commit_id"),
+            "--source-record",
+            &value(&supporting, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--rationale",
+            "The support finding makes the explanation useful",
+        ])
+        .expect("parse supports knowledge"))
+        .expect("support knowledge");
+        let validating = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&support_relation, "commit_id"),
+            "--statement",
+            "Validation evidence confirms the projected statement is current",
+        ])
+        .expect("parse validating finding"))
+        .expect("create validating finding");
+        let validate_relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-validates-knowledge",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&validating, "commit_id"),
+            "--source-record",
+            &value(&validating, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--rationale",
+            "The validation finding confirms the Knowledge statement",
+        ])
+        .expect("parse validates knowledge"))
+        .expect("validate knowledge");
+
+        let all_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&validate_relation, "commit_id"),
+            "--entity",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--expected-relation-edges",
+            "2",
+            "--expected-epistemic-explanations",
+            "2",
+        ])
+        .expect("parse all why"))
+        .expect("all why");
+        assert_eq!(value(&all_why, "relation_edges"), "2");
+        assert_eq!(value(&all_why, "epistemic_explanations"), "2");
+
+        let supports_only = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&validate_relation, "commit_id"),
+            "--entity",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--relation-kind",
+            "record_supports",
+            "--expected-relation-edges",
+            "1",
+            "--expected-epistemic-explanations",
+            "1",
+        ])
+        .expect("parse supports-only why"))
+        .expect("supports-only why");
+        assert_eq!(value(&supports_only, "relation_edges"), "1");
+        assert_eq!(value(&supports_only, "epistemic_explanations"), "1");
+        assert_eq!(
+            value(&supports_only, "epistemic_explanation.0.relation_id"),
+            value(&support_relation, "relation_id")
+        );
+        assert_eq!(
+            value(
+                &supports_only,
+                "epistemic_explanation.0.source_statement_json"
+            ),
+            "\"Support evidence names the missing statement lookup\""
+        );
+
+        let no_match = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&validate_relation, "commit_id"),
+            "--entity",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--relation-kind",
+            "knowledge_supersedes",
+            "--expected-relation-edges",
+            "0",
+            "--expected-epistemic-explanations",
+            "0",
+        ])
+        .expect("parse no-match why"))
+        .expect("no-match why");
+        assert_eq!(value(&no_match, "relation_edges"), "0");
+        assert_eq!(value(&no_match, "epistemic_explanations"), "0");
+
+        let limited = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&validate_relation, "commit_id"),
+            "--entity",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--relation-limit",
+            "1",
+            "--expected-relation-edges",
+            "1",
+            "--expected-epistemic-explanations",
+            "1",
+        ])
+        .expect("parse limited why"))
+        .expect("limited why");
+        assert_eq!(value(&limited, "relation_edges"), "1");
+        assert_eq!(value(&limited, "epistemic_explanations"), "1");
     }
 
     #[test]

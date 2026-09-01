@@ -1,5 +1,5 @@
 use super::goal::GOAL_ENTITY_KIND;
-use super::knowledge::KNOWLEDGE_ENTITY_KIND;
+use super::knowledge::{KNOWLEDGE_ENTITY_KIND, knowledge_at};
 use super::plan::PLAN_ENTITY_KIND;
 use super::record::{RECORD_ENTITY_KIND, RecordKind, record_at};
 use super::task::{
@@ -132,6 +132,7 @@ pub struct WhyQueryResult {
     pub target: ResolvedWhyQueryTarget,
     pub subject: ResolvedWhyQuerySubject,
     pub relation_edges: Vec<WhyRelationEdge>,
+    pub epistemic_explanations: Vec<WhyEpistemicExplanation>,
     pub scope_links: Vec<WhyScopeLink>,
     pub causal_anchor_changesets: Vec<WhyCausalAnchorChangeSet>,
     pub deferred_relation_families: Vec<WhyDeferredRelationFamily>,
@@ -286,6 +287,19 @@ pub struct WhyRelationEdge {
     pub relation_label: Option<String>,
     pub source: WhyRelationEndpoint,
     pub target: WhyRelationEndpoint,
+    pub state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhyEpistemicExplanation {
+    pub relation_kind: WhyRelationKind,
+    pub direction: WhyRelationDirection,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub source: WhyRelationEndpoint,
+    pub target: WhyRelationEndpoint,
+    pub source_statement: String,
+    pub target_statement: String,
     pub state_digest: Digest,
 }
 
@@ -529,16 +543,88 @@ pub(crate) fn explain_why(
             })
     });
 
+    let epistemic_explanations =
+        why_epistemic_explanations(connection, resolved.target.commit_id, &relation_edges)?;
     let deferred_relation_families = why_deferred_relation_families(&causal_anchor_changesets);
 
     Ok(WhyQueryResult {
         target: resolved.target,
         subject,
         relation_edges,
+        epistemic_explanations,
         scope_links,
         causal_anchor_changesets,
         deferred_relation_families,
     })
+}
+
+fn why_epistemic_explanations(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    relation_edges: &[WhyRelationEdge],
+) -> Result<Vec<WhyEpistemicExplanation>> {
+    let mut explanations = Vec::new();
+    for edge in relation_edges {
+        if !is_epistemic_why_relation(edge.relation_kind) {
+            continue;
+        }
+        let Some(source_statement) = why_endpoint_statement(connection, commit_id, edge.source)?
+        else {
+            continue;
+        };
+        let Some(target_statement) = why_endpoint_statement(connection, commit_id, edge.target)?
+        else {
+            continue;
+        };
+        explanations.push(WhyEpistemicExplanation {
+            relation_kind: edge.relation_kind,
+            direction: edge.direction,
+            relation_id: edge.relation_id,
+            relation_version_id: edge.relation_version_id,
+            source: edge.source,
+            target: edge.target,
+            source_statement,
+            target_statement,
+            state_digest: edge.state_digest,
+        });
+    }
+    Ok(explanations)
+}
+
+fn is_epistemic_why_relation(relation_kind: WhyRelationKind) -> bool {
+    matches!(
+        relation_kind,
+        WhyRelationKind::RecordContradicts
+            | WhyRelationKind::RecordInvalidates
+            | WhyRelationKind::RecordSupports
+            | WhyRelationKind::RecordValidates
+    )
+}
+
+fn why_endpoint_statement(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    endpoint: WhyRelationEndpoint,
+) -> Result<Option<String>> {
+    match endpoint {
+        WhyRelationEndpoint::Entity {
+            entity_kind: WhyEntityKind::Record,
+            entity_id,
+        } => Ok(Some(
+            record_at(connection, commit_id, entity_id)?.state.statement,
+        )),
+        WhyRelationEndpoint::Entity {
+            entity_kind: WhyEntityKind::Knowledge,
+            entity_id,
+        } => Ok(Some(
+            knowledge_at(connection, commit_id, entity_id)?
+                .state
+                .statement,
+        )),
+        WhyRelationEndpoint::Entity { .. }
+        | WhyRelationEndpoint::Evidence { .. }
+        | WhyRelationEndpoint::KnowledgeExposure { .. } => Ok(None),
+    }
 }
 
 fn why_deferred_relation_families(

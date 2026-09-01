@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-02 by ADR-0469 / Phase 4NB
+Last refreshed: 2026-09-02 by ADR-0470 / Phase 4NC
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -43,7 +43,7 @@ not complete.
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. Phase 4MR dogfoods `claim next --mode shared`, `runnable tasks`, and `context` in a real write-mode/read-write repository delivery slice. |
 | Claim modes and guard behavior | Yes | Yes | Yes | Yes | Phase 4LW dogfoods cooperative Claim transfer and stale-gated forced takeover in a realistic read-only external-project continuation loop. Phase 4MI dogfoods shared-Claim collaboration against the same real external project in read-only mode. Phase 4MR dogfoods shared-Claim write/read-write collaboration in this repository: two active shared Claims block protected writer mutation with `reason=non_unique_shared_claim_set`, releasing the reader Claim restores `unique_shared_claimant`, and the remaining writer performs the documentation write and Store closeout. Keep as regression foundation; automatic ownership arbitration between shared claimants remains outside V1 unless explicitly authorized. |
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LR adds explicit packet scope and deterministic path-sensitive Knowledge filtering for `context --scope-json` and `claim next --context-scope-json`. Phase 4LS adds durable `context-packet save/show/list` snapshots for exact resolved packets. Phase 4LT projects recent non-empty ChangeSet rationale into bounded packet items so continuation Agents can see why recent state moved. Phase 4LX adds lexical path selector normalization and dogfoods `context --scope-path`, `claim next --context-scope-path`, and `context-packet save --scope-path-prefix` against a read-only external project. Continue with broader context and Resource resolver gaps before claiming release maturity. |
-| Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics. Phase 4MA dogfoods a real external-project explanation across Task containment, Verification, Evidence, Record support, and Record-to-Knowledge support without adding display fields. Phase 4MH exposes `evolution` as a deferred relation family when the queried Entity anchors a first-parent-reachable ChangeSet, and dogfoods the behavior against a real external project. Phase 4ML makes that causal-anchor evolution evidence actionable by projecting the first-parent-reachable anchoring commit and ChangeSet from `why` for the queried Entity. Full evolution traversal, epistemic explanation, and broader causal traversal remain Open. |
+| Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics. Phase 4MA dogfoods a real external-project explanation across Task containment, Verification, Evidence, Record support, and Record-to-Knowledge support without adding display fields. Phase 4MH exposes `evolution` as a deferred relation family when the queried Entity anchors a first-parent-reachable ChangeSet, and dogfoods the behavior against a real external project. Phase 4ML makes that causal-anchor evolution evidence actionable by projecting the first-parent-reachable anchoring commit and ChangeSet from `why` for the queried Entity. Phase 4NC makes direct Record-to-Record and Record-to-Knowledge epistemic edges self-explanatory by projecting source and target statements from `why`. Full evolution traversal, broader causal traversal, and broader context/Resource resolver maturity remain Open. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover. Phase 4LV repeats focused Handoff creation/show after a read-only external-project closeout. Phase 4LW proves Claim transfer/takeover continuation around external-project Tasks. Phase 4MS proves focused Handoff consumption by a separate continuation Session in a real write-mode repository delivery slice, including Claim, VR-backed verification, Task closeout, and SessionDiff closeout. Keep as regression foundation; remote/cloud Handoff, cross-Store synchronization, automatic takeover, and Agent orchestration remain outside V1 unless explicitly authorized. |
 | Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Phase 4MM repeats merge dogfood on a larger and more varied local Store with 12 conflict items, 12 auto items including 8 source-only Tasks and 4 source-side scheduling Relations, explicit resolutions for all 24 items, freeze/continue, a two-parent merge commit, expected final WorkState, and required-valid integrity/doctor. Phase 4MT adds generated external local Git project write-mode merge proof. Phase 4MU repeats merge against pre-existing real `agent_soul` project content cloned into a write-mode sandbox: actual Git conflict on existing `README.md`, WorkVCS conflict and auto merge items, unresolved freeze guard, explicit source-side resolutions, freeze/continue, final WorkState proof, Branch diff, SessionDiff closeout, original project unchanged, and required-valid integrity/doctor. Keep as regression foundation; semantic/LLM, remote, distributed, cross-Store, Agent-orchestrated, and original-repository direct mutation merge flows remain outside the bounded V1-local release gate unless separately authorized. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Phase 4LP defines the V1-local directory profile and keeps external Store canonical DAG activation outside the current profile. Phase 4LQ proves the profile against a bounded larger Store workload and fixes a Verification basis import ordering blocker. |
@@ -57,7 +57,7 @@ Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
 1. Expand `why` only when a dogfood continuation exposes a concrete causal,
-   evolution, or epistemic explanation gap; do not add more explanation fields
+   evolution, or broader explanation gap; do not add more explanation fields
    speculatively.
 2. Reduce additional manual key-value capture in the operator CLI only where
    the next dogfood loop shows repeated workflow blockage.
@@ -356,6 +356,13 @@ The following remain beyond V1 even if they would make dogfood easier:
   causal Entity anchored. `why` now renders `causal_anchor_changesets` and
   `causal_anchor_changeset.<i>.*` fields while keeping full evolution traversal
   and epistemic traversal Open.
+  Phase 4NC closes the direct epistemic statement lookup gap for current
+  Record-to-Record and Record-to-Knowledge epistemic edges. `why` now renders
+  `epistemic_explanations` and `epistemic_explanation.<i>.*` fields with
+  source/target statement JSON for direct `supports`, `contradicts`,
+  `validates`, and `invalidates` relations, while keeping full evolution
+  traversal, broader causal traversal, and broader context/Resource resolver
+  maturity Open.
   Phase 4MM repeats merge lifecycle dogfood on a larger and more varied local
   Store: 12 shared Task conflicts, 8 source-only Tasks, 6 target-only Tasks, 4
   source-side scheduling Relations, all 24 merge items explicitly resolved,

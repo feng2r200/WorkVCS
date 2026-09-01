@@ -186,7 +186,9 @@ ADR-0447 adds a narrow executable Git contract: Git worktree Resource basis
 entries can be observed and re-observed through a deterministic
 `git-worktree-manifest-v1` fingerprint. ADR-0448 adds explicit basis-aware
 dispatch for supported Resource basis entries through
-`verification cache-refresh --resource-content-from-basis`; it is not a daemon,
+`verification cache-refresh --resource-content-from-basis`. ADR-0455 adds an
+explicit batch mode for refreshing all current-head Resource-backed
+Verifications on a Branch through `--all-resource-backed`; it is not a daemon,
 watcher, or implicit refresh policy. Final CLI names outside these explicit
 flags, broader adapter implementations, symlink/case/rename and deletion policy,
 non-Verification observation capture policy, background refresh scheduling,

@@ -435,6 +435,21 @@ larger default smoke matrix is explicitly justified.
 
 ## Common Recovery Actions
 
+When a WorkVCS business command fails, read stderr as line-oriented key-value
+metadata before choosing the recovery path:
+
+```text
+error_code=<CODE>
+error_category=<CATEGORY>
+retryable=<true|false>
+message=<ESCAPED_MESSAGE>
+```
+
+Use `retryable=true` as a signal to refresh current state and retry the
+operation only after confirming the relevant branch, session, claim, or merge
+head. `message` remains human-facing context; recovery scripts should branch on
+`error_code` and `error_category`.
+
 When a Store fails integrity or doctor checks, stop using it as an authority
 until the failure is understood:
 
@@ -622,3 +637,6 @@ intended state transition.
   exchange APIs, and external Store canonical DAG activation remain open.
 - Larger Store validation has one bounded local run; broader and more varied
   performance evidence remains open.
+- WorkVCS business errors now emit stable key-value fields. Full per-code
+  recovery guidance, JSON error output, and top-level clap syntax-error
+  normalization remain open.

@@ -4814,10 +4814,27 @@ fn main() {
     match run(Cli::parse()) {
         Ok(output) => print!("{output}"),
         Err(error) => {
-            eprintln!("{error}");
+            eprint!("{}", render_workvcs_error(&error));
             std::process::exit(1);
         }
     }
+}
+
+fn render_workvcs_error(error: &WorkVcsError) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "error_code={}", error.code());
+    let _ = writeln!(output, "error_category={}", error.category());
+    let _ = writeln!(output, "retryable={}", error.retryable());
+    let _ = writeln!(output, "message={}", escape_key_value(&error.to_string()));
+    output
+}
+
+fn escape_key_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 fn run(cli: Cli) -> Result<String> {
@@ -20906,6 +20923,34 @@ fn render_structural_reference_list(references: &[StructuralReferenceSnapshot]) 
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn cli_renders_stable_workvcs_error_fields() {
+        let error = WorkVcsError::QueryInvalid("line one\nline two".to_owned());
+        let output = render_workvcs_error(&error);
+
+        assert_eq!(value(&output, "error_code"), "query_invalid");
+        assert_eq!(value(&output, "error_category"), "query");
+        assert_eq!(value(&output, "retryable"), "false");
+        assert_eq!(
+            value(&output, "message"),
+            "query invalid: line one\\nline two"
+        );
+    }
+
+    #[test]
+    fn cli_renders_retryable_workvcs_error_fields() {
+        let error = WorkVcsError::BranchHeadConflict("branch moved".to_owned());
+        let output = render_workvcs_error(&error);
+
+        assert_eq!(value(&output, "error_code"), "branch_head_conflict");
+        assert_eq!(value(&output, "error_category"), "mutation");
+        assert_eq!(value(&output, "retryable"), "true");
+        assert_eq!(
+            value(&output, "message"),
+            "branch head conflict: branch moved"
+        );
+    }
 
     #[test]
     fn cli_exposes_thin_command_shells() {

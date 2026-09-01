@@ -1,3 +1,5 @@
+use std::fmt;
+
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, WorkVcsError>;
@@ -24,6 +26,39 @@ pub enum ErrorCategory {
     Task,
     Time,
     Workspace,
+}
+
+impl ErrorCategory {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Canonical => "canonical",
+            Self::Evidence => "evidence",
+            Self::Goal => "goal",
+            Self::Identity => "identity",
+            Self::Import => "import",
+            Self::Integrity => "integrity",
+            Self::Knowledge => "knowledge",
+            Self::Mutation => "mutation",
+            Self::Plan => "plan",
+            Self::Query => "query",
+            Self::Record => "record",
+            Self::Relation => "relation",
+            Self::Replay => "replay",
+            Self::Resource => "resource",
+            Self::Runtime => "runtime",
+            Self::Store => "store",
+            Self::Storage => "storage",
+            Self::Task => "task",
+            Self::Time => "time",
+            Self::Workspace => "workspace",
+        }
+    }
+}
+
+impl fmt::Display for ErrorCategory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +104,60 @@ pub enum ErrorCode {
     TimeInvalid,
     WorkspaceInvalid,
     WorkspaceNotFound,
+}
+
+impl ErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CanonicalEncodingInvalid => "canonical_encoding_invalid",
+            Self::DigestInvalid => "digest_invalid",
+            Self::EvidenceInvalid => "evidence_invalid",
+            Self::EvidenceNotFound => "evidence_not_found",
+            Self::IdentityInvalid => "identity_invalid",
+            Self::ImmutableImportInvalid => "immutable_import_invalid",
+            Self::IntegrityInvalid => "integrity_invalid",
+            Self::KnowledgeInvalid => "knowledge_invalid",
+            Self::KnowledgeNotFound => "knowledge_not_found",
+            Self::CommitNotFound => "commit_not_found",
+            Self::BranchHeadConflict => "branch_head_conflict",
+            Self::BranchNotFound => "branch_not_found",
+            Self::ClaimInvalid => "claim_invalid",
+            Self::ClaimNotFound => "claim_not_found",
+            Self::EntityNotFound => "entity_not_found",
+            Self::EntityTransitionInvalid => "entity_transition_invalid",
+            Self::GoalInvalid => "goal_invalid",
+            Self::GoalNotFound => "goal_not_found",
+            Self::PlanInvalid => "plan_invalid",
+            Self::PlanNotFound => "plan_not_found",
+            Self::QueryInvalid => "query_invalid",
+            Self::QueryUnsupported => "query_unsupported",
+            Self::RecordInvalid => "record_invalid",
+            Self::RecordNotFound => "record_not_found",
+            Self::RelationInvalid => "relation_invalid",
+            Self::ResourceInvalid => "resource_invalid",
+            Self::ResourceNotFound => "resource_not_found",
+            Self::ResourceObservationNotFound => "resource_observation_not_found",
+            Self::ReplayInvalid => "replay_invalid",
+            Self::ReplayUnsupported => "replay_unsupported",
+            Self::SessionInvalid => "session_invalid",
+            Self::SessionNotFound => "session_not_found",
+            Self::StoreAlreadyInitialized => "store_already_initialized",
+            Self::StoreBootstrapInvalid => "store_bootstrap_invalid",
+            Self::StoreCompatibilityUnsupported => "store_compatibility_unsupported",
+            Self::StorageFailure => "storage_failure",
+            Self::TaskInvalid => "task_invalid",
+            Self::TaskNotFound => "task_not_found",
+            Self::TimeInvalid => "time_invalid",
+            Self::WorkspaceInvalid => "workspace_invalid",
+            Self::WorkspaceNotFound => "workspace_not_found",
+        }
+    }
+}
+
+impl fmt::Display for ErrorCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -288,4 +377,46 @@ impl WorkVcsError {
 
 pub(crate) fn storage_error(error: rusqlite::Error) -> WorkVcsError {
     WorkVcsError::StorageFailure(format!("sqlite operation failed: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ErrorCategory, ErrorCode, WorkVcsError};
+
+    #[test]
+    fn error_codes_render_stable_lower_snake_case() {
+        assert_eq!(ErrorCode::QueryInvalid.as_str(), "query_invalid");
+        assert_eq!(
+            ErrorCode::BranchHeadConflict.as_str(),
+            "branch_head_conflict"
+        );
+        assert_eq!(
+            ErrorCode::ResourceObservationNotFound.as_str(),
+            "resource_observation_not_found"
+        );
+        assert_eq!(
+            ErrorCode::StoreCompatibilityUnsupported.as_str(),
+            "store_compatibility_unsupported"
+        );
+    }
+
+    #[test]
+    fn error_categories_render_stable_lower_snake_case() {
+        assert_eq!(ErrorCategory::Query.as_str(), "query");
+        assert_eq!(ErrorCategory::Runtime.as_str(), "runtime");
+        assert_eq!(ErrorCategory::Resource.as_str(), "resource");
+    }
+
+    #[test]
+    fn workvcs_error_exposes_code_category_and_retryability() {
+        let query = WorkVcsError::QueryInvalid("missing selector".to_owned());
+        assert_eq!(query.code().as_str(), "query_invalid");
+        assert_eq!(query.category().as_str(), "query");
+        assert!(!query.retryable());
+
+        let conflict = WorkVcsError::BranchHeadConflict("moved head".to_owned());
+        assert_eq!(conflict.code().as_str(), "branch_head_conflict");
+        assert_eq!(conflict.category().as_str(), "mutation");
+        assert!(conflict.retryable());
+    }
 }

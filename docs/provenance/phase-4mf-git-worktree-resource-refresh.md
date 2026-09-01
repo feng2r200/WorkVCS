@@ -112,6 +112,28 @@ refresh over a real dirty worktree state, not only a clean HEAD-only repository.
 - Final re-review confirmed all four medium findings closed and found no
   remaining blocker/high/medium.
 
+## Commit, Merge, and Cleanup
+
+Local implementation commit:
+
+```text
+af5fba35ae4877f7278e2eb3a70a24a328cb2aec feat: add git worktree resource refresh
+```
+
+The commit was fast-forward merged to `main`.
+
+Exact worktree cleanup proof:
+
+```text
+log_dir=/tmp/workvcs-4mf-cleanup-20260901T064649Z
+clean=yes
+attached=yes
+unlocked=yes
+covered_by_main=yes
+removed=yes
+branch_retained=yes
+```
+
 ## Remaining Open
 
 - Automatic Resource re-observation scheduling.

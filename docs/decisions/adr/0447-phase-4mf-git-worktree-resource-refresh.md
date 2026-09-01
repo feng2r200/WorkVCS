@@ -81,6 +81,9 @@ non-Git/error state -> unknown/resource_error
   `/tmp/workvcs-4mf-final-validation-rerun2-20260901T064009Z`.
 - Independent review: Laplace found no blocker/high; four medium findings were
   fixed and the final re-review found no remaining blocker/high/medium.
+- Local commit and cleanup:
+  `af5fba35ae4877f7278e2eb3a70a24a328cb2aec`;
+  `/tmp/workvcs-4mf-cleanup-20260901T064649Z`.
 
 ## Consequences
 

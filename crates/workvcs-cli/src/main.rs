@@ -15389,6 +15389,14 @@ fn git_worktree_observation_summary(
             CanonicalValue::String("unsupported_resource_error".to_owned()),
         ),
         (
+            "submodule_policy".to_owned(),
+            CanonicalValue::String("parent_gitlink_status_diff".to_owned()),
+        ),
+        (
+            "submodule_recursion".to_owned(),
+            CanonicalValue::String("disabled".to_owned()),
+        ),
+        (
             "source".to_owned(),
             CanonicalValue::String("verification cache-refresh".to_owned()),
         ),
@@ -41478,6 +41486,131 @@ mod tests {
         );
         assert!(stamp.observed_fingerprint.is_none());
         assert!(stamp.observation_id.is_none());
+    }
+
+    #[test]
+    fn git_worktree_snapshot_reports_submodule_policy_from_parent_git_view() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let sub_repo = tempdir.path().join("sub-src");
+        git_test_init(&sub_repo);
+        fs::write(sub_repo.join("sub.txt"), b"sub baseline\n").expect("write sub baseline");
+        git_test(&sub_repo, &["add", "sub.txt"]);
+        git_test(&sub_repo, &["commit", "-q", "-m", "sub baseline"]);
+        let sub_baseline = git_command_first_line(&sub_repo, &["rev-parse", "HEAD"], "sub HEAD")
+            .expect("sub baseline HEAD");
+
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("README.md"), b"outer baseline\n").expect("write outer baseline");
+        git_test(&repo, &["add", "README.md"]);
+        git_test(&repo, &["commit", "-q", "-m", "outer baseline"]);
+        let sub_repo_text = sub_repo.to_str().expect("sub repo path text");
+        git_test(
+            &repo,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                sub_repo_text,
+                "deps/sub",
+            ],
+        );
+        git_test(&repo, &["commit", "-q", "-m", "add submodule"]);
+
+        let clean = git_worktree_snapshot(&repo).expect("clean git snapshot");
+        let clean_summary_json =
+            canonical_cli_json("git worktree observation summary", &clean.summary)
+                .expect("clean summary JSON");
+        assert!(clean_summary_json.contains(r#""submodule_policy":"parent_gitlink_status_diff""#));
+        assert!(clean_summary_json.contains(r#""submodule_recursion":"disabled""#));
+
+        let index = git_command_bytes(&repo, &["ls-files", "-s", "-z"], "git index")
+            .expect("read git index");
+        let index = String::from_utf8(index).expect("git index utf8");
+        assert!(index.contains("160000"));
+        assert!(index.contains(&sub_baseline));
+        assert!(index.contains("deps/sub"));
+
+        fs::write(
+            repo.join("deps/sub/inner-untracked.txt"),
+            b"inner untracked\n",
+        )
+        .expect("write inner untracked");
+        let parent_status = git_command_bytes(
+            &repo,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            "parent git status",
+        )
+        .expect("parent status");
+        let parent_status = String::from_utf8(parent_status).expect("parent status utf8");
+        assert!(parent_status.contains(" M deps/sub"));
+        let parent_untracked = git_command_bytes(
+            &repo,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            "parent git untracked files",
+        )
+        .expect("parent untracked files");
+        let parent_untracked = String::from_utf8(parent_untracked).expect("parent untracked utf8");
+        assert!(!parent_untracked.contains("inner-untracked.txt"));
+
+        let dirty = git_worktree_snapshot(&repo).expect("dirty submodule git snapshot");
+        assert_ne!(clean.fingerprint, dirty.fingerprint);
+        let dirty_summary_json =
+            canonical_cli_json("git worktree observation summary", &dirty.summary)
+                .expect("dirty summary JSON");
+        assert!(dirty_summary_json.contains(r#""submodule_policy":"parent_gitlink_status_diff""#));
+        assert!(dirty_summary_json.contains(r#""submodule_recursion":"disabled""#));
+        assert!(dirty_summary_json.contains(r#""untracked_files":0"#));
+
+        fs::remove_file(repo.join("deps/sub/inner-untracked.txt")).expect("remove inner untracked");
+        fs::write(sub_repo.join("sub.txt"), b"sub baseline\nsub update\n")
+            .expect("write sub update");
+        git_test(&sub_repo, &["add", "sub.txt"]);
+        git_test(&sub_repo, &["commit", "-q", "-m", "sub update"]);
+        let sub_update = git_command_first_line(&sub_repo, &["rev-parse", "HEAD"], "sub HEAD")
+            .expect("sub update HEAD");
+        let sub_worktree = repo.join("deps/sub");
+        git_test(&sub_worktree, &["fetch", "-q", "origin"]);
+        git_test(&sub_worktree, &["checkout", "-q", &sub_update]);
+        git_test(&repo, &["add", "deps/sub"]);
+
+        let pointer_update_index = git_command_bytes(&repo, &["ls-files", "-s", "-z"], "git index")
+            .expect("read pointer update git index");
+        let pointer_update_index =
+            String::from_utf8(pointer_update_index).expect("pointer update index utf8");
+        assert!(pointer_update_index.contains("160000"));
+        assert!(pointer_update_index.contains(&sub_update));
+        assert!(pointer_update_index.contains("deps/sub"));
+
+        let staged_diff = git_command_bytes(
+            &repo,
+            &[
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--no-indent-heuristic",
+                "--diff-algorithm=myers",
+                "--unified=3",
+                "-O/dev/null",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                "--",
+                "deps/sub",
+            ],
+            "submodule pointer git diff",
+        )
+        .expect("submodule pointer git diff");
+        let staged_diff = String::from_utf8(staged_diff).expect("submodule pointer diff utf8");
+        assert!(staged_diff.contains("Subproject commit"));
+        assert!(staged_diff.contains(&sub_baseline));
+        assert!(staged_diff.contains(&sub_update));
     }
 
     #[test]

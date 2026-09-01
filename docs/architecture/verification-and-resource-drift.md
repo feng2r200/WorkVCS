@@ -141,9 +141,12 @@ Resource Adapter to:
 An adapter must define deterministic scope matching and normalization. The
 current implementation confirms narrow executable local-file contracts for
 exact path, path-prefix, and glob Resource observations, plus a narrow Git
-worktree contract for the currently checked-out repository state. Broader
-symlink, case, rename, deletion, submodule, sparse checkout, and adapter rules
-remain implementation specifications, not confirmed choices here.
+worktree contract for the currently checked-out repository state. ADR-0463,
+ADR-0464, and ADR-0465 make the bounded Git rename, symlink, and submodule
+policies explicit for that V1-local adapter. Broader case-folding, deletion
+policy details not already fixed by the current adapter contracts,
+sparse-checkout semantics, and adapter rules remain implementation
+specifications, not confirmed choices here.
 
 For Git-backed Resources, an observation used for Verification must represent
 the actually verified state, including relevant index or working-tree changes;
@@ -189,10 +192,16 @@ dispatch for supported Resource basis entries through
 `verification cache-refresh --resource-content-from-basis`. ADR-0455 adds an
 explicit batch mode for refreshing all current-head Resource-backed
 Verifications on a Branch through `--all-resource-backed`; it is not a daemon,
-watcher, or implicit refresh policy. Final CLI names outside these explicit
-flags, broader adapter implementations, symlink/case/rename and deletion policy,
-non-Verification observation capture policy, background refresh scheduling,
-performance indexes, and a possible future AC waiver operation remain unfixed.
+watcher, or implicit refresh policy. ADR-0463 makes Git rename handling
+explicit as no-renames/delete-add summary metadata, ADR-0464 makes Git symlink
+handling explicit as Git index/diff material plus unsupported non-regular
+untracked entries, and ADR-0465 makes Git submodule handling explicit as parent
+Git gitlink/status/diff material with recursion disabled. Final CLI names
+outside these explicit flags, broader adapter implementations, case-folding
+policy, deletion policy details not already fixed by the current adapter
+contracts, sparse-checkout Git semantics, non-Verification observation capture
+policy, background refresh scheduling, performance indexes, and a possible
+future AC waiver operation remain unfixed.
 The executable schema, Rust implementation language, `rusqlite`, and the
 `workvcs-jcs-v1` canonical JSON profile are now closed by accepted
 implementation ADRs.

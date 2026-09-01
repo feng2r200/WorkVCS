@@ -139,3 +139,14 @@ shared Claim as permission for simultaneous protected mutation.
 - Automatic ownership arbitration between shared claimants remains outside V1.
 - Release guidance should explain the AC verified-at-commit versus
   stale-after-closeout behavior.
+
+## Delivery Closeout
+
+- Documentation commit:
+  `2ae04ec1d6c2afa9bb2b881f0aa4b4a51584bfd8`.
+- Fast-forward merged to `main`.
+- Worktree cleanup proof:
+  `/tmp/workvcs-4mi-cleanup-20260901T083722Z`.
+- Cleanup proof fields:
+  `clean=yes`, `attached=yes`, `unlocked=yes`, `covered_by_main=yes`,
+  `removed=yes`, `branch_retained=yes`.

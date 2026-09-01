@@ -173,10 +173,14 @@ uses the confirmed physical constraints in
 [Physical Schema v0.1 Contract](physical-schema-v0.1.md). ADR-0444 adds the
 first executable adapter-backed refresh contract: exact `local-file` path
 Resource basis entries can be re-observed through
-`verification cache-refresh --resource-content-from-scope-path`. Final CLI
-names, broader adapter implementations, glob/path-prefix semantics, symlink,
-case, rename and deletion policy, non-Verification observation capture policy,
-performance indexes, and a possible future AC waiver operation remain unfixed.
+`verification cache-refresh --resource-content-from-scope-path`. ADR-0445 adds
+the second executable local-file contract: path-prefix Resource basis entries
+can be observed and re-observed through a deterministic
+`local-file-path-prefix-manifest-v1` fingerprint. Final CLI names, broader
+adapter implementations, glob semantics, Git working-tree observation,
+symlink/case/rename and deletion policy, non-Verification observation capture
+policy, performance indexes, and a possible future AC waiver operation remain
+unfixed.
 The executable schema, Rust implementation language, `rusqlite`, and the
 `workvcs-jcs-v1` canonical JSON profile are now closed by accepted
 implementation ADRs.

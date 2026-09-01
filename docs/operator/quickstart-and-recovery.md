@@ -239,9 +239,13 @@ workvcs verify "$STORE" \
 `--scope-payload-json` with explicit `--scope-kind` and
 `--scope-schema-version` for advanced non-path payloads. The opt-in
 `--resource-content-from-scope-path` reads the file named by `--scope-path` and
-uses its content digest as the ResourceObservation fingerprint. Use the older
+uses its content digest as the ResourceObservation fingerprint. For a local-file
+directory prefix, use `--scope-path-prefix` with
+`--resource-content-from-scope-path-prefix`; it fingerprints a deterministic
+manifest of regular files under the prefix. Use the older
 `--resource-fingerprint`, `--resource-content`, or `--resource-content-file`
-inputs when the observed content is not exactly the scoped local file.
+inputs when the observed content is not exactly the scoped local file or
+path-prefix manifest.
 
 Capture the emitted `verification_entity_id` and `commit_id`. Use that
 `commit_id` as the next `HEAD_COMMIT_ID`. Before marking the Task done, inspect
@@ -486,6 +490,26 @@ becomes `reason_code=resource_drift`. A missing file becomes
 `reason_code=resource_error`. Relative stored paths are read relative to the
 current working directory of the command.
 
+For a local-file path-prefix Resource basis, use the explicit path-prefix
+refresh mode:
+
+```bash
+workvcs verification cache-refresh "$STORE" \
+  --branch "$BRANCH_ID" \
+  --verification "$VERIFICATION_ID" \
+  --resource-content-from-scope-path-prefix \
+  --expected-evaluated-commit "$HEAD_COMMIT_ID"
+```
+
+This mode supports only `adapter_kind=local-file`, `scope_kind=path`,
+`scope_schema_version=1`, and `scope_payload={"path_prefix":"..."}`. It
+recursively fingerprints regular files under the prefix using the
+`local-file-path-prefix-manifest-v1` profile. Unchanged content remains
+`applicability=applicable`; changed files become `reason_code=resource_drift`;
+a missing prefix becomes `reason_code=resource_unavailable`; a non-directory,
+symlink, special file, or traversal/read failure becomes
+`reason_code=resource_error`.
+
 When a Resource-backed Verification cannot be re-observed because the Resource
 is temporarily unavailable, record that state explicitly and keep the AC stale:
 
@@ -681,13 +705,15 @@ intended state transition.
   project in read-only mode. It is not yet broad write-mode or multi-project
   maturity evidence.
 - Explicit path-scope lexical normalization and opt-in local-file observation
-  from `verify --scope-path` are implemented for the common CLI shorthands.
+  from `verify --scope-path` and `verify --scope-path-prefix` are implemented
+  for the common CLI shorthands.
   Exact local-file path cache refresh is implemented behind
-  `verification cache-refresh --resource-content-from-scope-path`. Explicit
-  unavailable/error applicability stamps are dogfood-proven. Resource glob
-  semantics, path-prefix aggregation, Git working-tree adapters,
-  symlink/case/rename policy, and automatic re-observation scheduling remain
-  open.
+  `verification cache-refresh --resource-content-from-scope-path`; local-file
+  path-prefix cache refresh is implemented behind
+  `verification cache-refresh --resource-content-from-scope-path-prefix`.
+  Explicit unavailable/error applicability stamps are dogfood-proven. Resource
+  glob semantics, Git working-tree adapters, broader symlink/case/rename policy,
+  and automatic re-observation scheduling remain open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.

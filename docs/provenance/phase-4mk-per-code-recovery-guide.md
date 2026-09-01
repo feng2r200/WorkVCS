@@ -68,4 +68,11 @@ file now records the validation log and the review result.
 
 ## Delivery Closeout
 
-Pending.
+- Implementation/docs commit:
+  `fb340b45198b765a474e9ac49d20b673010a96f0`.
+- Fast-forward merged to `main`.
+- Worktree cleanup proof:
+  `/tmp/workvcs-4mk-cleanup-20260901T091653Z`.
+- Cleanup proof fields:
+  `clean=yes`, `attached=yes`, `unlocked=yes`, `covered_by_main=yes`,
+  `removed=yes`, `branch_retained=yes`.

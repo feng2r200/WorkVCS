@@ -57,6 +57,7 @@ index is:
 - [Phase 4MO JSON Error Output Evidence](provenance/phase-4mo-json-error-output.md)
 - [Phase 4MQ Branch Diff Dogfood Evidence](provenance/phase-4mq-branch-diff-dogfood.md)
 - [Phase 4MR Shared Claim Write-Mode Dogfood Evidence](provenance/phase-4mr-shared-claim-write-mode-dogfood.md)
+- [Phase 4MS Handoff Consumption Write-Mode Dogfood Evidence](provenance/phase-4ms-handoff-consumption-write-mode-dogfood.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -189,6 +190,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0457: Phase 4MP V1 Release Gate Matrix](decisions/adr/0457-phase-4mp-v1-release-gate-matrix.md)
 - [ADR-0458: Phase 4MQ Branch Diff Dogfood](decisions/adr/0458-phase-4mq-branch-diff-dogfood.md)
 - [ADR-0459: Phase 4MR Shared Claim Write-Mode Dogfood](decisions/adr/0459-phase-4mr-shared-claim-write-mode-dogfood.md)
+- [ADR-0460: Phase 4MS Handoff Consumption Write-Mode Dogfood](decisions/adr/0460-phase-4ms-handoff-consumption-write-mode-dogfood.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

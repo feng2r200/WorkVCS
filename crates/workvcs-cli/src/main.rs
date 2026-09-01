@@ -15381,6 +15381,14 @@ fn git_worktree_observation_summary(
             CanonicalValue::String("delete_add".to_owned()),
         ),
         (
+            "tracked_symlink_policy".to_owned(),
+            CanonicalValue::String("git_index_and_diff".to_owned()),
+        ),
+        (
+            "untracked_non_regular_policy".to_owned(),
+            CanonicalValue::String("unsupported_resource_error".to_owned()),
+        ),
+        (
             "source".to_owned(),
             CanonicalValue::String("verification cache-refresh".to_owned()),
         ),
@@ -41338,6 +41346,138 @@ mod tests {
             .expect("summary JSON");
         assert!(summary_json.contains(r#""rename_detection":"disabled""#));
         assert!(summary_json.contains(r#""rename_policy":"delete_add""#));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_worktree_snapshot_reports_symlink_policy_and_tracks_staged_symlink() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("target.txt"), b"target\n").expect("write target");
+        git_test(&repo, &["add", "target.txt"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+        let clean = git_worktree_snapshot(&repo)
+            .expect("clean git snapshot")
+            .fingerprint;
+
+        std::os::unix::fs::symlink("target.txt", repo.join("tracked-link"))
+            .expect("create tracked symlink");
+        git_test(&repo, &["add", "tracked-link"]);
+
+        let index = git_command_bytes(&repo, &["ls-files", "-s", "-z"], "git index")
+            .expect("read git index");
+        let index = String::from_utf8(index).expect("git index utf8");
+        assert!(index.contains("120000"));
+        assert!(index.contains("tracked-link"));
+
+        let staged_diff = git_command_bytes(
+            &repo,
+            &[
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--no-indent-heuristic",
+                "--diff-algorithm=myers",
+                "--unified=3",
+                "-O/dev/null",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+            ],
+            "tracked symlink git diff",
+        )
+        .expect("tracked symlink git diff");
+        let staged_diff = String::from_utf8(staged_diff).expect("tracked symlink diff utf8");
+        assert!(staged_diff.contains("new file mode 120000"));
+        assert!(staged_diff.contains("+++ b/tracked-link"));
+        assert!(staged_diff.contains("+target.txt"));
+
+        let symlinked = git_worktree_snapshot(&repo).expect("tracked symlink git snapshot");
+        assert_ne!(clean, symlinked.fingerprint);
+        let summary_json =
+            canonical_cli_json("git worktree observation summary", &symlinked.summary)
+                .expect("summary JSON");
+        assert!(summary_json.contains(r#""tracked_symlink_policy":"git_index_and_diff""#));
+        assert!(
+            summary_json.contains(r#""untracked_non_regular_policy":"unsupported_resource_error""#)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_worktree_snapshot_rejects_untracked_symlink_as_non_regular() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("target.txt"), b"target\n").expect("write target");
+        git_test(&repo, &["add", "target.txt"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+
+        std::os::unix::fs::symlink("target.txt", repo.join("untracked-link"))
+            .expect("create untracked symlink");
+
+        let error = match git_worktree_snapshot(&repo) {
+            Ok(_) => panic!("untracked symlink should be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .message()
+                .contains("unsupported untracked git worktree entry")
+        );
+        assert!(error.message().contains("untracked-link"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_worktree_applicability_stamp_maps_untracked_symlink_to_error() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = store_path.to_str().expect("store path text");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("target.txt"), b"target\n").expect("write target");
+        git_test(&repo, &["add", "target.txt"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+        std::os::unix::fs::symlink("target.txt", repo.join("untracked-link"))
+            .expect("create untracked symlink");
+        let repo_text = repo.to_str().expect("repo path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let mut engine = Engine::open(store).expect("open engine");
+        let basis = VerificationResourceBasis::new(
+            ResourceId::new_v7(),
+            "git".to_owned(),
+            1,
+            "git-worktree".to_owned(),
+            1,
+            CanonicalValue::object(vec![(
+                "repo".to_owned(),
+                CanonicalValue::String(repo_text.to_owned()),
+            )])
+            .expect("git scope payload"),
+            Digest::from_bytes([0; 32]),
+        )
+        .expect("resource basis");
+
+        let stamp =
+            git_worktree_applicability_stamp(&mut engine, 0, &basis, &GitWorktreeScope { repo })
+                .expect("map untracked symlink to applicability stamp");
+        assert_eq!(
+            stamp.observation_status,
+            ApplicabilityResourceObservationStatus::Error
+        );
+        assert!(stamp.observed_fingerprint.is_none());
+        assert!(stamp.observation_id.is_none());
     }
 
     #[test]

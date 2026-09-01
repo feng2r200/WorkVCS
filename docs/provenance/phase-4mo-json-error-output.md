@@ -129,3 +129,36 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 scripts/smoke-v0.1-cli-workflow.sh
 ```
+
+After the final evidence section was updated, docs-only closeout checks also
+passed:
+
+```text
+git diff --check
+cargo fmt --all -- --check
+```
+
+## Governance Finding
+
+After fast-forward merge, main contained the active schema-v5 Plan file and
+index, but not the ignored runtime state created in the implementation
+worktree. `workctl work status` reported `SCHEMA_V5_STATE_MISSING`.
+
+The exact `PLAN-20260901-041` runtime directory and the three T-001 through
+T-003 evidence records were copied from the implementation worktree into main's
+ignored `.work-governance/runtime` and `.work-governance/evidence` directories
+before T-004 closeout. This is a local Work Governance runtime portability
+finding; it is not a WorkVCS Store, schema, or product behavior change.
+
+## Delivery Closeout
+
+- Implementation commit:
+  `5e9a0a4cf2d16f564723342594bc627d9560bb4a`.
+- Fast-forward merged to `main`.
+- Plan closeout: `PLAN-20260901-041` completed and active index released by
+  `workctl goal close`.
+- Worktree cleanup proof:
+  `/tmp/workvcs-4mo-cleanup-20260901T110557Z`.
+- Cleanup proof fields:
+  `clean=yes`, `attached=yes`, `unlocked=yes`, `covered_by_main=yes`,
+  `removed=yes`, `branch_retained=yes`.

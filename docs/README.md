@@ -50,6 +50,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4MJ Clap Error Normalization Evidence](provenance/phase-4mj-clap-error-normalization.md)
 - [Phase 4MK Per-Code Recovery Guide Evidence](provenance/phase-4mk-per-code-recovery-guide.md)
 - [Phase 4ML Why Causal Anchor Traversal Evidence](provenance/phase-4ml-why-causal-anchor-traversal.md)
+- [Phase 4MM Merge Maturity Dogfood Evidence](provenance/phase-4mm-merge-maturity-dogfood.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -176,6 +177,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0451: Phase 4MJ Clap Error Normalization](decisions/adr/0451-phase-4mj-clap-error-normalization.md)
 - [ADR-0452: Phase 4MK Per-Code Recovery Guide](decisions/adr/0452-phase-4mk-per-code-recovery-guide.md)
 - [ADR-0453: Phase 4ML Why Causal Anchor Traversal](decisions/adr/0453-phase-4ml-why-causal-anchor-traversal.md)
+- [ADR-0454: Phase 4MM Merge Maturity Dogfood](decisions/adr/0454-phase-4mm-merge-maturity-dogfood.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

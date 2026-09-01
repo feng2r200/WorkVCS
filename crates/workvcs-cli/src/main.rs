@@ -1,7 +1,7 @@
 use clap::{ArgGroup, Parser, Subcommand, error::ErrorKind};
 use std::fmt::Write as _;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
@@ -524,6 +524,12 @@ enum Command {
         #[arg(long)]
         scope_json: Option<String>,
 
+        #[arg(long, value_name = "PATH")]
+        scope_path: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        scope_path_prefix: Option<PathBuf>,
+
         #[arg(long)]
         expected_state_digest: Option<String>,
     },
@@ -607,6 +613,12 @@ enum ContextPacketCommand {
 
         #[arg(long)]
         scope_json: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        scope_path: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        scope_path_prefix: Option<PathBuf>,
     },
     Show {
         #[arg(value_name = "STORE")]
@@ -653,6 +665,11 @@ enum ContextPacketCommand {
     ArgGroup::new("verify-resource-detail-source")
         .multiple(false)
         .args(["resource_detail_content", "resource_detail_content_digest", "resource_detail_content_file"])
+))]
+#[command(group(
+    ArgGroup::new("verify-resource-scope-payload-source")
+        .multiple(false)
+        .args(["scope_payload_json", "scope_path", "scope_path_prefix"])
 ))]
 struct VerifyArgs {
     #[arg(value_name = "STORE")]
@@ -723,6 +740,12 @@ struct VerifyArgs {
 
     #[arg(long)]
     scope_payload_json: Option<String>,
+
+    #[arg(long, value_name = "PATH")]
+    scope_path: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
+    scope_path_prefix: Option<PathBuf>,
 
     #[arg(long)]
     resource_fingerprint: Option<String>,
@@ -2185,6 +2208,12 @@ enum KnowledgeCommand {
         #[arg(long)]
         scope_json: Option<String>,
 
+        #[arg(long, value_name = "PATH")]
+        scope_path: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        scope_path_prefix: Option<PathBuf>,
+
         #[arg(long)]
         provenance_json: Option<String>,
     },
@@ -2231,6 +2260,12 @@ enum KnowledgeCommand {
 
         #[arg(long)]
         scope_json: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        scope_path: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        scope_path_prefix: Option<PathBuf>,
 
         #[arg(long)]
         statement_contains: Option<String>,
@@ -4355,6 +4390,12 @@ enum ClaimCommand {
 
         #[arg(long)]
         context_scope_json: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        context_scope_path: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        context_scope_path_prefix: Option<PathBuf>,
     },
     Task {
         #[arg(value_name = "STORE")]
@@ -7612,6 +7653,8 @@ fn run(cli: Cli) -> Result<String> {
                     head,
                     statement,
                     scope_json,
+                    scope_path,
+                    scope_path_prefix,
                     provenance_json,
                 },
         } => {
@@ -7621,8 +7664,16 @@ fn run(cli: Cli) -> Result<String> {
                 CommitId::parse_canonical(&head)?,
                 statement,
             )?;
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("knowledge scope", &scope_json)?)?;
+            if let Some(scope) = scope_from_cli(
+                "knowledge scope",
+                "--scope-json",
+                "--scope-path",
+                "--scope-path-prefix",
+                scope_json,
+                scope_path,
+                scope_path_prefix,
+            )? {
+                options = options.with_scope(scope.into_value())?;
             }
             if let Some(provenance_json) = provenance_json {
                 options = options
@@ -7665,6 +7716,8 @@ fn run(cli: Cli) -> Result<String> {
                     commit,
                     status,
                     scope_json,
+                    scope_path,
+                    scope_path_prefix,
                     statement_contains,
                     limit,
                     expected_knowledge,
@@ -7676,8 +7729,16 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(status) = status {
                 options = options.with_status(parse_knowledge_status(&status)?);
             }
-            if let Some(scope_json) = scope_json {
-                options = options.with_scope(parse_cli_object("knowledge scope", &scope_json)?)?;
+            if let Some(scope) = scope_from_cli(
+                "knowledge scope",
+                "--scope-json",
+                "--scope-path",
+                "--scope-path-prefix",
+                scope_json,
+                scope_path,
+                scope_path_prefix,
+            )? {
+                options = options.with_scope(scope.into_value())?;
             }
             if let Some(statement_contains) = statement_contains {
                 options = options.with_statement_contains(statement_contains)?;
@@ -10171,23 +10232,33 @@ fn run(cli: Cli) -> Result<String> {
                     context_profile,
                     context_budget_items,
                     context_scope_json,
+                    context_scope_path,
+                    context_scope_path_prefix,
                 },
         } => {
             let mut engine = Engine::open(store)?;
             let session_id = SessionId::parse_canonical(&session)?;
             let mut context_options = ContextPacketOptions::new(session_id);
+            let context_scope = scope_from_cli(
+                "context scope",
+                "--context-scope-json",
+                "--context-scope-path",
+                "--context-scope-path-prefix",
+                context_scope_json,
+                context_scope_path,
+                context_scope_path_prefix,
+            )?;
             let use_context_packet = context_profile.is_some()
                 || context_budget_items.is_some()
-                || context_scope_json.is_some();
+                || context_scope.is_some();
             if let Some(profile) = context_profile {
                 context_options = context_options.with_profile(parse_context_profile(&profile)?);
             }
             if let Some(budget_items) = context_budget_items {
                 context_options = context_options.with_budget_items(budget_items)?;
             }
-            if let Some(scope_json) = context_scope_json {
-                context_options =
-                    context_options.with_scope(parse_cli_object("context scope", &scope_json)?)?;
+            if let Some(scope) = context_scope {
+                context_options = context_options.with_scope(scope.into_value())?;
             }
             let claimed = engine.claim_next_task(
                 ClaimNextOptions::new(session_id).with_mode(parse_claim_mode(&mode)?),
@@ -10417,14 +10488,29 @@ fn run(cli: Cli) -> Result<String> {
             profile,
             budget_items,
             scope_json,
+            scope_path,
+            scope_path_prefix,
             expected_state_digest,
         } => {
             let engine = Engine::open(store)?;
             let session_id = SessionId::parse_canonical(&session)?;
-            let use_packet = profile.is_some() || budget_items.is_some() || scope_json.is_some();
+            let scope = scope_from_cli(
+                "context scope",
+                "--scope-json",
+                "--scope-path",
+                "--scope-path-prefix",
+                scope_json,
+                scope_path,
+                scope_path_prefix,
+            )?;
+            let use_packet = profile.is_some() || budget_items.is_some() || scope.is_some();
             let (state_digest, mut output) = if use_packet {
-                let options =
-                    context_packet_options_from_cli(session_id, profile, budget_items, scope_json)?;
+                let options = context_packet_options_from_cli(
+                    session_id,
+                    profile,
+                    budget_items,
+                    scope.map(CliScope::into_value),
+                )?;
                 let packet = engine.context_packet(options)?;
                 (packet.envelope.state_digest, render_context_packet(&packet))
             } else {
@@ -10452,11 +10538,26 @@ fn run(cli: Cli) -> Result<String> {
                 profile,
                 budget_items,
                 scope_json,
+                scope_path,
+                scope_path_prefix,
             } => {
                 let mut engine = Engine::open(store)?;
                 let session_id = SessionId::parse_canonical(&session)?;
-                let options =
-                    context_packet_options_from_cli(session_id, profile, budget_items, scope_json)?;
+                let scope = scope_from_cli(
+                    "context scope",
+                    "--scope-json",
+                    "--scope-path",
+                    "--scope-path-prefix",
+                    scope_json,
+                    scope_path,
+                    scope_path_prefix,
+                )?;
+                let options = context_packet_options_from_cli(
+                    session_id,
+                    profile,
+                    budget_items,
+                    scope.map(CliScope::into_value),
+                )?;
                 let saved = engine.save_context_packet(options)?;
                 Ok(render_context_packet_save(&saved))
             }
@@ -11890,6 +11991,8 @@ fn run_verify(args: Vec<String>) -> Result<String> {
         scope_kind,
         scope_schema_version,
         scope_payload_json,
+        scope_path,
+        scope_path_prefix,
         resource_fingerprint,
         resource_content,
         resource_content_file,
@@ -11956,6 +12059,8 @@ fn run_verify(args: Vec<String>) -> Result<String> {
             scope_kind,
             scope_schema_version,
             scope_payload_json,
+            scope_path,
+            scope_path_prefix,
             resource_fingerprint,
             resource_content,
             resource_content_file,
@@ -12029,7 +12134,7 @@ fn context_packet_options_from_cli(
     session_id: SessionId,
     profile: Option<String>,
     budget_items: Option<usize>,
-    scope_json: Option<String>,
+    scope: Option<CanonicalValue>,
 ) -> Result<ContextPacketOptions> {
     let mut options = ContextPacketOptions::new(session_id);
     if let Some(profile) = profile {
@@ -12038,8 +12143,8 @@ fn context_packet_options_from_cli(
     if let Some(budget_items) = budget_items {
         options = options.with_budget_items(budget_items)?;
     }
-    if let Some(scope_json) = scope_json {
-        options = options.with_scope(parse_cli_object("context scope", &scope_json)?)?;
+    if let Some(scope) = scope {
+        options = options.with_scope(scope)?;
     }
     Ok(options)
 }
@@ -12416,6 +12521,127 @@ fn parse_cli_object(label: &str, json: &str) -> Result<CanonicalValue> {
             "{label} must be an object"
         )))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CliScopeSource {
+    Json,
+    Path,
+    PathPrefix,
+}
+
+#[derive(Debug)]
+struct CliScope {
+    value: CanonicalValue,
+    source: CliScopeSource,
+}
+
+impl CliScope {
+    fn into_value(self) -> CanonicalValue {
+        self.value
+    }
+
+    fn is_path_shorthand(&self) -> bool {
+        matches!(
+            self.source,
+            CliScopeSource::Path | CliScopeSource::PathPrefix
+        )
+    }
+}
+
+fn scope_from_cli(
+    label: &str,
+    json_flag: &str,
+    path_flag: &str,
+    prefix_flag: &str,
+    scope_json: Option<String>,
+    scope_path: Option<PathBuf>,
+    scope_path_prefix: Option<PathBuf>,
+) -> Result<Option<CliScope>> {
+    let sources = usize::from(scope_json.is_some())
+        + usize::from(scope_path.is_some())
+        + usize::from(scope_path_prefix.is_some());
+    if sources > 1 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} requires at most one of {json_flag}, {path_flag}, or {prefix_flag}"
+        )));
+    }
+
+    if let Some(scope_json) = scope_json {
+        return Ok(Some(CliScope {
+            value: parse_cli_object(label, &scope_json)?,
+            source: CliScopeSource::Json,
+        }));
+    }
+    if let Some(path) = scope_path {
+        return Ok(Some(CliScope {
+            value: path_scope_value("path", path)?,
+            source: CliScopeSource::Path,
+        }));
+    }
+    if let Some(path_prefix) = scope_path_prefix {
+        return Ok(Some(CliScope {
+            value: path_scope_value("path_prefix", path_prefix)?,
+            source: CliScopeSource::PathPrefix,
+        }));
+    }
+    Ok(None)
+}
+
+fn path_scope_value(key: &str, path: PathBuf) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![(
+        key.to_owned(),
+        CanonicalValue::String(normalize_cli_scope_path(path)?),
+    )])
+}
+
+fn normalize_cli_scope_path(path: PathBuf) -> Result<String> {
+    normalize_cli_scope_path_components(&path)
+}
+
+fn normalize_cli_scope_path_components(path: &Path) -> Result<String> {
+    let mut prefix = None;
+    let mut rooted = false;
+    let mut segments: Vec<String> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(path_prefix) => {
+                let text = path_prefix.as_os_str().to_str().ok_or_else(|| {
+                    WorkVcsError::QueryInvalid("scope path prefix must be valid UTF-8".to_owned())
+                })?;
+                prefix = Some(text.replace('\\', "/"));
+            }
+            Component::RootDir => {
+                rooted = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => match segments.last() {
+                Some(last) if last != ".." => {
+                    segments.pop();
+                }
+                _ if !rooted => segments.push("..".to_owned()),
+                _ => {}
+            },
+            Component::Normal(segment) => {
+                let text = segment.to_str().ok_or_else(|| {
+                    WorkVcsError::QueryInvalid("scope path must be valid UTF-8".to_owned())
+                })?;
+                segments.push(text.to_owned());
+            }
+        }
+    }
+
+    let body = segments.join("/");
+    Ok(match (prefix, rooted, body.is_empty()) {
+        (Some(prefix), true, true) => format!("{prefix}/"),
+        (Some(prefix), true, false) => format!("{prefix}/{body}"),
+        (Some(prefix), false, true) => prefix,
+        (Some(prefix), false, false) => format!("{prefix}/{body}"),
+        (None, true, true) => "/".to_owned(),
+        (None, true, false) => format!("/{body}"),
+        (None, false, true) => ".".to_owned(),
+        (None, false, false) => body,
+    })
 }
 
 fn canonical_json_input_bytes(
@@ -12975,6 +13201,8 @@ struct VerifyResourceObservationArgs {
     scope_kind: Option<String>,
     scope_schema_version: Option<i64>,
     scope_payload_json: Option<String>,
+    scope_path: Option<PathBuf>,
+    scope_path_prefix: Option<PathBuf>,
     resource_fingerprint: Option<String>,
     resource_content: Option<String>,
     resource_content_file: Option<PathBuf>,
@@ -12997,6 +13225,8 @@ fn verify_resource_observation_from_cli(
         || args.scope_kind.is_some()
         || args.scope_schema_version.is_some()
         || args.scope_payload_json.is_some()
+        || args.scope_path.is_some()
+        || args.scope_path_prefix.is_some()
         || args.resource_fingerprint.is_some()
         || args.resource_content.is_some()
         || args.resource_content_file.is_some()
@@ -13043,12 +13273,41 @@ fn verify_resource_observation_from_cli(
         observation = observation.with_source_session_id(source_session_id);
     }
 
-    let scope_kind = required_arg("--scope-kind", args.scope_kind)?;
-    let scope_schema_version = required_arg("--scope-schema-version", args.scope_schema_version)?;
-    let scope_payload = parse_cli_object(
+    let scope = scope_from_cli(
         "verify resource scope payload",
-        &required_arg("--scope-payload-json", args.scope_payload_json)?,
-    )?;
+        "--scope-payload-json",
+        "--scope-path",
+        "--scope-path-prefix",
+        args.scope_payload_json,
+        args.scope_path,
+        args.scope_path_prefix,
+    )?
+    .ok_or_else(|| {
+        WorkVcsError::TaskInvalid(
+            "verify resource observation requires one of --scope-payload-json, --scope-path, or --scope-path-prefix"
+                .to_owned(),
+        )
+    })?;
+    let uses_path_shorthand = scope.is_path_shorthand();
+    let scope_kind = match args.scope_kind {
+        Some(scope_kind) => scope_kind,
+        None if uses_path_shorthand => "path".to_owned(),
+        None => {
+            return Err(WorkVcsError::TaskInvalid(
+                "--scope-kind is required".to_owned(),
+            ));
+        }
+    };
+    let scope_schema_version = match args.scope_schema_version {
+        Some(scope_schema_version) => scope_schema_version,
+        None if uses_path_shorthand => 1,
+        None => {
+            return Err(WorkVcsError::TaskInvalid(
+                "--scope-schema-version is required".to_owned(),
+            ));
+        }
+    };
+    let scope_payload = scope.into_value();
 
     Ok(Some(VerifyResourceObservationInput::new(
         observation,
@@ -20771,6 +21030,7 @@ mod tests {
                 .expect("verify help");
         assert!(verify_help.contains("Run a single-target verification wrapper"));
         assert!(verify_help.contains("--evidence-content-role"));
+        assert!(verify_help.contains("--scope-path"));
         assert!(verify_help.contains("--resource-detail-content-file"));
     }
 
@@ -37359,6 +37619,161 @@ mod tests {
     }
 
     #[test]
+    fn cli_verify_accepts_path_scope_shorthand_for_resource_observation() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        let scope_path = tempdir
+            .path()
+            .join("project")
+            .join("src")
+            .join("..")
+            .join("src")
+            .join("lib.rs");
+        let scope_path = scope_path.to_str().expect("scope path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Verify path-scoped resource observation",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "Path-scoped verify records resource evidence.",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+        head = value(&criterion, "commit_id");
+
+        let resource =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "create", store, "--kind", "git"])
+                    .expect("parse resource"),
+            )
+            .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let verified = run(Cli::try_parse_from([
+            "workvcs",
+            "verify",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--acceptance-criterion",
+            &criterion_id,
+            "--result",
+            "passed",
+            "--method",
+            "cli-smoke",
+            "--evidence-kind",
+            "cli-smoke",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--scope-path",
+            scope_path,
+            "--resource-content",
+            "path scoped resource content",
+            "--resource-detail-content",
+            "path scoped resource detail",
+            "--resource-detail-media-type",
+            "text/plain",
+            "--expected-branch",
+            &branch,
+            "--expected-head",
+            &head,
+            "--expected-target-kind",
+            "acceptance_criterion",
+            "--expected-target",
+            &criterion_id,
+            "--expected-result",
+            "passed",
+            "--expected-evidence-kind",
+            "cli-smoke",
+            "--expected-evidence-relations",
+            "1",
+            "--expected-resource-basis",
+            "1",
+            "--expected-cache-applicability",
+            "applicable",
+            "--expected-cache-reason-code",
+            "all_basis_applicable",
+        ])
+        .expect("parse verify"))
+        .expect("verify path-scoped resource");
+
+        assert_eq!(value(&verified, "resource_observation_recorded"), "true");
+        assert_eq!(value(&verified, "resource_id"), resource_id);
+        assert_eq!(value(&verified, "resource_basis"), "1");
+        assert_eq!(value(&verified, "applicability_cache_recorded"), "true");
+        assert_eq!(value(&verified, "applicability"), "applicable");
+        assert_eq!(value(&verified, "reason_code"), "all_basis_applicable");
+        assert_eq!(value(&verified, "branch_match_expected"), "true");
+        assert_eq!(value(&verified, "head_match_expected"), "true");
+        assert_eq!(value(&verified, "target_kind_match_expected"), "true");
+        assert_eq!(value(&verified, "target_match_expected"), "true");
+        assert_eq!(value(&verified, "result_match_expected"), "true");
+        assert_eq!(value(&verified, "evidence_kind_match_expected"), "true");
+        assert_eq!(
+            value(&verified, "evidence_relations_match_expected"),
+            "true"
+        );
+        assert_eq!(value(&verified, "resource_basis_match_expected"), "true");
+        assert_eq!(value(&verified, "applicability_matches_expected"), "true");
+        assert_eq!(value(&verified, "reason_code_matches_expected"), "true");
+    }
+
+    #[test]
     fn cli_runs_runtime_runnable_and_claim_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
@@ -39037,6 +39452,254 @@ mod tests {
         );
         assert!(context.contains("Matching path knowledge remains visible"));
         assert!(!context.contains("Unrelated path knowledge is filtered"));
+
+        let shorthand_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--scope-path",
+            "crates/workvcs-core/src/./runtime/context.rs",
+        ])
+        .expect("parse shorthand scoped packet context"))
+        .expect("shorthand scoped packet context");
+        assert_eq!(
+            value(&shorthand_context, "context_scope_json"),
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}"
+        );
+        assert!(shorthand_context.contains("Matching path knowledge remains visible"));
+        assert!(!shorthand_context.contains("Unrelated path knowledge is filtered"));
+    }
+
+    #[test]
+    fn cli_context_packet_accepts_path_scope_shorthands() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        let project = tempdir.path().join("project");
+        let matching_path = project.join("src").join("..").join("src").join("lib.rs");
+        let context_path = project.join("src").join(".").join("lib.rs");
+        let expected_path = project.join("src").join("lib.rs");
+        let unrelated_path = project.join("tests").join("lib.rs");
+        let prefix_path = project.join("src").join(".");
+        let matching_path = matching_path.to_str().expect("matching path text");
+        let context_path = context_path.to_str().expect("context path text");
+        let expected_path = expected_path.to_str().expect("expected path text");
+        let unrelated_path = unrelated_path.to_str().expect("unrelated path text");
+        let prefix_path = prefix_path.to_str().expect("prefix path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let matching = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Path shorthand knowledge remains visible",
+            "--scope-path",
+            matching_path,
+        ])
+        .expect("parse matching knowledge"))
+        .expect("create matching knowledge");
+        let unrelated = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&matching, "commit_id"),
+            "--statement",
+            "Path shorthand unrelated knowledge is filtered",
+            "--scope-path",
+            unrelated_path,
+        ])
+        .expect("parse unrelated knowledge"))
+        .expect("create unrelated knowledge");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--scope-path",
+            context_path,
+        ])
+        .expect("parse scoped packet context"))
+        .expect("scoped packet context");
+
+        assert_eq!(
+            value(&context, "head_commit_id"),
+            value(&unrelated, "commit_id")
+        );
+        assert_eq!(
+            value(&context, "context_scope_json"),
+            format!(r#"{{"path":"{expected_path}"}}"#)
+        );
+        assert!(context.contains("Path shorthand knowledge remains visible"));
+        assert!(!context.contains("Path shorthand unrelated knowledge is filtered"));
+
+        let saved = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "save",
+            store,
+            "--session",
+            &session_id,
+            "--scope-path-prefix",
+            prefix_path,
+        ])
+        .expect("parse scoped packet save"))
+        .expect("save scoped packet");
+        assert_eq!(
+            value(&saved, "context_scope_json"),
+            format!(r#"{{"path_prefix":"{}"}}"#, project.join("src").display())
+        );
+        assert_eq!(value(&saved, "saved_context_items"), "4");
+    }
+
+    #[test]
+    fn cli_path_scope_shorthand_interoperates_with_relative_scope_json() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let json_scoped = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Relative JSON scope matches shorthand context",
+            "--scope-json",
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}",
+        ])
+        .expect("parse json scoped knowledge"))
+        .expect("create json scoped knowledge");
+        let shorthand_scoped = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&json_scoped, "commit_id"),
+            "--statement",
+            "Relative shorthand scope matches JSON context",
+            "--scope-path",
+            "crates/workvcs-core/src/./runtime/context.rs",
+        ])
+        .expect("parse shorthand scoped knowledge"))
+        .expect("create shorthand scoped knowledge");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let shorthand_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--scope-path",
+            "crates/workvcs-core/src/runtime/context.rs",
+        ])
+        .expect("parse shorthand context"))
+        .expect("run shorthand context");
+        assert_eq!(
+            value(&shorthand_context, "head_commit_id"),
+            value(&shorthand_scoped, "commit_id")
+        );
+        assert!(shorthand_context.contains("Relative JSON scope matches shorthand context"));
+        assert!(shorthand_context.contains("Relative shorthand scope matches JSON context"));
+
+        let json_context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--scope-json",
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}",
+        ])
+        .expect("parse json context"))
+        .expect("run json context");
+        assert!(json_context.contains("Relative JSON scope matches shorthand context"));
+        assert!(json_context.contains("Relative shorthand scope matches JSON context"));
     }
 
     #[test]

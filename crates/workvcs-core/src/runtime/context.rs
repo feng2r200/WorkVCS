@@ -1760,9 +1760,9 @@ fn collect_path_scope_selectors(scope: &CanonicalValue, selectors: &mut PathScop
 
 fn collect_string_selector(value: &CanonicalValue, selectors: &mut BTreeSet<String>) {
     if let CanonicalValue::String(text) = value
-        && !text.is_empty()
+        && let Some(selector) = normalize_path_scope_selector(text)
     {
-        selectors.insert(text.clone());
+        selectors.insert(selector);
     }
 }
 
@@ -1787,6 +1787,40 @@ fn path_is_within_prefix(path: &str, prefix: &str) -> bool {
 
 fn prefixes_overlap(left: &str, right: &str) -> bool {
     path_is_within_prefix(left, right) || path_is_within_prefix(right, left)
+}
+
+fn normalize_path_scope_selector(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+
+    let absolute = text.starts_with('/');
+    let mut segments = Vec::new();
+    for segment in text.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => match segments.last() {
+                Some(last) if *last != ".." => {
+                    segments.pop();
+                }
+                _ if !absolute => segments.push(segment),
+                _ => {}
+            },
+            _ => segments.push(segment),
+        }
+    }
+
+    if absolute {
+        if segments.is_empty() {
+            Some("/".to_owned())
+        } else {
+            Some(format!("/{}", segments.join("/")))
+        }
+    } else if segments.is_empty() {
+        Some(".".to_owned())
+    } else {
+        Some(segments.join("/"))
+    }
 }
 
 fn context_packet_value(packet: &ContextPacket) -> Result<CanonicalValue> {

@@ -550,6 +550,93 @@ fn context_packet_filters_path_scoped_knowledge_by_explicit_scope() {
 }
 
 #[test]
+fn context_packet_path_scope_matching_normalizes_lexical_variants() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Normalize scoped path selectors")
+                .expect("task options"),
+        )
+        .expect("create task");
+    head = task.commit_id;
+
+    let exact = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Normalized exact path remains visible")
+                .expect("exact knowledge options")
+                .with_scope(object(vec![(
+                    "path",
+                    string("/repo/work/../work/src/./lib.rs"),
+                )]))
+                .expect("exact knowledge scope"),
+        )
+        .expect("create exact knowledge");
+    head = exact.commit_id;
+
+    let prefix = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Normalized prefix remains visible")
+                .expect("prefix knowledge options")
+                .with_scope(object(vec![("path_prefix", string("/repo/work/src//"))]))
+                .expect("prefix knowledge scope"),
+        )
+        .expect("create prefix knowledge");
+    head = prefix.commit_id;
+
+    let unrelated = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Lexically adjacent path is filtered")
+                .expect("unrelated knowledge options")
+                .with_scope(object(vec![(
+                    "path",
+                    string("/repo/work/src-other/lib.rs"),
+                )]))
+                .expect("unrelated knowledge scope"),
+        )
+        .expect("create unrelated knowledge");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let scope = object(vec![("path", string("/repo/work/src/./lib.rs"))]);
+    let scoped = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id)
+                .with_scope(scope.clone())
+                .expect("scoped context options"),
+        )
+        .expect("scoped context packet");
+
+    assert_eq!(scoped.envelope.head_commit_id, unrelated.commit_id);
+    assert_eq!(scoped.scope.as_ref(), Some(&scope));
+    let summaries = scoped_knowledge_summaries(&scoped);
+    assert_eq!(summaries.len(), 2);
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("Normalized exact path remains visible"))
+    );
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("Normalized prefix remains visible"))
+    );
+    assert!(
+        !summaries
+            .iter()
+            .any(|summary| summary.contains("Lexically adjacent path is filtered"))
+    );
+}
+
+#[test]
 fn context_packet_snapshots_persist_scope_json_and_stable_packet_digest() {
     let (_tempdir, path) = store_path();
     let (mut engine, workspace) = create_workspace(&path);

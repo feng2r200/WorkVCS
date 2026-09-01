@@ -34,6 +34,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4LU Claim Guard Recovery Hints Evidence](provenance/phase-4lu-claim-guard-recovery-hints.md)
 - [Phase 4LV Another Project Dogfood Evidence](provenance/phase-4lv-another-project-dogfood.md)
 - [Phase 4LW Claim Transfer and Takeover Dogfood Evidence](provenance/phase-4lw-claim-transfer-takeover-dogfood.md)
+- [Phase 4LX Resource Scope Path Normalization Evidence](provenance/phase-4lx-resource-scope-path-normalization.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -145,6 +146,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0436: Phase 4LU Claim Guard Recovery Hints](decisions/adr/0436-phase-4lu-claim-guard-recovery-hints.md)
 - [ADR-0437: Phase 4LV Another Project Read-Only Dogfood](decisions/adr/0437-phase-4lv-another-project-dogfood.md)
 - [ADR-0438: Phase 4LW Claim Transfer and Takeover Dogfood](decisions/adr/0438-phase-4lw-claim-transfer-takeover-dogfood.md)
+- [ADR-0439: Phase 4LX Resource Scope Path Normalization](decisions/adr/0439-phase-4lx-resource-scope-path-normalization.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

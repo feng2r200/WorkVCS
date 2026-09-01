@@ -109,15 +109,17 @@ workvcs claim next "$STORE" \
   --session "$SESSION_ID" \
   --context-profile normal \
   --context-budget-items 20 \
-  --context-scope-json '{"path":"crates/workvcs-core/src/runtime/context.rs"}'
+  --context-scope-path crates/workvcs-core/src/runtime/context.rs
 ```
 
 When context options are present, packet fields are emitted with
 `claim_next_` prefixes, for example `claim_next_context_profile` and
-`claim_next_context_item.0.category`. Use `--context-scope-json` with normal or
-full packets when the current work has an explicit file or resource path; it
-filters path-scoped Knowledge while leaving global and non-path-scoped
-Knowledge visible. Brief packets echo the scope but do not include
+`claim_next_context_item.0.category`. Use `--context-scope-path` or
+`--context-scope-path-prefix` with normal or full packets when the current work
+has an explicit file or resource path; these shorthands build the same scope
+objects as `--context-scope-json`. They filter path-scoped Knowledge while
+leaving global and non-path-scoped Knowledge visible. Brief packets echo the
+scope but do not include
 `scoped_knowledge` items. If the selected Task is contained by a Goal or Plan,
 brief packets include a `goal_plan_path` item that summarizes the current
 hierarchy. If the selected Task has Acceptance Criteria or Verification
@@ -137,6 +139,8 @@ Inspect continuation context:
 workvcs context "$STORE" --session "$SESSION_ID"
 workvcs context "$STORE" --session "$SESSION_ID" --profile normal --budget-items 20
 workvcs context "$STORE" --session "$SESSION_ID" \
+  --scope-path crates/workvcs-core/src/runtime/context.rs
+workvcs context "$STORE" --session "$SESSION_ID" \
   --scope-json '{"path":"crates/workvcs-core/src/runtime/context.rs"}'
 workvcs next "$STORE" --session "$SESSION_ID"
 ```
@@ -149,14 +153,18 @@ workvcs context-packet save "$STORE" \
   --session "$SESSION_ID" \
   --profile normal \
   --budget-items 20 \
-  --scope-json '{"path":"crates/workvcs-core/src/runtime/context.rs"}'
+  --scope-path-prefix crates/workvcs-core/src/runtime
 ```
 
 Capture the emitted `context_packet_id` and `packet_digest`. The snapshot is
 append-only provenance; it does not move a Branch head, create a WorkState
 commit, create an Event, or create a Claim. `show` and `list` load paths verify
 the packet digest and reject metadata that no longer agrees with the canonical
-packet JSON.
+packet JSON. `--scope-path` and `--scope-path-prefix` normalize common lexical
+variants such as repeated separators, `.`, `..`, and trailing separators for
+matching; they do not resolve symlinks, check file existence, expand globs, or
+ask an adapter to observe the Resource. Relative paths stay relative; pass an
+absolute path when cross-working-directory scope identity is required.
 
 ```bash
 workvcs context-packet show "$STORE" \
@@ -206,6 +214,30 @@ workvcs verify "$STORE" \
   --evidence-content-role log \
   --evidence-content "validation command passed"
 ```
+
+For Resource-backed evidence scoped to a local path, prefer the shorthand:
+
+```bash
+workvcs verify "$STORE" \
+  --branch "$BRANCH_ID" \
+  --head "$HEAD_COMMIT_ID" \
+  --verification-requirement "$VR_ENTITY_ID" \
+  --result passed \
+  --method cli \
+  --evidence-kind command_output \
+  --evidence-content-role log \
+  --evidence-content "validation command passed" \
+  --resource "$RESOURCE_ID" \
+  --adapter-kind git \
+  --adapter-schema-version 1 \
+  --scope-path crates/workvcs-core/src/runtime/context.rs \
+  --resource-content "observed resource content"
+```
+
+`verify --scope-path` and `verify --scope-path-prefix` default to
+`scope_kind=path` and `scope_schema_version=1`. Keep using
+`--scope-payload-json` with explicit `--scope-kind` and
+`--scope-schema-version` for advanced non-path payloads.
 
 Capture the emitted `verification_entity_id` and `commit_id`. Use that
 `commit_id` as the next `HEAD_COMMIT_ID`. Before marking the Task done, inspect
@@ -569,7 +601,8 @@ intended state transition.
 - The documented loop has been repeated once against another real local
   project in read-only mode. It is not yet broad write-mode or multi-project
   maturity evidence.
-- Resource path/glob normalization and adapter-backed re-observation remain
+- Explicit path-scope lexical normalization is implemented for the common CLI
+  shorthands. Resource glob semantics and adapter-backed re-observation remain
   open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.

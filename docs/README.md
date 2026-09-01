@@ -28,6 +28,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4LO Bundle Portability Dogfood Evidence](provenance/phase-4lo-bundle-portability-dogfood.md)
 - [Phase 4LP Bundle Profile Contract Evidence](provenance/phase-4lp-bundle-profile-contract.md)
 - [Phase 4LQ Larger Store Portability Validation Evidence](provenance/phase-4lq-larger-store-portability-validation.md)
+- [Phase 4LR Context Path-Sensitive Knowledge Evidence](provenance/phase-4lr-context-path-sensitive-knowledge.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -133,6 +134,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0430: Phase 4LO Bundle Portability Dogfood](decisions/adr/0430-phase-4lo-bundle-portability-dogfood.md)
 - [ADR-0431: Phase 4LP Bundle Profile Contract](decisions/adr/0431-phase-4lp-bundle-profile-contract.md)
 - [ADR-0432: Phase 4LQ Larger Store Portability Validation](decisions/adr/0432-phase-4lq-larger-store-portability-validation.md)
+- [ADR-0433: Phase 4LR Context Path-Sensitive Knowledge](decisions/adr/0433-phase-4lr-context-path-sensitive-knowledge.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

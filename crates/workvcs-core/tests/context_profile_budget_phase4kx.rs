@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, ContextItemCategory,
-    ContextPacketOptions, ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions,
-    KnowledgeCreateOptions, PlanCreateOptions, PrimaryContainmentCreateOptions,
-    RecordCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions, SessionId,
-    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
-    VerificationRequirementCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
+    AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, CanonicalValue,
+    ContextItemCategory, ContextPacket, ContextPacketOptions, ContextPriority, ContextProfile,
+    Engine, ErrorCode, GoalCreateOptions, KnowledgeCreateOptions, PlanCreateOptions,
+    PrimaryContainmentCreateOptions, RecordCreateOptions, RecordRelationCreateOptions,
+    RecordTransitionOptions, SessionId, SessionStartOptions, StoreInitOptions, TaskCreateOptions,
+    TaskSchedulingRelationCreateOptions, VerificationRequirementCreateOptions, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -33,6 +34,34 @@ fn create_workspace(path: &Path) -> (Engine, WorkspaceInfo) {
 
 fn contains_category(packet: &workvcs_core::ContextPacket, category: ContextItemCategory) -> bool {
     packet.items.iter().any(|item| item.category == category)
+}
+
+fn object(entries: Vec<(&str, CanonicalValue)>) -> CanonicalValue {
+    CanonicalValue::object(
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+    )
+    .expect("canonical object")
+}
+
+fn string(value: &str) -> CanonicalValue {
+    CanonicalValue::String(value.to_owned())
+}
+
+fn array(values: Vec<CanonicalValue>) -> CanonicalValue {
+    CanonicalValue::Array(values)
+}
+
+fn scoped_knowledge_summaries(packet: &ContextPacket) -> Vec<&str> {
+    packet
+        .items
+        .iter()
+        .filter_map(|item| {
+            (item.category == ContextItemCategory::ScopedKnowledge).then_some(item.summary.as_str())
+        })
+        .collect()
 }
 
 #[test]
@@ -205,6 +234,188 @@ fn context_packet_profiles_filter_categories_deterministically() {
     ));
     assert!(normal.items.len() > brief.items.len());
     assert!(full.items.len() > normal.items.len());
+}
+
+#[test]
+fn context_packet_filters_path_scoped_knowledge_by_explicit_scope() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Filter scoped knowledge")
+                .expect("task options"),
+        )
+        .expect("create task");
+    head = task.commit_id;
+
+    let global = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Global knowledge remains visible")
+                .expect("global knowledge options"),
+        )
+        .expect("create global knowledge");
+    head = global.commit_id;
+
+    let exact = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Exact path knowledge remains visible")
+                .expect("exact knowledge options")
+                .with_scope(object(vec![(
+                    "path",
+                    string("crates/workvcs-core/src/runtime/context.rs"),
+                )]))
+                .expect("exact knowledge scope"),
+        )
+        .expect("create exact knowledge");
+    head = exact.commit_id;
+
+    let prefix = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Prefix path knowledge remains visible")
+                .expect("prefix knowledge options")
+                .with_scope(object(vec![(
+                    "path_prefix",
+                    string("crates/workvcs-core/src/runtime"),
+                )]))
+                .expect("prefix knowledge scope"),
+        )
+        .expect("create prefix knowledge");
+    head = prefix.commit_id;
+
+    let payload = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(
+                branch_id,
+                head,
+                "Resource payload knowledge remains visible",
+            )
+            .expect("payload knowledge options")
+            .with_scope(object(vec![
+                ("scope_kind", string("resource")),
+                (
+                    "scope_payload",
+                    object(vec![(
+                        "path",
+                        string("crates/workvcs-core/src/runtime/context.rs"),
+                    )]),
+                ),
+            ]))
+            .expect("payload knowledge scope"),
+        )
+        .expect("create payload knowledge");
+    head = payload.commit_id;
+
+    let non_path = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(
+                branch_id,
+                head,
+                "Non-path scoped knowledge remains visible",
+            )
+            .expect("non-path knowledge options")
+            .with_scope(object(vec![("kind", string("workspace"))]))
+            .expect("non-path knowledge scope"),
+        )
+        .expect("create non-path knowledge");
+    head = non_path.commit_id;
+
+    let other = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Other path knowledge is filtered")
+                .expect("other knowledge options")
+                .with_scope(object(vec![(
+                    "paths",
+                    array(vec![string("crates/workvcs-cli/src/main.rs")]),
+                )]))
+                .expect("other knowledge scope"),
+        )
+        .expect("create other knowledge");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let unscoped = engine
+        .context_packet(ContextPacketOptions::new(session.session_id))
+        .expect("unscoped context packet");
+    assert_eq!(scoped_knowledge_summaries(&unscoped).len(), 6);
+
+    let scope = object(vec![(
+        "path",
+        string("crates/workvcs-core/src/runtime/context.rs"),
+    )]);
+    let scoped = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id)
+                .with_scope(scope.clone())
+                .expect("scoped context options"),
+        )
+        .expect("scoped context packet");
+
+    assert_eq!(scoped.envelope.head_commit_id, other.commit_id);
+    assert_eq!(scoped.scope.as_ref(), Some(&scope));
+    let summaries = scoped_knowledge_summaries(&scoped);
+    assert_eq!(summaries.len(), 5);
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("Global knowledge remains visible"))
+    );
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("Exact path knowledge remains visible"))
+    );
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("Prefix path knowledge remains visible"))
+    );
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("Resource payload knowledge remains visible"))
+    );
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("Non-path scoped knowledge remains visible"))
+    );
+    assert!(
+        !summaries
+            .iter()
+            .any(|summary| summary.contains("Other path knowledge is filtered"))
+    );
+    assert_eq!(unscoped.available_items, scoped.available_items + 1);
+
+    let budgeted = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id)
+                .with_scope(scope)
+                .expect("budgeted scoped context options")
+                .with_budget_items(4)
+                .expect("budgeted scoped context options"),
+        )
+        .expect("budgeted scoped context packet");
+    assert_eq!(budgeted.available_items, scoped.available_items);
+    assert_eq!(budgeted.items.len(), 4);
+    assert_eq!(budgeted.omission_summary.total, scoped.available_items - 4);
+    assert!(
+        budgeted
+            .omission_summary
+            .by_category
+            .iter()
+            .any(
+                |bucket| bucket.category == ContextItemCategory::ScopedKnowledge
+                    && bucket.omitted == 5
+            )
+    );
 }
 
 #[test]
@@ -883,4 +1094,14 @@ fn context_packet_rejects_zero_item_budget() {
         .expect_err("zero context item budget should fail");
 
     assert_eq!(error.code(), ErrorCode::QueryInvalid);
+
+    let error = ContextPacketOptions::new(SessionId::new_v7())
+        .with_scope(CanonicalValue::String("crates/workvcs-core".to_owned()))
+        .expect_err("scalar context scope should fail");
+
+    assert_eq!(error.code(), ErrorCode::QueryInvalid);
+    assert_eq!(
+        error.to_string(),
+        "query invalid: context scope must be an object"
+    );
 }

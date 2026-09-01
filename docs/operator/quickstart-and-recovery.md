@@ -95,30 +95,37 @@ context:
 ```bash
 workvcs claim next "$STORE" \
   --session "$SESSION_ID" \
-  --context-profile brief \
-  --context-budget-items 20
+  --context-profile normal \
+  --context-budget-items 20 \
+  --context-scope-json '{"path":"crates/workvcs-core/src/runtime/context.rs"}'
 ```
 
 When context options are present, packet fields are emitted with
 `claim_next_` prefixes, for example `claim_next_context_profile` and
-`claim_next_context_item.0.category`. If the selected Task is contained by a
-Goal or Plan, brief packets include a `goal_plan_path` item that summarizes the
-current hierarchy. If the selected Task has Acceptance
-Criteria or Verification Requirements, brief packets include
-`acceptance_criterion` and `verification_requirement` context items whose
-subjects can be reused with `workvcs verify`. When a Task is blocked by an
-unsatisfied dependency, brief packets also include `blocked_dependency` items
-that name the blocking Task and summarize its current status. Failed Attempts
-appear as `failed_attempt` items in brief packets; normal packets also include
-running, succeeded, and inconclusive `attempt` items. Attempt summaries expose
-status, terminality, current Record version and digest, canonical scope, and
-nearby Record relation counts.
+`claim_next_context_item.0.category`. Use `--context-scope-json` with normal or
+full packets when the current work has an explicit file or resource path; it
+filters path-scoped Knowledge while leaving global and non-path-scoped
+Knowledge visible. Brief packets echo the scope but do not include
+`scoped_knowledge` items. If the selected Task is contained by a Goal or Plan,
+brief packets include a `goal_plan_path` item that summarizes the current
+hierarchy. If the selected Task has Acceptance Criteria or Verification
+Requirements, brief packets include `acceptance_criterion` and
+`verification_requirement` context items whose subjects can be reused with
+`workvcs verify`. When a Task is blocked by an unsatisfied dependency, brief
+packets also include `blocked_dependency` items that name the blocking Task and
+summarize its current status. Failed Attempts appear as `failed_attempt` items
+in brief packets; normal packets also include running, succeeded, and
+inconclusive `attempt` items. Attempt summaries expose status, terminality,
+current Record version and digest, canonical scope, and nearby Record relation
+counts.
 
 Inspect continuation context:
 
 ```bash
 workvcs context "$STORE" --session "$SESSION_ID"
 workvcs context "$STORE" --session "$SESSION_ID" --profile normal --budget-items 20
+workvcs context "$STORE" --session "$SESSION_ID" \
+  --scope-json '{"path":"crates/workvcs-core/src/runtime/context.rs"}'
 workvcs next "$STORE" --session "$SESSION_ID"
 ```
 
@@ -509,9 +516,8 @@ intended state transition.
   has not yet been repeated on another real project.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
-- Context packets still need path-sensitive Knowledge policy, persistence
-  decisions, and a decision on whether transition rationale becomes a projected
-  Record field.
+- Context packets still need persistence decisions and a decision on whether
+  transition rationale becomes a projected Record field.
 - `why` does not yet expose the Handoff focus link as a relation.
 - Automatic stale detection remains open.
 - Merge lifecycle is locally dogfood-proven, but not yet another-project or
@@ -519,4 +525,5 @@ intended state transition.
 - Bundle portability is locally dogfood-proven for copied-target same-Store
   operation. The V1-local directory profile is defined, but packaged archives,
   exchange APIs, and external Store canonical DAG activation remain open.
-- Larger Store validation has not yet been run.
+- Larger Store validation has one bounded local run; broader and more varied
+  performance evidence remains open.

@@ -519,6 +519,9 @@ enum Command {
         budget_items: Option<usize>,
 
         #[arg(long)]
+        scope_json: Option<String>,
+
+        #[arg(long)]
         expected_state_digest: Option<String>,
     },
     Next {
@@ -4294,6 +4297,9 @@ enum ClaimCommand {
 
         #[arg(long)]
         context_budget_items: Option<usize>,
+
+        #[arg(long)]
+        context_scope_json: Option<String>,
     },
     Task {
         #[arg(value_name = "STORE")]
@@ -10092,17 +10098,24 @@ fn run(cli: Cli) -> Result<String> {
                     expected_lifecycle_state,
                     context_profile,
                     context_budget_items,
+                    context_scope_json,
                 },
         } => {
             let mut engine = Engine::open(store)?;
             let session_id = SessionId::parse_canonical(&session)?;
             let mut context_options = ContextPacketOptions::new(session_id);
-            let use_context_packet = context_profile.is_some() || context_budget_items.is_some();
+            let use_context_packet = context_profile.is_some()
+                || context_budget_items.is_some()
+                || context_scope_json.is_some();
             if let Some(profile) = context_profile {
                 context_options = context_options.with_profile(parse_context_profile(&profile)?);
             }
             if let Some(budget_items) = context_budget_items {
                 context_options = context_options.with_budget_items(budget_items)?;
+            }
+            if let Some(scope_json) = context_scope_json {
+                context_options =
+                    context_options.with_scope(parse_cli_object("context scope", &scope_json)?)?;
             }
             let claimed = engine.claim_next_task(
                 ClaimNextOptions::new(session_id).with_mode(parse_claim_mode(&mode)?),
@@ -10331,11 +10344,12 @@ fn run(cli: Cli) -> Result<String> {
             session,
             profile,
             budget_items,
+            scope_json,
             expected_state_digest,
         } => {
             let engine = Engine::open(store)?;
             let session_id = SessionId::parse_canonical(&session)?;
-            let use_packet = profile.is_some() || budget_items.is_some();
+            let use_packet = profile.is_some() || budget_items.is_some() || scope_json.is_some();
             let (state_digest, mut output) = if use_packet {
                 let mut options = ContextPacketOptions::new(session_id);
                 if let Some(profile) = profile {
@@ -10343,6 +10357,10 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 if let Some(budget_items) = budget_items {
                     options = options.with_budget_items(budget_items)?;
+                }
+                if let Some(scope_json) = scope_json {
+                    options =
+                        options.with_scope(parse_cli_object("context scope", &scope_json)?)?;
                 }
                 let packet = engine.context_packet(options)?;
                 (packet.envelope.state_digest, render_context_packet(&packet))
@@ -17697,8 +17715,13 @@ fn render_context_packet(packet: &ContextPacket) -> String {
         .budget_items
         .map(|value| value.get().to_string())
         .unwrap_or_else(|| "none".to_owned());
+    let scope_json = packet
+        .scope
+        .as_ref()
+        .map(context_canonical_json)
+        .unwrap_or_else(|| "none".to_owned());
     let mut output = format!(
-        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\ncontext_profile={}\ncontext_budget_items={}\ncontext_available_items={}\ncontext_items={}\ncontext_omitted_items={}\ncontext_omission_priorities={}\ncontext_omission_categories={}\n",
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\ncontext_profile={}\ncontext_budget_items={}\ncontext_scope_json={}\ncontext_available_items={}\ncontext_items={}\ncontext_omitted_items={}\ncontext_omission_priorities={}\ncontext_omission_categories={}\n",
         envelope.session_id,
         session_lifecycle_state(envelope.lifecycle_state),
         envelope.workspace_id,
@@ -17711,6 +17734,7 @@ fn render_context_packet(packet: &ContextPacket) -> String {
         focus_entity_id,
         packet.profile.as_str(),
         budget_items,
+        scope_json,
         packet.available_items,
         packet.items.len(),
         packet.omission_summary.total,
@@ -30393,6 +30417,8 @@ mod tests {
             "brief",
             "--context-budget-items",
             "3",
+            "--context-scope-json",
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}",
             "--expected-selected",
             "true",
             "--expected-head",
@@ -30413,6 +30439,10 @@ mod tests {
         assert_eq!(value(&claimed, "claim_next_focus_entity_id"), task_id);
         assert_eq!(value(&claimed, "claim_next_context_profile"), "brief");
         assert_eq!(value(&claimed, "claim_next_context_budget_items"), "3");
+        assert_eq!(
+            value(&claimed, "claim_next_context_scope_json"),
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}"
+        );
         assert_eq!(value(&claimed, "claim_next_context_items"), "3");
         assert_eq!(value(&claimed, "claim_next_context_omitted_items"), "1");
         assert_eq!(
@@ -38536,6 +38566,104 @@ mod tests {
             context.contains("context_knowledge.0.knowledge_scope_json={\"kind\":\"workspace\"}")
         );
         assert!(!context.contains("Legacy cache keys do not need schema versions"));
+    }
+
+    #[test]
+    fn cli_context_packet_filters_path_scoped_knowledge_by_scope_json() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let matching = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Matching path knowledge remains visible",
+            "--scope-json",
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}",
+        ])
+        .expect("parse matching knowledge"))
+        .expect("create matching knowledge");
+        let unrelated = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&matching, "commit_id"),
+            "--statement",
+            "Unrelated path knowledge is filtered",
+            "--scope-json",
+            "{\"path\":\"crates/workvcs-cli/src/main.rs\"}",
+        ])
+        .expect("parse unrelated knowledge"))
+        .expect("create unrelated knowledge");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--scope-json",
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}",
+        ])
+        .expect("parse scoped packet context"))
+        .expect("scoped packet context");
+
+        assert_eq!(
+            value(&context, "head_commit_id"),
+            value(&unrelated, "commit_id")
+        );
+        assert_eq!(value(&context, "context_profile"), "normal");
+        assert_eq!(value(&context, "context_budget_items"), "none");
+        assert_eq!(
+            value(&context, "context_scope_json"),
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}"
+        );
+        assert!(context.contains("Matching path knowledge remains visible"));
+        assert!(!context.contains("Unrelated path knowledge is filtered"));
     }
 
     #[test]

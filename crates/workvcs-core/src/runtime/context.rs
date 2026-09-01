@@ -1,6 +1,6 @@
 use super::runnable::{self, RunnableTasksOptions, RunnableTasksProjection};
 use super::session::{self, SessionLifecycleState, SessionSnapshot};
-use crate::canonical::canonical_bytes;
+use crate::canonical::{CanonicalValue, canonical_bytes};
 use crate::error::{Result, WorkVcsError};
 use crate::history::{
     self, AcceptanceCriterionEffectiveStatus, AcceptanceCriterionSnapshot, BranchHead,
@@ -54,6 +54,7 @@ pub struct ContextPacketOptions {
     session_id: SessionId,
     profile: ContextProfile,
     budget_items: Option<NonZeroUsize>,
+    scope: Option<CanonicalValue>,
 }
 
 impl ContextPacketOptions {
@@ -62,6 +63,7 @@ impl ContextPacketOptions {
             session_id,
             profile: ContextProfile::Normal,
             budget_items: None,
+            scope: None,
         }
     }
 
@@ -78,6 +80,16 @@ impl ContextPacketOptions {
         Ok(self)
     }
 
+    pub fn with_scope(mut self, scope: CanonicalValue) -> Result<Self> {
+        if !matches!(scope, CanonicalValue::Object(_)) {
+            return Err(WorkVcsError::QueryInvalid(
+                "context scope must be an object".to_owned(),
+            ));
+        }
+        self.scope = Some(scope);
+        Ok(self)
+    }
+
     pub fn session_id(&self) -> SessionId {
         self.session_id
     }
@@ -88,6 +100,10 @@ impl ContextPacketOptions {
 
     pub fn budget_items(&self) -> Option<NonZeroUsize> {
         self.budget_items
+    }
+
+    pub fn scope(&self) -> Option<&CanonicalValue> {
+        self.scope.as_ref()
     }
 }
 
@@ -349,6 +365,7 @@ pub struct ContextPacket {
     pub envelope: ContextPacketEnvelope,
     pub profile: ContextProfile,
     pub budget_items: Option<NonZeroUsize>,
+    pub scope: Option<CanonicalValue>,
     pub available_items: usize,
     pub items: Vec<ContextItem>,
     pub omission_summary: ContextOmissionSummary,
@@ -553,7 +570,7 @@ pub(crate) fn context_packet(
         connection,
         &ContextOverviewOptions::new(options.session_id()),
     )?;
-    let mut items = collect_context_items(&overview, options.profile())?;
+    let mut items = collect_context_items(&overview, options.profile(), options.scope())?;
     items.sort_by_key(|item| item.priority);
     let available_items = items.len();
     let limit = options
@@ -571,6 +588,7 @@ pub(crate) fn context_packet(
         envelope: ContextPacketEnvelope::from_overview(&overview),
         profile: options.profile(),
         budget_items: options.budget_items(),
+        scope: options.scope().cloned(),
         available_items,
         items,
         omission_summary,
@@ -609,6 +627,7 @@ fn context_acceptance_criteria(
 fn collect_context_items(
     context: &ContextOverview,
     profile: ContextProfile,
+    scope: Option<&CanonicalValue>,
 ) -> Result<Vec<ContextItem>> {
     let mut items = Vec::new();
     let session = &context.session;
@@ -912,6 +931,9 @@ fn collect_context_items(
         );
     }
     for knowledge in &context.knowledge.knowledge {
+        if !knowledge_matches_context_scope(&knowledge.state.scope, scope) {
+            continue;
+        }
         push_context_item(
             &mut items,
             profile,
@@ -939,6 +961,111 @@ fn collect_context_items(
         );
     }
     Ok(items)
+}
+
+#[derive(Default)]
+struct PathScopeSelectors {
+    paths: BTreeSet<String>,
+    prefixes: BTreeSet<String>,
+}
+
+impl PathScopeSelectors {
+    fn from_scope(scope: &CanonicalValue) -> Self {
+        let mut selectors = Self::default();
+        collect_path_scope_selectors(scope, &mut selectors);
+        selectors
+    }
+
+    fn is_empty(&self) -> bool {
+        self.paths.is_empty() && self.prefixes.is_empty()
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        self.paths.iter().any(|path| {
+            other.paths.contains(path)
+                || other
+                    .prefixes
+                    .iter()
+                    .any(|prefix| path_is_within_prefix(path, prefix))
+        }) || other.paths.iter().any(|path| {
+            self.prefixes
+                .iter()
+                .any(|prefix| path_is_within_prefix(path, prefix))
+        }) || self.prefixes.iter().any(|left| {
+            other
+                .prefixes
+                .iter()
+                .any(|right| prefixes_overlap(left, right))
+        })
+    }
+}
+
+fn knowledge_matches_context_scope(
+    knowledge_scope: &CanonicalValue,
+    context_scope: Option<&CanonicalValue>,
+) -> bool {
+    let knowledge_selectors = PathScopeSelectors::from_scope(knowledge_scope);
+    if knowledge_selectors.is_empty() {
+        return true;
+    }
+
+    let Some(context_scope) = context_scope else {
+        return true;
+    };
+    let context_selectors = PathScopeSelectors::from_scope(context_scope);
+    if context_selectors.is_empty() {
+        return true;
+    }
+
+    knowledge_selectors.overlaps(&context_selectors)
+}
+
+fn collect_path_scope_selectors(scope: &CanonicalValue, selectors: &mut PathScopeSelectors) {
+    let CanonicalValue::Object(entries) = scope else {
+        return;
+    };
+
+    for (key, value) in entries {
+        match key.as_str() {
+            "path" => collect_string_selector(value, &mut selectors.paths),
+            "paths" => collect_string_selectors(value, &mut selectors.paths),
+            "path_prefix" => collect_string_selector(value, &mut selectors.prefixes),
+            "path_prefixes" => collect_string_selectors(value, &mut selectors.prefixes),
+            "scope_payload" => collect_path_scope_selectors(value, selectors),
+            _ => {}
+        }
+    }
+}
+
+fn collect_string_selector(value: &CanonicalValue, selectors: &mut BTreeSet<String>) {
+    if let CanonicalValue::String(text) = value
+        && !text.is_empty()
+    {
+        selectors.insert(text.clone());
+    }
+}
+
+fn collect_string_selectors(value: &CanonicalValue, selectors: &mut BTreeSet<String>) {
+    if let CanonicalValue::Array(values) = value {
+        for value in values {
+            collect_string_selector(value, selectors);
+        }
+    }
+}
+
+fn path_is_within_prefix(path: &str, prefix: &str) -> bool {
+    if path == prefix {
+        return true;
+    }
+    if prefix.ends_with('/') {
+        return path.starts_with(prefix);
+    }
+    path.strip_prefix(prefix)
+        .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn prefixes_overlap(left: &str, right: &str) -> bool {
+    path_is_within_prefix(left, right) || path_is_within_prefix(right, left)
 }
 
 fn primary_parent_by_child(

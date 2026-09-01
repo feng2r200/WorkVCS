@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0440 / Phase 4LY
+Last refreshed: 2026-09-01 by ADR-0442 / Phase 4MA
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -39,7 +39,7 @@ not complete.
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. |
 | Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LW dogfoods cooperative Claim transfer and stale-gated forced takeover in a realistic read-only external-project continuation loop. Shared-Claim collaboration remains smoke-proven but not yet real-project dogfooded. |
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LR adds explicit packet scope and deterministic path-sensitive Knowledge filtering for `context --scope-json` and `claim next --context-scope-json`. Phase 4LS adds durable `context-packet save/show/list` snapshots for exact resolved packets. Phase 4LT projects recent non-empty ChangeSet rationale into bounded packet items so continuation Agents can see why recent state moved. Phase 4LX adds lexical path selector normalization and dogfoods `context --scope-path`, `claim next --context-scope-path`, and `context-packet save --scope-path-prefix` against a read-only external project. Continue with broader context and Resource resolver gaps before claiming release maturity. |
-| Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics; next prove broader causal/evolution and real-project explanation paths. |
+| Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics. Phase 4MA dogfoods a real external-project explanation across Task containment, Verification, Evidence, Record support, and Record-to-Knowledge support without adding display fields. Evolution, epistemic, and broader causal traversal remain Open. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover. Phase 4LV repeats focused Handoff creation/show after a read-only external-project closeout. Phase 4LW proves Claim transfer/takeover continuation around external-project Tasks; broader Handoff consumption across varied project and write-mode flows remains open. |
 | Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Repeat on another real project or larger Store before release maturity claims. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Phase 4LP defines the V1-local directory profile and keeps external Store canonical DAG activation outside the current profile. Phase 4LQ proves the profile against a bounded larger Store workload and fixes a Verification basis import ordering blocker. |
@@ -55,8 +55,9 @@ current user request supplies a narrower priority.
 1. Close Resource adapter contracts, unavailable/error observation states,
    glob semantics, or automatic re-observation policy only when the next
    continuation or verification workflow proves the need.
-2. Dogfood broader `why` paths, including causal/evolution explanation gaps,
-   before expanding explanation output again.
+2. Expand `why` only when a dogfood continuation exposes a concrete causal,
+   evolution, or epistemic explanation gap; do not add more explanation fields
+   speculatively.
 3. Reduce additional manual key-value capture in the operator CLI only where
    the next dogfood loop shows repeated workflow blockage.
 4. Broaden larger Store and performance validation only when the next workload

@@ -17155,8 +17155,21 @@ fn render_claim_list(result: &ClaimListResult) -> String {
 }
 
 fn render_claim_guard(result: &ClaimGuardResult) -> String {
+    let blocking_claim = claim_guard_stale_takeover_candidate(result);
+    let stale_takeover_available = blocking_claim.is_some();
+    let stale_takeover_claim_id = blocking_claim
+        .map(|claim| claim.claim_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let stale_takeover_previous_session_id = blocking_claim
+        .map(|claim| claim.session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let stale_takeover_required_previous_session_lifecycle_state = if stale_takeover_available {
+        "potentially_stale"
+    } else {
+        "none"
+    };
     let mut output = format!(
-        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ntask_entity_id={}\naction={}\nallowed={}\nreason={}\nactive_claims={}\n",
+        "session_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\ntask_entity_id={}\naction={}\nallowed={}\nreason={}\nactive_claims={}\nstale_takeover_available={}\nstale_takeover_claim_id={}\nstale_takeover_previous_session_id={}\nstale_takeover_required_previous_session_lifecycle_state={}\n",
         result.session_id,
         result.workspace_id,
         result.branch_id,
@@ -17165,7 +17178,11 @@ fn render_claim_guard(result: &ClaimGuardResult) -> String {
         claim_guard_action(result.action),
         result.allowed,
         claim_guard_reason(result.reason),
-        result.active_claims.len()
+        result.active_claims.len(),
+        stale_takeover_available,
+        stale_takeover_claim_id,
+        stale_takeover_previous_session_id,
+        stale_takeover_required_previous_session_lifecycle_state
     );
     for (index, claim) in result.active_claims.iter().enumerate() {
         let _ = writeln!(output, "active_claim.{index}.claim_id={}", claim.claim_id);
@@ -17186,6 +17203,17 @@ fn render_claim_guard(result: &ClaimGuardResult) -> String {
         );
     }
     output
+}
+
+fn claim_guard_stale_takeover_candidate(result: &ClaimGuardResult) -> Option<&ClaimSnapshot> {
+    if result.reason != ClaimGuardReason::ExclusiveClaimOwnedByOtherSession {
+        return None;
+    }
+    result.active_claims.iter().find(|claim| {
+        claim.lifecycle_state == ClaimLifecycleState::Active
+            && claim.mode == ClaimMode::Exclusive
+            && claim.session_id != result.session_id
+    })
 }
 
 fn render_claim_next(result: &ClaimNextResult) -> String {
@@ -37729,6 +37757,19 @@ mod tests {
         assert_eq!(value(&unclaimed_guard, "allowed"), "true");
         assert_eq!(value(&unclaimed_guard, "reason"), "unclaimed");
         assert_eq!(value(&unclaimed_guard, "active_claims"), "0");
+        assert_eq!(value(&unclaimed_guard, "stale_takeover_available"), "false");
+        assert_eq!(value(&unclaimed_guard, "stale_takeover_claim_id"), "none");
+        assert_eq!(
+            value(&unclaimed_guard, "stale_takeover_previous_session_id"),
+            "none"
+        );
+        assert_eq!(
+            value(
+                &unclaimed_guard,
+                "stale_takeover_required_previous_session_lifecycle_state"
+            ),
+            "none"
+        );
         assert_eq!(value(&unclaimed_guard, "allowed_match_expected"), "true");
         assert_eq!(value(&unclaimed_guard, "reason_match_expected"), "true");
         assert_eq!(
@@ -38174,10 +38215,80 @@ mod tests {
         assert_eq!(value(&guard, "allowed"), "true");
         assert_eq!(value(&guard, "reason"), "owned_exclusive_claim");
         assert_eq!(value(&guard, "active_claims"), "1");
+        assert_eq!(value(&guard, "stale_takeover_available"), "false");
+        assert_eq!(value(&guard, "stale_takeover_claim_id"), "none");
+        assert_eq!(value(&guard, "stale_takeover_previous_session_id"), "none");
+        assert_eq!(
+            value(
+                &guard,
+                "stale_takeover_required_previous_session_lifecycle_state"
+            ),
+            "none"
+        );
         assert_eq!(value(&guard, "active_claim.0.claim_id"), claim_id);
         assert_eq!(value(&guard, "allowed_match_expected"), "true");
         assert_eq!(value(&guard, "reason_match_expected"), "true");
         assert_eq!(value(&guard, "active_claims_match_expected"), "true");
+        let other_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse other session start"))
+        .expect("start other session");
+        let other_session_id = value(&other_session, "session_id");
+        let blocked_guard = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "guard",
+            store,
+            "--session",
+            &other_session_id,
+            "--task",
+            &task_id,
+            "--expected-allowed",
+            "false",
+            "--expected-reason",
+            "exclusive_claim_owned_by_other_session",
+            "--expected-active-claims",
+            "1",
+        ])
+        .expect("parse blocked claim guard"))
+        .expect("blocked claim guard");
+        assert_eq!(value(&blocked_guard, "allowed"), "false");
+        assert_eq!(
+            value(&blocked_guard, "reason"),
+            "exclusive_claim_owned_by_other_session"
+        );
+        assert_eq!(value(&blocked_guard, "stale_takeover_available"), "true");
+        assert_eq!(value(&blocked_guard, "stale_takeover_claim_id"), claim_id);
+        assert_eq!(
+            value(&blocked_guard, "stale_takeover_previous_session_id"),
+            session_id
+        );
+        assert_eq!(
+            value(
+                &blocked_guard,
+                "stale_takeover_required_previous_session_lifecycle_state"
+            ),
+            "potentially_stale"
+        );
+        assert_eq!(value(&blocked_guard, "active_claim.0.claim_id"), claim_id);
+        assert_eq!(
+            value(&blocked_guard, "active_claim.0.session_id"),
+            session_id
+        );
+        assert_eq!(value(&blocked_guard, "allowed_match_expected"), "true");
+        assert_eq!(value(&blocked_guard, "reason_match_expected"), "true");
+        assert_eq!(
+            value(&blocked_guard, "active_claims_match_expected"),
+            "true"
+        );
         let failed = run(Cli::try_parse_from([
             "workvcs",
             "task",

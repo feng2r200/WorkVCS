@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0435 / Phase 4LT
+Last refreshed: 2026-09-01 by ADR-0436 / Phase 4LU
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -43,7 +43,7 @@ not complete.
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover; repeat on another real project before claiming broad dogfood maturity. |
 | Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Repeat on another real project or larger Store before release maturity claims. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Phase 4LP defines the V1-local directory profile and keeps external Store canonical DAG activation outside the current profile. Phase 4LQ proves the profile against a bounded larger Store workload and fixes a Verification basis import ordering blocker. |
-| CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`; continue reducing manual key-value capture only where dogfood shows repeated friction. |
+| CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`. Phase 4LU reduces the Phase 4LG blocked-Claim recovery ID-capture friction by adding top-level `claim guard` stale-takeover hint fields. Continue reducing command friction only where dogfood shows repeated ID plumbing or workflow blockage. |
 | Actionable errors and recovery | Yes | Partial | Partial | Partial | Phase 4LN documents merge unresolved and moved-head recovery; Phase 4LO documents Bundle divergence refusal and restore/checkpoint selector boundaries. Phase 4LQ records a concrete apply-ordering failure and recovery. Stable key-value `error_code` output remains Open. |
 | Larger Store and performance evidence | Partial | Partial | No | Yes | Phase 4LQ runs the opt-in larger Store portability validation with 48 Tasks, 8 Verification records, 32 scheduling relation inputs, 267 payload files, 749 payload references, apply, restore, and integrity/doctor in 22 seconds. This is bounded local portability dogfood, not broad performance maturity. |
 
@@ -52,12 +52,12 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Reduce manual key-value capture in the operator CLI only where the dogfood
-   evidence shows repeated friction.
-2. Broaden larger Store and performance validation only when the next workload
+1. Use WorkVCS on another real project before claiming broad dogfood maturity.
+2. Reduce additional manual key-value capture in the operator CLI only where
+   the next dogfood loop shows repeated workflow blockage.
+3. Broaden larger Store and performance validation only when the next workload
    is meaningfully larger or more varied than Phase 4LQ; do not design indexes
    without evidence from that run.
-3. Use WorkVCS on another real project before claiming broad dogfood maturity.
 4. Dogfood broader `why` paths, including causal/evolution explanation gaps,
    before expanding explanation output again.
 5. Close Resource path/glob normalization or adapter-backed re-observation
@@ -157,4 +157,7 @@ The following remain beyond V1 even if they would make dogfood easier:
   canonical packet JSON, Session list entry, and Store doctor result. Phase
   4LT projects recent non-empty ChangeSet rationale into brief/normal/full
   ContextPacket output and dogfoods a Goal achievement rationale through
-  `context` and persisted `context-packet show` JSON.
+  `context` and persisted `context-packet show` JSON. Phase 4LU adds stable
+  top-level `claim guard` stale-takeover hint fields so a blocked continuation
+  can identify the blocking Claim and previous owning Session without scanning
+  indexed active-claim rows.

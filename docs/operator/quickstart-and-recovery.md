@@ -501,6 +501,22 @@ workvcs handoff consume "$STORE" \
 workvcs claim guard "$STORE" \
   --session "$CONTINUATION_SESSION_ID" \
   --task "$TASK_ENTITY_ID"
+```
+
+For the `exclusive_claim_owned_by_other_session` case, `claim guard` emits the
+stable top-level fields needed by the next explicit recovery steps:
+
+```text
+stale_takeover_available=true
+stale_takeover_claim_id=<CLAIM_ID>
+stale_takeover_previous_session_id=<PREVIOUS_OWNER_SESSION_ID>
+stale_takeover_required_previous_session_lifecycle_state=potentially_stale
+```
+
+These fields are hints only. They do not mark the previous Session stale and do
+not perform takeover.
+
+```bash
 
 workvcs session mark-stale "$STORE" \
   --session "$PREVIOUS_OWNER_SESSION_ID" \

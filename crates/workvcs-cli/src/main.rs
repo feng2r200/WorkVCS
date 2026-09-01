@@ -15397,6 +15397,14 @@ fn git_worktree_observation_summary(
             CanonicalValue::String("disabled".to_owned()),
         ),
         (
+            "sparse_checkout_policy".to_owned(),
+            CanonicalValue::String("parent_index_status_diff".to_owned()),
+        ),
+        (
+            "sparse_checkout_expansion".to_owned(),
+            CanonicalValue::String("disabled".to_owned()),
+        ),
+        (
             "source".to_owned(),
             CanonicalValue::String("verification cache-refresh".to_owned()),
         ),
@@ -41611,6 +41619,132 @@ mod tests {
         assert!(staged_diff.contains("Subproject commit"));
         assert!(staged_diff.contains(&sub_baseline));
         assert!(staged_diff.contains(&sub_update));
+    }
+
+    #[test]
+    fn git_worktree_snapshot_reports_sparse_checkout_policy_from_parent_git_view() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::create_dir_all(repo.join("keep")).expect("create keep dir");
+        fs::create_dir_all(repo.join("omit")).expect("create omit dir");
+        fs::write(repo.join("README.md"), b"root baseline\n").expect("write readme");
+        fs::write(repo.join("keep/included.txt"), b"kept baseline\n").expect("write included file");
+        fs::write(repo.join("omit/excluded.txt"), b"omitted baseline\n")
+            .expect("write excluded file");
+        git_test(
+            &repo,
+            &["add", "README.md", "keep/included.txt", "omit/excluded.txt"],
+        );
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+
+        git_test(&repo, &["sparse-checkout", "init", "--cone"]);
+        git_test(&repo, &["sparse-checkout", "set", "keep"]);
+
+        assert!(repo.join("README.md").exists());
+        assert!(repo.join("keep/included.txt").exists());
+        assert!(!repo.join("omit/excluded.txt").exists());
+
+        let clean_status = git_command_bytes(
+            &repo,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            "clean sparse checkout status",
+        )
+        .expect("clean sparse checkout status");
+        assert!(clean_status.is_empty());
+        let clean_untracked = git_command_bytes(
+            &repo,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            "clean sparse checkout untracked files",
+        )
+        .expect("clean sparse checkout untracked files");
+        assert!(clean_untracked.is_empty());
+
+        let index = git_command_bytes(&repo, &["ls-files", "-s", "-z"], "git index")
+            .expect("read sparse checkout git index");
+        let index = String::from_utf8(index).expect("sparse checkout git index utf8");
+        assert!(index.contains("keep/included.txt"));
+        assert!(index.contains("omit/excluded.txt"));
+        let sparse_flags = git_command_bytes(&repo, &["ls-files", "-t", "-z"], "git ls-files -t")
+            .expect("read sparse checkout flags");
+        let sparse_flags = String::from_utf8(sparse_flags).expect("sparse checkout flags utf8");
+        assert!(sparse_flags.contains("S omit/excluded.txt"));
+
+        let clean = git_worktree_snapshot(&repo).expect("clean sparse checkout snapshot");
+        let clean_summary_json =
+            canonical_cli_json("git worktree observation summary", &clean.summary)
+                .expect("clean sparse checkout summary JSON");
+        assert!(
+            clean_summary_json.contains(r#""sparse_checkout_policy":"parent_index_status_diff""#)
+        );
+        assert!(clean_summary_json.contains(r#""sparse_checkout_expansion":"disabled""#));
+        assert!(clean_summary_json.contains(r#""untracked_files":0"#));
+
+        fs::write(
+            repo.join("keep/included.txt"),
+            b"kept baseline\nkept update\n",
+        )
+        .expect("write included update");
+        let included_status = git_command_bytes(
+            &repo,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            "included sparse checkout status",
+        )
+        .expect("included sparse checkout status");
+        let included_status =
+            String::from_utf8(included_status).expect("included sparse checkout status utf8");
+        assert!(included_status.contains(" M keep/included.txt"));
+        let dirty = git_worktree_snapshot(&repo).expect("dirty included sparse checkout snapshot");
+        assert_ne!(clean.fingerprint, dirty.fingerprint);
+        let dirty_summary_json =
+            canonical_cli_json("git worktree observation summary", &dirty.summary)
+                .expect("dirty sparse checkout summary JSON");
+        assert!(
+            dirty_summary_json.contains(r#""sparse_checkout_policy":"parent_index_status_diff""#)
+        );
+        assert!(dirty_summary_json.contains(r#""sparse_checkout_expansion":"disabled""#));
+
+        git_test(&repo, &["checkout", "-q", "--", "keep/included.txt"]);
+        fs::create_dir_all(repo.join("omit")).expect("create omitted dir for untracked file");
+        fs::write(
+            repo.join("omit/new-untracked.txt"),
+            b"new untracked in sparse-excluded dir\n",
+        )
+        .expect("write sparse excluded untracked file");
+        let excluded_untracked_status = git_command_bytes(
+            &repo,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            "excluded dir untracked status",
+        )
+        .expect("excluded dir untracked status");
+        let excluded_untracked_status = String::from_utf8(excluded_untracked_status)
+            .expect("excluded dir untracked status utf8");
+        assert!(excluded_untracked_status.contains("?? omit/new-untracked.txt"));
+        let excluded_untracked_files = git_command_bytes(
+            &repo,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            "excluded dir untracked files",
+        )
+        .expect("excluded dir untracked files");
+        let excluded_untracked_files =
+            String::from_utf8(excluded_untracked_files).expect("excluded dir untracked files utf8");
+        assert!(excluded_untracked_files.contains("omit/new-untracked.txt"));
+        let excluded_untracked =
+            git_worktree_snapshot(&repo).expect("excluded dir untracked sparse checkout snapshot");
+        assert_ne!(clean.fingerprint, excluded_untracked.fingerprint);
+        let excluded_untracked_summary_json = canonical_cli_json(
+            "git worktree observation summary",
+            &excluded_untracked.summary,
+        )
+        .expect("excluded dir untracked sparse checkout summary JSON");
+        assert!(
+            excluded_untracked_summary_json
+                .contains(r#""sparse_checkout_policy":"parent_index_status_diff""#)
+        );
+        assert!(
+            excluded_untracked_summary_json.contains(r#""sparse_checkout_expansion":"disabled""#)
+        );
+        assert!(excluded_untracked_summary_json.contains(r#""untracked_files":1"#));
     }
 
     #[test]

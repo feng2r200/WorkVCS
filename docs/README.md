@@ -5,9 +5,11 @@ confirmed product, domain, and architecture state.
 
 ## Implementation readiness
 
-The current V1 implementation-readiness and dogfood gap ledger is:
+The current V1 implementation-readiness, release gate, and dogfood evidence
+index is:
 
 - [V1 Readiness Ledger](provenance/v1-readiness-ledger.md)
+- [V1 Release Gate Matrix](provenance/v1-release-gate-matrix.md)
 - [Context Profile Budget Dogfood Evidence](provenance/context-profile-budget-dogfood.md)
 - [Verify Wrapper Dogfood Evidence](provenance/verify-wrapper-dogfood.md)
 - [Verification Cache Refresh Dogfood Evidence](provenance/verification-cache-refresh-dogfood.md)
@@ -182,11 +184,13 @@ Recent repository-level CLI smoke gates:
 - [ADR-0454: Phase 4MM Merge Maturity Dogfood](decisions/adr/0454-phase-4mm-merge-maturity-dogfood.md)
 - [ADR-0455: Phase 4MN Batch Basis Refresh](decisions/adr/0455-phase-4mn-batch-basis-refresh.md)
 - [ADR-0456: Phase 4MO JSON Error Output](decisions/adr/0456-phase-4mo-json-error-output.md)
+- [ADR-0457: Phase 4MP V1 Release Gate Matrix](decisions/adr/0457-phase-4mp-v1-release-gate-matrix.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
-is tracked separately in the V1 readiness ledger. The local Rust V0.1
-implementation is in progress and has smoke-proven coverage for several V1
-areas, but it is not release-ready and is not dogfood-complete.
+is tracked separately in the V1 readiness ledger and release-maturity status is
+tracked in the V1 release gate matrix. The local Rust V0.1 implementation is
+in progress and has smoke-proven coverage for several V1 areas, but it is not
+release-ready and is not dogfood-complete.
 
 Detailed promotion evidence and the confirmation ledger are retained in
 [Confirmed State v0.1 Provenance](provenance/confirmed-state-v0.1.md) and

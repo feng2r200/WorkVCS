@@ -514,6 +514,14 @@ convergence, and required-valid integrity/doctor proof in 331 seconds. Treat
 this as bounded V1-local evidence, not as a general benchmark or index-tuning
 basis.
 
+For successful preserved runs, the script now appends the final key-value
+summary to the tail of the same `run.log` path that records per-command output.
+The Phase 4NF proof ran the script with a small two-cycle opt-in workload and
+confirmed that the stdout summary and final same-length `run.log` tail were
+byte-identical. Use this when handing off validation evidence: the named
+`log_file` now contains both the command trace and the final compact result
+summary.
+
 ## Common Recovery Actions
 
 When a WorkVCS business command fails, read stderr as line-oriented key-value
@@ -948,5 +956,6 @@ message=error: unexpected argument ...
   justification.
 - WorkVCS business errors and top-level clap syntax errors now emit stable
   key-value and JSON fields, and current per-code recovery guidance is
-  documented in the operator error recovery guide. Broader recovery maturity
-  remains open.
+  documented in the operator error recovery guide. Maintained Store validator
+  logs now include the final compact success summary at the preserved `run.log`
+  tail. Broader recovery maturity remains open.

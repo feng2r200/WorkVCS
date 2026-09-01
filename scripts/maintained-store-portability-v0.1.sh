@@ -585,43 +585,45 @@ for ((cycle = 1; cycle <= cycle_count; cycle += 1)); do
 done
 
 elapsed_seconds=$((SECONDS - run_started_at))
-printf 'maintained_store_result=PASS\n'
-printf 'store_id=%s\n' "$store_id"
-printf 'workspace_id=%s\n' "$workspace_id"
-printf 'branch_id=%s\n' "$branch_id"
-printf 'cycles=%s\n' "$cycle_count"
-printf 'source_reopens=%s\n' "$cycle_count"
-printf 'same_target_applies=%s\n' "$cycle_count"
-printf 'target_restore_checks=%s\n' "$target_restore_checks"
-printf 'lineage_list_checks=%s\n' "$lineage_list_checks"
-printf 'seed_tasks=%s\n' "$seed_tasks"
-printf 'tasks_per_cycle=%s\n' "$tasks_per_cycle"
-printf 'final_task_count=%s\n' "$total_tasks"
-printf 'verification_requirements=%s\n' "$total_requirements"
-printf 'verification_records=%s\n' "$total_verifications"
-printf 'relation_versions=%s\n' "$total_relation_versions"
-printf 'baseline_head_commit_id=%s\n' "$baseline_head_commit_id"
-printf 'baseline_state_digest=%s\n' "$baseline_state_digest"
-printf 'final_source_head_commit_id=%s\n' "$head_commit_id"
-printf 'final_source_state_digest=%s\n' "$source_state_digest"
-printf 'final_target_head_commit_id=%s\n' "$target_main_head_commit_id"
-printf 'final_target_state_digest=%s\n' "$target_main_state_digest"
-for ((cycle = 1; cycle <= cycle_count; cycle += 1)); do
-    printf 'cycle_%s_head_commit_id=%s\n' "$cycle" "${cycle_head_commit_ids[$cycle]}"
-    printf 'cycle_%s_state_digest=%s\n' "$cycle" "${cycle_state_digests[$cycle]}"
-    printf 'cycle_%s_checkpoint_id=%s\n' "$cycle" "${cycle_checkpoint_ids[$cycle]}"
-    printf 'cycle_%s_target_lineages=%s\n' "$cycle" "${cycle_lineage_counts[$cycle]}"
-    printf 'cycle_%s_bundle_import_id=%s\n' "$cycle" "${cycle_bundle_import_ids[$cycle]}"
-    printf 'cycle_%s_bundle_digest=%s\n' "$cycle" "${cycle_bundle_digests[$cycle]}"
-    printf 'cycle_%s_payload_files=%s\n' "$cycle" "${cycle_payload_files[$cycle]}"
-    printf 'cycle_%s_payload_references=%s\n' "$cycle" "${cycle_payload_references[$cycle]}"
-    printf 'cycle_%s_restore_commit_id=%s\n' "$cycle" "${cycle_restore_commit_ids[$cycle]}"
-done
-printf 'elapsed_seconds=%s\n' "$elapsed_seconds"
-if [[ "$keep_tmp" == "1" ]]; then
-    printf 'output_dir=%s\n' "$run_dir"
-    printf 'log_file=%s\n' "$log_file"
-else
-    printf 'output_dir=removed_on_success\n'
-    printf 'log_file=removed_on_success\n'
-fi
+{
+    printf 'maintained_store_result=PASS\n'
+    printf 'store_id=%s\n' "$store_id"
+    printf 'workspace_id=%s\n' "$workspace_id"
+    printf 'branch_id=%s\n' "$branch_id"
+    printf 'cycles=%s\n' "$cycle_count"
+    printf 'source_reopens=%s\n' "$cycle_count"
+    printf 'same_target_applies=%s\n' "$cycle_count"
+    printf 'target_restore_checks=%s\n' "$target_restore_checks"
+    printf 'lineage_list_checks=%s\n' "$lineage_list_checks"
+    printf 'seed_tasks=%s\n' "$seed_tasks"
+    printf 'tasks_per_cycle=%s\n' "$tasks_per_cycle"
+    printf 'final_task_count=%s\n' "$total_tasks"
+    printf 'verification_requirements=%s\n' "$total_requirements"
+    printf 'verification_records=%s\n' "$total_verifications"
+    printf 'relation_versions=%s\n' "$total_relation_versions"
+    printf 'baseline_head_commit_id=%s\n' "$baseline_head_commit_id"
+    printf 'baseline_state_digest=%s\n' "$baseline_state_digest"
+    printf 'final_source_head_commit_id=%s\n' "$head_commit_id"
+    printf 'final_source_state_digest=%s\n' "$source_state_digest"
+    printf 'final_target_head_commit_id=%s\n' "$target_main_head_commit_id"
+    printf 'final_target_state_digest=%s\n' "$target_main_state_digest"
+    for ((cycle = 1; cycle <= cycle_count; cycle += 1)); do
+        printf 'cycle_%s_head_commit_id=%s\n' "$cycle" "${cycle_head_commit_ids[$cycle]}"
+        printf 'cycle_%s_state_digest=%s\n' "$cycle" "${cycle_state_digests[$cycle]}"
+        printf 'cycle_%s_checkpoint_id=%s\n' "$cycle" "${cycle_checkpoint_ids[$cycle]}"
+        printf 'cycle_%s_target_lineages=%s\n' "$cycle" "${cycle_lineage_counts[$cycle]}"
+        printf 'cycle_%s_bundle_import_id=%s\n' "$cycle" "${cycle_bundle_import_ids[$cycle]}"
+        printf 'cycle_%s_bundle_digest=%s\n' "$cycle" "${cycle_bundle_digests[$cycle]}"
+        printf 'cycle_%s_payload_files=%s\n' "$cycle" "${cycle_payload_files[$cycle]}"
+        printf 'cycle_%s_payload_references=%s\n' "$cycle" "${cycle_payload_references[$cycle]}"
+        printf 'cycle_%s_restore_commit_id=%s\n' "$cycle" "${cycle_restore_commit_ids[$cycle]}"
+    done
+    printf 'elapsed_seconds=%s\n' "$elapsed_seconds"
+    if [[ "$keep_tmp" == "1" ]]; then
+        printf 'output_dir=%s\n' "$run_dir"
+        printf 'log_file=%s\n' "$log_file"
+    else
+        printf 'output_dir=removed_on_success\n'
+        printf 'log_file=removed_on_success\n'
+    fi
+} | tee -a "$log_file"

@@ -153,4 +153,11 @@ scripts/smoke-v0.1-cli-workflow.sh
 
 ## Delivery Closeout
 
-Pending.
+- Dogfood evidence commit:
+  `417183ba87c80fad02177792f935261698e34d4d`.
+- Fast-forward merged to `main`.
+- Worktree cleanup proof:
+  `/tmp/workvcs-4mm-cleanup-20260901T100936Z`.
+- Cleanup proof fields:
+  `clean=yes`, `attached=yes`, `unlocked=yes`, `covered_by_main=yes`,
+  `removed=yes`, `branch_retained=yes`.

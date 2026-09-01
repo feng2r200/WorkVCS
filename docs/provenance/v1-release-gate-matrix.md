@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-01 by ADR-0460 / Phase 4MS
+Last refreshed: 2026-09-01 by ADR-0461 / Phase 4MT
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4MS was main commit
-`ef025c7b1eaaacb9100113d86dd15c9639d5afa2` and the V1 readiness ledger last
-refreshed by ADR-0459 / Phase 4MR. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4MT was main commit
+`37562537fe42af3e30310499d9c9d38e898dd8b3` and the V1 readiness ledger last
+refreshed by ADR-0460 / Phase 4MS. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -48,7 +48,7 @@ dogfood, or release-operation gaps named by the gates.
 | Session, Claim, Runnable, `claim next`, and `next` | Continuation, focus, and Claim guard flows remain usable across stale recovery and multi-operator scenarios. | Ledger marks the current Session/Runnable/claim-next surface dogfood-proven. Phase 4LW and Phase 4MI cover Claim transfer, stale takeover, and shared read-only collaboration. Phase 4MR covers shared-Claim write/read-write coordination in this repository: non-unique shared Claims block protected writer mutation, then reader release restores unique-writer closeout. | Pass | No | Keep as regression foundation; automatic ownership arbitration, distributed collaboration, and remote multi-operator coordination remain outside V1 unless explicitly authorized. |
 | Context resolver, packets, and `why` explanations | Context packets and `why` output expose enough focused, causal, and explanatory state for continuation Agents without speculative LLM extraction. | Phases 4LR through 4LT and 4LX cover scoped packets and rationale projection; Phases 4MA, 4MH, and 4ML cover selected `why` relationships and causal anchors. | Partial | Yes | Prove broader context/Resource resolver behavior, full evolution traversal, epistemic explanation, and broader causal traversal only through concrete dogfood gaps. |
 | Handoff consumption | Handoff creation, display, focus consumption, blocked recovery, and continuation work across varied project and write-mode workflows. | Current evidence covers focused Handoff smoke, Handoff consumption, blocked recovery, read-only external-project Handoff creation/show, external-project continuation-adjacent Claim work, and Phase 4MS write-mode Handoff consumption with continuation Claim, VR-backed verification, Task closeout, and SessionDiff closeout. | Pass | No | Keep as regression foundation; remote/cloud Handoff, cross-Store synchronization, automatic takeover, and Agent orchestration remain outside V1 unless explicitly authorized. |
-| Merge lifecycle and conflict recovery | Divergent Work Branch resolution, freeze/continue/abort/restart recovery, and final WorkState proof hold in realistic write-mode external-project work. | Phase 4LN and Phase 4MM prove merge behavior in durable local Stores, including larger conflict sets and two-parent merge commits. | Partial | Yes | Repeat merge in a real write-mode external-project workflow before a broad release-maturity claim. |
+| Merge lifecycle and conflict recovery | Divergent Work Branch resolution, freeze/continue/abort/restart recovery, and final WorkState proof hold in realistic write-mode external-project work. | Phase 4LN and Phase 4MM prove merge behavior in durable local Stores, including larger conflict sets and two-parent merge commits. Phase 4MT adds generated external local Git project write-mode merge proof with an actual Git conflict, WorkVCS conflict and auto merge items, unresolved freeze guard, explicit source-side resolutions, freeze/continue, a two-parent WorkVCS merge commit, final WorkState proof, Branch diff, SessionDiff closeout, and required-valid integrity/doctor. | Partial | Yes | Repeat merge against a pre-existing real external project or broader operator-owned write-mode workflow before a broad release-maturity claim. |
 | Operator discoverability and actionable recovery | Operators and scripts can identify failures, choose recovery, and parse error output without source inspection. | Phase 4LZ, Phase 4MJ, Phase 4MK, and Phase 4MO cover stable key-value and JSON error output plus per-code recovery guidance for current error codes. | Partial | Yes | Prove broader recovery maturity in realistic workflows and reduce command friction only where repeated dogfood blockage appears. |
 | Larger Store and performance evidence | Candidate release behavior is bounded by workload evidence that is larger and more varied than smoke, with integrity/doctor proof. | Phase 4LQ validates portability on a bounded larger Store; Phase 4MM validates a larger merge-path Store. | Partial | Yes | Run a meaningfully larger or more varied workload only when the next real workload justifies it; do not design indexes from the current bounded runs alone. |
 | Candidate release operation | A named candidate commit has a fresh full validation matrix, clean git state, closed governance Plan, refreshed release gate matrix, and explicit release authorization. | No candidate release has been authorized or prepared in this slice. | Blocked | Yes | After all functional/dogfood gates pass, run a release-candidate validation from the exact candidate commit and obtain explicit release authorization. |
@@ -61,7 +61,8 @@ over speculative broadening.
 
 Priority candidates:
 
-1. Repeat merge in a real write-mode external-project workflow.
+1. Repeat merge against a pre-existing real external project or broader
+   operator-owned write-mode workflow.
 2. Close Resource adapter policy or background re-observation gaps only when
    the next continuation or verification workflow proves the need.
 3. Refresh this matrix after each blocking gate changes status and before any
@@ -110,6 +111,22 @@ Phase 4MS refreshes this matrix after real write-mode Handoff consumption
 dogfood. The Handoff consumption gate is now `Pass` for the bounded V1-local
 scope, backed by
 `docs/provenance/phase-4ms-handoff-consumption-write-mode-dogfood.md`.
+
+The overall release decision remains false because other blocking gates remain
+`Partial` or `Blocked`.
+
+## Phase 4MT Update
+
+Phase 4MT refreshes this matrix after generated external local Git write-mode
+merge dogfood. The run pairs an actual external Git conflict and two-parent
+merge commit with a WorkVCS merge over the mirrored external project states,
+backed by
+`docs/provenance/phase-4mt-external-merge-write-mode-dogfood.md`.
+
+This narrows the merge gate but does not close it. The external project was
+generated for this dogfood rather than a pre-existing business repository or
+broader operator-owned workflow, so merge lifecycle and conflict recovery
+remain `Partial` and blocking for broad release maturity.
 
 The overall release decision remains false because other blocking gates remain
 `Partial` or `Blocked`.

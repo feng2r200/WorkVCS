@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0460 / Phase 4MS
+Last refreshed: 2026-09-01 by ADR-0461 / Phase 4MT
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -45,7 +45,7 @@ not complete.
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LR adds explicit packet scope and deterministic path-sensitive Knowledge filtering for `context --scope-json` and `claim next --context-scope-json`. Phase 4LS adds durable `context-packet save/show/list` snapshots for exact resolved packets. Phase 4LT projects recent non-empty ChangeSet rationale into bounded packet items so continuation Agents can see why recent state moved. Phase 4LX adds lexical path selector normalization and dogfoods `context --scope-path`, `claim next --context-scope-path`, and `context-packet save --scope-path-prefix` against a read-only external project. Continue with broader context and Resource resolver gaps before claiming release maturity. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics. Phase 4MA dogfoods a real external-project explanation across Task containment, Verification, Evidence, Record support, and Record-to-Knowledge support without adding display fields. Phase 4MH exposes `evolution` as a deferred relation family when the queried Entity anchors a first-parent-reachable ChangeSet, and dogfoods the behavior against a real external project. Phase 4ML makes that causal-anchor evolution evidence actionable by projecting the first-parent-reachable anchoring commit and ChangeSet from `why` for the queried Entity. Full evolution traversal, epistemic explanation, and broader causal traversal remain Open. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover. Phase 4LV repeats focused Handoff creation/show after a read-only external-project closeout. Phase 4LW proves Claim transfer/takeover continuation around external-project Tasks. Phase 4MS proves focused Handoff consumption by a separate continuation Session in a real write-mode repository delivery slice, including Claim, VR-backed verification, Task closeout, and SessionDiff closeout. Keep as regression foundation; remote/cloud Handoff, cross-Store synchronization, automatic takeover, and Agent orchestration remain outside V1 unless explicitly authorized. |
-| Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Phase 4MM repeats merge dogfood on a larger and more varied local Store with 12 conflict items, 12 auto items including 8 source-only Tasks and 4 source-side scheduling Relations, explicit resolutions for all 24 items, freeze/continue, a two-parent merge commit, expected final WorkState, and required-valid integrity/doctor. Repeat merge in a real write-mode external-project workflow before broad release-maturity claims. |
+| Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Phase 4MM repeats merge dogfood on a larger and more varied local Store with 12 conflict items, 12 auto items including 8 source-only Tasks and 4 source-side scheduling Relations, explicit resolutions for all 24 items, freeze/continue, a two-parent merge commit, expected final WorkState, and required-valid integrity/doctor. Phase 4MT adds generated external local Git project write-mode merge proof: actual Git conflict, WorkVCS conflict and auto merge items, unresolved freeze guard, explicit source-side resolutions, freeze/continue, final WorkState proof, Branch diff, SessionDiff closeout, and required-valid integrity/doctor. Repeat this against a pre-existing real external project or broader operator-owned workflow before broad release-maturity claims. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Phase 4LP defines the V1-local directory profile and keeps external Store canonical DAG activation outside the current profile. Phase 4LQ proves the profile against a bounded larger Store workload and fixes a Verification basis import ordering blocker. |
 | CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`. Phase 4LU reduces the Phase 4LG blocked-Claim recovery ID-capture friction by adding top-level `claim guard` stale-takeover hint fields. Phase 4LX reduces repeated scope JSON authoring for local-file Context and Resource-backed verification workflows with path shorthands. Phase 4MJ reduces stale command-spelling recovery friction by normalizing top-level clap usage failures into stable key-value stderr. Phase 4MK adds a per-code recovery guide so operators do not have to infer recovery behavior from raw messages or source. Continue reducing command friction only where dogfood shows repeated ID plumbing or workflow blockage. |
 | Actionable errors and recovery | Yes | Partial | Yes | Partial | Phase 4LN documents merge unresolved and moved-head recovery; Phase 4LO documents Bundle divergence refusal and restore/checkpoint selector boundaries. Phase 4LQ records a concrete apply-ordering failure and recovery. Phase 4LZ adds stable process-level key-value fields for WorkVCS business errors: `error_code`, `error_category`, `retryable`, and escaped `message`. Phase 4MJ adds the same script-readable shape for top-level clap parse errors, with `error_code=cli_parse_error`, `error_category=usage`, `retryable=false`, `clap_error_kind`, escaped `message`, and preserved help display. Phase 4MK documents current per-code operator recovery actions for every stable WorkVCS business error code and `cli_parse_error`. Phase 4MO adds explicit `--error-format json` output for WorkVCS business errors and top-level clap parse errors, with process-level dogfood proving parseable JSON while preserving default key-value stderr. Phase 4MP adds the current V1 release gate matrix; broader recovery maturity remains Open. |
@@ -56,8 +56,8 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Repeat merge in a real write-mode external-project workflow before a broad
-   release-maturity claim.
+1. Repeat merge against a pre-existing real external project or broader
+   operator-owned write-mode workflow before a broad release-maturity claim.
 2. Close remaining Resource adapter policies or background re-observation
    policy only when the next continuation or verification workflow proves the
    need; after Phase 4MN, prefer real workflow blockers over additional refresh
@@ -304,6 +304,15 @@ The following remain beyond V1 even if they would make dogfood easier:
   released the Claim, and ended with a SessionDiff. The run keeps remote/cloud
   Handoff, cross-Store synchronization, automatic takeover, and Agent
   orchestration outside V1.
+  Phase 4MT narrows the merge release gate with generated external local Git
+  write-mode proof: the external target/source branches produced an actual Git
+  conflict and two-parent merge commit, and WorkVCS completed the mirrored
+  merge through conflict and auto item inspection, unresolved freeze guard,
+  explicit source-side resolutions, freeze/continue, final WorkState version
+  anchors plus read-only entity-version state proof, Branch diff, SessionDiff
+  closeout, and required-valid integrity/doctor. Because the external project
+  was generated for this dogfood, this does not prove pre-existing business
+  repository maturity or broad release maturity.
   Phase 4ML closes a concrete `why` dogfood gap: Decision supersede ChangeSets
   already had causal anchors visible through `changeset anchors`, but `why`
   could not report which first-parent-reachable commit/ChangeSet the queried

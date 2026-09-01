@@ -346,9 +346,15 @@ these read-only scope links; existing relation filters and limits apply to
 
 When querying a Record or other Entity that was used as a causal anchor for a
 ChangeSet reachable through first-parent history, `why` reports
-`deferred_relation_family.0=evolution`. This means WorkVCS can see that the
-Entity participates in an evolution explanation family, but full ChangeSet
-evolution traversal is still not implemented.
+`deferred_relation_family.0=evolution`, the anchoring
+`causal_anchor_changeset.<i>.*` fields, and the direct
+`evolution_change_operation.<i>.*` fields for that ChangeSet. The operation
+fields include `subject_family` and `subject_object_id`, so an operator can see
+which Entity or Relation the causal anchor changed without running a separate
+`changeset operations` command. Use `--expected-evolution-change-operations`
+when a script needs to assert the projected operation count. Full ChangeSet
+evolution traversal is still not implemented, and relation filters and limits
+continue to apply only to `relation_edges`.
 
 Start a continuation Session, then consume the Handoff into that Session's
 focus:
@@ -933,8 +939,9 @@ message=error: unexpected argument ...
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` exposes focused Handoff scope links, anchored evolution as a deferred
-  family, causal anchor ChangeSet projections, and direct epistemic statement
-  explanations. Full evolution traversal, broader causal traversal, and broader
+  family, causal anchor ChangeSet projections, direct evolution operation
+  subjects for those ChangeSets, and direct epistemic statement explanations.
+  Full evolution traversal, broader causal traversal, and broader
   context/Resource resolver maturity remain open.
 - Shared-Claim collaboration has read-only real-project and bounded
   write-mode/read-write dogfood evidence. Automatic ownership arbitration,

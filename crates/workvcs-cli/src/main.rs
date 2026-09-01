@@ -103,11 +103,11 @@ use workvcs_core::{
     VerificationRequirementRevisionOptions, VerificationRequirementSnapshot,
     VerificationResourceBasis, VerificationResult, VerificationSnapshot, VerificationTarget,
     VerifyOptions, VerifyResourceObservationInput, VerifyResult, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyEpistemicExplanation, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
-    WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WhyScopeLinkKind, WorkState,
-    WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
-    WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError, WorkspaceId, WorkspaceInfo,
-    WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
+    WhyEntityKind, WhyEpistemicExplanation, WhyEvolutionChangeOperation, WhyQueryOptions,
+    WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind,
+    WhyScopeLinkKind, WorkState, WorkStateDiff, WorkStateDiffChangeKind, WorkStateDiffOptions,
+    WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions, WorkVcsError,
+    WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions, WorkspaceListResult,
     WorkspaceResourceAssociationListOptions, WorkspaceResourceAssociationListResult,
     WorkspaceResourceAssociationOptions, WorkspaceResourceAssociationResult, canonical_bytes,
     content_object_digest, entity_version_digest, parse_canonical_json, relation_version_digest,
@@ -463,6 +463,9 @@ enum Command {
 
         #[arg(long)]
         expected_epistemic_explanations: Option<usize>,
+
+        #[arg(long)]
+        expected_evolution_change_operations: Option<usize>,
 
         #[arg(long)]
         expected_scope_links: Option<usize>,
@@ -7563,6 +7566,7 @@ fn run(cli: Cli) -> Result<String> {
             relation_limit,
             expected_relation_edges,
             expected_epistemic_explanations,
+            expected_evolution_change_operations,
             expected_scope_links,
         } => {
             if matches!(relation_limit, Some(0)) {
@@ -7696,6 +7700,16 @@ fn run(cli: Cli) -> Result<String> {
                     )));
                 }
                 output.push_str("epistemic_explanations_match_expected=true\n");
+            }
+            if let Some(expected_evolution_change_operations) = expected_evolution_change_operations
+            {
+                let actual_evolution_change_operations = result.evolution_change_operations.len();
+                if actual_evolution_change_operations != expected_evolution_change_operations {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "why evolution change operations {actual_evolution_change_operations} does not match expected {expected_evolution_change_operations}"
+                    )));
+                }
+                output.push_str("evolution_change_operations_match_expected=true\n");
             }
             if let Some(expected_scope_links) = expected_scope_links {
                 let actual_scope_links = result.scope_links.len();
@@ -22694,6 +22708,15 @@ fn render_why(result: &WhyQueryResult) -> String {
     }
     writeln!(
         output,
+        "evolution_change_operations={}",
+        result.evolution_change_operations.len()
+    )
+    .expect("write to String");
+    for (index, operation) in result.evolution_change_operations.iter().enumerate() {
+        render_why_evolution_change_operation(&mut output, index, operation);
+    }
+    writeln!(
+        output,
         "deferred_relation_families={}",
         result.deferred_relation_families.len()
     )
@@ -22707,6 +22730,73 @@ fn render_why(result: &WhyQueryResult) -> String {
         .expect("write to String");
     }
     output
+}
+
+fn render_why_evolution_change_operation(
+    output: &mut String,
+    index: usize,
+    operation: &WhyEvolutionChangeOperation,
+) {
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.commit_id={}",
+        operation.commit_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.changeset_id={}",
+        operation.changeset_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.changeset_operation_type={}",
+        operation.changeset_operation_type
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.changeset_operation_schema_version={}",
+        operation.changeset_operation_schema_version
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.operation_id={}",
+        operation.operation_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.ordinal={}",
+        operation.ordinal
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.subject_family={}",
+        operation.subject.family()
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.subject_object_id={}",
+        operation.subject.object_id()
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.operation_payload_digest={}",
+        operation.operation_payload_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "evolution_change_operation.{index}.operation_payload_size_bytes={}",
+        operation.operation_payload_size_bytes
+    )
+    .expect("write to String");
 }
 
 fn retain_why_epistemic_explanations_for_relation_edges(result: &mut WhyQueryResult) {
@@ -47388,6 +47478,7 @@ mod tests {
         assert!(why_prior.contains("relation.0.relation_kind=record_supersedes"));
         assert!(why_prior.contains("relation.0.direction=incoming"));
         assert_eq!(value(&why_prior, "causal_anchor_changesets"), "0");
+        assert_eq!(value(&why_prior, "evolution_change_operations"), "0");
         assert_eq!(value(&why_prior, "deferred_relation_families"), "0");
 
         let why_finding = run(Cli::try_parse_from([
@@ -47422,6 +47513,63 @@ mod tests {
             value(&why_finding, "causal_anchor_changeset.0.anchor_object_kind"),
             "entity"
         );
+        assert_eq!(value(&why_finding, "evolution_change_operations"), "3");
+        assert_eq!(
+            value(&why_finding, "evolution_change_operation.0.changeset_id"),
+            value(&superseded, "changeset_id")
+        );
+        assert_eq!(
+            value(
+                &why_finding,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "record.decision.supersede"
+        );
+        assert_eq!(
+            value(&why_finding, "evolution_change_operation.0.ordinal"),
+            "0"
+        );
+        assert_eq!(
+            value(&why_finding, "evolution_change_operation.0.subject_family"),
+            "entity"
+        );
+        assert_eq!(
+            value(
+                &why_finding,
+                "evolution_change_operation.0.subject_object_id"
+            ),
+            value(&prior, "record_entity_id")
+        );
+        assert_eq!(
+            value(&why_finding, "evolution_change_operation.1.ordinal"),
+            "1"
+        );
+        assert_eq!(
+            value(&why_finding, "evolution_change_operation.1.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(
+                &why_finding,
+                "evolution_change_operation.1.subject_object_id"
+            ),
+            value(&superseded, "relation_id")
+        );
+        assert_eq!(
+            value(&why_finding, "evolution_change_operation.2.ordinal"),
+            "2"
+        );
+        assert_eq!(
+            value(&why_finding, "evolution_change_operation.2.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(
+                &why_finding,
+                "evolution_change_operation.2.subject_object_id"
+            ),
+            value(&superseded, "causal_relation_id")
+        );
         assert_eq!(value(&why_finding, "deferred_relation_families"), "1");
         assert_eq!(
             value(&why_finding, "deferred_relation_family.0"),
@@ -47440,6 +47588,8 @@ mod tests {
             "record_derived_from",
             "--relation-limit",
             "1",
+            "--expected-evolution-change-operations",
+            "3",
         ])
         .expect("parse filtered why causal finding"))
         .expect("filtered why causal finding");
@@ -47454,6 +47604,17 @@ mod tests {
         assert_eq!(
             value(&filtered_why_finding, "deferred_relation_family.0"),
             "evolution"
+        );
+        assert_eq!(
+            value(&filtered_why_finding, "evolution_change_operations"),
+            "3"
+        );
+        assert_eq!(
+            value(
+                &filtered_why_finding,
+                "evolution_change_operations_match_expected"
+            ),
+            "true"
         );
     }
 

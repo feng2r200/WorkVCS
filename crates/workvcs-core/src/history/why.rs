@@ -7,12 +7,13 @@ use super::task::{
     VERIFICATION_REQUIREMENT_ENTITY_KIND,
 };
 use super::{
-    HistoryQueryOptions, KnowledgeRelationListOptions, PrimaryContainmentEndpointKind,
-    RecordKnowledgeRelationListOptions, RecordRelationListOptions, RecordRelationType,
-    StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence, knowledge_exposure,
-    knowledge_relations_at, primary_containment_relations_at, query_history,
-    record_knowledge_relations_at, record_relations_at, state_at, structural_references_at,
-    verification_evidence_relations_at, verification_relations_at,
+    ChangeOperationSubject, HistoryQueryOptions, KnowledgeRelationListOptions,
+    PrimaryContainmentEndpointKind, RecordKnowledgeRelationListOptions, RecordRelationListOptions,
+    RecordRelationType, StructuralReferenceEndpointKind, VerificationTarget, branch_head,
+    changeset_operations, evidence, knowledge_exposure, knowledge_relations_at,
+    primary_containment_relations_at, query_history, record_knowledge_relations_at,
+    record_relations_at, state_at, structural_references_at, verification_evidence_relations_at,
+    verification_relations_at,
 };
 use crate::canonical::CanonicalValue;
 use crate::error::{Result, WorkVcsError};
@@ -135,6 +136,7 @@ pub struct WhyQueryResult {
     pub epistemic_explanations: Vec<WhyEpistemicExplanation>,
     pub scope_links: Vec<WhyScopeLink>,
     pub causal_anchor_changesets: Vec<WhyCausalAnchorChangeSet>,
+    pub evolution_change_operations: Vec<WhyEvolutionChangeOperation>,
     pub deferred_relation_families: Vec<WhyDeferredRelationFamily>,
 }
 
@@ -324,6 +326,19 @@ pub struct WhyCausalAnchorChangeSet {
     pub changeset_created_at_us: i64,
     pub anchor_object_id: EntityId,
     pub anchor_object_kind: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhyEvolutionChangeOperation {
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub changeset_operation_type: String,
+    pub changeset_operation_schema_version: i64,
+    pub operation_id: crate::identity::OperationId,
+    pub ordinal: i64,
+    pub subject: ChangeOperationSubject,
+    pub operation_payload_digest: Digest,
+    pub operation_payload_size_bytes: i64,
 }
 
 pub(crate) fn explain_why(
@@ -545,6 +560,8 @@ pub(crate) fn explain_why(
 
     let epistemic_explanations =
         why_epistemic_explanations(connection, resolved.target.commit_id, &relation_edges)?;
+    let evolution_change_operations =
+        why_evolution_change_operations(connection, &causal_anchor_changesets)?;
     let deferred_relation_families = why_deferred_relation_families(&causal_anchor_changesets);
 
     Ok(WhyQueryResult {
@@ -554,8 +571,32 @@ pub(crate) fn explain_why(
         epistemic_explanations,
         scope_links,
         causal_anchor_changesets,
+        evolution_change_operations,
         deferred_relation_families,
     })
+}
+
+fn why_evolution_change_operations(
+    connection: &StoreConnection,
+    causal_anchor_changesets: &[WhyCausalAnchorChangeSet],
+) -> Result<Vec<WhyEvolutionChangeOperation>> {
+    let mut evolution_operations = Vec::new();
+    for anchor in causal_anchor_changesets {
+        for operation in changeset_operations(connection, anchor.changeset_id)?.operations {
+            evolution_operations.push(WhyEvolutionChangeOperation {
+                commit_id: anchor.commit_id,
+                changeset_id: anchor.changeset_id,
+                changeset_operation_type: anchor.operation_type.clone(),
+                changeset_operation_schema_version: anchor.operation_schema_version,
+                operation_id: operation.operation_id,
+                ordinal: operation.ordinal,
+                subject: operation.subject,
+                operation_payload_digest: operation.operation_payload_digest,
+                operation_payload_size_bytes: operation.operation_payload_size_bytes,
+            });
+        }
+    }
+    Ok(evolution_operations)
 }
 
 fn why_epistemic_explanations(

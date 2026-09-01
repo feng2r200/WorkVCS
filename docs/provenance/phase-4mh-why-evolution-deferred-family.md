@@ -122,6 +122,16 @@ Superseded matrix evidence:
 `/tmp/workvcs-4mh-final-validation-20260901T074018Z` passed before independent
 review fixes and is retained only as intermediate evidence.
 
+## Delivery Closeout
+
+- Implementation commit: `07c1602552d48007e3e16af494788a5b4db0facc`.
+- Fast-forward merged to `main`.
+- Worktree cleanup proof:
+  `/tmp/workvcs-4mh-cleanup-20260901T075652Z`.
+- Cleanup proof fields:
+  `clean=yes`, `attached=yes`, `unlocked=yes`, `covered_by_main=yes`,
+  `removed=yes`, `branch_retained=yes`.
+
 ## Remaining Open
 
 - Full evolution traversal remains Open.

@@ -471,7 +471,7 @@ larger default smoke matrix is explicitly justified.
 ## Common Recovery Actions
 
 When a WorkVCS business command fails, read stderr as line-oriented key-value
-metadata before choosing the recovery path:
+metadata before choosing the recovery path. This is the default output:
 
 ```text
 error_code=<CODE>
@@ -484,6 +484,10 @@ Use `retryable=true` as a signal to refresh current state and retry the
 operation only after confirming the relevant branch, session, claim, or merge
 head. `message` remains human-facing context; recovery scripts should branch on
 `error_code` and `error_category`.
+
+For machine-readable stderr, pass `--error-format json`. JSON mode emits one
+object for the same fields and changes only failure output; successful command
+stdout is unchanged.
 
 For code-specific operator actions, use the current
 [WorkVCS Error Recovery Guide](error-recovery-guide.md). It covers every
@@ -835,9 +839,10 @@ the script, rerun the failing command with `workvcs ... --help` open for that
 subcommand, and only update expectations after the command output proves the
 intended state transition.
 
-Top-level syntax failures use stable key-value stderr. Branch on
-`error_code=cli_parse_error` and `clap_error_kind` for stale flags or removed
-subcommands; do not parse the human `message` except for display:
+Top-level syntax failures use stable key-value stderr by default and the same
+field names in opt-in JSON mode. Branch on `error_code=cli_parse_error` and
+`clap_error_kind` for stale flags or removed subcommands; do not parse the
+human `message` except for display:
 
 ```text
 error_code=cli_parse_error

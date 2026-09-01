@@ -1,14 +1,15 @@
 # WorkVCS Error Recovery Guide
 
-Status: Phase 4MK current V1-local operator guidance.
+Status: Phase 4MO current V1-local operator guidance.
 
-This guide covers the stable line-oriented error fields emitted by the current
-CLI. It is intentionally an operator recovery contract, not a new wire
-protocol. JSON error output remains Open.
+This guide covers the stable error fields emitted by the current CLI. It is
+intentionally an operator recovery contract, not a new recovery engine or Store
+protocol.
 
 ## Read The Fields
 
-WorkVCS business errors render stderr as:
+By default, WorkVCS business errors render stderr as line-oriented key-value
+fields:
 
 ```text
 error_code=<CODE>
@@ -17,7 +18,7 @@ retryable=<true|false>
 message=<ESCAPED_MESSAGE>
 ```
 
-Top-level CLI syntax errors render stderr as:
+Top-level CLI syntax errors render the same default key-value shape:
 
 ```text
 error_code=cli_parse_error
@@ -29,6 +30,21 @@ message=<ESCAPED_MESSAGE>
 
 Route automation by `error_code`, `error_category`, and `retryable`.
 `message` is display-only context. Do not parse it for control flow.
+
+For JSON stderr, pass `--error-format json`. WorkVCS business errors render one
+JSON object:
+
+```json
+{"error_category":"task","error_code":"task_invalid","message":"task invalid: example","retryable":false}
+```
+
+Top-level CLI syntax errors include the stable clap kind:
+
+```json
+{"clap_error_kind":"unknown_argument","error_category":"usage","error_code":"cli_parse_error","message":"error: unexpected argument ...","retryable":false}
+```
+
+The default remains `--error-format key-value`.
 
 ## Retry Rule
 
@@ -94,5 +110,6 @@ selector as applicable.
   the truth at the evaluated head.
 - Store integrity and compatibility failures are authority problems. Preserve
   evidence first; repair or migrate only through explicit supported paths.
-- JSON output remains Open, so scripts should parse the current key-value
-  stderr form line by line.
+- JSON output is opt-in. Existing scripts that do not pass
+  `--error-format json` should continue parsing the default key-value stderr
+  form line by line.

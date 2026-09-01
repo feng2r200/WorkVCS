@@ -1,5 +1,6 @@
-use clap::{ArgGroup, Parser, Subcommand, error::ErrorKind};
+use clap::{ArgGroup, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::{MatchOptions, Pattern, glob_with};
+use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -116,7 +117,7 @@ use workvcs_core::{
 const TOP_LEVEL_HELP: &str = "\
 WorkVCS v0.1 thin command shell
 
-Usage: workvcs <COMMAND>
+Usage: workvcs [OPTIONS] <COMMAND>
 
 Commands:
   init          Initialize a WorkVCS Store
@@ -161,7 +162,8 @@ Commands:
   help          Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help  Print help
+      --error-format <ERROR_FORMAT>  [default: key-value] [possible values: key-value, json]
+  -h, --help                         Print help
 ";
 
 #[derive(Debug, Parser)]
@@ -169,8 +171,17 @@ Options:
 #[command(about = "WorkVCS v0.1 thin command shell")]
 #[command(override_help = TOP_LEVEL_HELP)]
 struct Cli {
+    #[arg(long, value_enum, default_value_t = ErrorOutputFormat::KeyValue, global = true)]
+    error_format: ErrorOutputFormat,
+
     #[command(subcommand)]
     command: Box<Command>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ErrorOutputFormat {
+    KeyValue,
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -4857,20 +4868,23 @@ enum VerificationCommand {
 }
 
 fn main() {
-    let cli = match Cli::try_parse() {
+    let args = std::env::args_os().collect::<Vec<_>>();
+    let parse_error_format = error_output_format_from_args(args.iter().map(|arg| arg.as_os_str()));
+    let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
-        Err(error) => handle_clap_parse_error(error),
+        Err(error) => handle_clap_parse_error(error, parse_error_format),
     };
+    let error_format = cli.error_format;
     match run(cli) {
         Ok(output) => print!("{output}"),
         Err(error) => {
-            eprint!("{}", render_workvcs_error(&error));
+            eprint!("{}", render_workvcs_error(&error, error_format));
             std::process::exit(1);
         }
     }
 }
 
-fn handle_clap_parse_error(error: clap::Error) -> ! {
+fn handle_clap_parse_error(error: clap::Error, error_format: ErrorOutputFormat) -> ! {
     if matches!(
         error.kind(),
         ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
@@ -4879,11 +4893,57 @@ fn handle_clap_parse_error(error: clap::Error) -> ! {
         let _ = error.print();
         std::process::exit(exit_code);
     }
-    eprint!("{}", render_clap_parse_error(&error));
+    eprint!("{}", render_clap_parse_error(&error, error_format));
     std::process::exit(error.exit_code());
 }
 
-fn render_clap_parse_error(error: &clap::Error) -> String {
+fn error_output_format_from_args<'a, I>(args: I) -> ErrorOutputFormat
+where
+    I: IntoIterator<Item = &'a OsStr>,
+{
+    let mut args = args.into_iter().skip(1).peekable();
+    let mut format = ErrorOutputFormat::KeyValue;
+    while let Some(arg) = args.next() {
+        let Some(arg) = arg.to_str() else {
+            continue;
+        };
+        if arg == "--" {
+            break;
+        }
+        if let Some(value) = arg.strip_prefix("--error-format=") {
+            if let Some(parsed) = ErrorOutputFormat::from_token(value) {
+                format = parsed;
+            }
+            continue;
+        }
+        if arg == "--error-format"
+            && let Some(value) = args.peek().and_then(|value| value.to_str())
+            && let Some(parsed) = ErrorOutputFormat::from_token(value)
+        {
+            format = parsed;
+        }
+    }
+    format
+}
+
+impl ErrorOutputFormat {
+    fn from_token(value: &str) -> Option<Self> {
+        match value {
+            "key-value" => Some(Self::KeyValue),
+            "json" => Some(Self::Json),
+            _ => None,
+        }
+    }
+}
+
+fn render_clap_parse_error(error: &clap::Error, format: ErrorOutputFormat) -> String {
+    match format {
+        ErrorOutputFormat::KeyValue => render_clap_parse_error_key_value(error),
+        ErrorOutputFormat::Json => render_clap_parse_error_json(error),
+    }
+}
+
+fn render_clap_parse_error_key_value(error: &clap::Error) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "error_code=cli_parse_error");
     let _ = writeln!(output, "error_category=usage");
@@ -4897,12 +4957,44 @@ fn render_clap_parse_error(error: &clap::Error) -> String {
     output
 }
 
-fn render_workvcs_error(error: &WorkVcsError) -> String {
+fn render_clap_parse_error_json(error: &clap::Error) -> String {
+    render_json_error(serde_json::json!({
+        "error_code": "cli_parse_error",
+        "error_category": "usage",
+        "retryable": false,
+        "clap_error_kind": clap_error_kind_label(error.kind()),
+        "message": error.to_string(),
+    }))
+}
+
+fn render_workvcs_error(error: &WorkVcsError, format: ErrorOutputFormat) -> String {
+    match format {
+        ErrorOutputFormat::KeyValue => render_workvcs_error_key_value(error),
+        ErrorOutputFormat::Json => render_workvcs_error_json(error),
+    }
+}
+
+fn render_workvcs_error_key_value(error: &WorkVcsError) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "error_code={}", error.code());
     let _ = writeln!(output, "error_category={}", error.category());
     let _ = writeln!(output, "retryable={}", error.retryable());
     let _ = writeln!(output, "message={}", escape_key_value(&error.to_string()));
+    output
+}
+
+fn render_workvcs_error_json(error: &WorkVcsError) -> String {
+    render_json_error(serde_json::json!({
+        "error_code": error.code().as_str(),
+        "error_category": error.category().as_str(),
+        "retryable": error.retryable(),
+        "message": error.to_string(),
+    }))
+}
+
+fn render_json_error(value: serde_json::Value) -> String {
+    let mut output = serde_json::to_string(&value).expect("JSON error output should serialize");
+    output.push('\n');
     output
 }
 
@@ -22971,7 +23063,7 @@ mod tests {
     #[test]
     fn cli_renders_stable_workvcs_error_fields() {
         let error = WorkVcsError::QueryInvalid("line one\nline two".to_owned());
-        let output = render_workvcs_error(&error);
+        let output = render_workvcs_error(&error, ErrorOutputFormat::KeyValue);
 
         assert_eq!(value(&output, "error_code"), "query_invalid");
         assert_eq!(value(&output, "error_category"), "query");
@@ -22985,7 +23077,7 @@ mod tests {
     #[test]
     fn cli_renders_retryable_workvcs_error_fields() {
         let error = WorkVcsError::BranchHeadConflict("branch moved".to_owned());
-        let output = render_workvcs_error(&error);
+        let output = render_workvcs_error(&error, ErrorOutputFormat::KeyValue);
 
         assert_eq!(value(&output, "error_code"), "branch_head_conflict");
         assert_eq!(value(&output, "error_category"), "mutation");
@@ -22994,6 +23086,19 @@ mod tests {
             value(&output, "message"),
             "branch head conflict: branch moved"
         );
+    }
+
+    #[test]
+    fn cli_renders_workvcs_error_json() {
+        let error = WorkVcsError::QueryInvalid("line one\nline two".to_owned());
+        let output = render_workvcs_error(&error, ErrorOutputFormat::Json);
+        let json = json_value(&output);
+
+        assert_eq!(json["error_code"], "query_invalid");
+        assert_eq!(json["error_category"], "query");
+        assert_eq!(json["retryable"], false);
+        assert_eq!(json["message"], "query invalid: line one\nline two");
+        assert_eq!(output.lines().count(), 1);
     }
 
     #[test]
@@ -23009,7 +23114,7 @@ mod tests {
             "01a05c0f-92f4-7873-8c9d-c00a64fdd3d4",
         ])
         .expect_err("unknown clap argument should fail before run");
-        let output = render_clap_parse_error(&error);
+        let output = render_clap_parse_error(&error, ErrorOutputFormat::KeyValue);
 
         assert_eq!(error.exit_code(), 2);
         assert_eq!(value(&output, "error_code"), "cli_parse_error");
@@ -23022,6 +23127,51 @@ mod tests {
     }
 
     #[test]
+    fn cli_renders_clap_parse_error_json() {
+        let error = Cli::try_parse_from(["workvcs", "unknown-command"])
+            .expect_err("unknown subcommand should fail before run");
+        let output = render_clap_parse_error(&error, ErrorOutputFormat::Json);
+        let json = json_value(&output);
+
+        assert_eq!(error.exit_code(), 2);
+        assert_eq!(json["error_code"], "cli_parse_error");
+        assert_eq!(json["error_category"], "usage");
+        assert_eq!(json["retryable"], false);
+        assert_eq!(json["clap_error_kind"], "invalid_subcommand");
+        assert!(
+            json["message"]
+                .as_str()
+                .expect("message is a string")
+                .contains("unrecognized subcommand")
+        );
+        assert_eq!(output.lines().count(), 1);
+    }
+
+    #[test]
+    fn cli_detects_json_error_format_before_parse_completion() {
+        assert_eq!(
+            detected_error_format(&["workvcs", "--error-format", "json", "unknown-command"]),
+            ErrorOutputFormat::Json
+        );
+        assert_eq!(
+            detected_error_format(&["workvcs", "--error-format=json", "unknown-command"]),
+            ErrorOutputFormat::Json
+        );
+        assert_eq!(
+            detected_error_format(&["workvcs", "--error-format", "key-value", "--bad"]),
+            ErrorOutputFormat::KeyValue
+        );
+        assert_eq!(
+            detected_error_format(&["workvcs", "--error-format", "bogus", "--bad"]),
+            ErrorOutputFormat::KeyValue
+        );
+        assert_eq!(
+            detected_error_format(&["workvcs", "--", "--error-format", "json"]),
+            ErrorOutputFormat::KeyValue
+        );
+    }
+
+    #[test]
     fn cli_keeps_help_and_version_as_clap_display() {
         let help = Cli::try_parse_from(["workvcs", "--help"])
             .expect_err("help should be represented as a clap display error");
@@ -23029,6 +23179,11 @@ mod tests {
         assert_eq!(help.kind(), ErrorKind::DisplayHelp);
         assert_eq!(help.exit_code(), 0);
         assert!(!help.use_stderr());
+        assert!(
+            help.to_string()
+                .contains("Usage: workvcs [OPTIONS] <COMMAND>")
+        );
+        assert!(help.to_string().contains("--error-format <ERROR_FORMAT>"));
     }
 
     #[test]
@@ -51033,5 +51188,13 @@ mod tests {
             .find_map(|line| line.strip_prefix(&format!("{key}=")))
             .unwrap_or_else(|| panic!("missing {key} in output:\n{output}"))
             .to_owned()
+    }
+
+    fn json_value(output: &str) -> serde_json::Value {
+        serde_json::from_str(output).expect("output should be JSON")
+    }
+
+    fn detected_error_format(args: &[&str]) -> ErrorOutputFormat {
+        error_output_format_from_args(args.iter().map(OsStr::new))
     }
 }

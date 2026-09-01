@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-02 by ADR-0471 / Phase 4ND
+Last refreshed: 2026-09-02 by ADR-0472 / Phase 4NE
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4ND was main commit
-`26b241dab7987ff2a440f4934589b563d7d38698` and the V1 readiness ledger last
-refreshed by ADR-0470 / Phase 4NC. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4NE was main commit
+`4a527662f1517b9db6629393ad6dd5173e676a71` and the V1 readiness ledger last
+refreshed by ADR-0471 / Phase 4ND. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -22,10 +22,10 @@ project documents or current validation evidence.
   every blocking gate below to `Pass` using fresh evidence from the candidate
   commit.
 
-V0.1 dogfood should continue. This matrix closes the maintained Store
-portability subgap; it does not close the remaining context/explanation,
-operator recovery, larger workload/performance, or release-operation gaps named
-by the gates.
+V0.1 dogfood should continue. This matrix closes the larger workload and
+performance-evidence gate for the bounded V1-local scope; it does not close the
+remaining context/explanation, operator recovery, or release-operation gaps
+named by the gates.
 
 ## Gate States
 
@@ -51,7 +51,7 @@ by the gates.
 | Handoff consumption | Handoff creation, display, focus consumption, blocked recovery, and continuation work across varied project and write-mode workflows. | Current evidence covers focused Handoff smoke, Handoff consumption, blocked recovery, read-only external-project Handoff creation/show, external-project continuation-adjacent Claim work, and Phase 4MS write-mode Handoff consumption with continuation Claim, VR-backed verification, Task closeout, and SessionDiff closeout. | Pass | No | Keep as regression foundation; remote/cloud Handoff, cross-Store synchronization, automatic takeover, and Agent orchestration remain outside V1 unless explicitly authorized. |
 | Merge lifecycle and conflict recovery | Divergent Work Branch resolution, freeze/continue/abort/restart recovery, and final WorkState proof hold in realistic write-mode external-project work. | Phase 4LN and Phase 4MM prove merge behavior in durable local Stores, including larger conflict sets and two-parent merge commits. Phase 4MT adds generated external local Git project write-mode merge proof. Phase 4MU repeats merge against pre-existing real `agent_soul` project content cloned into a write-mode sandbox with an actual Git conflict on existing `README.md`, WorkVCS conflict and auto merge items, unresolved freeze guard, explicit source-side resolutions, freeze/continue, a two-parent WorkVCS merge commit, final WorkState proof, Branch diff, SessionDiff closeout, original-project unchanged proof, and required-valid integrity/doctor. | Pass | No | Keep as regression foundation; semantic/LLM merge, remote or distributed merge, cross-Store synchronization, Agent orchestration, and direct mutation of an original external repository remain outside the bounded V1-local release gate unless separately authorized. |
 | Operator discoverability and actionable recovery | Operators and scripts can identify failures, choose recovery, and parse error output without source inspection. | Phase 4LZ, Phase 4MJ, Phase 4MK, and Phase 4MO cover stable key-value and JSON error output plus per-code recovery guidance for current error codes. | Partial | Yes | Prove broader recovery maturity in realistic workflows and reduce command friction only where repeated dogfood blockage appears. |
-| Larger Store and performance evidence | Candidate release behavior is bounded by workload evidence that is larger and more varied than smoke, with integrity/doctor proof. | Phase 4LQ validates portability on a bounded larger Store; Phase 4MM validates a larger merge-path Store. | Partial | Yes | Run a meaningfully larger or more varied workload only when the next real workload justifies it; do not design indexes from the current bounded runs alone. |
+| Larger Store and performance evidence | Candidate release behavior is bounded by workload evidence that is larger and more varied than smoke, with integrity/doctor proof. | Phase 4LQ validates portability on a bounded larger Store; Phase 4MM validates a larger merge-path Store; Phase 4NE validates a larger maintained Store with five cycles, 112 final Tasks, 20 Verifications, 80 script-counted scheduling relation versions, five same-target applies, 647 final payload files, 1,817 final payload references, and source/target required-valid integrity/doctor in 331 seconds. | Pass | No | Keep as bounded regression evidence; do not design indexes or claim general performance maturity without future workload-specific profiling. |
 | Candidate release operation | A named candidate commit has a fresh full validation matrix, clean git state, closed governance Plan, refreshed release gate matrix, and explicit release authorization. | No candidate release has been authorized or prepared in this slice. | Blocked | Yes | After all functional/dogfood gates pass, run a release-candidate validation from the exact candidate commit and obtain explicit release authorization. |
 
 ## Next Highest-Value Work
@@ -67,10 +67,37 @@ Priority candidates:
    gap.
 2. Prove broader operator recovery maturity or reduce command friction only
    where repeated dogfood blockage appears.
-3. Run a meaningfully larger or more varied workload only when justified; do
-   not design indexes from bounded runs alone.
-4. Refresh this matrix after each blocking gate changes status and before any
+3. Refresh this matrix after each blocking gate changes status and before any
    release-ready or release-candidate claim.
+
+## Phase 4NE Update
+
+Phase 4NE refreshes this matrix after a larger maintained Store workload
+validation. The run used the existing opt-in
+`scripts/maintained-store-portability-v0.1.sh` script with five cycles, 12 seed
+Tasks, 20 Tasks per cycle, four Verifications per cycle, and eight relation
+pairs per cycle.
+
+The final output reported 112 Tasks, 20 Verification records, 80
+script-counted scheduling relation versions, five same-target Bundle applies,
+five source reopens, five lineage-list checks, one target-local restore check,
+647 final Bundle payload files, 1,817 final payload references,
+source/target head convergence at
+`01a05ea0-8e7e-7e62-8169-e6b3be863b78`, source/target WorkState digest
+convergence at
+`437c61bd224372024e31b98c23db218f7eeac371e2cdd058d59c7964aa8c6762`, and
+elapsed time of 331 seconds. Log checks found five `bundle apply-dir` commands,
+five `store lineage-list` commands, ten `doctor` commands, twelve
+`store integrity` commands, one `restore` command, and no failure markers.
+
+This closes the Larger Store and performance evidence gate for the bounded
+V1-local release scope, backed by
+`docs/provenance/phase-4ne-larger-maintained-store-workload-validation.md`.
+The evidence is still not a general benchmark, index-design basis, external
+Store proof, remote/cloud proof, or V2 proof.
+
+The overall release decision remains false because other blocking gates remain
+`Partial` or `Blocked`.
 
 ## Phase 4ND Update
 

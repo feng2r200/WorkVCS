@@ -495,6 +495,25 @@ later fast-forward applies. Use `WORKVCS_MAINTAINED_STORE_CYCLES`,
 `WORKVCS_MAINTAINED_STORE_RELATION_PAIRS_PER_CYCLE` to scale the run. Keep it
 opt-in until default smoke expansion is explicitly justified.
 
+The Phase 4NE larger maintained Store validation used the same script with:
+
+```bash
+WORKVCS_MAINTAINED_STORE_CYCLES=5 \
+WORKVCS_MAINTAINED_STORE_SEED_TASKS=12 \
+WORKVCS_MAINTAINED_STORE_TASKS_PER_CYCLE=20 \
+WORKVCS_MAINTAINED_STORE_VERIFICATIONS_PER_CYCLE=4 \
+WORKVCS_MAINTAINED_STORE_RELATION_PAIRS_PER_CYCLE=8 \
+WORKVCS_MAINTAINED_STORE_OUTPUT_ROOT=.work-governance/runtime/logs/phase-4ne \
+  ./scripts/maintained-store-portability-v0.1.sh
+```
+
+That run produced 112 final Tasks, 20 Verifications, 80 script-counted
+scheduling relation versions, five same-target applies, 647 final Bundle
+payload files, 1,817 final payload references, source/target head and digest
+convergence, and required-valid integrity/doctor proof in 331 seconds. Treat
+this as bounded V1-local evidence, not as a general benchmark or index-tuning
+basis.
+
 ## Common Recovery Actions
 
 When a WorkVCS business command fails, read stderr as line-oriented key-value
@@ -923,8 +942,10 @@ message=error: unexpected argument ...
   portability is proven, and maintained Store repeated reopen/apply/doctor
   portability is proven. Packaged archives, exchange APIs, and external Store
   canonical DAG activation remain open.
-- Larger Store validation has one bounded local run; broader and more varied
-  performance evidence remains open.
+- Larger Store validation now includes the Phase 4LQ one-shot portability run,
+  Phase 4MM larger merge-path run, and Phase 4NE larger maintained Store run.
+  These are bounded V1-local evidence, not general benchmarks or index-tuning
+  justification.
 - WorkVCS business errors and top-level clap syntax errors now emit stable
   key-value and JSON fields, and current per-code recovery guidance is
   documented in the operator error recovery guide. Broader recovery maturity

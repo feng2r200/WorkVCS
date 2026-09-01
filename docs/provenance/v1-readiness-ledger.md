@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-02 by ADR-0471 / Phase 4ND
+Last refreshed: 2026-09-02 by ADR-0472 / Phase 4NE
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -49,7 +49,7 @@ not complete.
 | Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Phase 4LP defines the V1-local directory profile and keeps external Store canonical DAG activation outside the current profile. Phase 4LQ proves the profile against a bounded larger Store workload and fixes a Verification basis import ordering blocker. |
 | CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`. Phase 4LU reduces the Phase 4LG blocked-Claim recovery ID-capture friction by adding top-level `claim guard` stale-takeover hint fields. Phase 4LX reduces repeated scope JSON authoring for local-file Context and Resource-backed verification workflows with path shorthands. Phase 4MJ reduces stale command-spelling recovery friction by normalizing top-level clap usage failures into stable key-value stderr. Phase 4MK adds a per-code recovery guide so operators do not have to infer recovery behavior from raw messages or source. Continue reducing command friction only where dogfood shows repeated ID plumbing or workflow blockage. |
 | Actionable errors and recovery | Yes | Partial | Yes | Partial | Phase 4LN documents merge unresolved and moved-head recovery; Phase 4LO documents Bundle divergence refusal and restore/checkpoint selector boundaries. Phase 4LQ records a concrete apply-ordering failure and recovery. Phase 4LZ adds stable process-level key-value fields for WorkVCS business errors: `error_code`, `error_category`, `retryable`, and escaped `message`. Phase 4MJ adds the same script-readable shape for top-level clap parse errors, with `error_code=cli_parse_error`, `error_category=usage`, `retryable=false`, `clap_error_kind`, escaped `message`, and preserved help display. Phase 4MK documents current per-code operator recovery actions for every stable WorkVCS business error code and `cli_parse_error`. Phase 4MO adds explicit `--error-format json` output for WorkVCS business errors and top-level clap parse errors, with process-level dogfood proving parseable JSON while preserving default key-value stderr. Phase 4MP adds the current V1 release gate matrix; broader recovery maturity remains Open. |
-| Larger Store and performance evidence | Partial | Partial | No | Yes | Phase 4LQ runs the opt-in larger Store portability validation with 48 Tasks, 8 Verification records, 32 scheduling relation inputs, 267 payload files, 749 payload references, apply, restore, and integrity/doctor in 22 seconds. Phase 4MM adds bounded merge-path evidence on a 56-commit, 78-operation local Store with required-valid integrity/doctor after merge. These are bounded local dogfood runs, not broad performance maturity. |
+| Larger Store and performance evidence | Partial | Partial | No | Yes | Phase 4LQ runs the opt-in larger Store portability validation with 48 Tasks, 8 Verification records, 32 scheduling relation inputs, 267 payload files, 749 payload references, apply, restore, and integrity/doctor in 22 seconds. Phase 4MM adds bounded merge-path evidence on a 56-commit, 78-operation local Store with required-valid integrity/doctor after merge. Phase 4NE adds a larger maintained Store run with 112 final Tasks, 20 Verifications, 80 script-counted scheduling relation versions, five same-target Bundle applies, 647 final payload files, 1,817 final payload references, and source/target required-valid integrity/doctor in 331 seconds. Treat these as bounded V1-local release-gate evidence, not broad performance maturity or index-tuning justification. |
 
 ## Dogfood-Biased Next Queue
 
@@ -61,10 +61,7 @@ current user request supplies a narrower priority.
    speculatively.
 2. Reduce additional manual key-value capture in the operator CLI only where
    the next dogfood loop shows repeated workflow blockage.
-3. Broaden larger Store and performance validation only when the next workload
-   is meaningfully larger or more varied than Phase 4LQ; do not design indexes
-   without evidence from that run.
-4. Refresh the V1 release gate matrix after any blocking gate changes status
+3. Refresh the V1 release gate matrix after any blocking gate changes status
    and before any release-ready or release-candidate claim.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
@@ -370,6 +367,14 @@ The following remain beyond V1 even if they would make dogfood easier:
   checks with zero cross-Store lineage records, source and target integrity,
   source and target doctor, and target-local restore proof on a forked target
   Branch without corrupting later main-Branch applies.
+  Phase 4NE broadens workload evidence with a larger maintained Store run:
+  five maintenance cycles, 112 final Tasks, 20 Verification records, 80
+  script-counted scheduling relation versions, five same-target Bundle applies,
+  647 final payload files, 1,817 final payload references, source/target head
+  and state digest
+  convergence, and source/target required-valid integrity/doctor in 331
+  seconds. This is bounded V1-local evidence, not a general benchmark or
+  index-tuning basis.
   Phase 4MM repeats merge lifecycle dogfood on a larger and more varied local
   Store: 12 shared Task conflicts, 8 source-only Tasks, 6 target-only Tasks, 4
   source-side scheduling Relations, all 24 merge items explicitly resolved,

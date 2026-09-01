@@ -485,6 +485,11 @@ operation only after confirming the relevant branch, session, claim, or merge
 head. `message` remains human-facing context; recovery scripts should branch on
 `error_code` and `error_category`.
 
+For code-specific operator actions, use the current
+[WorkVCS Error Recovery Guide](error-recovery-guide.md). It covers every
+current WorkVCS business `error_code` and the top-level `cli_parse_error`
+syntax failure shape.
+
 When a Store fails integrity or doctor checks, stop using it as an authority
 until the failure is understood:
 
@@ -878,5 +883,5 @@ message=error: unexpected argument ...
 - Larger Store validation has one bounded local run; broader and more varied
   performance evidence remains open.
 - WorkVCS business errors and top-level clap syntax errors now emit stable
-  key-value fields. Full per-code recovery guidance and JSON error output
-  remain open.
+  key-value fields, and current per-code recovery guidance is documented in the
+  operator error recovery guide. JSON error output remains open.

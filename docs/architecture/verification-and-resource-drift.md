@@ -184,10 +184,13 @@ executable local-file contract: glob Resource basis entries can be observed and
 re-observed through a deterministic `local-file-glob-manifest-v1` fingerprint.
 ADR-0447 adds a narrow executable Git contract: Git worktree Resource basis
 entries can be observed and re-observed through a deterministic
-`git-worktree-manifest-v1` fingerprint. Final CLI names outside these explicit
+`git-worktree-manifest-v1` fingerprint. ADR-0448 adds explicit basis-aware
+dispatch for supported Resource basis entries through
+`verification cache-refresh --resource-content-from-basis`; it is not a daemon,
+watcher, or implicit refresh policy. Final CLI names outside these explicit
 flags, broader adapter implementations, symlink/case/rename and deletion policy,
-non-Verification observation capture policy, performance indexes, and a
-possible future AC waiver operation remain unfixed.
+non-Verification observation capture policy, background refresh scheduling,
+performance indexes, and a possible future AC waiver operation remain unfixed.
 The executable schema, Rust implementation language, `rusqlite`, and the
 `workvcs-jcs-v1` canonical JSON profile are now closed by accepted
 implementation ADRs.

@@ -4780,6 +4780,9 @@ enum VerificationCommand {
         #[arg(long)]
         resource_content_from_scope_git_worktree: bool,
 
+        #[arg(long)]
+        resource_content_from_basis: bool,
+
         #[arg(long, default_value = "{}")]
         detail_json: String,
 
@@ -9559,6 +9562,7 @@ fn run(cli: Cli) -> Result<String> {
                 resource_content_from_scope_path_prefix,
                 resource_content_from_scope_glob,
                 resource_content_from_scope_git_worktree,
+                resource_content_from_basis,
                 detail_json,
                 expected_evaluated_commit,
                 expected_applicability,
@@ -9586,7 +9590,8 @@ fn run(cli: Cli) -> Result<String> {
                 let resource_content_scope_sources = usize::from(resource_content_from_scope_path)
                     + usize::from(resource_content_from_scope_path_prefix)
                     + usize::from(resource_content_from_scope_glob)
-                    + usize::from(resource_content_from_scope_git_worktree);
+                    + usize::from(resource_content_from_scope_git_worktree)
+                    + usize::from(resource_content_from_basis);
                 if resource_content_scope_sources > 1 {
                     return Err(WorkVcsError::TaskInvalid(
                         "verification cache-refresh requires at most one resource content scope source".to_owned(),
@@ -9621,6 +9626,14 @@ fn run(cli: Cli) -> Result<String> {
                     )?
                 } else if resource_content_from_scope_git_worktree {
                     refresh_verification_applicability_from_git_worktree_scope(
+                        &mut engine,
+                        branch_id,
+                        verification_entity_id,
+                        expected_evaluated_commit_id,
+                        detail,
+                    )?
+                } else if resource_content_from_basis {
+                    refresh_verification_applicability_from_resource_basis(
                         &mut engine,
                         branch_id,
                         verification_entity_id,
@@ -13863,6 +13876,77 @@ impl GitWorktreeReadFailure {
     }
 }
 
+enum ResourceBasisRefreshInput {
+    LocalFile(LocalFileScopeInput),
+    GitWorktree(GitWorktreeScope),
+}
+
+fn refresh_verification_applicability_from_resource_basis(
+    engine: &mut Engine,
+    branch_id: BranchId,
+    verification_entity_id: EntityId,
+    expected_evaluated_commit_id: Option<CommitId>,
+    detail: CanonicalValue,
+) -> Result<VerificationApplicabilityCacheSnapshot> {
+    let head = engine.branch_head(branch_id)?;
+    if let Some(expected_evaluated_commit_id) = expected_evaluated_commit_id
+        && head.head_commit_id != expected_evaluated_commit_id
+    {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            branch_id, expected_evaluated_commit_id, head.head_commit_id
+        )));
+    }
+    let verification = engine.verification_at(head.head_commit_id, verification_entity_id)?;
+    let resource_basis = verification.state.resource_basis.clone();
+    if resource_basis.is_empty() {
+        return Err(WorkVcsError::TaskInvalid(
+            "--resource-content-from-basis requires verification resource basis".to_owned(),
+        ));
+    }
+
+    let refresh_inputs = resource_basis
+        .iter()
+        .map(resource_basis_refresh_input_from_basis)
+        .collect::<Result<Vec<_>>>()?;
+    let mut resource_stamps = Vec::with_capacity(resource_basis.len());
+    for (index, (basis, input)) in resource_basis.iter().zip(refresh_inputs.iter()).enumerate() {
+        let stamp = match input {
+            ResourceBasisRefreshInput::LocalFile(input) => {
+                local_file_scope_applicability_stamp(engine, index, basis, input)?
+            }
+            ResourceBasisRefreshInput::GitWorktree(scope) => {
+                git_worktree_applicability_stamp(engine, index, basis, scope)?
+            }
+        };
+        resource_stamps.push(stamp);
+    }
+
+    engine.record_verification_applicability(
+        VerificationApplicabilityRecordOptions::new(
+            branch_id,
+            verification_entity_id,
+            head.head_commit_id,
+        )?
+        .with_resource_stamps(resource_stamps)?
+        .with_detail(detail)?,
+    )
+}
+
+fn resource_basis_refresh_input_from_basis(
+    basis: &VerificationResourceBasis,
+) -> Result<ResourceBasisRefreshInput> {
+    match basis.adapter_kind.as_str() {
+        "local-file" => {
+            local_file_scope_from_basis_auto(basis).map(ResourceBasisRefreshInput::LocalFile)
+        }
+        "git" => git_worktree_scope_from_basis(basis).map(ResourceBasisRefreshInput::GitWorktree),
+        adapter_kind => Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-basis does not support adapter_kind {adapter_kind:?}"
+        ))),
+    }
+}
+
 fn refresh_verification_applicability_from_local_file_scope(
     engine: &mut Engine,
     branch_id: BranchId,
@@ -14121,6 +14205,62 @@ fn local_file_scope_applicability_stamp(
             basis.adapter_schema_version,
             basis.scope_schema_version,
         ),
+    }
+}
+
+fn local_file_scope_from_basis_auto(
+    basis: &VerificationResourceBasis,
+) -> Result<LocalFileScopeInput> {
+    if basis.adapter_kind != "local-file" {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-basis supports adapter_kind local-file, found {:?}",
+            basis.adapter_kind
+        )));
+    }
+    if basis.adapter_schema_version != 1 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-basis supports local-file adapter_schema_version 1, found {}",
+            basis.adapter_schema_version
+        )));
+    }
+    if basis.scope_kind != "path" {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-basis supports local-file scope_kind path, found {:?}",
+            basis.scope_kind
+        )));
+    }
+    if basis.scope_schema_version != 1 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-basis supports local-file scope_schema_version 1, found {}",
+            basis.scope_schema_version
+        )));
+    }
+
+    let CanonicalValue::Object(entries) = &basis.scope_payload else {
+        return Err(WorkVcsError::TaskInvalid(
+            "local-file basis refresh requires object scope payload".to_owned(),
+        ));
+    };
+    if entries.len() != 1 {
+        return Err(WorkVcsError::TaskInvalid(
+            "local-file basis refresh requires scope payload with exactly one of path, path_prefix, or glob".to_owned(),
+        ));
+    }
+    let (key, path) = &entries[0];
+    let CanonicalValue::String(path) = path else {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "local-file basis refresh requires string scope payload field {key}"
+        )));
+    };
+    match key.as_str() {
+        "path" => Ok(LocalFileScopeInput::Path(PathBuf::from(path))),
+        "path_prefix" => Ok(LocalFileScopeInput::PathPrefix(PathBuf::from(path))),
+        "glob" => Ok(LocalFileScopeInput::Glob(
+            local_file_glob_scope_from_pattern(path)?,
+        )),
+        _ => Err(WorkVcsError::TaskInvalid(format!(
+            "local-file basis refresh does not support scope payload field {key:?}"
+        ))),
     }
 }
 
@@ -22741,6 +22881,16 @@ mod tests {
         assert!(verify_help.contains("--resource-content-from-scope-glob"));
         assert!(verify_help.contains("--resource-content-from-scope-git-worktree"));
         assert!(verify_help.contains("--resource-detail-content-file"));
+
+        let cache_refresh_help =
+            Cli::try_parse_from(["workvcs", "verification", "cache-refresh", "--help"])
+                .expect_err("cache-refresh help should render through clap DisplayHelp")
+                .to_string();
+        assert!(cache_refresh_help.contains("--resource-content-from-scope-path"));
+        assert!(cache_refresh_help.contains("--resource-content-from-scope-path-prefix"));
+        assert!(cache_refresh_help.contains("--resource-content-from-scope-glob"));
+        assert!(cache_refresh_help.contains("--resource-content-from-scope-git-worktree"));
+        assert!(cache_refresh_help.contains("--resource-content-from-basis"));
     }
 
     #[test]
@@ -39985,6 +40135,31 @@ mod tests {
             .observations
             .len();
         assert_eq!(after_observations, before_observations);
+
+        let basis_error = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-basis",
+            "--expected-evaluated-commit",
+            &verification_head,
+        ])
+        .expect("parse mixed-basis automatic cache refresh"))
+        .expect_err("reject unsupported automatic basis before recording observations");
+        assert!(format!("{basis_error}").contains("scope_kind git-worktree"));
+
+        let after_basis_observations = Engine::open(store)
+            .expect("open after basis count")
+            .resource_observations(ResourceObservationListOptions::all())
+            .expect("list after basis observations")
+            .observations
+            .len();
+        assert_eq!(after_basis_observations, before_observations);
     }
 
     #[test]
@@ -40329,6 +40504,35 @@ mod tests {
         .expect("refresh applicable prefix cache");
         assert_eq!(value(&applicable, "applicability"), "applicable");
         assert_eq!(value(&applicable, "reason_code"), "all_basis_applicable");
+        assert_eq!(value(&applicable, "resource_stamps"), "1");
+
+        let basis_applicable = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-basis",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse applicable prefix basis refresh"))
+        .expect("refresh applicable prefix cache from basis");
+        assert_eq!(value(&basis_applicable, "applicability"), "applicable");
+        assert_eq!(
+            value(&basis_applicable, "reason_code"),
+            "all_basis_applicable"
+        );
+        assert_eq!(value(&basis_applicable, "resource_stamps"), "1");
 
         let applicable_cache = run(Cli::try_parse_from([
             "workvcs",
@@ -40360,6 +40564,31 @@ mod tests {
             .expect("changed path-prefix snapshot")
             .fingerprint
             .to_string();
+        let basis_stale = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-basis",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "stale",
+            "--expected-reason-code",
+            "resource_drift",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse stale prefix basis refresh"))
+        .expect("refresh stale prefix cache from basis");
+        assert_eq!(value(&basis_stale, "applicability"), "stale");
+        assert_eq!(value(&basis_stale, "reason_code"), "resource_drift");
+        assert_eq!(value(&basis_stale, "resource_stamps"), "1");
+
         let stale = run(Cli::try_parse_from([
             "workvcs",
             "verification",
@@ -40976,6 +41205,282 @@ mod tests {
     }
 
     #[test]
+    fn cli_refreshes_mixed_resource_basis_from_recorded_scopes() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = store_path.to_str().expect("store path text");
+        let local_path = tempdir.path().join("resource.txt");
+        fs::write(&local_path, b"local baseline\n").expect("write local baseline");
+        let local_path_text = local_path.to_str().expect("local path text");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("README.md"), b"git baseline\n").expect("write git baseline");
+        git_test(&repo, &["add", "README.md"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "test basis-aware resource refresh",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let task_version = value(&task, "task_entity_version_id");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &task_version,
+            "--local-key",
+            "AC-BASIS-REFRESH",
+            "--statement",
+            "basis-aware cache refresh tracks all supported resource basis entries",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+        head = value(&criterion, "commit_id");
+
+        let local_resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse local resource"))
+        .expect("create local resource");
+        let local_resource_id = value(&local_resource, "resource_id");
+        let git_resource =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "create", store, "--kind", "git"])
+                    .expect("parse git resource"),
+            )
+            .expect("create git resource");
+        let git_resource_id = value(&git_resource, "resource_id");
+
+        let verification = {
+            let mut engine = Engine::open(store).expect("open engine");
+            let local_content = fs::read(&local_path).expect("read local baseline");
+            let local_fingerprint = content_object_digest(&local_content);
+            let local_observation = engine
+                .record_resource_observation(
+                    ResourceObservationCreateOptions::new(
+                        ResourceId::parse_canonical(&local_resource_id).expect("local resource id"),
+                        "local-file".to_owned(),
+                        1,
+                        local_fingerprint,
+                        local_file_scope_path_observation_summary(&local_path)
+                            .expect("local summary"),
+                    )
+                    .expect("local observation options"),
+                )
+                .expect("record local observation");
+            let git_snapshot = git_worktree_snapshot(&repo).expect("git baseline snapshot");
+            let git_observation = engine
+                .record_resource_observation(
+                    ResourceObservationCreateOptions::new(
+                        ResourceId::parse_canonical(&git_resource_id).expect("git resource id"),
+                        "git".to_owned(),
+                        1,
+                        git_snapshot.fingerprint,
+                        git_snapshot.summary,
+                    )
+                    .expect("git observation options"),
+                )
+                .expect("record git observation");
+            let local_basis = VerificationResourceBasis::new(
+                ResourceId::parse_canonical(&local_resource_id).expect("local resource id"),
+                "local-file",
+                1,
+                "path",
+                1,
+                path_scope_value("path", local_path.clone()).expect("local scope"),
+                local_fingerprint,
+            )
+            .expect("local basis")
+            .with_baseline_observation_id(local_observation.observation_id)
+            .expect("local basis observation");
+            let git_basis = VerificationResourceBasis::new(
+                ResourceId::parse_canonical(&git_resource_id).expect("git resource id"),
+                "git",
+                1,
+                "git-worktree",
+                1,
+                git_worktree_scope_value(repo.clone()).expect("git scope"),
+                git_snapshot.fingerprint,
+            )
+            .expect("git basis")
+            .with_baseline_observation_id(git_observation.observation_id)
+            .expect("git basis observation");
+
+            engine
+                .create_verification(
+                    VerificationCreateOptions::new(
+                        BranchId::parse_canonical(&branch).expect("branch id"),
+                        CommitId::parse_canonical(&head).expect("head id"),
+                        VerificationTarget::AcceptanceCriterion(
+                            EntityId::parse_canonical(&criterion_id).expect("criterion id"),
+                        ),
+                        VerificationResult::Passed,
+                    )
+                    .expect("verification options")
+                    .with_resource_basis(vec![local_basis, git_basis])
+                    .expect("resource basis options"),
+                )
+                .expect("create mixed supported verification")
+        };
+        let verification_id = verification.verification_entity_id.to_string();
+        let verification_head = verification.commit_id.to_string();
+        let before_observations = Engine::open(store)
+            .expect("open before count")
+            .resource_observations(ResourceObservationListOptions::all())
+            .expect("list before observations")
+            .observations
+            .len();
+        assert_eq!(before_observations, 2);
+
+        let refreshed = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-basis",
+            "--expected-evaluated-commit",
+            &verification_head,
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+            "--expected-resource-stamps",
+            "2",
+        ])
+        .expect("parse basis-aware refresh"))
+        .expect("refresh from recorded basis");
+        assert_eq!(value(&refreshed, "applicability"), "applicable");
+        assert_eq!(value(&refreshed, "reason_code"), "all_basis_applicable");
+        assert_eq!(value(&refreshed, "resource_stamps"), "2");
+
+        let shown_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse basis-aware cache show"))
+        .expect("show basis-aware cache");
+        assert_eq!(
+            value(&shown_cache, "resource_stamp.0.observation_status"),
+            "observed"
+        );
+        assert_eq!(
+            value(&shown_cache, "resource_stamp.1.observation_status"),
+            "observed"
+        );
+
+        let after_observations = Engine::open(store)
+            .expect("open after count")
+            .resource_observations(ResourceObservationListOptions::all())
+            .expect("list after observations")
+            .observations
+            .len();
+        assert_eq!(after_observations, 4);
+
+        fs::write(&local_path, b"local changed\n").expect("write local drift");
+        let stale = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-basis",
+            "--expected-evaluated-commit",
+            &verification_head,
+            "--expected-applicability",
+            "stale",
+            "--expected-reason-code",
+            "resource_drift",
+            "--expected-resource-stamps",
+            "2",
+        ])
+        .expect("parse stale basis-aware refresh"))
+        .expect("refresh drift from recorded basis");
+        assert_eq!(value(&stale, "applicability"), "stale");
+        assert_eq!(value(&stale, "reason_code"), "resource_drift");
+
+        let ambiguous = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-basis",
+            "--resource-content-from-scope-path",
+        ])
+        .expect("parse ambiguous basis-aware refresh"));
+        assert!(
+            format!("{}", ambiguous.expect_err("ambiguous refresh should fail"))
+                .contains("at most one resource content scope source")
+        );
+
+        assert_eq!(
+            local_path_text,
+            local_path.to_str().expect("local path text after")
+        );
+    }
+
+    #[test]
     fn cli_refreshes_local_file_scope_glob_applicability_cache() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let store_path = tempdir.path().join("workvcs.sqlite");
@@ -41154,6 +41659,35 @@ mod tests {
         .expect("refresh applicable glob cache");
         assert_eq!(value(&applicable, "applicability"), "applicable");
         assert_eq!(value(&applicable, "reason_code"), "all_basis_applicable");
+        assert_eq!(value(&applicable, "resource_stamps"), "1");
+
+        let basis_applicable = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-basis",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse applicable glob basis refresh"))
+        .expect("refresh applicable glob cache from basis");
+        assert_eq!(value(&basis_applicable, "applicability"), "applicable");
+        assert_eq!(
+            value(&basis_applicable, "reason_code"),
+            "all_basis_applicable"
+        );
+        assert_eq!(value(&basis_applicable, "resource_stamps"), "1");
 
         let applicable_cache = run(Cli::try_parse_from([
             "workvcs",
@@ -41185,6 +41719,31 @@ mod tests {
             .expect("changed glob snapshot")
             .fingerprint
             .to_string();
+        let basis_stale = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-basis",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "stale",
+            "--expected-reason-code",
+            "resource_drift",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse stale glob basis refresh"))
+        .expect("refresh stale glob cache from basis");
+        assert_eq!(value(&basis_stale, "applicability"), "stale");
+        assert_eq!(value(&basis_stale, "reason_code"), "resource_drift");
+        assert_eq!(value(&basis_stale, "resource_stamps"), "1");
+
         let stale = run(Cli::try_parse_from([
             "workvcs",
             "verification",

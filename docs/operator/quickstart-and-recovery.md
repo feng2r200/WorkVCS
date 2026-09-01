@@ -578,6 +578,22 @@ unstaged, or untracked state becomes `reason_code=resource_drift`; a missing
 repo path becomes `reason_code=resource_unavailable`; a non-Git directory or
 Git command failure becomes `reason_code=resource_error`.
 
+When the Verification already has supported Resource basis entries and you want
+the CLI to choose the matching implemented adapter path, use basis-aware refresh:
+
+```bash
+workvcs verification cache-refresh "$STORE" \
+  --branch "$BRANCH_ID" \
+  --verification "$VERIFICATION_ID" \
+  --resource-content-from-basis \
+  --expected-evaluated-commit "$HEAD_COMMIT_ID"
+```
+
+This explicit mode supports the current exact local-file path, local-file
+path-prefix, local-file glob, and Git worktree contracts. It validates every
+Resource basis before observing any Resource. Unsupported or malformed basis
+entries fail the command instead of producing a partial refresh.
+
 When a Resource-backed Verification cannot be re-observed because the Resource
 is temporarily unavailable, record that state explicitly and keep the AC stale:
 
@@ -783,9 +799,11 @@ intended state transition.
   `verification cache-refresh --resource-content-from-scope-glob`.
   Git worktree cache refresh is implemented behind
   `verification cache-refresh --resource-content-from-scope-git-worktree`.
+  Basis-aware cache refresh is implemented behind
+  `verification cache-refresh --resource-content-from-basis`.
   Explicit unavailable/error applicability stamps are dogfood-proven. Broader
-  symlink/case/rename, broader Git adapter policy, and automatic re-observation
-  scheduling remain open.
+  symlink/case/rename, broader Git adapter policy, and background
+  re-observation scheduling remain open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.

@@ -59,6 +59,7 @@ index is:
 - [Phase 4MR Shared Claim Write-Mode Dogfood Evidence](provenance/phase-4mr-shared-claim-write-mode-dogfood.md)
 - [Phase 4MS Handoff Consumption Write-Mode Dogfood Evidence](provenance/phase-4ms-handoff-consumption-write-mode-dogfood.md)
 - [Phase 4MT External Merge Write-Mode Dogfood Evidence](provenance/phase-4mt-external-merge-write-mode-dogfood.md)
+- [Phase 4MU Preexisting External Merge Write-Mode Dogfood Evidence](provenance/phase-4mu-preexisting-external-merge-write-mode-dogfood.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -193,6 +194,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0459: Phase 4MR Shared Claim Write-Mode Dogfood](decisions/adr/0459-phase-4mr-shared-claim-write-mode-dogfood.md)
 - [ADR-0460: Phase 4MS Handoff Consumption Write-Mode Dogfood](decisions/adr/0460-phase-4ms-handoff-consumption-write-mode-dogfood.md)
 - [ADR-0461: Phase 4MT External Merge Write-Mode Dogfood](decisions/adr/0461-phase-4mt-external-merge-write-mode-dogfood.md)
+- [ADR-0462: Phase 4MU Preexisting External Merge Write-Mode Dogfood](decisions/adr/0462-phase-4mu-preexisting-external-merge-write-mode-dogfood.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

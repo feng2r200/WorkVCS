@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-02 by ADR-0467 / Phase 4MZ
+Last refreshed: 2026-09-02 by ADR-0468 / Phase 4NA
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4MZ was main commit
-`5ad69baacc0600b883711fc64de229abff25a5fd` and the V1 readiness ledger last
-refreshed by ADR-0466 / Phase 4MY. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4NA was main commit
+`a2ce415b16e54efded620ec0ad41b03858b779ae` and the V1 readiness ledger last
+refreshed by ADR-0467 / Phase 4MZ. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -44,7 +44,7 @@ dogfood, or release-operation gaps named by the gates.
 | Workspace, Branch, history, diff, show-at, and restore | Branch and state navigation workflows are proven in real implementation work, not only narrow smoke or post-Bundle inspection. | Current ledger marks this area implemented with partial smoke and dogfood evidence. Phase 4LO dogfoods `restore` and `show-at` against a target Store. Phase 4MQ dogfoods Branch fork, bidirectional Branch diff, Branch history, Branch `show-at`, and two-Branch integrity in a real repository delivery Store. | Pass | No | Keep as regression foundation; broaden only if a future real Branch/diff workflow exposes a concrete gap. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Work graph planning and dependency semantics are repeatedly used in real project workflows through closeout. | Phase 4LV dogfoods Goal/Plan/Task for a bounded external-project review; ordering, dependencies, and containment remain broader repetition gaps. | Partial | Yes | Repeat planning, dependency, ordering, and containment usage in varied real-project continuation or implementation loops. |
 | AC, VR, Verification, Evidence, and verification wrapper | Acceptance and verification records can close obligations through the CLI and remain understandable in recovery and handoff scenarios. | Ledger marks AC/VR/Verification/Evidence and the top-level `verify` wrapper as dogfood-proven for current covered scenarios. | Partial | Yes | Repeat obligation closure in recovery and handoff-consumption scenarios, including Resource-backed stale/recovery behavior where relevant. |
-| Resource registration, observation, applicability, and drift | Resource-backed verification covers explicit basis refresh, unavailable/error states, drift projection, adapter boundaries, and re-observation policy. | Phases 4LV, 4LX through 4MG, and 4MN cover exact path, path-prefix, glob, Git worktree, persisted-basis, and batch basis refresh scenarios; Phase 4MV covers explicit no-renames/delete-add Git rename-policy scenarios; Phase 4MW covers explicit tracked-symlink Git index/diff and untracked-non-regular Resource error-policy scenarios; Phase 4MX covers explicit parent-Git submodule gitlink/status/diff and disabled-recursion policy scenarios; Phase 4MY covers explicit parent-Git sparse-checkout index/status/diff and disabled-expansion policy scenarios; Phase 4MZ covers explicit no-WorkVCS-case-folding scenarios for local-file exact path, path-prefix, glob, and Git worktree Resource observations. | Partial | Yes | Decide and prove background re-observation scheduling only when a real workflow demands it. |
+| Resource registration, observation, applicability, and drift | Resource-backed verification covers explicit basis refresh, unavailable/error states, drift projection, adapter boundaries, and re-observation policy. | Phases 4LV, 4LX through 4MG, and 4MN cover exact path, path-prefix, glob, Git worktree, persisted-basis, and batch basis refresh scenarios; Phase 4MV covers explicit no-renames/delete-add Git rename-policy scenarios; Phase 4MW covers explicit tracked-symlink Git index/diff and untracked-non-regular Resource error-policy scenarios; Phase 4MX covers explicit parent-Git submodule gitlink/status/diff and disabled-recursion policy scenarios; Phase 4MY covers explicit parent-Git sparse-checkout index/status/diff and disabled-expansion policy scenarios; Phase 4MZ covers explicit no-WorkVCS-case-folding scenarios for local-file exact path, path-prefix, glob, and Git worktree Resource observations; Phase 4NA covers explicit foreground operator-triggered re-observation scheduling through current-head Resource-backed batch refresh, with background re-observation disabled. | Pass | No | Keep as regression foundation; background daemons, watchers, automatic polling, implicit refresh, and Agent orchestration remain outside V1. |
 | Session, Claim, Runnable, `claim next`, and `next` | Continuation, focus, and Claim guard flows remain usable across stale recovery and multi-operator scenarios. | Ledger marks the current Session/Runnable/claim-next surface dogfood-proven. Phase 4LW and Phase 4MI cover Claim transfer, stale takeover, and shared read-only collaboration. Phase 4MR covers shared-Claim write/read-write coordination in this repository: non-unique shared Claims block protected writer mutation, then reader release restores unique-writer closeout. | Pass | No | Keep as regression foundation; automatic ownership arbitration, distributed collaboration, and remote multi-operator coordination remain outside V1 unless explicitly authorized. |
 | Context resolver, packets, and `why` explanations | Context packets and `why` output expose enough focused, causal, and explanatory state for continuation Agents without speculative LLM extraction. | Phases 4LR through 4LT and 4LX cover scoped packets and rationale projection; Phases 4MA, 4MH, and 4ML cover selected `why` relationships and causal anchors. | Partial | Yes | Prove broader context/Resource resolver behavior, full evolution traversal, epistemic explanation, and broader causal traversal only through concrete dogfood gaps. |
 | Handoff consumption | Handoff creation, display, focus consumption, blocked recovery, and continuation work across varied project and write-mode workflows. | Current evidence covers focused Handoff smoke, Handoff consumption, blocked recovery, read-only external-project Handoff creation/show, external-project continuation-adjacent Claim work, and Phase 4MS write-mode Handoff consumption with continuation Claim, VR-backed verification, Task closeout, and SessionDiff closeout. | Pass | No | Keep as regression foundation; remote/cloud Handoff, cross-Store synchronization, automatic takeover, and Agent orchestration remain outside V1 unless explicitly authorized. |
@@ -61,10 +61,12 @@ over speculative broadening.
 
 Priority candidates:
 
-1. Close the background re-observation scheduling gap only when the next
-   continuation or verification workflow proves the need; after Phase 4MZ, no
-   named Resource adapter policy gap remains in this matrix.
-2. Refresh this matrix after each blocking gate changes status and before any
+1. Repeat Goal/Plan/Task ordering and containment or AC/VR closure only when a
+   real continuation or recovery workflow exposes the release-maturity gap.
+2. Expand context/Resource resolver or `why` behavior only when a dogfood
+   continuation exposes a concrete causal, evolution, or epistemic explanation
+   gap.
+3. Refresh this matrix after each blocking gate changes status and before any
    release-ready or release-candidate claim.
 
 ## V2 Boundary
@@ -222,6 +224,35 @@ registration, observation, applicability, and drift gate, backed by
 `docs/provenance/phase-4my-git-sparse-checkout-resource-policy-dogfood.md`.
 The gate remains `Partial` and blocking because case-folding policy and
 background re-observation scheduling remain unproven.
+
+The overall release decision remains false because other blocking gates remain
+`Partial` or `Blocked`.
+
+## Phase 4NA Update
+
+Phase 4NA refreshes this matrix after Resource re-observation scheduling policy
+dogfood. The V1-local policy is explicit foreground operator-triggered batch
+refresh through `verification cache-refresh --all-resource-backed
+--resource-content-from-basis`; background re-observation, daemons, watchers,
+automatic polling, implicit refresh, and Agent orchestration remain disabled.
+
+The run used a `/tmp` clone of the pre-existing local `agent_soul` repository,
+created two Resource-backed Verifications and one non-resource-backed
+Verification, mutated only the clone's `README.md`, and ran the explicit
+foreground batch refresh. The command output reported
+`reobservation_policy=explicit_operator_batch_refresh`,
+`background_reobservation=disabled`, `reobservation_trigger=operator_explicit`,
+`reobservation_execution=foreground_command`,
+`selection_policy=current_head_resource_backed_verifications`, and
+`branch_head_mutation=disabled`; it refreshed two Resource-backed caches,
+skipped the non-resource-backed Verification, projected modified `README.md` as
+`stale` / `resource_drift`, preserved unchanged `AGENTS.md` as `applicable` /
+`all_basis_applicable`, kept the Branch head stable, and left the original
+`agent_soul` repository unchanged.
+
+This closes the Resource registration, observation, applicability, and drift
+gate for the bounded V1-local release scope, backed by
+`docs/provenance/phase-4na-resource-reobservation-scheduling-policy-dogfood.md`.
 
 The overall release decision remains false because other blocking gates remain
 `Partial` or `Blocked`.

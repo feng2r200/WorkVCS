@@ -872,7 +872,9 @@ message=error: unexpected argument ...
   `verification cache-refresh --resource-content-from-basis`.
   Explicit unavailable/error applicability stamps are dogfood-proven. Bounded
   rename, symlink, submodule, sparse-checkout, and path case policies are
-  dogfood-proven. Background re-observation scheduling remains open.
+  dogfood-proven. Batch Resource-basis refresh is the V1-local explicit
+  foreground re-observation scheduling policy; background re-observation,
+  daemons, watchers, automatic polling, and implicit refresh remain disabled.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` exposes focused Handoff scope links and anchored evolution as a deferred

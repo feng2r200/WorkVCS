@@ -17748,7 +17748,7 @@ fn render_verification_applicability_cache_refresh_batch(
     result: &VerificationApplicabilityBatchRefreshResult,
 ) -> String {
     let mut output = format!(
-        "branch_id={}\nevaluated_commit_id={}\nrefreshed_caches={}\n",
+        "reobservation_policy=explicit_operator_batch_refresh\nbackground_reobservation=disabled\nreobservation_trigger=operator_explicit\nreobservation_execution=foreground_command\nselection_policy=current_head_resource_backed_verifications\nbranch_head_mutation=disabled\nbranch_id={}\nevaluated_commit_id={}\nrefreshed_caches={}\n",
         result.branch_id,
         result.evaluated_commit_id,
         result.caches.len()
@@ -42877,6 +42877,24 @@ mod tests {
         ])
         .expect("parse batch basis refresh"))
         .expect("batch refresh resource-backed verifications");
+        assert_eq!(
+            value(&refreshed, "reobservation_policy"),
+            "explicit_operator_batch_refresh"
+        );
+        assert_eq!(value(&refreshed, "background_reobservation"), "disabled");
+        assert_eq!(
+            value(&refreshed, "reobservation_trigger"),
+            "operator_explicit"
+        );
+        assert_eq!(
+            value(&refreshed, "reobservation_execution"),
+            "foreground_command"
+        );
+        assert_eq!(
+            value(&refreshed, "selection_policy"),
+            "current_head_resource_backed_verifications"
+        );
+        assert_eq!(value(&refreshed, "branch_head_mutation"), "disabled");
         assert_eq!(value(&refreshed, "branch_id"), branch);
         assert_eq!(value(&refreshed, "evaluated_commit_id"), head);
         assert_eq!(value(&refreshed, "refreshed_caches"), "2");

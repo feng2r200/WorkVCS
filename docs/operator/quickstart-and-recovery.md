@@ -467,6 +467,47 @@ workvcs verification cache-refresh "$STORE" \
   --verification "$VERIFICATION_ID"
 ```
 
+When a Resource-backed Verification cannot be re-observed because the Resource
+is temporarily unavailable, record that state explicitly and keep the AC stale:
+
+```bash
+workvcs verification cache-record "$STORE" \
+  --branch "$BRANCH_ID" \
+  --head "$HEAD_COMMIT_ID" \
+  --verification "$VERIFICATION_ID" \
+  --adapter-kind "$ADAPTER_KIND" \
+  --adapter-schema-version "$ADAPTER_SCHEMA_VERSION" \
+  --scope-schema-version "$SCOPE_SCHEMA_VERSION" \
+  --observation-status unavailable \
+  --expected-applicability unknown \
+  --expected-reason-code resource_unavailable
+
+workvcs ac status "$STORE" \
+  --branch "$BRANCH_ID" \
+  --criterion "$AC_ENTITY_ID"
+```
+
+When the adapter attempted re-observation but failed, use `error` instead:
+
+```bash
+workvcs verification cache-record "$STORE" \
+  --branch "$BRANCH_ID" \
+  --head "$HEAD_COMMIT_ID" \
+  --verification "$VERIFICATION_ID" \
+  --adapter-kind "$ADAPTER_KIND" \
+  --adapter-schema-version "$ADAPTER_SCHEMA_VERSION" \
+  --scope-schema-version "$SCOPE_SCHEMA_VERSION" \
+  --observation-status error \
+  --expected-applicability unknown \
+  --expected-reason-code resource_error
+```
+
+Do not pass `--observed-fingerprint` or `--observation` with `unavailable` or
+`error` stamps. Those states intentionally mean the current content was not
+observed. `workvcs verification cache-show` should report
+`observed_fingerprint=none` and `observation_id=none`; the related AC remains
+`status=stale` until an applicable observation is recorded or refreshed.
+
 When a merge cannot be frozen, inspect every merge item and resolve each item
 explicitly before freezing. This includes `AUTO` items:
 
@@ -622,8 +663,9 @@ intended state transition.
   maturity evidence.
 - Explicit path-scope lexical normalization and opt-in local-file observation
   from `verify --scope-path` are implemented for the common CLI shorthands.
-  Resource glob semantics, adapter contracts, unavailable/error observation
-  states, and automatic adapter-backed re-observation remain open.
+  Explicit unavailable/error applicability stamps are dogfood-proven. Resource
+  glob semantics, adapter contracts, adapter-produced unavailable/error
+  reporting, and automatic adapter-backed re-observation remain open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.

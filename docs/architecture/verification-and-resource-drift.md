@@ -140,9 +140,10 @@ Resource Adapter to:
 
 An adapter must define deterministic scope matching and normalization. The
 current implementation confirms narrow executable local-file contracts for
-exact path, path-prefix, and glob Resource observations. Broader symlink, case,
-rename, deletion, and non-local-file adapter rules remain implementation
-specifications, not confirmed choices here.
+exact path, path-prefix, and glob Resource observations, plus a narrow Git
+worktree contract for the currently checked-out repository state. Broader
+symlink, case, rename, deletion, submodule, sparse checkout, and adapter rules
+remain implementation specifications, not confirmed choices here.
 
 For Git-backed Resources, an observation used for Verification must represent
 the actually verified state, including relevant index or working-tree changes;
@@ -181,10 +182,12 @@ can be observed and re-observed through a deterministic
 `local-file-path-prefix-manifest-v1` fingerprint. ADR-0446 adds the third
 executable local-file contract: glob Resource basis entries can be observed and
 re-observed through a deterministic `local-file-glob-manifest-v1` fingerprint.
-Final CLI names, broader adapter implementations, Git working-tree observation,
-symlink/case/rename and deletion policy, non-Verification observation capture
-policy, performance indexes, and a possible future AC waiver operation remain
-unfixed.
+ADR-0447 adds a narrow executable Git contract: Git worktree Resource basis
+entries can be observed and re-observed through a deterministic
+`git-worktree-manifest-v1` fingerprint. Final CLI names outside these explicit
+flags, broader adapter implementations, symlink/case/rename and deletion policy,
+non-Verification observation capture policy, performance indexes, and a
+possible future AC waiver operation remain unfixed.
 The executable schema, Rust implementation language, `rusqlite`, and the
 `workvcs-jcs-v1` canonical JSON profile are now closed by accepted
 implementation ADRs.

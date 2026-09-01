@@ -42,6 +42,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4MC Local File Cache Refresh Evidence](provenance/phase-4mc-local-file-cache-refresh.md)
 - [Phase 4MD Local File Path Prefix Refresh Evidence](provenance/phase-4md-local-file-path-prefix-refresh.md)
 - [Phase 4ME Local File Glob Refresh Evidence](provenance/phase-4me-local-file-glob-refresh.md)
+- [Phase 4MF Git Worktree Resource Refresh Evidence](provenance/phase-4mf-git-worktree-resource-refresh.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -160,6 +161,8 @@ Recent repository-level CLI smoke gates:
 - [ADR-0443: Phase 4MB Resource Unavailable Error Dogfood](decisions/adr/0443-phase-4mb-resource-unavailable-error-dogfood.md)
 - [ADR-0444: Phase 4MC Local File Cache Refresh](decisions/adr/0444-phase-4mc-local-file-cache-refresh.md)
 - [ADR-0445: Phase 4MD Local File Path Prefix Refresh](decisions/adr/0445-phase-4md-local-file-path-prefix-refresh.md)
+- [ADR-0446: Phase 4ME Local File Glob Refresh](decisions/adr/0446-phase-4me-local-file-glob-refresh.md)
+- [ADR-0447: Phase 4MF Git Worktree Resource Refresh](decisions/adr/0447-phase-4mf-git-worktree-resource-refresh.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

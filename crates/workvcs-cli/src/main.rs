@@ -3,6 +3,7 @@ use glob::{MatchOptions, Pattern, glob_with};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
@@ -667,6 +668,7 @@ enum ContextPacketCommand {
             "resource_content_from_scope_path",
             "resource_content_from_scope_path_prefix",
             "resource_content_from_scope_glob",
+            "resource_content_from_scope_git_worktree",
         ])
 ))]
 #[command(group(
@@ -677,7 +679,7 @@ enum ContextPacketCommand {
 #[command(group(
     ArgGroup::new("verify-resource-scope-payload-source")
         .multiple(false)
-        .args(["scope_payload_json", "scope_path", "scope_path_prefix", "scope_glob"])
+        .args(["scope_payload_json", "scope_path", "scope_path_prefix", "scope_glob", "scope_git_worktree"])
 ))]
 struct VerifyArgs {
     #[arg(value_name = "STORE")]
@@ -758,6 +760,9 @@ struct VerifyArgs {
     #[arg(long, value_name = "GLOB")]
     scope_glob: Option<String>,
 
+    #[arg(long, value_name = "PATH")]
+    scope_git_worktree: Option<PathBuf>,
+
     #[arg(long)]
     resource_fingerprint: Option<String>,
 
@@ -775,6 +780,9 @@ struct VerifyArgs {
 
     #[arg(long)]
     resource_content_from_scope_glob: bool,
+
+    #[arg(long)]
+    resource_content_from_scope_git_worktree: bool,
 
     #[arg(long, default_value = "{}")]
     resource_summary_json: String,
@@ -4768,6 +4776,9 @@ enum VerificationCommand {
 
         #[arg(long)]
         resource_content_from_scope_glob: bool,
+
+        #[arg(long)]
+        resource_content_from_scope_git_worktree: bool,
 
         #[arg(long, default_value = "{}")]
         detail_json: String,
@@ -9137,15 +9148,17 @@ fn run(cli: Cli) -> Result<String> {
                 content_from_scope_path: false,
                 content_from_scope_path_prefix: false,
                 content_from_scope_glob: false,
+                content_from_scope_git_worktree: false,
                 scope_path: None,
                 scope_path_prefix: None,
                 scope_glob: None,
+                scope_git_worktree: None,
             })?;
             let mut options = ResourceObservationCreateOptions::new(
                 ResourceId::parse_canonical(&resource)?,
                 adapter_kind,
                 adapter_schema_version,
-                fingerprint,
+                fingerprint.fingerprint,
                 parse_cli_object("resource observation summary", &summary_json)?,
             )?;
             if let Some(detail_content) = resource_observation_detail_from_cli(
@@ -9545,6 +9558,7 @@ fn run(cli: Cli) -> Result<String> {
                 resource_content_from_scope_path,
                 resource_content_from_scope_path_prefix,
                 resource_content_from_scope_glob,
+                resource_content_from_scope_git_worktree,
                 detail_json,
                 expected_evaluated_commit,
                 expected_applicability,
@@ -9571,7 +9585,8 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 let resource_content_scope_sources = usize::from(resource_content_from_scope_path)
                     + usize::from(resource_content_from_scope_path_prefix)
-                    + usize::from(resource_content_from_scope_glob);
+                    + usize::from(resource_content_from_scope_glob)
+                    + usize::from(resource_content_from_scope_git_worktree);
                 if resource_content_scope_sources > 1 {
                     return Err(WorkVcsError::TaskInvalid(
                         "verification cache-refresh requires at most one resource content scope source".to_owned(),
@@ -9603,6 +9618,14 @@ fn run(cli: Cli) -> Result<String> {
                         expected_evaluated_commit_id,
                         detail,
                         LocalFileScopeMode::Glob,
+                    )?
+                } else if resource_content_from_scope_git_worktree {
+                    refresh_verification_applicability_from_git_worktree_scope(
+                        &mut engine,
+                        branch_id,
+                        verification_entity_id,
+                        expected_evaluated_commit_id,
+                        detail,
                     )?
                 } else {
                     engine.refresh_verification_applicability(options)?
@@ -12094,12 +12117,14 @@ fn run_verify(args: Vec<String>) -> Result<String> {
         scope_path,
         scope_path_prefix,
         scope_glob,
+        scope_git_worktree,
         resource_fingerprint,
         resource_content,
         resource_content_file,
         resource_content_from_scope_path,
         resource_content_from_scope_path_prefix,
         resource_content_from_scope_glob,
+        resource_content_from_scope_git_worktree,
         resource_summary_json,
         resource_detail_content,
         resource_detail_content_file,
@@ -12166,12 +12191,14 @@ fn run_verify(args: Vec<String>) -> Result<String> {
             scope_path,
             scope_path_prefix,
             scope_glob,
+            scope_git_worktree,
             resource_fingerprint,
             resource_content,
             resource_content_file,
             resource_content_from_scope_path,
             resource_content_from_scope_path_prefix,
             resource_content_from_scope_glob,
+            resource_content_from_scope_git_worktree,
             resource_summary_json,
             resource_detail_content,
             resource_detail_content_file,
@@ -12637,6 +12664,7 @@ enum CliScopeSource {
     Path,
     PathPrefix,
     Glob,
+    GitWorktree,
 }
 
 #[derive(Debug)]
@@ -12650,11 +12678,14 @@ impl CliScope {
         self.value
     }
 
-    fn is_path_shorthand(&self) -> bool {
-        matches!(
-            self.source,
-            CliScopeSource::Path | CliScopeSource::PathPrefix | CliScopeSource::Glob
-        )
+    fn default_scope_kind(&self) -> Option<&'static str> {
+        match self.source {
+            CliScopeSource::Json => None,
+            CliScopeSource::Path | CliScopeSource::PathPrefix | CliScopeSource::Glob => {
+                Some("path")
+            }
+            CliScopeSource::GitWorktree => Some("git-worktree"),
+        }
     }
 }
 
@@ -12712,19 +12743,28 @@ fn glob_scope_value(glob: String) -> Result<CanonicalValue> {
     )])
 }
 
+fn git_worktree_scope_value(repo: PathBuf) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![(
+        "repo".to_owned(),
+        CanonicalValue::String(normalize_cli_scope_path(repo)?),
+    )])
+}
+
 fn verify_resource_scope_from_cli(
     scope_json: Option<String>,
     scope_path: Option<PathBuf>,
     scope_path_prefix: Option<PathBuf>,
     scope_glob: Option<String>,
+    scope_git_worktree: Option<PathBuf>,
 ) -> Result<Option<CliScope>> {
     let sources = usize::from(scope_json.is_some())
         + usize::from(scope_path.is_some())
         + usize::from(scope_path_prefix.is_some())
-        + usize::from(scope_glob.is_some());
+        + usize::from(scope_glob.is_some())
+        + usize::from(scope_git_worktree.is_some());
     if sources > 1 {
         return Err(WorkVcsError::QueryInvalid(
-            "verify resource scope payload requires at most one of --scope-payload-json, --scope-path, --scope-path-prefix, or --scope-glob".to_owned(),
+            "verify resource scope payload requires at most one of --scope-payload-json, --scope-path, --scope-path-prefix, --scope-glob, or --scope-git-worktree".to_owned(),
         ));
     }
     if let Some(scope_json) = scope_json {
@@ -12749,6 +12789,12 @@ fn verify_resource_scope_from_cli(
         return Ok(Some(CliScope {
             value: glob_scope_value(glob)?,
             source: CliScopeSource::Glob,
+        }));
+    }
+    if let Some(repo) = scope_git_worktree {
+        return Ok(Some(CliScope {
+            value: git_worktree_scope_value(repo)?,
+            source: CliScopeSource::GitWorktree,
         }));
     }
     Ok(None)
@@ -13249,12 +13295,36 @@ struct ResourceFingerprintArgs {
     content_from_scope_path: bool,
     content_from_scope_path_prefix: bool,
     content_from_scope_glob: bool,
+    content_from_scope_git_worktree: bool,
     scope_path: Option<PathBuf>,
     scope_path_prefix: Option<PathBuf>,
     scope_glob: Option<String>,
+    scope_git_worktree: Option<PathBuf>,
 }
 
-fn fingerprint_from_cli(args: ResourceFingerprintArgs) -> Result<Digest> {
+#[derive(Debug)]
+struct ResourceFingerprintResult {
+    fingerprint: Digest,
+    summary: Option<CanonicalValue>,
+}
+
+impl ResourceFingerprintResult {
+    fn without_summary(fingerprint: Digest) -> Self {
+        Self {
+            fingerprint,
+            summary: None,
+        }
+    }
+
+    fn with_summary(fingerprint: Digest, summary: CanonicalValue) -> Self {
+        Self {
+            fingerprint,
+            summary: Some(summary),
+        }
+    }
+}
+
+fn fingerprint_from_cli(args: ResourceFingerprintArgs) -> Result<ResourceFingerprintResult> {
     match (
         args.fingerprint,
         args.content,
@@ -13262,24 +13332,34 @@ fn fingerprint_from_cli(args: ResourceFingerprintArgs) -> Result<Digest> {
         args.content_from_scope_path,
         args.content_from_scope_path_prefix,
         args.content_from_scope_glob,
+        args.content_from_scope_git_worktree,
     ) {
-        (Some(fingerprint), None, None, false, false, false) => Digest::from_hex(&fingerprint),
-        (None, Some(content), None, false, false, false) => {
-            Ok(content_object_digest(content.as_bytes()))
+        (Some(fingerprint), None, None, false, false, false, false) => {
+            Digest::from_hex(&fingerprint).map(ResourceFingerprintResult::without_summary)
         }
-        (None, None, Some(path), false, false, false) => {
+        (None, Some(content), None, false, false, false, false) => Ok(
+            ResourceFingerprintResult::without_summary(content_object_digest(content.as_bytes())),
+        ),
+        (None, None, Some(path), false, false, false, false) => {
             let bytes = read_cli_file("resource observation content", &path)?;
-            Ok(content_object_digest(&bytes))
+            Ok(ResourceFingerprintResult::without_summary(
+                content_object_digest(&bytes),
+            ))
         }
-        (None, None, None, true, false, false) => {
+        (None, None, None, true, false, false, false) => {
             let path = required_arg("--scope-path", args.scope_path)?;
             let bytes = read_cli_file("resource observation content from scope path", &path)?;
-            Ok(content_object_digest(&bytes))
+            Ok(ResourceFingerprintResult::with_summary(
+                content_object_digest(&bytes),
+                local_file_scope_path_observation_summary(&path)?,
+            ))
         }
-        (None, None, None, false, true, false) => {
+        (None, None, None, false, true, false, false) => {
             let path_prefix = required_arg("--scope-path-prefix", args.scope_path_prefix)?;
             local_file_path_prefix_snapshot(&path_prefix)
-                .map(|snapshot| snapshot.fingerprint)
+                .map(|snapshot| {
+                    ResourceFingerprintResult::with_summary(snapshot.fingerprint, snapshot.summary)
+                })
                 .map_err(|failure| {
                     WorkVcsError::QueryInvalid(format!(
                         "failed to read resource observation content from scope path prefix {}: {}",
@@ -13288,13 +13368,29 @@ fn fingerprint_from_cli(args: ResourceFingerprintArgs) -> Result<Digest> {
                     ))
                 })
         }
-        (None, None, None, false, false, true) => {
+        (None, None, None, false, false, true, false) => {
             let glob = required_arg("--scope-glob", args.scope_glob)?;
             local_file_glob_snapshot(&glob)
-                .map(|snapshot| snapshot.fingerprint)
+                .map(|snapshot| {
+                    ResourceFingerprintResult::with_summary(snapshot.fingerprint, snapshot.summary)
+                })
                 .map_err(|failure| {
                     WorkVcsError::QueryInvalid(format!(
                         "failed to read resource observation content from scope glob {glob:?}: {}",
+                        failure.message()
+                    ))
+                })
+        }
+        (None, None, None, false, false, false, true) => {
+            let repo = required_arg("--scope-git-worktree", args.scope_git_worktree)?;
+            git_worktree_snapshot(&repo)
+                .map(|snapshot| {
+                    ResourceFingerprintResult::with_summary(snapshot.fingerprint, snapshot.summary)
+                })
+                .map_err(|failure| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "failed to read resource observation content from scope git worktree {}: {}",
+                        repo.display(),
                         failure.message()
                     ))
                 })
@@ -13412,12 +13508,14 @@ struct VerifyResourceObservationArgs {
     scope_path: Option<PathBuf>,
     scope_path_prefix: Option<PathBuf>,
     scope_glob: Option<String>,
+    scope_git_worktree: Option<PathBuf>,
     resource_fingerprint: Option<String>,
     resource_content: Option<String>,
     resource_content_file: Option<PathBuf>,
     resource_content_from_scope_path: bool,
     resource_content_from_scope_path_prefix: bool,
     resource_content_from_scope_glob: bool,
+    resource_content_from_scope_git_worktree: bool,
     resource_summary_json: String,
     resource_detail_content: Option<String>,
     resource_detail_content_file: Option<PathBuf>,
@@ -13431,6 +13529,8 @@ fn verify_resource_observation_from_cli(
     args: VerifyResourceObservationArgs,
     source_session_id: Option<SessionId>,
 ) -> Result<Option<VerifyResourceObservationInput>> {
+    let uses_git_worktree_scope = args.scope_git_worktree.is_some();
+    let uses_git_worktree_content = args.resource_content_from_scope_git_worktree;
     let has_resource_args = args.resource.is_some()
         || args.adapter_kind.is_some()
         || args.adapter_schema_version.is_some()
@@ -13440,12 +13540,14 @@ fn verify_resource_observation_from_cli(
         || args.scope_path.is_some()
         || args.scope_path_prefix.is_some()
         || args.scope_glob.is_some()
+        || args.scope_git_worktree.is_some()
         || args.resource_fingerprint.is_some()
         || args.resource_content.is_some()
         || args.resource_content_file.is_some()
         || args.resource_content_from_scope_path
         || args.resource_content_from_scope_path_prefix
         || args.resource_content_from_scope_glob
+        || args.resource_content_from_scope_git_worktree
         || args.resource_summary_json != "{}"
         || args.resource_detail_content.is_some()
         || args.resource_detail_content_file.is_some()
@@ -13464,19 +13566,36 @@ fn verify_resource_observation_from_cli(
         content_from_scope_path: args.resource_content_from_scope_path,
         content_from_scope_path_prefix: args.resource_content_from_scope_path_prefix,
         content_from_scope_glob: args.resource_content_from_scope_glob,
+        content_from_scope_git_worktree: args.resource_content_from_scope_git_worktree,
         scope_path: args.scope_path.clone(),
         scope_path_prefix: args.scope_path_prefix.clone(),
         scope_glob: args.scope_glob.clone(),
+        scope_git_worktree: args.scope_git_worktree.clone(),
     })?;
-    let mut observation = ResourceObservationCreateOptions::new(
-        ResourceId::parse_canonical(&required_arg("--resource", args.resource)?)?,
-        required_arg("--adapter-kind", args.adapter_kind)?,
-        required_arg("--adapter-schema-version", args.adapter_schema_version)?,
-        fingerprint,
+    let summary = if args.resource_summary_json == "{}" {
+        match fingerprint.summary {
+            Some(summary) => summary,
+            None => parse_cli_object(
+                "verify resource observation summary",
+                &args.resource_summary_json,
+            )?,
+        }
+    } else {
         parse_cli_object(
             "verify resource observation summary",
             &args.resource_summary_json,
-        )?,
+        )?
+    };
+    let resource_id = ResourceId::parse_canonical(&required_arg("--resource", args.resource)?)?;
+    let adapter_kind = required_arg("--adapter-kind", args.adapter_kind)?;
+    let adapter_schema_version =
+        required_arg("--adapter-schema-version", args.adapter_schema_version)?;
+    let mut observation = ResourceObservationCreateOptions::new(
+        resource_id,
+        adapter_kind.clone(),
+        adapter_schema_version,
+        fingerprint.fingerprint,
+        summary,
     )?;
     if let Some(detail_content) = resource_observation_detail_from_cli(
         ResourceObservationDetailArgs {
@@ -13500,17 +13619,18 @@ fn verify_resource_observation_from_cli(
         args.scope_path,
         args.scope_path_prefix,
         args.scope_glob,
+        args.scope_git_worktree,
     )?
     .ok_or_else(|| {
         WorkVcsError::TaskInvalid(
-            "verify resource observation requires one of --scope-payload-json, --scope-path, --scope-path-prefix, or --scope-glob"
+            "verify resource observation requires one of --scope-payload-json, --scope-path, --scope-path-prefix, --scope-glob, or --scope-git-worktree"
                 .to_owned(),
         )
     })?;
-    let uses_path_shorthand = scope.is_path_shorthand();
+    let default_scope_kind = scope.default_scope_kind();
     let scope_kind = match args.scope_kind {
         Some(scope_kind) => scope_kind,
-        None if uses_path_shorthand => "path".to_owned(),
+        None if let Some(scope_kind) = default_scope_kind => scope_kind.to_owned(),
         None => {
             return Err(WorkVcsError::TaskInvalid(
                 "--scope-kind is required".to_owned(),
@@ -13519,7 +13639,7 @@ fn verify_resource_observation_from_cli(
     };
     let scope_schema_version = match args.scope_schema_version {
         Some(scope_schema_version) => scope_schema_version,
-        None if uses_path_shorthand => 1,
+        None if default_scope_kind.is_some() => 1,
         None => {
             return Err(WorkVcsError::TaskInvalid(
                 "--scope-schema-version is required".to_owned(),
@@ -13527,6 +13647,15 @@ fn verify_resource_observation_from_cli(
         }
     };
     let scope_payload = scope.into_value();
+    if uses_git_worktree_scope || uses_git_worktree_content {
+        validate_git_worktree_verify_contract(
+            &adapter_kind,
+            adapter_schema_version,
+            &scope_kind,
+            scope_schema_version,
+            &scope_payload,
+        )?;
+    }
 
     Ok(Some(VerifyResourceObservationInput::new(
         observation,
@@ -13702,6 +13831,38 @@ impl LocalFileGlobReadFailure {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GitWorktreeScope {
+    repo: PathBuf,
+}
+
+struct GitWorktreeSnapshot {
+    fingerprint: Digest,
+    summary: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GitWorktreeUntrackedEntry {
+    path: String,
+    fingerprint: Digest,
+    size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GitWorktreeReadFailure {
+    Unavailable,
+    Error(String),
+}
+
+impl GitWorktreeReadFailure {
+    fn message(&self) -> &str {
+        match self {
+            Self::Unavailable => "git worktree is unavailable",
+            Self::Error(message) => message,
+        }
+    }
+}
+
 fn refresh_verification_applicability_from_local_file_scope(
     engine: &mut Engine,
     branch_id: BranchId,
@@ -13748,6 +13909,179 @@ fn refresh_verification_applicability_from_local_file_scope(
         .with_resource_stamps(resource_stamps)?
         .with_detail(detail)?,
     )
+}
+
+fn refresh_verification_applicability_from_git_worktree_scope(
+    engine: &mut Engine,
+    branch_id: BranchId,
+    verification_entity_id: EntityId,
+    expected_evaluated_commit_id: Option<CommitId>,
+    detail: CanonicalValue,
+) -> Result<VerificationApplicabilityCacheSnapshot> {
+    let head = engine.branch_head(branch_id)?;
+    if let Some(expected_evaluated_commit_id) = expected_evaluated_commit_id
+        && head.head_commit_id != expected_evaluated_commit_id
+    {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            branch_id, expected_evaluated_commit_id, head.head_commit_id
+        )));
+    }
+    let verification = engine.verification_at(head.head_commit_id, verification_entity_id)?;
+    let resource_basis = verification.state.resource_basis.clone();
+    if resource_basis.is_empty() {
+        return Err(WorkVcsError::TaskInvalid(
+            "--resource-content-from-scope-git-worktree requires verification resource basis"
+                .to_owned(),
+        ));
+    }
+
+    let scopes = resource_basis
+        .iter()
+        .map(git_worktree_scope_from_basis)
+        .collect::<Result<Vec<_>>>()?;
+    let mut resource_stamps = Vec::with_capacity(resource_basis.len());
+    for (index, (basis, scope)) in resource_basis.iter().zip(scopes.iter()).enumerate() {
+        resource_stamps.push(git_worktree_applicability_stamp(
+            engine, index, basis, scope,
+        )?);
+    }
+
+    engine.record_verification_applicability(
+        VerificationApplicabilityRecordOptions::new(
+            branch_id,
+            verification_entity_id,
+            head.head_commit_id,
+        )?
+        .with_resource_stamps(resource_stamps)?
+        .with_detail(detail)?,
+    )
+}
+
+fn git_worktree_applicability_stamp(
+    engine: &mut Engine,
+    resource_basis_ordinal: usize,
+    basis: &VerificationResourceBasis,
+    scope: &GitWorktreeScope,
+) -> Result<ApplicabilityResourceStampInput> {
+    match git_worktree_snapshot(&scope.repo) {
+        Ok(snapshot) => {
+            let observation =
+                engine.record_resource_observation(ResourceObservationCreateOptions::new(
+                    basis.resource_id,
+                    basis.adapter_kind.clone(),
+                    basis.adapter_schema_version,
+                    snapshot.fingerprint,
+                    snapshot.summary,
+                )?)?;
+            ApplicabilityResourceStampInput::observed(
+                resource_basis_ordinal as i64,
+                basis.adapter_kind.clone(),
+                basis.adapter_schema_version,
+                basis.scope_schema_version,
+                snapshot.fingerprint,
+            )?
+            .with_observation_id(observation.observation_id)
+        }
+        Err(GitWorktreeReadFailure::Unavailable) => ApplicabilityResourceStampInput::unavailable(
+            resource_basis_ordinal as i64,
+            basis.adapter_kind.clone(),
+            basis.adapter_schema_version,
+            basis.scope_schema_version,
+        ),
+        Err(GitWorktreeReadFailure::Error(_)) => ApplicabilityResourceStampInput::error(
+            resource_basis_ordinal as i64,
+            basis.adapter_kind.clone(),
+            basis.adapter_schema_version,
+            basis.scope_schema_version,
+        ),
+    }
+}
+
+fn validate_git_worktree_verify_contract(
+    adapter_kind: &str,
+    adapter_schema_version: i64,
+    scope_kind: &str,
+    scope_schema_version: i64,
+    scope_payload: &CanonicalValue,
+) -> Result<()> {
+    if adapter_kind != "git" {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--scope-git-worktree supports adapter_kind git, found {adapter_kind:?}"
+        )));
+    }
+    if adapter_schema_version != 1 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--scope-git-worktree supports adapter_schema_version 1, found {adapter_schema_version}"
+        )));
+    }
+    if scope_kind != "git-worktree" {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--scope-git-worktree supports scope_kind git-worktree, found {scope_kind:?}"
+        )));
+    }
+    if scope_schema_version != 1 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--scope-git-worktree supports scope_schema_version 1, found {scope_schema_version}"
+        )));
+    }
+    git_worktree_scope_from_payload(scope_payload)?;
+    Ok(())
+}
+
+fn git_worktree_scope_from_basis(basis: &VerificationResourceBasis) -> Result<GitWorktreeScope> {
+    if basis.adapter_kind != "git" {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-scope-git-worktree supports adapter_kind git, found {:?}",
+            basis.adapter_kind
+        )));
+    }
+    if basis.adapter_schema_version != 1 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-scope-git-worktree supports adapter_schema_version 1, found {}",
+            basis.adapter_schema_version
+        )));
+    }
+    if basis.scope_kind != "git-worktree" {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-scope-git-worktree supports scope_kind git-worktree, found {:?}",
+            basis.scope_kind
+        )));
+    }
+    if basis.scope_schema_version != 1 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-scope-git-worktree supports scope_schema_version 1, found {}",
+            basis.scope_schema_version
+        )));
+    }
+    git_worktree_scope_from_payload(&basis.scope_payload)
+}
+
+fn git_worktree_scope_from_payload(scope_payload: &CanonicalValue) -> Result<GitWorktreeScope> {
+    let CanonicalValue::Object(entries) = scope_payload else {
+        return Err(WorkVcsError::TaskInvalid(
+            "git worktree refresh requires object scope payload".to_owned(),
+        ));
+    };
+    if entries.len() != 1 {
+        return Err(WorkVcsError::TaskInvalid(
+            "git worktree refresh requires scope payload with only field repo".to_owned(),
+        ));
+    }
+    let (key, repo) = &entries[0];
+    if key != "repo" {
+        return Err(WorkVcsError::TaskInvalid(
+            "git worktree refresh requires scope payload field repo".to_owned(),
+        ));
+    };
+    let CanonicalValue::String(repo) = repo else {
+        return Err(WorkVcsError::TaskInvalid(
+            "git worktree refresh requires string scope payload field repo".to_owned(),
+        ));
+    };
+    Ok(GitWorktreeScope {
+        repo: PathBuf::from(repo),
+    })
 }
 
 fn local_file_scope_applicability_stamp(
@@ -14296,6 +14630,369 @@ fn local_file_scope_glob_observation_summary(
             CanonicalValue::safe_integer(size_bytes)?,
         ),
     ])
+}
+
+fn git_worktree_snapshot(
+    repo: &Path,
+) -> std::result::Result<GitWorktreeSnapshot, GitWorktreeReadFailure> {
+    let repo_metadata = fs::symlink_metadata(repo).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            GitWorktreeReadFailure::Unavailable
+        } else {
+            GitWorktreeReadFailure::Error(format!(
+                "failed to inspect git worktree {}: {error}",
+                repo.display()
+            ))
+        }
+    })?;
+    if !repo_metadata.is_dir() {
+        return Err(GitWorktreeReadFailure::Error(format!(
+            "git worktree {} is not a directory",
+            repo.display()
+        )));
+    }
+
+    let root = git_command_first_line(repo, &["rev-parse", "--show-toplevel"], "git root")?;
+    let root = PathBuf::from(root);
+    let head_oid = git_command_first_line(&root, &["rev-parse", "--verify", "HEAD"], "git HEAD")?;
+    let status = git_command_bytes(
+        &root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        "git status",
+    )?;
+    let index_entries = git_command_bytes(&root, &["ls-files", "-s", "-z"], "git index")?;
+    let staged_diff = git_command_bytes(
+        &root,
+        &[
+            "diff",
+            "--cached",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--no-indent-heuristic",
+            "--diff-algorithm=myers",
+            "--unified=3",
+            "-O/dev/null",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ],
+        "git staged diff",
+    )?;
+    let unstaged_diff = git_command_bytes(
+        &root,
+        &[
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--no-indent-heuristic",
+            "--diff-algorithm=myers",
+            "--unified=3",
+            "-O/dev/null",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ],
+        "git unstaged diff",
+    )?;
+    let untracked_paths = git_command_bytes(
+        &root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+        "git untracked files",
+    )?;
+    let untracked_files = git_worktree_untracked_entries(&root, &untracked_paths)?;
+    let manifest = git_worktree_manifest_value(
+        &head_oid,
+        &status,
+        &index_entries,
+        &staged_diff,
+        &unstaged_diff,
+        &untracked_files,
+    )?;
+    let manifest_bytes = canonical_bytes(&manifest)
+        .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))?;
+    let fingerprint = content_object_digest(&manifest_bytes);
+    let summary = git_worktree_observation_summary(
+        repo,
+        &root,
+        &head_oid,
+        &status,
+        &staged_diff,
+        &unstaged_diff,
+        untracked_files.len(),
+    )?;
+    Ok(GitWorktreeSnapshot {
+        fingerprint,
+        summary,
+    })
+}
+
+fn git_command_bytes(
+    repo: &Path,
+    args: &[&str],
+    label: &str,
+) -> std::result::Result<Vec<u8>, GitWorktreeReadFailure> {
+    let output = ProcessCommand::new("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("-c")
+        .arg("color.ui=false")
+        .arg("-c")
+        .arg("core.quotepath=false")
+        .arg("-c")
+        .arg("diff.renames=false")
+        .arg("-c")
+        .arg("diff.algorithm=myers")
+        .arg("-c")
+        .arg("diff.context=3")
+        .arg("-c")
+        .arg("diff.indentHeuristic=false")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .map_err(|error| GitWorktreeReadFailure::Error(format!("{label} failed: {error}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        return Err(GitWorktreeReadFailure::Error(format!(
+            "{label} exited with {}: {}",
+            output.status, stderr
+        )));
+    }
+    Ok(output.stdout)
+}
+
+fn git_command_first_line(
+    repo: &Path,
+    args: &[&str],
+    label: &str,
+) -> std::result::Result<String, GitWorktreeReadFailure> {
+    let output = git_command_bytes(repo, args, label)?;
+    let text = String::from_utf8(output).map_err(|error| {
+        GitWorktreeReadFailure::Error(format!("{label} output is not UTF-8: {error}"))
+    })?;
+    let line = text
+        .lines()
+        .next()
+        .ok_or_else(|| GitWorktreeReadFailure::Error(format!("{label} output is empty")))?;
+    Ok(line.to_owned())
+}
+
+fn git_worktree_untracked_entries(
+    root: &Path,
+    bytes: &[u8],
+) -> std::result::Result<Vec<GitWorktreeUntrackedEntry>, GitWorktreeReadFailure> {
+    let mut files = Vec::new();
+    for path in git_z_paths(bytes, "git untracked files")? {
+        let normalized_path = normalize_cli_scope_path_components(Path::new(&path))
+            .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))?;
+        if normalized_path == "." || normalized_path.starts_with("../") {
+            return Err(GitWorktreeReadFailure::Error(format!(
+                "git untracked path {path:?} is outside the repository root"
+            )));
+        }
+        let full_path = root.join(&normalized_path);
+        let metadata = fs::symlink_metadata(&full_path).map_err(|error| {
+            GitWorktreeReadFailure::Error(format!(
+                "failed to inspect untracked file {}: {error}",
+                full_path.display()
+            ))
+        })?;
+        if !metadata.is_file() {
+            return Err(GitWorktreeReadFailure::Error(format!(
+                "unsupported untracked git worktree entry {}",
+                full_path.display()
+            )));
+        }
+        let content = fs::read(&full_path).map_err(|error| {
+            GitWorktreeReadFailure::Error(format!(
+                "failed to read untracked file {}: {error}",
+                full_path.display()
+            ))
+        })?;
+        let size_bytes = i64::try_from(content.len()).map_err(|_| {
+            GitWorktreeReadFailure::Error(format!(
+                "untracked file {} is too large",
+                full_path.display()
+            ))
+        })?;
+        files.push(GitWorktreeUntrackedEntry {
+            path: normalized_path,
+            fingerprint: content_object_digest(&content),
+            size_bytes,
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn git_z_paths(
+    bytes: &[u8],
+    label: &str,
+) -> std::result::Result<Vec<String>, GitWorktreeReadFailure> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            String::from_utf8(entry.to_vec()).map_err(|error| {
+                GitWorktreeReadFailure::Error(format!("{label} path is not UTF-8: {error}"))
+            })
+        })
+        .collect()
+}
+
+fn git_worktree_manifest_value(
+    head_oid: &str,
+    status: &[u8],
+    index_entries: &[u8],
+    staged_diff: &[u8],
+    unstaged_diff: &[u8],
+    untracked_files: &[GitWorktreeUntrackedEntry],
+) -> std::result::Result<CanonicalValue, GitWorktreeReadFailure> {
+    let untracked_entries = untracked_files
+        .iter()
+        .map(git_worktree_untracked_entry_value)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    CanonicalValue::object(vec![
+        (
+            "manifest_profile".to_owned(),
+            CanonicalValue::String("git-worktree-manifest-v1".to_owned()),
+        ),
+        (
+            "head_oid".to_owned(),
+            CanonicalValue::String(head_oid.to_owned()),
+        ),
+        (
+            "status".to_owned(),
+            git_worktree_bytes_summary_value(status)?,
+        ),
+        (
+            "index_entries".to_owned(),
+            git_worktree_bytes_summary_value(index_entries)?,
+        ),
+        (
+            "staged_diff".to_owned(),
+            git_worktree_bytes_summary_value(staged_diff)?,
+        ),
+        (
+            "unstaged_diff".to_owned(),
+            git_worktree_bytes_summary_value(unstaged_diff)?,
+        ),
+        (
+            "untracked_files".to_owned(),
+            CanonicalValue::Array(untracked_entries),
+        ),
+    ])
+    .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))
+}
+
+fn git_worktree_untracked_entry_value(
+    file: &GitWorktreeUntrackedEntry,
+) -> std::result::Result<CanonicalValue, GitWorktreeReadFailure> {
+    CanonicalValue::object(vec![
+        ("path".to_owned(), CanonicalValue::String(file.path.clone())),
+        (
+            "fingerprint".to_owned(),
+            CanonicalValue::String(file.fingerprint.to_string()),
+        ),
+        (
+            "size_bytes".to_owned(),
+            CanonicalValue::safe_integer(file.size_bytes)
+                .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))?,
+        ),
+    ])
+    .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))
+}
+
+fn git_worktree_bytes_summary_value(
+    bytes: &[u8],
+) -> std::result::Result<CanonicalValue, GitWorktreeReadFailure> {
+    let size_bytes = i64::try_from(bytes.len())
+        .map_err(|_| GitWorktreeReadFailure::Error("git output is too large".to_owned()))?;
+    CanonicalValue::object(vec![
+        (
+            "digest".to_owned(),
+            CanonicalValue::String(content_object_digest(bytes).to_string()),
+        ),
+        (
+            "size_bytes".to_owned(),
+            CanonicalValue::safe_integer(size_bytes)
+                .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))?,
+        ),
+    ])
+    .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))
+}
+
+fn git_worktree_observation_summary(
+    repo: &Path,
+    root: &Path,
+    head_oid: &str,
+    status: &[u8],
+    staged_diff: &[u8],
+    unstaged_diff: &[u8],
+    untracked_count: usize,
+) -> std::result::Result<CanonicalValue, GitWorktreeReadFailure> {
+    let untracked_count = i64::try_from(untracked_count).map_err(|_| {
+        GitWorktreeReadFailure::Error("git untracked file count is too large".to_owned())
+    })?;
+    let status_size = i64::try_from(status.len())
+        .map_err(|_| GitWorktreeReadFailure::Error("git status is too large".to_owned()))?;
+    let staged_diff_size = i64::try_from(staged_diff.len())
+        .map_err(|_| GitWorktreeReadFailure::Error("git staged diff is too large".to_owned()))?;
+    let unstaged_diff_size = i64::try_from(unstaged_diff.len())
+        .map_err(|_| GitWorktreeReadFailure::Error("git unstaged diff is too large".to_owned()))?;
+    CanonicalValue::object(vec![
+        (
+            "adapter_contract".to_owned(),
+            CanonicalValue::String("git-worktree-v1".to_owned()),
+        ),
+        (
+            "manifest_profile".to_owned(),
+            CanonicalValue::String("git-worktree-manifest-v1".to_owned()),
+        ),
+        (
+            "source".to_owned(),
+            CanonicalValue::String("verification cache-refresh".to_owned()),
+        ),
+        (
+            "repo".to_owned(),
+            CanonicalValue::String(repo.display().to_string()),
+        ),
+        (
+            "root".to_owned(),
+            CanonicalValue::String(root.display().to_string()),
+        ),
+        (
+            "head_oid".to_owned(),
+            CanonicalValue::String(head_oid.to_owned()),
+        ),
+        (
+            "status_size_bytes".to_owned(),
+            CanonicalValue::safe_integer(status_size)
+                .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))?,
+        ),
+        (
+            "staged_diff_size_bytes".to_owned(),
+            CanonicalValue::safe_integer(staged_diff_size)
+                .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))?,
+        ),
+        (
+            "unstaged_diff_size_bytes".to_owned(),
+            CanonicalValue::safe_integer(unstaged_diff_size)
+                .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))?,
+        ),
+        (
+            "untracked_files".to_owned(),
+            CanonicalValue::safe_integer(untracked_count)
+                .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))?,
+        ),
+    ])
+    .map_err(|error| GitWorktreeReadFailure::Error(error.to_string()))
 }
 
 fn local_file_scope_path_prefix_observation_summary(
@@ -22038,9 +22735,11 @@ mod tests {
         assert!(verify_help.contains("--evidence-content-role"));
         assert!(verify_help.contains("--scope-path"));
         assert!(verify_help.contains("--scope-glob"));
+        assert!(verify_help.contains("--scope-git-worktree"));
         assert!(verify_help.contains("--resource-content-from-scope-path"));
         assert!(verify_help.contains("--resource-content-from-scope-path-prefix"));
         assert!(verify_help.contains("--resource-content-from-scope-glob"));
+        assert!(verify_help.contains("--resource-content-from-scope-git-worktree"));
         assert!(verify_help.contains("--resource-detail-content-file"));
     }
 
@@ -22083,9 +22782,11 @@ mod tests {
             content_from_scope_path: true,
             content_from_scope_path_prefix: false,
             content_from_scope_glob: false,
+            content_from_scope_git_worktree: false,
             scope_path: None,
             scope_path_prefix: None,
             scope_glob: None,
+            scope_git_worktree: None,
         })
         .expect_err("scope path content source without scope path should fail");
         assert!(format!("{scope_path_error}").contains("--scope-path"));
@@ -22097,9 +22798,11 @@ mod tests {
             content_from_scope_path: false,
             content_from_scope_path_prefix: true,
             content_from_scope_glob: false,
+            content_from_scope_git_worktree: false,
             scope_path: None,
             scope_path_prefix: None,
             scope_glob: None,
+            scope_git_worktree: None,
         })
         .expect_err("scope path prefix content source without scope path prefix should fail");
         assert!(format!("{scope_path_prefix_error}").contains("--scope-path-prefix"));
@@ -22111,12 +22814,30 @@ mod tests {
             content_from_scope_path: false,
             content_from_scope_path_prefix: false,
             content_from_scope_glob: true,
+            content_from_scope_git_worktree: false,
             scope_path: None,
             scope_path_prefix: None,
             scope_glob: None,
+            scope_git_worktree: None,
         })
         .expect_err("scope glob content source without scope glob should fail");
         assert!(format!("{scope_glob_error}").contains("--scope-glob"));
+
+        let scope_git_error = fingerprint_from_cli(ResourceFingerprintArgs {
+            fingerprint: None,
+            content: None,
+            content_file: None,
+            content_from_scope_path: false,
+            content_from_scope_path_prefix: false,
+            content_from_scope_glob: false,
+            content_from_scope_git_worktree: true,
+            scope_path: None,
+            scope_path_prefix: None,
+            scope_glob: None,
+            scope_git_worktree: None,
+        })
+        .expect_err("scope git worktree content source without scope git worktree should fail");
+        assert!(format!("{scope_git_error}").contains("--scope-git-worktree"));
     }
 
     #[test]
@@ -22126,7 +22847,7 @@ mod tests {
                 .expect_err("unbounded glob root should fail");
             assert!(format!("{error}").contains("fixed non-wildcard root"));
             let shorthand_error =
-                verify_resource_scope_from_cli(None, None, None, Some(pattern.to_owned()))
+                verify_resource_scope_from_cli(None, None, None, Some(pattern.to_owned()), None)
                     .expect_err("unbounded verify scope glob should fail");
             assert!(format!("{shorthand_error}").contains("fixed non-wildcard root"));
         }
@@ -22134,9 +22855,14 @@ mod tests {
         let parent_error = local_file_glob_scope_from_pattern("../project/**/*.rs")
             .expect_err("parent-root glob should fail");
         assert!(format!("{parent_error}").contains("parent directory"));
-        let parent_shorthand_error =
-            verify_resource_scope_from_cli(None, None, None, Some("../project/**/*.rs".to_owned()))
-                .expect_err("parent-root verify scope glob should fail");
+        let parent_shorthand_error = verify_resource_scope_from_cli(
+            None,
+            None,
+            None,
+            Some("../project/**/*.rs".to_owned()),
+            None,
+        )
+        .expect_err("parent-root verify scope glob should fail");
         assert!(format!("{parent_shorthand_error}").contains("parent directory"));
 
         let scope = local_file_glob_scope_from_pattern("src/**/*.rs")
@@ -22144,7 +22870,7 @@ mod tests {
         assert_eq!(scope.pattern, "src/**/*.rs");
         assert_eq!(scope.root, PathBuf::from("src"));
         let shorthand =
-            verify_resource_scope_from_cli(None, None, None, Some("src/**/*.rs".to_owned()))
+            verify_resource_scope_from_cli(None, None, None, Some("src/**/*.rs".to_owned()), None)
                 .expect("fixed verify scope glob should pass")
                 .expect("scope should be present");
         assert_eq!(
@@ -39722,6 +40448,529 @@ mod tests {
         ])
         .expect("parse error prefix refresh"))
         .expect("refresh error prefix cache");
+        assert_eq!(value(&error, "applicability"), "unknown");
+        assert_eq!(value(&error, "reason_code"), "resource_error");
+    }
+
+    fn git_test_init(repo: &Path) {
+        fs::create_dir_all(repo).expect("create git repo directory");
+        let output = ProcessCommand::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(repo)
+            .output()
+            .expect("run git init");
+        assert!(
+            output.status.success(),
+            "git init {} failed with {}\nstdout: {}\nstderr: {}",
+            repo.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        git_test(repo, &["config", "user.email", "workvcs@example.test"]);
+        git_test(repo, &["config", "user.name", "WorkVCS Test"]);
+        git_test(repo, &["config", "commit.gpgsign", "false"]);
+    }
+
+    fn git_test(repo: &Path, args: &[&str]) {
+        let output = ProcessCommand::new("git")
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git -C {} {:?} failed with {}\nstdout: {}\nstderr: {}",
+            repo.display(),
+            args,
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn git_worktree_snapshot_tracks_uncommitted_states() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("README.md"), b"baseline\n").expect("write baseline");
+        git_test(&repo, &["add", "README.md"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+
+        let clean = git_worktree_snapshot(&repo)
+            .expect("clean git snapshot")
+            .fingerprint;
+        let clean_again = git_worktree_snapshot(&repo)
+            .expect("repeat clean git snapshot")
+            .fingerprint;
+        assert_eq!(clean, clean_again);
+
+        fs::write(repo.join("README.md"), b"unstaged\n").expect("write unstaged change");
+        let unstaged = git_worktree_snapshot(&repo)
+            .expect("unstaged git snapshot")
+            .fingerprint;
+        assert_ne!(clean, unstaged);
+
+        git_test(&repo, &["add", "README.md"]);
+        let staged = git_worktree_snapshot(&repo)
+            .expect("staged git snapshot")
+            .fingerprint;
+        assert_ne!(clean, staged);
+        assert_ne!(unstaged, staged);
+
+        fs::write(repo.join("untracked.txt"), b"untracked\n").expect("write untracked file");
+        let untracked = git_worktree_snapshot(&repo)
+            .expect("untracked git snapshot")
+            .fingerprint;
+        assert_ne!(staged, untracked);
+    }
+
+    #[test]
+    fn git_worktree_snapshot_is_stable_under_diff_config() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("README.md"), b"one\ntwo\nthree\n").expect("write baseline");
+        fs::write(repo.join("SECOND.md"), b"alpha\nbeta\ngamma\n").expect("write second baseline");
+        git_test(&repo, &["add", "README.md"]);
+        git_test(&repo, &["add", "SECOND.md"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+        fs::write(repo.join("README.md"), b"one\nchanged\nthree\n").expect("write change");
+        fs::write(repo.join("SECOND.md"), b"alpha\nchanged\ngamma\n").expect("write second change");
+
+        let default_config = git_worktree_snapshot(&repo)
+            .expect("default config snapshot")
+            .fingerprint;
+        fs::write(
+            repo.join(".git").join("diff-order"),
+            b"SECOND.md\nREADME.md\n",
+        )
+        .expect("write diff order file");
+        git_test(&repo, &["config", "diff.algorithm", "patience"]);
+        git_test(&repo, &["config", "diff.context", "9"]);
+        git_test(&repo, &["config", "diff.renames", "true"]);
+        git_test(&repo, &["config", "diff.indentHeuristic", "true"]);
+        git_test(&repo, &["config", "diff.orderFile", ".git/diff-order"]);
+        git_test(&repo, &["config", "color.ui", "always"]);
+        let non_default_config = git_worktree_snapshot(&repo)
+            .expect("non-default config snapshot")
+            .fingerprint;
+
+        assert_eq!(default_config, non_default_config);
+    }
+
+    #[test]
+    fn cli_git_worktree_scope_rejects_contract_mismatch() {
+        let repo = std::env::temp_dir().join("workvcs-git-scope-contract-test");
+        let resource = ResourceId::new_v7().to_string();
+        let digest = Digest::from_bytes([0; 32]).to_string();
+
+        let wrong_adapter = verify_resource_observation_from_cli(
+            VerifyResourceObservationArgs {
+                resource: Some(resource.clone()),
+                adapter_kind: Some("local-file".to_owned()),
+                adapter_schema_version: Some(1),
+                scope_kind: None,
+                scope_schema_version: None,
+                scope_payload_json: None,
+                scope_path: None,
+                scope_path_prefix: None,
+                scope_glob: None,
+                scope_git_worktree: Some(repo.clone()),
+                resource_fingerprint: Some(digest.clone()),
+                resource_content: None,
+                resource_content_file: None,
+                resource_content_from_scope_path: false,
+                resource_content_from_scope_path_prefix: false,
+                resource_content_from_scope_glob: false,
+                resource_content_from_scope_git_worktree: false,
+                resource_summary_json: "{}".to_owned(),
+                resource_detail_content: None,
+                resource_detail_content_file: None,
+                resource_detail_content_digest: None,
+                resource_detail_content_size_bytes: None,
+                resource_detail_media_type: None,
+                resource_detail_format_metadata_json: "{}".to_owned(),
+            },
+            None,
+        )
+        .expect_err("wrong git adapter kind should fail");
+        assert!(format!("{wrong_adapter}").contains("adapter_kind git"));
+
+        let wrong_scope_kind = verify_resource_observation_from_cli(
+            VerifyResourceObservationArgs {
+                resource: Some(resource),
+                adapter_kind: Some("git".to_owned()),
+                adapter_schema_version: Some(1),
+                scope_kind: Some("path".to_owned()),
+                scope_schema_version: None,
+                scope_payload_json: None,
+                scope_path: None,
+                scope_path_prefix: None,
+                scope_glob: None,
+                scope_git_worktree: Some(repo),
+                resource_fingerprint: Some(digest),
+                resource_content: None,
+                resource_content_file: None,
+                resource_content_from_scope_path: false,
+                resource_content_from_scope_path_prefix: false,
+                resource_content_from_scope_glob: false,
+                resource_content_from_scope_git_worktree: false,
+                resource_summary_json: "{}".to_owned(),
+                resource_detail_content: None,
+                resource_detail_content_file: None,
+                resource_detail_content_digest: None,
+                resource_detail_content_size_bytes: None,
+                resource_detail_media_type: None,
+                resource_detail_format_metadata_json: "{}".to_owned(),
+            },
+            None,
+        )
+        .expect_err("wrong git scope kind should fail");
+        assert!(format!("{wrong_scope_kind}").contains("scope_kind git-worktree"));
+    }
+
+    #[test]
+    fn git_worktree_refresh_rejects_extra_scope_payload_fields() {
+        let basis = VerificationResourceBasis::new(
+            ResourceId::new_v7(),
+            "git".to_owned(),
+            1,
+            "git-worktree".to_owned(),
+            1,
+            CanonicalValue::object(vec![
+                ("repo".to_owned(), CanonicalValue::String("repo".to_owned())),
+                (
+                    "subpath".to_owned(),
+                    CanonicalValue::String("src".to_owned()),
+                ),
+            ])
+            .expect("scope payload"),
+            Digest::from_bytes([0; 32]),
+        )
+        .expect("resource basis");
+        let error = git_worktree_scope_from_basis(&basis)
+            .expect_err("extra git worktree scope fields should fail");
+        assert!(format!("{error}").contains("only field repo"));
+    }
+
+    #[test]
+    fn cli_refreshes_git_worktree_scope_applicability_cache() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = store_path.to_str().expect("store path text");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("README.md"), b"baseline\n").expect("write baseline");
+        git_test(&repo, &["add", "README.md"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+        let repo_text = repo.to_str().expect("repo path text");
+        let baseline_fingerprint = git_worktree_snapshot(&repo)
+            .expect("baseline git snapshot")
+            .fingerprint
+            .to_string();
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "test git worktree refresh",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let task_version = value(&task, "task_entity_version_id");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &task_version,
+            "--local-key",
+            "AC-GIT-WORKTREE-REFRESH",
+            "--statement",
+            "git worktree cache refresh tracks current repository state",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+        head = value(&criterion, "commit_id");
+
+        let resource =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "create", store, "--kind", "git"])
+                    .expect("parse resource"),
+            )
+            .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let verified = run(Cli::try_parse_from([
+            "workvcs",
+            "verify",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--acceptance-criterion",
+            &criterion_id,
+            "--result",
+            "passed",
+            "--method",
+            "cli-smoke",
+            "--evidence-kind",
+            "cli-smoke",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "git",
+            "--adapter-schema-version",
+            "1",
+            "--scope-git-worktree",
+            repo_text,
+            "--resource-content-from-scope-git-worktree",
+            "--expected-resource-basis",
+            "1",
+            "--expected-cache-applicability",
+            "applicable",
+            "--expected-cache-reason-code",
+            "all_basis_applicable",
+        ])
+        .expect("parse git verify"))
+        .expect("verify git worktree resource");
+        assert_eq!(value(&verified, "resource_observation_recorded"), "true");
+        assert_eq!(
+            value(&verified, "resource_fingerprint"),
+            baseline_fingerprint
+        );
+        assert_eq!(value(&verified, "applicability_cache_recorded"), "true");
+        assert_eq!(value(&verified, "applicability"), "applicable");
+        assert_eq!(value(&verified, "reason_code"), "all_basis_applicable");
+        assert_eq!(value(&verified, "resource_basis_match_expected"), "true");
+        assert_eq!(value(&verified, "applicability_matches_expected"), "true");
+        assert_eq!(value(&verified, "reason_code_matches_expected"), "true");
+        let verification_id = value(&verified, "verification_entity_id");
+        let baseline_observation_id = value(&verified, "observation_id");
+        head = value(&verified, "commit_id");
+
+        let baseline_observation = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observation-show",
+            store,
+            "--observation",
+            &baseline_observation_id,
+        ])
+        .expect("parse baseline git observation show"))
+        .expect("show baseline git observation");
+        let baseline_summary = value(&baseline_observation, "summary_json");
+        assert!(baseline_summary.contains(r#""manifest_profile":"git-worktree-manifest-v1""#));
+        assert!(baseline_summary.contains(r#""repo":"#));
+        assert!(baseline_summary.contains(r#""root":"#));
+        assert!(baseline_summary.contains(r#""head_oid":"#));
+        assert!(baseline_summary.contains(r#""status_size_bytes":"#));
+
+        let verification_show = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse verification show"))
+        .expect("show verification");
+        assert_eq!(
+            value(&verification_show, "resource_basis.0.scope_kind"),
+            "git-worktree"
+        );
+        assert_eq!(
+            value(&verification_show, "resource_basis.0.scope_payload_json"),
+            format!(r#"{{"repo":"{repo_text}"}}"#)
+        );
+
+        let applicable = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-git-worktree",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse applicable git refresh"))
+        .expect("refresh applicable git cache");
+        assert_eq!(value(&applicable, "applicability"), "applicable");
+        assert_eq!(value(&applicable, "reason_code"), "all_basis_applicable");
+
+        let applicable_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse applicable git cache show"))
+        .expect("show applicable git cache");
+        assert_eq!(
+            value(&applicable_cache, "resource_stamp.0.observation_status"),
+            "observed"
+        );
+        assert_eq!(
+            value(&applicable_cache, "resource_stamp.0.observed_fingerprint"),
+            baseline_fingerprint
+        );
+        assert_ne!(
+            value(&applicable_cache, "resource_stamp.0.observation_id"),
+            baseline_observation_id
+        );
+
+        fs::write(repo.join("untracked.txt"), b"untracked\n").expect("write untracked file");
+        let changed_fingerprint = git_worktree_snapshot(&repo)
+            .expect("changed git snapshot")
+            .fingerprint
+            .to_string();
+        let stale = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-git-worktree",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "stale",
+            "--expected-reason-code",
+            "resource_drift",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse stale git refresh"))
+        .expect("refresh stale git cache");
+        assert_eq!(value(&stale, "applicability"), "stale");
+        assert_eq!(value(&stale, "reason_code"), "resource_drift");
+
+        let stale_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse stale git cache show"))
+        .expect("show stale git cache");
+        assert_eq!(
+            value(&stale_cache, "resource_stamp.0.observed_fingerprint"),
+            changed_fingerprint
+        );
+
+        let moved_repo = tempdir.path().join("moved-repo");
+        fs::rename(&repo, &moved_repo).expect("move repo away");
+        let unavailable = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-git-worktree",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "unknown",
+            "--expected-reason-code",
+            "resource_unavailable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse unavailable git refresh"))
+        .expect("refresh unavailable git cache");
+        assert_eq!(value(&unavailable, "applicability"), "unknown");
+        assert_eq!(value(&unavailable, "reason_code"), "resource_unavailable");
+
+        fs::create_dir(&repo).expect("create non-git directory");
+        let error = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-git-worktree",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "unknown",
+            "--expected-reason-code",
+            "resource_error",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse error git refresh"))
+        .expect("refresh error git cache");
         assert_eq!(value(&error, "applicability"), "unknown");
         assert_eq!(value(&error, "reason_code"), "resource_error");
     }

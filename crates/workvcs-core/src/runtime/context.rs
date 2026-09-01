@@ -1,7 +1,7 @@
 use super::runnable::{self, RunnableTasksOptions, RunnableTasksProjection};
 use super::session::{self, SessionLifecycleState, SessionSnapshot};
-use crate::canonical::{CanonicalValue, canonical_bytes};
-use crate::error::{Result, WorkVcsError};
+use crate::canonical::{CanonicalValue, canonical_bytes, parse_canonical_json};
+use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history::{
     self, AcceptanceCriterionEffectiveStatus, AcceptanceCriterionSnapshot, BranchHead,
     GoalSnapshot, KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
@@ -12,10 +12,17 @@ use crate::history::{
     RecordStatus, TaskSnapshot, VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget,
     WhyRelationEdge, WhyRelationKind,
 };
-use crate::identity::{BranchId, CommitId, Digest, EntityId, RelationId, SessionId, WorkspaceId};
-use crate::store::StoreConnection;
+use crate::identity::{
+    BranchId, CommitId, ContextPacketId, Digest, EntityId, RelationId, SessionId, WorkspaceId,
+};
+use crate::store::{StoreConnection, current_epoch_micros};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
+
+const CONTEXT_PACKET_DIGEST_DOMAIN: &str = "context-packet-snapshot-v1";
+const CONTEXT_PACKET_FORMAT: &str = "workvcs-context-packet-v1";
+const CONTEXT_PACKET_FORMAT_VERSION: i64 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContextOverviewOptions {
@@ -372,6 +379,70 @@ pub struct ContextPacket {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContextPacketSaveResult {
+    pub snapshot: ContextPacketSnapshot,
+    pub packet: ContextPacket,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContextPacketSnapshot {
+    pub context_packet_id: ContextPacketId,
+    pub session_id: SessionId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub head_commit_id: CommitId,
+    pub state_digest: Digest,
+    pub profile: ContextProfile,
+    pub budget_items: Option<NonZeroUsize>,
+    pub scope: Option<CanonicalValue>,
+    pub available_items: usize,
+    pub item_count: usize,
+    pub omitted_items: usize,
+    pub packet_digest: Digest,
+    pub packet_json: CanonicalValue,
+    pub created_at_us: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContextPacketListOptions {
+    session_id: SessionId,
+    limit: NonZeroUsize,
+}
+
+impl ContextPacketListOptions {
+    pub fn for_session(session_id: SessionId) -> Self {
+        Self {
+            session_id,
+            limit: NonZeroUsize::new(20).expect("default context packet list limit is non-zero"),
+        }
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Result<Self> {
+        let limit = NonZeroUsize::new(limit).ok_or_else(|| {
+            WorkVcsError::QueryInvalid(
+                "context packet list limit must be greater than zero".to_owned(),
+            )
+        })?;
+        self.limit = limit;
+        Ok(self)
+    }
+
+    pub fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn limit(self) -> NonZeroUsize {
+        self.limit
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContextPacketListResult {
+    pub session_id: SessionId,
+    pub snapshots: Vec<ContextPacketSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContextOverview {
     pub session: SessionSnapshot,
     pub branch: BranchHead,
@@ -593,6 +664,546 @@ pub(crate) fn context_packet(
         items,
         omission_summary,
     })
+}
+
+pub(crate) fn save_context_packet(
+    connection: &mut StoreConnection,
+    options: &ContextPacketOptions,
+) -> Result<ContextPacketSaveResult> {
+    connection.verify_foreign_keys()?;
+    let packet = context_packet(connection, options)?;
+    let packet_json = context_packet_value(&packet)?;
+    let packet_json_bytes = canonical_bytes(&packet_json)?;
+    let packet_json_text = String::from_utf8(packet_json_bytes.clone()).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!("context packet JSON was not UTF-8: {error}"))
+    })?;
+    let packet_digest = Digest::domain_separated(CONTEXT_PACKET_DIGEST_DOMAIN, &packet_json_bytes);
+    let scope_json = packet
+        .scope
+        .as_ref()
+        .map(canonical_object_json_text)
+        .transpose()?;
+    let context_packet_id = ContextPacketId::new_v7();
+    let created_at_us = current_epoch_micros()?;
+    let context_packet_id_bytes = context_packet_id.raw_bytes();
+    let session_id_bytes = packet.envelope.session_id.raw_bytes();
+    let workspace_id_bytes = packet.envelope.workspace_id.raw_bytes();
+    let branch_id_bytes = packet.envelope.branch_id.raw_bytes();
+    let head_commit_id_bytes = packet.envelope.head_commit_id.raw_bytes();
+    let state_digest_bytes = packet.envelope.state_digest.as_bytes();
+    let packet_digest_bytes = packet_digest.as_bytes();
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO context_packet_snapshot(
+                context_packet_id,
+                session_id,
+                workspace_id,
+                branch_id,
+                head_commit_id,
+                state_digest,
+                profile,
+                budget_items,
+                scope_json,
+                available_items,
+                item_count,
+                omitted_items,
+                packet_digest,
+                packet_json,
+                created_at_us
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                &context_packet_id_bytes[..],
+                &session_id_bytes[..],
+                &workspace_id_bytes[..],
+                &branch_id_bytes[..],
+                &head_commit_id_bytes[..],
+                &state_digest_bytes[..],
+                packet.profile.as_str(),
+                packet
+                    .budget_items
+                    .map(|value| usize_to_i64("context packet budget_items", value.get()))
+                    .transpose()?,
+                scope_json.as_deref(),
+                usize_to_i64("context packet available_items", packet.available_items)?,
+                usize_to_i64("context packet item_count", packet.items.len())?,
+                usize_to_i64(
+                    "context packet omitted_items",
+                    packet.omission_summary.total
+                )?,
+                &packet_digest_bytes[..],
+                packet_json_text,
+                created_at_us
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)?;
+
+    let snapshot = load_context_packet_snapshot(connection, context_packet_id)?;
+    Ok(ContextPacketSaveResult { snapshot, packet })
+}
+
+pub(crate) fn context_packet_snapshot(
+    connection: &StoreConnection,
+    context_packet_id: ContextPacketId,
+) -> Result<ContextPacketSnapshot> {
+    connection.verify_foreign_keys()?;
+    load_context_packet_snapshot(connection, context_packet_id)
+}
+
+pub(crate) fn context_packet_snapshots(
+    connection: &StoreConnection,
+    options: &ContextPacketListOptions,
+) -> Result<ContextPacketListResult> {
+    connection.verify_foreign_keys()?;
+    let limit = i64::try_from(options.limit().get()).map_err(|_| {
+        WorkVcsError::QueryInvalid("context packet list limit is too large".to_owned())
+    })?;
+    let session_id_bytes = options.session_id().raw_bytes();
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT context_packet_id
+             FROM context_packet_snapshot
+             WHERE session_id = ?1
+             ORDER BY created_at_us DESC, context_packet_id DESC
+             LIMIT ?2",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&session_id_bytes[..], limit], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(storage_error)?;
+
+    let mut snapshots = Vec::new();
+    for row in rows {
+        let context_packet_id = decode_context_packet_id(
+            "context_packet_snapshot.context_packet_id",
+            row.map_err(storage_error)?,
+        )?;
+        snapshots.push(load_context_packet_snapshot(connection, context_packet_id)?);
+    }
+    Ok(ContextPacketListResult {
+        session_id: options.session_id(),
+        snapshots,
+    })
+}
+
+fn load_context_packet_snapshot(
+    connection: &StoreConnection,
+    context_packet_id: ContextPacketId,
+) -> Result<ContextPacketSnapshot> {
+    let context_packet_id_bytes = context_packet_id.raw_bytes();
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT session_id,
+                    workspace_id,
+                    branch_id,
+                    head_commit_id,
+                    state_digest,
+                    profile,
+                    budget_items,
+                    scope_json,
+                    available_items,
+                    item_count,
+                    omitted_items,
+                    packet_digest,
+                    packet_json,
+                    created_at_us
+             FROM context_packet_snapshot
+             WHERE context_packet_id = ?1",
+            params![&context_packet_id_bytes[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, Vec<u8>>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, i64>(13)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let Some((
+        session_id,
+        workspace_id,
+        branch_id,
+        head_commit_id,
+        state_digest,
+        profile,
+        budget_items,
+        scope_json,
+        available_items,
+        item_count,
+        omitted_items,
+        packet_digest,
+        packet_json,
+        created_at_us,
+    )) = row
+    else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "context packet snapshot {context_packet_id} does not exist"
+        )));
+    };
+
+    let packet_json_value =
+        parse_canonical_object_json("context_packet_snapshot.packet_json", &packet_json)?;
+    let scope = scope_json
+        .map(|json| parse_canonical_object_json("context_packet_snapshot.scope_json", &json))
+        .transpose()?;
+    let budget_items = match budget_items {
+        Some(value) => Some(non_zero_usize_from_i64(
+            "context_packet_snapshot.budget_items",
+            value,
+        )?),
+        None => None,
+    };
+
+    let session_id = decode_session_id("context_packet_snapshot.session_id", session_id)?;
+    let workspace_id = decode_workspace_id("context_packet_snapshot.workspace_id", workspace_id)?;
+    let branch_id = decode_branch_id("context_packet_snapshot.branch_id", branch_id)?;
+    let head_commit_id =
+        decode_commit_id("context_packet_snapshot.head_commit_id", head_commit_id)?;
+    let state_digest = decode_digest("context_packet_snapshot.state_digest", state_digest)?;
+    let profile = parse_context_profile("context_packet_snapshot.profile", &profile)?;
+    let available_items =
+        usize_from_i64("context_packet_snapshot.available_items", available_items)?;
+    let item_count = usize_from_i64("context_packet_snapshot.item_count", item_count)?;
+    let omitted_items = usize_from_i64("context_packet_snapshot.omitted_items", omitted_items)?;
+    let packet_digest = decode_digest("context_packet_snapshot.packet_digest", packet_digest)?;
+    let packet_json_bytes = canonical_bytes(&packet_json_value)?;
+    let expected_packet_digest =
+        Digest::domain_separated(CONTEXT_PACKET_DIGEST_DOMAIN, &packet_json_bytes);
+    if packet_digest != expected_packet_digest {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "context packet snapshot {context_packet_id} digest does not match packet_json"
+        )));
+    }
+    validate_context_packet_snapshot_columns(
+        context_packet_id,
+        &packet_json_value,
+        ContextPacketSnapshotColumnExpectations {
+            session_id,
+            workspace_id,
+            branch_id,
+            head_commit_id,
+            state_digest,
+            profile,
+            budget_items,
+            scope: scope.as_ref(),
+            available_items,
+            item_count,
+            omitted_items,
+        },
+    )?;
+
+    Ok(ContextPacketSnapshot {
+        context_packet_id,
+        session_id,
+        workspace_id,
+        branch_id,
+        head_commit_id,
+        state_digest,
+        profile,
+        budget_items,
+        scope,
+        available_items,
+        item_count,
+        omitted_items,
+        packet_digest,
+        packet_json: packet_json_value,
+        created_at_us,
+    })
+}
+
+struct ContextPacketSnapshotColumnExpectations<'a> {
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    head_commit_id: CommitId,
+    state_digest: Digest,
+    profile: ContextProfile,
+    budget_items: Option<NonZeroUsize>,
+    scope: Option<&'a CanonicalValue>,
+    available_items: usize,
+    item_count: usize,
+    omitted_items: usize,
+}
+
+fn validate_context_packet_snapshot_columns(
+    context_packet_id: ContextPacketId,
+    packet_json: &CanonicalValue,
+    expected: ContextPacketSnapshotColumnExpectations<'_>,
+) -> Result<()> {
+    let packet = canonical_object_fields("context_packet_snapshot.packet_json", packet_json)?;
+    expect_packet_json_string(
+        context_packet_id,
+        packet,
+        "context_packet_format",
+        CONTEXT_PACKET_FORMAT,
+    )?;
+    expect_packet_json_integer(
+        context_packet_id,
+        packet,
+        "context_packet_format_version",
+        CONTEXT_PACKET_FORMAT_VERSION,
+    )?;
+    expect_packet_json_string(
+        context_packet_id,
+        packet,
+        "profile",
+        expected.profile.as_str(),
+    )?;
+    expect_packet_json_optional_usize(
+        context_packet_id,
+        packet,
+        "budget_items",
+        expected.budget_items,
+    )?;
+    expect_packet_json_scope(context_packet_id, packet, expected.scope)?;
+    expect_packet_json_usize(
+        context_packet_id,
+        packet,
+        "available_items",
+        expected.available_items,
+    )?;
+
+    let items = canonical_array_field(context_packet_id, packet, "items")?;
+    if items.len() != expected.item_count {
+        return Err(context_packet_snapshot_mismatch(
+            context_packet_id,
+            "items length",
+            expected.item_count.to_string(),
+            items.len().to_string(),
+        ));
+    }
+
+    let omission_summary = canonical_object_field(context_packet_id, packet, "omission_summary")?;
+    expect_packet_json_usize(
+        context_packet_id,
+        omission_summary,
+        "total",
+        expected.omitted_items,
+    )?;
+
+    let envelope = canonical_object_field(context_packet_id, packet, "envelope")?;
+    expect_packet_json_string(
+        context_packet_id,
+        envelope,
+        "session_id",
+        &expected.session_id.to_string(),
+    )?;
+    expect_packet_json_string(
+        context_packet_id,
+        envelope,
+        "workspace_id",
+        &expected.workspace_id.to_string(),
+    )?;
+    expect_packet_json_string(
+        context_packet_id,
+        envelope,
+        "branch_id",
+        &expected.branch_id.to_string(),
+    )?;
+    expect_packet_json_string(
+        context_packet_id,
+        envelope,
+        "head_commit_id",
+        &expected.head_commit_id.to_string(),
+    )?;
+    expect_packet_json_string(
+        context_packet_id,
+        envelope,
+        "state_digest",
+        &expected.state_digest.to_string(),
+    )?;
+    Ok(())
+}
+
+fn canonical_object_fields<'a>(
+    label: &str,
+    value: &'a CanonicalValue,
+) -> Result<&'a [(String, CanonicalValue)]> {
+    match value {
+        CanonicalValue::Object(entries) => Ok(entries),
+        _ => Err(WorkVcsError::StorageFailure(format!(
+            "{label} must be an object"
+        ))),
+    }
+}
+
+fn canonical_object_field<'a>(
+    context_packet_id: ContextPacketId,
+    entries: &'a [(String, CanonicalValue)],
+    field: &str,
+) -> Result<&'a [(String, CanonicalValue)]> {
+    let value = canonical_field(context_packet_id, entries, field)?;
+    canonical_object_fields(
+        &format!("context packet snapshot {context_packet_id} packet_json.{field}"),
+        value,
+    )
+}
+
+fn canonical_array_field<'a>(
+    context_packet_id: ContextPacketId,
+    entries: &'a [(String, CanonicalValue)],
+    field: &str,
+) -> Result<&'a [CanonicalValue]> {
+    match canonical_field(context_packet_id, entries, field)? {
+        CanonicalValue::Array(values) => Ok(values),
+        _ => Err(WorkVcsError::StorageFailure(format!(
+            "context packet snapshot {context_packet_id} packet_json.{field} must be an array"
+        ))),
+    }
+}
+
+fn canonical_field<'a>(
+    context_packet_id: ContextPacketId,
+    entries: &'a [(String, CanonicalValue)],
+    field: &str,
+) -> Result<&'a CanonicalValue> {
+    entries
+        .iter()
+        .find_map(|(key, value)| (key == field).then_some(value))
+        .ok_or_else(|| {
+            WorkVcsError::StorageFailure(format!(
+                "context packet snapshot {context_packet_id} packet_json missing field {field}"
+            ))
+        })
+}
+
+fn expect_packet_json_string(
+    context_packet_id: ContextPacketId,
+    entries: &[(String, CanonicalValue)],
+    field: &str,
+    expected: &str,
+) -> Result<()> {
+    match canonical_field(context_packet_id, entries, field)? {
+        CanonicalValue::String(actual) if actual == expected => Ok(()),
+        CanonicalValue::String(actual) => Err(context_packet_snapshot_mismatch(
+            context_packet_id,
+            field,
+            expected.to_owned(),
+            actual.clone(),
+        )),
+        _ => Err(WorkVcsError::StorageFailure(format!(
+            "context packet snapshot {context_packet_id} packet_json.{field} must be a string"
+        ))),
+    }
+}
+
+fn expect_packet_json_integer(
+    context_packet_id: ContextPacketId,
+    entries: &[(String, CanonicalValue)],
+    field: &str,
+    expected: i64,
+) -> Result<()> {
+    match canonical_field(context_packet_id, entries, field)? {
+        CanonicalValue::Integer(actual) if actual.get() == expected => Ok(()),
+        CanonicalValue::Integer(actual) => Err(context_packet_snapshot_mismatch(
+            context_packet_id,
+            field,
+            expected.to_string(),
+            actual.get().to_string(),
+        )),
+        _ => Err(WorkVcsError::StorageFailure(format!(
+            "context packet snapshot {context_packet_id} packet_json.{field} must be an integer"
+        ))),
+    }
+}
+
+fn expect_packet_json_usize(
+    context_packet_id: ContextPacketId,
+    entries: &[(String, CanonicalValue)],
+    field: &str,
+    expected: usize,
+) -> Result<()> {
+    expect_packet_json_integer(
+        context_packet_id,
+        entries,
+        field,
+        usize_to_i64(field, expected)?,
+    )
+}
+
+fn expect_packet_json_optional_usize(
+    context_packet_id: ContextPacketId,
+    entries: &[(String, CanonicalValue)],
+    field: &str,
+    expected: Option<NonZeroUsize>,
+) -> Result<()> {
+    let expected_i64 = expected
+        .map(|value| usize_to_i64(field, value.get()))
+        .transpose()?;
+    match (
+        expected,
+        canonical_field(context_packet_id, entries, field)?,
+    ) {
+        (None, CanonicalValue::Null) => Ok(()),
+        (Some(_), CanonicalValue::Integer(actual)) if Some(actual.get()) == expected_i64 => Ok(()),
+        (expected, actual) => Err(context_packet_snapshot_mismatch(
+            context_packet_id,
+            field,
+            expected
+                .map(|value| value.get().to_string())
+                .unwrap_or_else(|| "null".to_owned()),
+            context_packet_json_scalar(actual)?,
+        )),
+    }
+}
+
+fn expect_packet_json_scope(
+    context_packet_id: ContextPacketId,
+    entries: &[(String, CanonicalValue)],
+    expected: Option<&CanonicalValue>,
+) -> Result<()> {
+    let actual = canonical_field(context_packet_id, entries, "scope")?;
+    match (expected, actual) {
+        (None, CanonicalValue::Null) => Ok(()),
+        (Some(expected), actual) if expected == actual => Ok(()),
+        (expected, actual) => Err(context_packet_snapshot_mismatch(
+            context_packet_id,
+            "scope",
+            expected
+                .map(context_packet_json_scalar)
+                .transpose()?
+                .unwrap_or_else(|| "null".to_owned()),
+            context_packet_json_scalar(actual)?,
+        )),
+    }
+}
+
+fn context_packet_json_scalar(value: &CanonicalValue) -> Result<String> {
+    canonical_json_text(value)
+}
+
+fn context_packet_snapshot_mismatch(
+    context_packet_id: ContextPacketId,
+    field: &str,
+    expected: String,
+    actual: String,
+) -> WorkVcsError {
+    WorkVcsError::StorageFailure(format!(
+        "context packet snapshot {context_packet_id} {field} does not match packet_json: column={expected} packet_json={actual}"
+    ))
 }
 
 fn context_acceptance_criteria(
@@ -1066,6 +1677,261 @@ fn path_is_within_prefix(path: &str, prefix: &str) -> bool {
 
 fn prefixes_overlap(left: &str, right: &str) -> bool {
     path_is_within_prefix(left, right) || path_is_within_prefix(right, left)
+}
+
+fn context_packet_value(packet: &ContextPacket) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("context_packet_format", CONTEXT_PACKET_FORMAT),
+        integer_field(
+            "context_packet_format_version",
+            CONTEXT_PACKET_FORMAT_VERSION,
+        )?,
+        (
+            "envelope".to_owned(),
+            context_packet_envelope_value(&packet.envelope)?,
+        ),
+        string_field("profile", packet.profile.as_str()),
+        (
+            "budget_items".to_owned(),
+            packet
+                .budget_items
+                .map(|value| usize_value(value.get()))
+                .transpose()?
+                .unwrap_or(CanonicalValue::Null),
+        ),
+        (
+            "scope".to_owned(),
+            packet.scope.clone().unwrap_or(CanonicalValue::Null),
+        ),
+        integer_field(
+            "available_items",
+            usize_to_i64("context packet available_items", packet.available_items)?,
+        )?,
+        (
+            "items".to_owned(),
+            CanonicalValue::Array(
+                packet
+                    .items
+                    .iter()
+                    .map(context_item_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "omission_summary".to_owned(),
+            context_omission_summary_value(&packet.omission_summary)?,
+        ),
+    ])
+}
+
+fn context_packet_envelope_value(envelope: &ContextPacketEnvelope) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("session_id", envelope.session_id.to_string()),
+        string_field(
+            "lifecycle_state",
+            session_lifecycle_state_label(envelope.lifecycle_state),
+        ),
+        string_field("workspace_id", envelope.workspace_id.to_string()),
+        string_field("branch_id", envelope.branch_id.to_string()),
+        string_field("branch_name", envelope.branch_name.clone()),
+        string_field("head_commit_id", envelope.head_commit_id.to_string()),
+        string_field("state_digest", envelope.state_digest.to_string()),
+        integer_field("started_at_us", envelope.started_at_us)?,
+        (
+            "last_activity_at_us".to_owned(),
+            envelope
+                .last_activity_at_us
+                .map(CanonicalValue::safe_integer)
+                .transpose()?
+                .unwrap_or(CanonicalValue::Null),
+        ),
+        (
+            "focus_entity_id".to_owned(),
+            envelope
+                .focus_entity_id
+                .map(|focus_entity_id| CanonicalValue::String(focus_entity_id.to_string()))
+                .unwrap_or(CanonicalValue::Null),
+        ),
+    ])
+}
+
+fn context_item_value(item: &ContextItem) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("priority", item.priority.as_str()),
+        string_field("category", item.category.as_str()),
+        string_field("subject", item.subject.as_ref_string()),
+        string_field("item_key", item.item_key.clone()),
+        string_field("summary", item.summary.clone()),
+    ])
+}
+
+fn context_omission_summary_value(summary: &ContextOmissionSummary) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        integer_field(
+            "total",
+            usize_to_i64("context packet omitted_items", summary.total)?,
+        )?,
+        (
+            "by_priority".to_owned(),
+            CanonicalValue::Array(
+                summary
+                    .by_priority
+                    .iter()
+                    .map(|bucket| {
+                        CanonicalValue::object(vec![
+                            string_field("priority", bucket.priority.as_str()),
+                            integer_field(
+                                "omitted",
+                                usize_to_i64("context packet omitted priority", bucket.omitted)?,
+                            )?,
+                        ])
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "by_category".to_owned(),
+            CanonicalValue::Array(
+                summary
+                    .by_category
+                    .iter()
+                    .map(|bucket| {
+                        CanonicalValue::object(vec![
+                            string_field("category", bucket.category.as_str()),
+                            integer_field(
+                                "omitted",
+                                usize_to_i64("context packet omitted category", bucket.omitted)?,
+                            )?,
+                        ])
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+    ])
+}
+
+fn session_lifecycle_state_label(lifecycle_state: SessionLifecycleState) -> &'static str {
+    match lifecycle_state {
+        SessionLifecycleState::Active => "active",
+        SessionLifecycleState::PotentiallyStale => "potentially_stale",
+        SessionLifecycleState::Ended => "ended",
+    }
+}
+
+fn parse_context_profile(label: &str, value: &str) -> Result<ContextProfile> {
+    match value {
+        "brief" => Ok(ContextProfile::Brief),
+        "normal" => Ok(ContextProfile::Normal),
+        "full" => Ok(ContextProfile::Full),
+        other => Err(WorkVcsError::StorageFailure(format!(
+            "{label} has unsupported context profile {other:?}"
+        ))),
+    }
+}
+
+fn string_field(name: &str, value: impl Into<String>) -> (String, CanonicalValue) {
+    (name.to_owned(), CanonicalValue::String(value.into()))
+}
+
+fn integer_field(name: &str, value: i64) -> Result<(String, CanonicalValue)> {
+    Ok((name.to_owned(), CanonicalValue::safe_integer(value)?))
+}
+
+fn usize_value(value: usize) -> Result<CanonicalValue> {
+    CanonicalValue::safe_integer(usize_to_i64("context packet usize value", value)?)
+}
+
+fn usize_to_i64(label: &str, value: usize) -> Result<i64> {
+    i64::try_from(value)
+        .map_err(|_| WorkVcsError::QueryInvalid(format!("{label} does not fit i64")))
+}
+
+fn usize_from_i64(label: &str, value: i64) -> Result<usize> {
+    if value < 0 {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "{label} must be non-negative"
+        )));
+    }
+    usize::try_from(value)
+        .map_err(|_| WorkVcsError::StorageFailure(format!("{label} does not fit usize")))
+}
+
+fn non_zero_usize_from_i64(label: &str, value: i64) -> Result<NonZeroUsize> {
+    let value = usize_from_i64(label, value)?;
+    NonZeroUsize::new(value)
+        .ok_or_else(|| WorkVcsError::StorageFailure(format!("{label} must be greater than zero")))
+}
+
+fn canonical_object_json_text(value: &CanonicalValue) -> Result<String> {
+    if !matches!(value, CanonicalValue::Object(_)) {
+        return Err(WorkVcsError::QueryInvalid(
+            "context packet scope must be an object".to_owned(),
+        ));
+    }
+    canonical_json_text(value)
+}
+
+fn parse_canonical_object_json(label: &str, input: &str) -> Result<CanonicalValue> {
+    let value = parse_canonical_json(input.as_bytes())?;
+    if !matches!(value, CanonicalValue::Object(_)) {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "{label} must be a canonical JSON object"
+        )));
+    }
+    let reencoded = canonical_json_text(&value)?;
+    if reencoded != input {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "{label} is not canonical JSON"
+        )));
+    }
+    Ok(value)
+}
+
+fn canonical_json_text(value: &CanonicalValue) -> Result<String> {
+    String::from_utf8(canonical_bytes(value)?).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!("canonical JSON was not UTF-8: {error}"))
+    })
+}
+
+fn decode_context_packet_id(column: &str, bytes: Vec<u8>) -> Result<ContextPacketId> {
+    ContextPacketId::from_bytes(fixed_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::StorageFailure(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_session_id(column: &str, bytes: Vec<u8>) -> Result<SessionId> {
+    SessionId::from_bytes(fixed_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::StorageFailure(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
+    WorkspaceId::from_bytes(fixed_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::StorageFailure(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_branch_id(column: &str, bytes: Vec<u8>) -> Result<BranchId> {
+    BranchId::from_bytes(fixed_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::StorageFailure(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_commit_id(column: &str, bytes: Vec<u8>) -> Result<CommitId> {
+    CommitId::from_bytes(fixed_bytes(column, bytes)?).map_err(|error| {
+        WorkVcsError::StorageFailure(format!("{column} is not a UUIDv7 value: {error}"))
+    })
+}
+
+fn decode_digest(column: &str, bytes: Vec<u8>) -> Result<Digest> {
+    Ok(Digest::from_bytes(fixed_bytes(column, bytes)?))
+}
+
+fn fixed_bytes<const N: usize>(column: &str, bytes: Vec<u8>) -> Result<[u8; N]> {
+    let len = bytes.len();
+    bytes.try_into().map_err(|_| {
+        WorkVcsError::StorageFailure(format!("{column} must be {N} bytes, found {len}"))
+    })
 }
 
 fn primary_parent_by_child(

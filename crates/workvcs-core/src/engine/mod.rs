@@ -100,14 +100,17 @@ use crate::history::{
     StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
-use crate::store::{Store, StoreInfo, StoreInitOptions};
+use crate::store::{
+    ContextPacketSnapshotSchemaMigrationResult, Store, StoreInfo, StoreInitOptions,
+};
 use crate::{
     ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardOptions, ClaimGuardResult,
     ClaimListOptions, ClaimListResult, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
-    ClaimTransferResult, ContextOverview, ContextOverviewOptions, ContextPacket,
-    ContextPacketOptions, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
-    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    ClaimTransferResult, ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketId,
+    ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
+    ContextPacketSaveResult, ContextPacketSnapshot, MergeAbortOptions, MergeAbortResult,
+    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
     MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
@@ -133,6 +136,12 @@ impl Engine {
         Ok(Self {
             store: Store::open(path.as_ref())?,
         })
+    }
+
+    pub fn migrate_context_packet_snapshot_schema(
+        path: impl AsRef<Path>,
+    ) -> Result<ContextPacketSnapshotSchemaMigrationResult> {
+        Store::migrate_context_packet_snapshot_schema(path.as_ref())
     }
 
     pub fn store_info(&self) -> Result<StoreInfo> {
@@ -1088,6 +1097,27 @@ impl Engine {
 
     pub fn context_packet(&self, options: ContextPacketOptions) -> Result<ContextPacket> {
         self.store.context_packet(&options)
+    }
+
+    pub fn save_context_packet(
+        &mut self,
+        options: ContextPacketOptions,
+    ) -> Result<ContextPacketSaveResult> {
+        self.store.save_context_packet(&options)
+    }
+
+    pub fn context_packet_snapshot(
+        &self,
+        context_packet_id: ContextPacketId,
+    ) -> Result<ContextPacketSnapshot> {
+        self.store.context_packet_snapshot(context_packet_id)
+    }
+
+    pub fn context_packet_snapshots(
+        &self,
+        options: ContextPacketListOptions,
+    ) -> Result<ContextPacketListResult> {
+        self.store.context_packet_snapshots(&options)
     }
 
     pub fn next_work(&mut self, options: NextWorkOptions) -> Result<NextWorkResult> {

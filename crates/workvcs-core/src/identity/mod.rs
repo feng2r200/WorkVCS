@@ -3,9 +3,9 @@ mod ids;
 
 pub use digest::Digest;
 pub use ids::{
-    BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, EntityId, EntityVersionId, EventId,
-    EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalRefId,
-    ExternalVersionId, ImportId, KnowledgeSpaceId, LineageId, MergeId, MergeItemId, MigrationId,
-    OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId,
-    SessionId, StoreId, WorkspaceId,
+    BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, ContextPacketId, EntityId,
+    EntityVersionId, EventId, EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId,
+    ExternalRefId, ExternalVersionId, ImportId, KnowledgeSpaceId, LineageId, MergeId, MergeItemId,
+    MigrationId, OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId,
+    SessionDiffId, SessionId, StoreId, WorkspaceId,
 };

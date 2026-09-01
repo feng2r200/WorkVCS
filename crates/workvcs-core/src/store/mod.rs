@@ -10,4 +10,5 @@ pub use bootstrap::{
     StoreManifest,
 };
 pub(crate) use connection::StoreConnection;
+pub use open::ContextPacketSnapshotSchemaMigrationResult;
 pub(crate) use open::Store;

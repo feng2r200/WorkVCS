@@ -1,3 +1,4 @@
+use crate::canonical::CanonicalValue;
 use crate::error::Result;
 use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
@@ -83,16 +84,17 @@ use crate::history::{
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
 use crate::identity::{
-    ChangeSetId, CheckpointId, ExposureId, ExternalRefId, KnowledgeSpaceId, LineageId, MigrationId,
-    RelationId,
+    ChangeSetId, CheckpointId, ContextPacketId, ExposureId, ExternalRefId, KnowledgeSpaceId,
+    LineageId, MigrationId, RelationId,
 };
 use crate::runtime::{
     ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardOptions, ClaimGuardResult,
     ClaimListOptions, ClaimListResult, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
     ClaimTransferResult, ContextOverview, ContextOverviewOptions, ContextPacket,
-    ContextPacketOptions, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
-    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
+    ContextPacketSaveResult, ContextPacketSnapshot, MergeAbortOptions, MergeAbortResult,
+    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
     MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
@@ -102,7 +104,8 @@ use crate::runtime::{
     SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use crate::store::bootstrap::{
-    StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest, validate_bootstrap,
+    STORE_FORMAT_VERSION, StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest,
+    load_store_info, validate_application_id, validate_bootstrap,
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
@@ -115,6 +118,14 @@ use std::path::Path;
 pub(crate) struct Store {
     connection: StoreConnection,
     info: StoreInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContextPacketSnapshotSchemaMigrationResult {
+    pub store_info: StoreInfo,
+    pub migrated: bool,
+    pub added_schema_objects: Vec<String>,
+    pub migration: Option<StoreMigrationAttemptSnapshot>,
 }
 
 impl Store {
@@ -134,6 +145,43 @@ impl Store {
         let connection = StoreConnection::open(path)?;
         let info = validate_bootstrap(&connection)?;
         Ok(Self { connection, info })
+    }
+
+    pub(crate) fn migrate_context_packet_snapshot_schema(
+        path: &Path,
+    ) -> Result<ContextPacketSnapshotSchemaMigrationResult> {
+        let mut connection = StoreConnection::open(path)?;
+        validate_application_id(&connection)?;
+        let before_info = load_store_info(&connection)?;
+        let migration = schema::migrate_context_packet_snapshot_schema(&mut connection)?;
+        let added_schema_objects = migration.added_schema_objects;
+        let recorded_migration = if added_schema_objects.is_empty() {
+            None
+        } else {
+            let detail = context_packet_snapshot_schema_migration_detail(&added_schema_objects)?;
+            Some(
+                history::record_store_migration(
+                    &mut connection,
+                    StoreMigrationRecordOptions::new(
+                        STORE_FORMAT_VERSION,
+                        STORE_FORMAT_VERSION,
+                        before_info.manifest.schema_version,
+                        before_info.manifest.schema_version,
+                        "workvcs-context-packet-snapshot-v1",
+                        "completed",
+                        detail,
+                    )?,
+                )?
+                .migration,
+            )
+        };
+        let store_info = validate_bootstrap(&connection)?;
+        Ok(ContextPacketSnapshotSchemaMigrationResult {
+            store_info,
+            migrated: !added_schema_objects.is_empty(),
+            added_schema_objects,
+            migration: recorded_migration,
+        })
     }
 
     pub(crate) fn info(&self) -> Result<StoreInfo> {
@@ -1688,6 +1736,33 @@ impl Store {
         runtime::context_packet(&self.connection, options)
     }
 
+    pub(crate) fn save_context_packet(
+        &mut self,
+        options: &ContextPacketOptions,
+    ) -> Result<ContextPacketSaveResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::save_context_packet(&mut self.connection, options)
+    }
+
+    pub(crate) fn context_packet_snapshot(
+        &self,
+        context_packet_id: ContextPacketId,
+    ) -> Result<ContextPacketSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::context_packet_snapshot(&self.connection, context_packet_id)
+    }
+
+    pub(crate) fn context_packet_snapshots(
+        &self,
+        options: &ContextPacketListOptions,
+    ) -> Result<ContextPacketListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::context_packet_snapshots(&self.connection, options)
+    }
+
     pub(crate) fn next_work(&mut self, options: &NextWorkOptions) -> Result<NextWorkResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
@@ -1699,4 +1774,24 @@ impl Store {
         debug_assert_eq!(current, self.info);
         runtime::verify(&mut self.connection, options)
     }
+}
+
+fn context_packet_snapshot_schema_migration_detail(
+    added_schema_objects: &[String],
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        (
+            "migration_kind".to_owned(),
+            CanonicalValue::String("context_packet_snapshot_schema_addition".to_owned()),
+        ),
+        (
+            "added_schema_objects".to_owned(),
+            CanonicalValue::Array(
+                added_schema_objects
+                    .iter()
+                    .map(|object| CanonicalValue::String(object.clone()))
+                    .collect(),
+            ),
+        ),
+    ])
 }

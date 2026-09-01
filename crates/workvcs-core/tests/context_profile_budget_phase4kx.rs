@@ -1,13 +1,15 @@
+use rusqlite::params;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, CanonicalValue,
-    ContextItemCategory, ContextPacket, ContextPacketOptions, ContextPriority, ContextProfile,
-    Engine, ErrorCode, GoalCreateOptions, KnowledgeCreateOptions, PlanCreateOptions,
-    PrimaryContainmentCreateOptions, RecordCreateOptions, RecordRelationCreateOptions,
-    RecordTransitionOptions, SessionId, SessionStartOptions, StoreInitOptions, TaskCreateOptions,
-    TaskSchedulingRelationCreateOptions, VerificationRequirementCreateOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    ContextItemCategory, ContextPacket, ContextPacketListOptions, ContextPacketOptions,
+    ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions, KnowledgeCreateOptions,
+    PlanCreateOptions, PrimaryContainmentCreateOptions, RecordCreateOptions,
+    RecordRelationCreateOptions, RecordTransitionOptions, SessionId, SessionStartOptions,
+    StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
+    VerificationRequirementCreateOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
+    canonical_bytes,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -415,6 +417,177 @@ fn context_packet_filters_path_scoped_knowledge_by_explicit_scope() {
                 |bucket| bucket.category == ContextItemCategory::ScopedKnowledge
                     && bucket.omitted == 5
             )
+    );
+}
+
+#[test]
+fn context_packet_snapshots_persist_scope_json_and_stable_packet_digest() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Persist resolved context packet")
+                .expect("task options"),
+        )
+        .expect("create task");
+    head = task.commit_id;
+
+    let matching = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Persisted packet keeps matching path")
+                .expect("matching knowledge options")
+                .with_scope(object(vec![(
+                    "path",
+                    string("crates/workvcs-core/src/runtime/context.rs"),
+                )]))
+                .expect("matching knowledge scope"),
+        )
+        .expect("create matching knowledge");
+    head = matching.commit_id;
+
+    let unrelated = engine
+        .create_knowledge(
+            KnowledgeCreateOptions::new(branch_id, head, "Persisted packet filters other path")
+                .expect("unrelated knowledge options")
+                .with_scope(object(vec![(
+                    "path",
+                    string("crates/workvcs-cli/src/main.rs"),
+                )]))
+                .expect("unrelated knowledge scope"),
+        )
+        .expect("create unrelated knowledge");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    let scope = object(vec![(
+        "path",
+        string("crates/workvcs-core/src/runtime/context.rs"),
+    )]);
+    let options = ContextPacketOptions::new(session.session_id)
+        .with_profile(ContextProfile::Normal)
+        .with_budget_items(8)
+        .expect("budgeted context options")
+        .with_scope(scope.clone())
+        .expect("scoped context options");
+
+    let saved = engine
+        .save_context_packet(options.clone())
+        .expect("save context packet");
+    assert_eq!(saved.snapshot.session_id, session.session_id);
+    assert_eq!(saved.snapshot.workspace_id, workspace.workspace_id);
+    assert_eq!(saved.snapshot.branch_id, branch_id);
+    assert_eq!(saved.snapshot.head_commit_id, unrelated.commit_id);
+    assert_eq!(
+        saved.snapshot.state_digest,
+        saved.packet.envelope.state_digest
+    );
+    assert_eq!(saved.snapshot.profile, ContextProfile::Normal);
+    assert_eq!(
+        saved.snapshot.budget_items.map(|value| value.get()),
+        Some(8)
+    );
+    assert_eq!(saved.snapshot.scope.as_ref(), Some(&scope));
+    assert_eq!(saved.snapshot.available_items, saved.packet.available_items);
+    assert_eq!(saved.snapshot.item_count, saved.packet.items.len());
+    assert_eq!(
+        saved.snapshot.omitted_items,
+        saved.packet.omission_summary.total
+    );
+
+    let packet_json =
+        String::from_utf8(canonical_bytes(&saved.snapshot.packet_json).expect("json"))
+            .expect("packet json is utf8");
+    assert!(packet_json.contains("\"context_packet_format\":\"workvcs-context-packet-v1\""));
+    assert!(packet_json.contains("\"context_packet_format_version\":1"));
+    assert!(
+        packet_json.contains("\"scope\":{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}")
+    );
+    assert!(packet_json.contains("Persisted packet keeps matching path"));
+    assert!(!packet_json.contains("Persisted packet filters other path"));
+
+    let loaded = engine
+        .context_packet_snapshot(saved.snapshot.context_packet_id)
+        .expect("load context packet snapshot");
+    assert_eq!(loaded, saved.snapshot);
+
+    {
+        let connection = rusqlite::Connection::open(&path).expect("open raw sqlite");
+        let context_packet_id_bytes = saved.snapshot.context_packet_id.raw_bytes();
+        connection
+            .execute(
+                "UPDATE context_packet_snapshot
+                 SET available_items = available_items + 1
+                 WHERE context_packet_id = ?1",
+                params![&context_packet_id_bytes[..]],
+            )
+            .expect("corrupt context packet snapshot count");
+    }
+    let corrupt_snapshot = engine.context_packet_snapshot(saved.snapshot.context_packet_id);
+    assert!(matches!(
+        corrupt_snapshot,
+        Err(WorkVcsError::StorageFailure(message))
+            if message.contains("available_items does not match packet_json")
+    ));
+
+    {
+        let connection = rusqlite::Connection::open(&path).expect("open raw sqlite");
+        let context_packet_id_bytes = saved.snapshot.context_packet_id.raw_bytes();
+        connection
+            .execute(
+                "UPDATE context_packet_snapshot
+                 SET available_items = available_items - 1
+                 WHERE context_packet_id = ?1",
+                params![&context_packet_id_bytes[..]],
+            )
+            .expect("repair context packet snapshot count");
+    }
+
+    let saved_again = engine
+        .save_context_packet(options)
+        .expect("save same context packet again");
+    assert_ne!(
+        saved_again.snapshot.context_packet_id,
+        saved.snapshot.context_packet_id
+    );
+    assert_eq!(
+        saved_again.snapshot.packet_digest,
+        saved.snapshot.packet_digest
+    );
+    assert_eq!(saved_again.snapshot.packet_json, saved.snapshot.packet_json);
+
+    let listed = engine
+        .context_packet_snapshots(
+            ContextPacketListOptions::for_session(session.session_id)
+                .with_limit(10)
+                .expect("list limit"),
+        )
+        .expect("list context packet snapshots");
+    assert_eq!(listed.session_id, session.session_id);
+    assert_eq!(listed.snapshots.len(), 2);
+    assert_eq!(
+        listed.snapshots[0].context_packet_id,
+        saved_again.snapshot.context_packet_id
+    );
+    assert_eq!(
+        listed.snapshots[0].packet_digest,
+        saved.snapshot.packet_digest
+    );
+    assert_eq!(
+        listed.snapshots[1].context_packet_id,
+        saved.snapshot.context_packet_id
+    );
+
+    assert!(
+        ContextPacketListOptions::for_session(session.session_id)
+            .with_limit(0)
+            .is_err()
     );
 }
 

@@ -124,6 +124,69 @@ fn open_rejects_schema_object_drift_with_same_table_count() {
 }
 
 #[test]
+fn explicit_context_packet_snapshot_schema_migration_recovers_pre_4ls_store() {
+    let (_tempdir, path) = store_path();
+    init_store(&path).expect("init store");
+
+    {
+        let connection = raw_connection(&path);
+        connection
+            .execute("DROP INDEX idx_context_packet_snapshot_session_created", [])
+            .expect("drop context packet session index");
+        connection
+            .execute("DROP INDEX idx_context_packet_snapshot_branch_head", [])
+            .expect("drop context packet branch index");
+        connection
+            .execute("DROP TABLE context_packet_snapshot", [])
+            .expect("drop context packet snapshot table");
+    }
+
+    assert_open_error_code(&path, ErrorCode::StoreBootstrapInvalid);
+
+    let migrated = Engine::migrate_context_packet_snapshot_schema(&path)
+        .expect("migrate context packet snapshot schema");
+    assert!(migrated.migrated);
+    assert_eq!(migrated.added_schema_objects.len(), 3);
+    assert!(
+        migrated
+            .added_schema_objects
+            .contains(&"table:context_packet_snapshot".to_owned())
+    );
+    assert!(
+        migrated
+            .added_schema_objects
+            .contains(&"index:idx_context_packet_snapshot_branch_head".to_owned())
+    );
+    assert!(
+        migrated
+            .added_schema_objects
+            .contains(&"index:idx_context_packet_snapshot_session_created".to_owned())
+    );
+    let migration = migrated
+        .migration
+        .as_ref()
+        .expect("migration record exists");
+    assert_eq!(migration.from_schema_version, SCHEMA_VERSION);
+    assert_eq!(migration.to_schema_version, SCHEMA_VERSION);
+    assert_eq!(migration.tool_version, "workvcs-context-packet-snapshot-v1");
+    assert_eq!(
+        migration
+            .outcome
+            .as_ref()
+            .expect("migration outcome")
+            .outcome,
+        "completed"
+    );
+
+    Engine::open(&path).expect("reopen migrated store");
+    let no_op = Engine::migrate_context_packet_snapshot_schema(&path)
+        .expect("idempotent context packet snapshot schema migration");
+    assert!(!no_op.migrated);
+    assert!(no_op.added_schema_objects.is_empty());
+    assert!(no_op.migration.is_none());
+}
+
+#[test]
 fn open_rejects_missing_manifest() {
     let (_tempdir, path) = store_path();
     init_store(&path).expect("init store");

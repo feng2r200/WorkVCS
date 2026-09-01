@@ -53,6 +53,18 @@ workvcs doctor "$STORE" --require-valid
 workvcs store integrity "$STORE" --require-valid
 ```
 
+If a local Store was created before Phase 4LS and ordinary open reports that
+the frozen schema object set is missing only context packet snapshot objects,
+run the explicit additive migration:
+
+```bash
+workvcs store migrate-context-packet-snapshot "$STORE"
+```
+
+The command is intentionally narrow. It only adds the context packet snapshot
+table and indexes for a recognized pre-4LS Store and records migration
+provenance. Other schema drift remains a stop condition.
+
 ## Minimal Work Loop
 
 Create a Store and Workspace:
@@ -127,6 +139,31 @@ workvcs context "$STORE" --session "$SESSION_ID" --profile normal --budget-items
 workvcs context "$STORE" --session "$SESSION_ID" \
   --scope-json '{"path":"crates/workvcs-core/src/runtime/context.rs"}'
 workvcs next "$STORE" --session "$SESSION_ID"
+```
+
+Persist the exact packet used for continuation when an Agent handoff or review
+needs durable context evidence:
+
+```bash
+workvcs context-packet save "$STORE" \
+  --session "$SESSION_ID" \
+  --profile normal \
+  --budget-items 20 \
+  --scope-json '{"path":"crates/workvcs-core/src/runtime/context.rs"}'
+```
+
+Capture the emitted `context_packet_id` and `packet_digest`. The snapshot is
+append-only provenance; it does not move a Branch head, create a WorkState
+commit, create an Event, or create a Claim. `show` and `list` load paths verify
+the packet digest and reject metadata that no longer agrees with the canonical
+packet JSON.
+
+```bash
+workvcs context-packet show "$STORE" \
+  --packet "$CONTEXT_PACKET_ID"
+
+workvcs context-packet list "$STORE" \
+  --session "$SESSION_ID"
 ```
 
 Record acceptance and verification when a slice has an explicit check:
@@ -516,8 +553,8 @@ intended state transition.
   has not yet been repeated on another real project.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
-- Context packets still need persistence decisions and a decision on whether
-  transition rationale becomes a projected Record field.
+- Context packet persistence is implemented; transition-rationale projection
+  remains open.
 - `why` does not yet expose the Handoff focus link as a relation.
 - Automatic stale detection remains open.
 - Merge lifecycle is locally dogfood-proven, but not yet another-project or

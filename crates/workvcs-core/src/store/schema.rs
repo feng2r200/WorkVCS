@@ -1,8 +1,18 @@
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::store::connection::StoreConnection;
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 
 pub(crate) const SCHEMA_SQL: &str = include_str!("../../../../schema/schema-v0.1.sql");
+const CONTEXT_PACKET_SNAPSHOT_OBJECTS: &[(&str, &str)] = &[
+    ("table", "context_packet_snapshot"),
+    ("index", "idx_context_packet_snapshot_branch_head"),
+    ("index", "idx_context_packet_snapshot_session_created"),
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ContextPacketSnapshotSchemaMigration {
+    pub(crate) added_schema_objects: Vec<String>,
+}
 
 pub(crate) fn install(connection: &StoreConnection) -> Result<()> {
     connection.execute_batch(SCHEMA_SQL)
@@ -21,12 +31,104 @@ pub(crate) fn validate_installed_schema(connection: &StoreConnection) -> Result<
     }
 }
 
+pub(crate) fn migrate_context_packet_snapshot_schema(
+    connection: &mut StoreConnection,
+) -> Result<ContextPacketSnapshotSchemaMigration> {
+    connection.verify_foreign_keys()?;
+    let actual = schema_objects(connection.inner())?;
+    let expected = expected_schema_objects()?;
+    if actual == expected {
+        return Ok(ContextPacketSnapshotSchemaMigration {
+            added_schema_objects: Vec::new(),
+        });
+    }
+
+    let actual_without_context_packet = actual
+        .iter()
+        .filter(|object| !is_context_packet_snapshot_object(object))
+        .cloned()
+        .collect::<Vec<_>>();
+    let expected_without_context_packet = expected
+        .iter()
+        .filter(|object| !is_context_packet_snapshot_object(object))
+        .cloned()
+        .collect::<Vec<_>>();
+    if actual_without_context_packet != expected_without_context_packet {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "cannot migrate context packet snapshot schema because the installed schema is not a recognized pre-4LS schema: {}",
+            schema_mismatch_summary(&actual, &expected)
+        )));
+    }
+
+    for object in actual
+        .iter()
+        .filter(|object| is_context_packet_snapshot_object(object))
+    {
+        let Some(expected_object) = expected.iter().find(|candidate| {
+            candidate.object_type == object.object_type && candidate.name == object.name
+        }) else {
+            return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                "cannot migrate context packet snapshot schema because installed schema contains unexpected {} {}",
+                object.object_type, object.name
+            )));
+        };
+        if object != expected_object {
+            return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                "cannot migrate context packet snapshot schema because installed {} {} does not match schema-v0.1",
+                object.object_type, object.name
+            )));
+        }
+    }
+
+    let missing = expected
+        .iter()
+        .filter(|object| is_context_packet_snapshot_object(object))
+        .filter(|object| {
+            !actual.iter().any(|candidate| {
+                candidate.object_type == object.object_type && candidate.name == object.name
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if missing.is_empty() {
+        return Ok(ContextPacketSnapshotSchemaMigration {
+            added_schema_objects: Vec::new(),
+        });
+    }
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    for object in &missing {
+        transaction
+            .execute_batch(&object.sql)
+            .map_err(storage_error)?;
+    }
+    transaction.commit().map_err(storage_error)?;
+
+    let added_schema_objects = missing
+        .into_iter()
+        .map(|object| format!("{}:{}", object.object_type, object.name))
+        .collect();
+    Ok(ContextPacketSnapshotSchemaMigration {
+        added_schema_objects,
+    })
+}
+
 fn expected_schema_objects() -> Result<Vec<SchemaObject>> {
     let connection = Connection::open_in_memory().map_err(storage_error)?;
     connection
         .execute_batch(SCHEMA_SQL)
         .map_err(storage_error)?;
     schema_objects(&connection)
+}
+
+fn is_context_packet_snapshot_object(object: &SchemaObject) -> bool {
+    CONTEXT_PACKET_SNAPSHOT_OBJECTS
+        .iter()
+        .any(|(object_type, name)| object.object_type == *object_type && object.name == *name)
 }
 
 fn schema_objects(connection: &Connection) -> Result<Vec<SchemaObject>> {

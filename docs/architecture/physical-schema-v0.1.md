@@ -229,6 +229,14 @@ SQLite table. Projection and cache repair may physically delete and rebuild
 derived rows without a WorkStateCommit; ordinary cache rebuild does not emit
 an Event unless it represents an actual corruption/repair incident.
 
+ContextPacketSnapshot is immutable runtime provenance for an exact resolved
+context packet. It records the Session, Workspace, Branch, head Commit, state
+digest, profile, optional budget, optional scope, counts, packet digest,
+canonical packet JSON, and creation time. It is not a WorkState, Branch, Event,
+Claim, or relation authority. The Engine verifies the packet digest against the
+stored canonical packet JSON when loading a snapshot and rejects rows whose
+denormalized columns disagree with the packet JSON envelope or counts.
+
 ## Schema Assembly Review closure
 
 **Physical DDL Schema Assembly Review = PASS / CLOSED.**

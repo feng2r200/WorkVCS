@@ -302,6 +302,28 @@ CREATE TABLE session_diff (
         REFERENCES content_object(content_digest) ON DELETE RESTRICT
 ) STRICT;
 
+CREATE TABLE context_packet_snapshot (
+    context_packet_id BLOB NOT NULL PRIMARY KEY CHECK(length(context_packet_id) = 16),
+    session_id BLOB NOT NULL CHECK(length(session_id) = 16)
+        REFERENCES session(session_id) ON DELETE RESTRICT,
+    workspace_id BLOB NOT NULL CHECK(length(workspace_id) = 16)
+        REFERENCES workspace(workspace_id) ON DELETE RESTRICT,
+    branch_id BLOB NOT NULL CHECK(length(branch_id) = 16)
+        REFERENCES branch(branch_id) ON DELETE RESTRICT,
+    head_commit_id BLOB NOT NULL CHECK(length(head_commit_id) = 16)
+        REFERENCES workstate_commit(commit_id) ON DELETE RESTRICT,
+    state_digest BLOB NOT NULL CHECK(length(state_digest) = 32),
+    profile TEXT NOT NULL CHECK(profile IN ('brief', 'normal', 'full')),
+    budget_items INTEGER CHECK(budget_items IS NULL OR budget_items > 0),
+    scope_json TEXT CHECK(scope_json IS NULL OR json_valid(scope_json)),
+    available_items INTEGER NOT NULL CHECK(available_items >= 0),
+    item_count INTEGER NOT NULL CHECK(item_count >= 0),
+    omitted_items INTEGER NOT NULL CHECK(omitted_items >= 0),
+    packet_digest BLOB NOT NULL CHECK(length(packet_digest) = 32),
+    packet_json TEXT NOT NULL CHECK(json_valid(packet_json)),
+    created_at_us INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE claim (
     claim_id BLOB NOT NULL PRIMARY KEY CHECK(length(claim_id) = 16)
         REFERENCES object_identity(object_id) ON DELETE RESTRICT,
@@ -785,5 +807,11 @@ WHERE reference_scope = 'version';
 CREATE UNIQUE INDEX uq_exposure_initial_transition
 ON knowledge_exposure_transition(exposure_id)
 WHERE previous_transition_id IS NULL;
+
+CREATE INDEX idx_context_packet_snapshot_session_created
+ON context_packet_snapshot(session_id, created_at_us, context_packet_id);
+
+CREATE INDEX idx_context_packet_snapshot_branch_head
+ON context_packet_snapshot(branch_id, head_commit_id);
 
 COMMIT;

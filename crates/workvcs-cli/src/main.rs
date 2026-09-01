@@ -24,7 +24,9 @@ use workvcs_core::{
     ClaimListResult, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
     ClaimTransferResult, CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
-    ContextPacket, ContextPacketOptions, ContextProfile, DecisionRecordSupersedeCommit,
+    ContextPacket, ContextPacketId, ContextPacketListOptions, ContextPacketListResult,
+    ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot,
+    ContextPacketSnapshotSchemaMigrationResult, ContextProfile, DecisionRecordSupersedeCommit,
     DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityTransitionCommit,
     EntityTransitionOptions, EntityVersionId, EventId, EventListOptions, EventListResult,
     EventSnapshot, EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions,
@@ -145,6 +147,7 @@ Commands:
   handoff       Author and inspect focused handoffs
   claim         Claim and release runtime work
   context       Show the current session context
+  context-packet  Save and inspect context packet snapshots
   next          Select next runnable work for a session
   runnable      Inspect runnable task projections
   verify        Run a single-target verification wrapper
@@ -524,6 +527,10 @@ enum Command {
         #[arg(long)]
         expected_state_digest: Option<String>,
     },
+    ContextPacket {
+        #[command(subcommand)]
+        command: ContextPacketCommand,
+    },
     Next {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -580,6 +587,46 @@ enum Command {
     Merge {
         #[command(subcommand)]
         command: MergeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ContextPacketCommand {
+    Save {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        profile: Option<String>,
+
+        #[arg(long)]
+        budget_items: Option<usize>,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        packet: String,
+    },
+    List {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        limit: Option<usize>,
+
+        #[arg(long)]
+        expected_packets: Option<usize>,
     },
 }
 
@@ -1002,6 +1049,14 @@ enum StoreCommand {
 
         #[arg(long)]
         expected_migrations: Option<usize>,
+    },
+    #[command(name = "migrate-context-packet-snapshot")]
+    MigrateContextPacketSnapshot {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        expected_migrated: Option<bool>,
     },
     #[command(name = "external-ref-record")]
     ExternalRefRecord {
@@ -5281,6 +5336,23 @@ fn run(cli: Cli) -> Result<String> {
                         )));
                     }
                     output.push_str("migrations_match_expected=true\n");
+                }
+                Ok(output)
+            }
+            StoreCommand::MigrateContextPacketSnapshot {
+                store,
+                expected_migrated,
+            } => {
+                let result = Engine::migrate_context_packet_snapshot_schema(store)?;
+                let mut output = render_context_packet_snapshot_schema_migration(&result)?;
+                if let Some(expected_migrated) = expected_migrated {
+                    if result.migrated != expected_migrated {
+                        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                            "context packet snapshot schema migrated {} does not match expected {}",
+                            result.migrated, expected_migrated
+                        )));
+                    }
+                    output.push_str("migrated_match_expected=true\n");
                 }
                 Ok(output)
             }
@@ -10351,17 +10423,8 @@ fn run(cli: Cli) -> Result<String> {
             let session_id = SessionId::parse_canonical(&session)?;
             let use_packet = profile.is_some() || budget_items.is_some() || scope_json.is_some();
             let (state_digest, mut output) = if use_packet {
-                let mut options = ContextPacketOptions::new(session_id);
-                if let Some(profile) = profile {
-                    options = options.with_profile(parse_context_profile(&profile)?);
-                }
-                if let Some(budget_items) = budget_items {
-                    options = options.with_budget_items(budget_items)?;
-                }
-                if let Some(scope_json) = scope_json {
-                    options =
-                        options.with_scope(parse_cli_object("context scope", &scope_json)?)?;
-                }
+                let options =
+                    context_packet_options_from_cli(session_id, profile, budget_items, scope_json)?;
                 let packet = engine.context_packet(options)?;
                 (packet.envelope.state_digest, render_context_packet(&packet))
             } else {
@@ -10382,6 +10445,51 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(output)
         }
+        Command::ContextPacket { command } => match command {
+            ContextPacketCommand::Save {
+                store,
+                session,
+                profile,
+                budget_items,
+                scope_json,
+            } => {
+                let mut engine = Engine::open(store)?;
+                let session_id = SessionId::parse_canonical(&session)?;
+                let options =
+                    context_packet_options_from_cli(session_id, profile, budget_items, scope_json)?;
+                let saved = engine.save_context_packet(options)?;
+                Ok(render_context_packet_save(&saved))
+            }
+            ContextPacketCommand::Show { store, packet } => {
+                let engine = Engine::open(store)?;
+                let snapshot =
+                    engine.context_packet_snapshot(ContextPacketId::parse_canonical(&packet)?)?;
+                Ok(render_context_packet_snapshot(&snapshot, "", true))
+            }
+            ContextPacketCommand::List {
+                store,
+                session,
+                limit,
+                expected_packets,
+            } => {
+                let engine = Engine::open(store)?;
+                let session_id = SessionId::parse_canonical(&session)?;
+                let mut options = ContextPacketListOptions::for_session(session_id);
+                if let Some(limit) = limit {
+                    options = options.with_limit(limit)?;
+                }
+                let result = engine.context_packet_snapshots(options)?;
+                let mut output = render_context_packet_list(&result);
+                append_expected_count_match(
+                    &mut output,
+                    "context packet list packets",
+                    result.snapshots.len(),
+                    expected_packets,
+                    "context_packets_match_expected",
+                )?;
+                Ok(output)
+            }
+        },
         Command::Next {
             store,
             session,
@@ -11915,6 +12023,25 @@ fn parse_context_profile(value: &str) -> Result<ContextProfile> {
             "context profile {other:?} is not in the CLI vocabulary"
         ))),
     }
+}
+
+fn context_packet_options_from_cli(
+    session_id: SessionId,
+    profile: Option<String>,
+    budget_items: Option<usize>,
+    scope_json: Option<String>,
+) -> Result<ContextPacketOptions> {
+    let mut options = ContextPacketOptions::new(session_id);
+    if let Some(profile) = profile {
+        options = options.with_profile(parse_context_profile(&profile)?);
+    }
+    if let Some(budget_items) = budget_items {
+        options = options.with_budget_items(budget_items)?;
+    }
+    if let Some(scope_json) = scope_json {
+        options = options.with_scope(parse_cli_object("context scope", &scope_json)?)?;
+    }
+    Ok(options)
 }
 
 fn parse_task_list_status(value: &str) -> Result<TaskStatus> {
@@ -17788,6 +17915,69 @@ fn render_context_packet(packet: &ContextPacket) -> String {
     output
 }
 
+fn render_context_packet_save(result: &ContextPacketSaveResult) -> String {
+    let mut output = render_context_packet_snapshot(&result.snapshot, "", false);
+    let _ = writeln!(output, "saved_context_items={}", result.packet.items.len());
+    output
+}
+
+fn render_context_packet_list(result: &ContextPacketListResult) -> String {
+    let mut output = format!(
+        "session_id={}\ncontext_packets={}\n",
+        result.session_id,
+        result.snapshots.len()
+    );
+    for (index, snapshot) in result.snapshots.iter().enumerate() {
+        output.push_str(&render_context_packet_snapshot(
+            snapshot,
+            &format!("context_packet.{index}."),
+            false,
+        ));
+    }
+    output
+}
+
+fn render_context_packet_snapshot(
+    snapshot: &ContextPacketSnapshot,
+    prefix: &str,
+    include_packet_json: bool,
+) -> String {
+    let budget_items = snapshot
+        .budget_items
+        .map(|value| value.get().to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let scope_json = snapshot
+        .scope
+        .as_ref()
+        .map(context_canonical_json)
+        .unwrap_or_else(|| "none".to_owned());
+    let mut output = format!(
+        "{prefix}context_packet_id={}\n{prefix}session_id={}\n{prefix}workspace_id={}\n{prefix}branch_id={}\n{prefix}head_commit_id={}\n{prefix}state_digest={}\n{prefix}context_profile={}\n{prefix}context_budget_items={}\n{prefix}context_scope_json={}\n{prefix}context_available_items={}\n{prefix}context_items={}\n{prefix}context_omitted_items={}\n{prefix}packet_digest={}\n{prefix}created_at_us={}\n",
+        snapshot.context_packet_id,
+        snapshot.session_id,
+        snapshot.workspace_id,
+        snapshot.branch_id,
+        snapshot.head_commit_id,
+        snapshot.state_digest,
+        snapshot.profile.as_str(),
+        budget_items,
+        scope_json,
+        snapshot.available_items,
+        snapshot.item_count,
+        snapshot.omitted_items,
+        snapshot.packet_digest,
+        snapshot.created_at_us
+    );
+    if include_packet_json {
+        let _ = writeln!(
+            output,
+            "{prefix}packet_json={}",
+            context_canonical_json(&snapshot.packet_json)
+        );
+    }
+    output
+}
+
 fn render_claim_next_context_packet(packet: &ContextPacket) -> String {
     render_context_packet(packet)
         .lines()
@@ -19702,6 +19892,26 @@ fn write_store_migration_snapshot_fields(
     Ok(())
 }
 
+fn render_context_packet_snapshot_schema_migration(
+    result: &ContextPacketSnapshotSchemaMigrationResult,
+) -> Result<String> {
+    let mut output = format!(
+        "context_packet_snapshot_schema_migrated={}\nstore_id={}\nschema_version={}\nadded_schema_objects={}\nmigration_recorded={}\n",
+        result.migrated,
+        result.store_info.store_id,
+        result.store_info.manifest.schema_version,
+        result.added_schema_objects.len(),
+        result.migration.is_some()
+    );
+    for (index, object) in result.added_schema_objects.iter().enumerate() {
+        let _ = writeln!(output, "added_schema_object.{index}={object}");
+    }
+    if let Some(migration) = &result.migration {
+        write_store_migration_snapshot_fields(&mut output, Some("migration"), migration)?;
+    }
+    Ok(output)
+}
+
 fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
     format!(
         "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nactual_manifest_size_bytes={}\nproblem={}\n",
@@ -20421,6 +20631,7 @@ mod tests {
                 "handoff",
                 "claim",
                 "context",
+                "context-packet",
                 "next",
                 "runnable",
                 "verify",
@@ -20488,6 +20699,10 @@ mod tests {
             ("handoff", "Author and inspect focused handoffs"),
             ("claim", "Claim and release runtime work"),
             ("context", "Show the current session context"),
+            (
+                "context-packet",
+                "Save and inspect context packet snapshots",
+            ),
             ("next", "Select next runnable work for a session"),
             ("runnable", "Inspect runnable task projections"),
             ("verify", "Run a single-target verification wrapper"),
@@ -23878,6 +24093,53 @@ mod tests {
         .expect("parse missing store migration-list"))
         .expect("list missing store migrations");
         assert_eq!(value(&missing_filtered, "migrations"), "0");
+    }
+
+    #[test]
+    fn cli_context_packet_snapshot_schema_migration_reports_noop_for_current_store() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            store,
+            "--display-name",
+            "migration-store",
+        ])
+        .expect("parse init"))
+        .expect("init store");
+
+        let migrated = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migrate-context-packet-snapshot",
+            store,
+            "--expected-migrated",
+            "false",
+        ])
+        .expect("parse context packet snapshot schema migration"))
+        .expect("run context packet snapshot schema migration");
+        assert_eq!(
+            value(&migrated, "context_packet_snapshot_schema_migrated"),
+            "false"
+        );
+        assert_eq!(value(&migrated, "schema_version"), "1");
+        assert_eq!(value(&migrated, "added_schema_objects"), "0");
+        assert_eq!(value(&migrated, "migration_recorded"), "false");
+        assert_eq!(value(&migrated, "migrated_match_expected"), "true");
+
+        let mismatched = run(Cli::try_parse_from([
+            "workvcs",
+            "store",
+            "migrate-context-packet-snapshot",
+            store,
+            "--expected-migrated",
+            "true",
+        ])
+        .expect("parse mismatched context packet snapshot schema migration"));
+        assert!(mismatched.is_err());
     }
 
     #[test]
@@ -38664,6 +38926,189 @@ mod tests {
         );
         assert!(context.contains("Matching path knowledge remains visible"));
         assert!(!context.contains("Unrelated path knowledge is filtered"));
+    }
+
+    #[test]
+    fn cli_saves_shows_and_lists_context_packet_snapshots() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Save an inspectable context packet",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let matching = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--statement",
+            "CLI persisted packet keeps matching path",
+            "--scope-json",
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}",
+        ])
+        .expect("parse matching knowledge"))
+        .expect("create matching knowledge");
+        let unrelated = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&matching, "commit_id"),
+            "--statement",
+            "CLI persisted packet filters other path",
+            "--scope-json",
+            "{\"path\":\"crates/workvcs-cli/src/main.rs\"}",
+        ])
+        .expect("parse unrelated knowledge"))
+        .expect("create unrelated knowledge");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let saved = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "save",
+            store,
+            "--session",
+            &session_id,
+            "--profile",
+            "normal",
+            "--budget-items",
+            "8",
+            "--scope-json",
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}",
+        ])
+        .expect("parse context packet save"))
+        .expect("save context packet");
+        let packet_id = value(&saved, "context_packet_id");
+        let packet_digest = value(&saved, "packet_digest");
+        assert_eq!(value(&saved, "session_id"), session_id);
+        assert_eq!(value(&saved, "branch_id"), branch);
+        assert_eq!(
+            value(&saved, "head_commit_id"),
+            value(&unrelated, "commit_id")
+        );
+        assert_eq!(value(&saved, "context_profile"), "normal");
+        assert_eq!(value(&saved, "context_budget_items"), "8");
+        assert_eq!(
+            value(&saved, "context_scope_json"),
+            "{\"path\":\"crates/workvcs-core/src/runtime/context.rs\"}"
+        );
+        assert_eq!(
+            value(&saved, "saved_context_items"),
+            value(&saved, "context_items")
+        );
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "show",
+            store,
+            "--packet",
+            &packet_id,
+        ])
+        .expect("parse context packet show"))
+        .expect("show context packet");
+        assert_eq!(value(&shown, "context_packet_id"), packet_id);
+        assert_eq!(value(&shown, "packet_digest"), packet_digest);
+        assert_eq!(
+            value(&shown, "context_scope_json"),
+            value(&saved, "context_scope_json")
+        );
+        let packet_json = value(&shown, "packet_json");
+        assert!(packet_json.contains("\"context_packet_format\":\"workvcs-context-packet-v1\""));
+        assert!(packet_json.contains("CLI persisted packet keeps matching path"));
+        assert!(!packet_json.contains("CLI persisted packet filters other path"));
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--expected-packets",
+            "1",
+        ])
+        .expect("parse context packet list"))
+        .expect("list context packets");
+        assert_eq!(value(&listed, "context_packets"), "1");
+        assert_eq!(value(&listed, "context_packets_match_expected"), "true");
+        assert_eq!(
+            value(&listed, "context_packet.0.context_packet_id"),
+            packet_id
+        );
+        assert_eq!(
+            value(&listed, "context_packet.0.packet_digest"),
+            packet_digest
+        );
+
+        let zero_limit = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--limit",
+            "0",
+        ])
+        .expect("parse zero context packet list limit"));
+        assert!(matches!(
+            zero_limit,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "context packet list limit must be greater than zero"
+        ));
     }
 
     #[test]

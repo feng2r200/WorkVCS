@@ -33,7 +33,7 @@ SELECT 'application_id', (application_id = 1465271123)
 FROM pragma_application_id();
 
 INSERT INTO assert_true
-SELECT 'table count', count(*) = 67
+SELECT 'table count', count(*) = 68
 FROM sqlite_schema
 WHERE type = 'table'
   AND name NOT LIKE 'sqlite_%';
@@ -79,6 +79,32 @@ SELECT 'exposure initial partial unique index exists',
 FROM sqlite_schema
 WHERE type = 'index'
   AND name = 'uq_exposure_initial_transition';
+
+INSERT INTO assert_true
+SELECT 'context packet snapshot table exists',
+       count(*) = 1
+FROM sqlite_schema
+WHERE type = 'table'
+  AND name = 'context_packet_snapshot'
+  AND sql LIKE '%packet_digest%'
+  AND sql LIKE '%packet_json%'
+  AND sql LIKE '%scope_json%'
+  AND sql LIKE '%budget_items%'
+  AND sql LIKE '%profile IN (%brief%, %normal%, %full%)%';
+
+INSERT INTO assert_true
+SELECT 'context packet snapshot session index exists',
+       count(*) = 1
+FROM sqlite_schema
+WHERE type = 'index'
+  AND name = 'idx_context_packet_snapshot_session_created';
+
+INSERT INTO assert_true
+SELECT 'context packet snapshot branch head index exists',
+       count(*) = 1
+FROM sqlite_schema
+WHERE type = 'index'
+  AND name = 'idx_context_packet_snapshot_branch_head';
 
 INSERT INTO assert_true
 SELECT 'projection commit digest pair check exists',

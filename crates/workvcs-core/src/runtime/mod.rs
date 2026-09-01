@@ -15,7 +15,9 @@ pub use claim::{
 pub use context::{
     ContextItem, ContextItemCategory, ContextItemSubject, ContextOmissionBucket,
     ContextOmissionCategory, ContextOmissionSummary, ContextOverview, ContextOverviewOptions,
-    ContextPacket, ContextPacketEnvelope, ContextPacketOptions, ContextPriority, ContextProfile,
+    ContextPacket, ContextPacketEnvelope, ContextPacketListOptions, ContextPacketListResult,
+    ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot, ContextPriority,
+    ContextProfile,
 };
 pub use merge::{
     MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
@@ -42,7 +44,10 @@ pub(crate) use claim::{
     active_claims_for_session, claim_next_task, claim_snapshot, claim_task, force_takeover_claim,
     release_claim, task_claim_guard, transfer_claim,
 };
-pub(crate) use context::{context_overview, context_packet};
+pub(crate) use context::{
+    context_overview, context_packet, context_packet_snapshot, context_packet_snapshots,
+    save_context_packet,
+};
 pub(crate) use merge::{
     abort_merge, continue_merge, freeze_merge_resolutions, merge_attempt, merge_attempts,
     resolve_merge_item, start_merge,

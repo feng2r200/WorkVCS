@@ -117,11 +117,11 @@ pub use history::{
     WorkspaceResourceAssociationSnapshot,
 };
 pub use identity::{
-    BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, Digest, EntityId, EntityVersionId,
-    EventId, EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId, ExternalRefId,
-    ExternalVersionId, ImportId, KnowledgeSpaceId, LineageId, MergeId, MergeItemId, MigrationId,
-    OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId,
-    SessionId, StoreId, WorkspaceId,
+    BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, ContextPacketId, Digest, EntityId,
+    EntityVersionId, EventId, EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId,
+    ExternalRefId, ExternalVersionId, ImportId, KnowledgeSpaceId, LineageId, MergeId, MergeItemId,
+    MigrationId, OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId,
+    SessionDiffId, SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
     ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardAction, ClaimGuardOptions,
@@ -132,7 +132,9 @@ pub use runtime::{
 pub use runtime::{
     ContextItem, ContextItemCategory, ContextItemSubject, ContextOmissionBucket,
     ContextOmissionCategory, ContextOmissionSummary, ContextOverview, ContextOverviewOptions,
-    ContextPacket, ContextPacketEnvelope, ContextPacketOptions, ContextPriority, ContextProfile,
+    ContextPacket, ContextPacketEnvelope, ContextPacketListOptions, ContextPacketListResult,
+    ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot, ContextPriority,
+    ContextProfile,
 };
 pub use runtime::{
     MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
@@ -154,4 +156,6 @@ pub use runtime::{
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
-pub use store::{StoreInfo, StoreInitOptions, StoreManifest};
+pub use store::{
+    ContextPacketSnapshotSchemaMigrationResult, StoreInfo, StoreInitOptions, StoreManifest,
+};

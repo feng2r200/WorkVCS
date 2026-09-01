@@ -714,6 +714,47 @@ workvcs claim guard "$STORE" \
   --task "$TASK_ENTITY_ID"
 ```
 
+When two operators intentionally coordinate on the same Task, use shared Claims
+and inspect `context` before any protected mutation:
+
+```bash
+workvcs claim task "$STORE" \
+  --session "$FIRST_SESSION_ID" \
+  --task "$TASK_ENTITY_ID" \
+  --mode shared
+
+workvcs claim next "$STORE" \
+  --session "$SECOND_SESSION_ID" \
+  --mode shared
+
+workvcs context "$STORE" \
+  --session "$SECOND_SESSION_ID"
+
+workvcs claim guard "$STORE" \
+  --session "$FIRST_SESSION_ID" \
+  --task "$TASK_ENTITY_ID" \
+  --action structural-task
+```
+
+If the guard reports `reason=non_unique_shared_claim_set`, protected mutation
+is intentionally blocked. Release or transfer Claims until one responsible
+Session remains, then inspect the guard again before terminal work:
+
+```bash
+workvcs claim release "$STORE" \
+  --session "$SECOND_SESSION_ID" \
+  --claim "$SECOND_SHARED_CLAIM_ID"
+
+workvcs claim guard "$STORE" \
+  --session "$FIRST_SESSION_ID" \
+  --task "$TASK_ENTITY_ID" \
+  --action terminal-task
+```
+
+For version-scoped ACs, capture or cite the verification commit when the AC is
+`verified`. A later Task closeout commit can advance the Task version and make
+that same AC project as `stale`.
+
 If a focused Handoff continuation is blocked by another active Session's Claim,
 first consume the Handoff, inspect the guard, then recover with the same
 stale-gated takeover chain:
@@ -814,8 +855,8 @@ intended state transition.
   implemented; broader Context Resolver dogfood remains open.
 - `why` exposes focused Handoff scope links and anchored evolution as a deferred
   family, but full evolution traversal and epistemic explanation remain open.
-- Shared-Claim collaboration still needs realistic continuation dogfood beyond
-  smoke.
+- Shared-Claim collaboration has read-only real-project dogfood evidence.
+  Broader write-mode or read/write multi-operator maturity remains open.
 - Automatic stale detection remains open.
 - Merge lifecycle is locally dogfood-proven, but not yet another-project or
   larger-Store proven.

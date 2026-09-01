@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0449 / Phase 4MH
+Last refreshed: 2026-09-01 by ADR-0450 / Phase 4MI
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -37,7 +37,7 @@ not complete.
 | Verification command wrapper | Yes | Yes | Yes | Yes | Phase 4LV proves the top-level `verify` wrapper in another-project dogfood with evidence content, Resource observation, Resource basis, and applicability cache output. Phase 4LX adds and dogfoods `verify --scope-path` / `--scope-path-prefix`, defaulting those shorthands to `scope_kind=path` and `scope_schema_version=1` while preserving explicit JSON input for advanced callers. Phase 4LY adds explicit `--resource-content-from-scope-path` so the wrapper can observe a real local file from `--scope-path`. Phase 4MD adds explicit `--resource-content-from-scope-path-prefix` so the wrapper can observe a deterministic local-file path-prefix manifest from `--scope-path-prefix`. Phase 4ME adds explicit `--scope-glob` / `--resource-content-from-scope-glob` for deterministic local-file glob manifests. Phase 4MF adds explicit `--scope-git-worktree` / `--resource-content-from-scope-git-worktree` for deterministic Git worktree manifests. Keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Phase 4LV uses Resource create/bind/associate and Resource-backed `verify` observation against a real external local project. Phase 4LX closes lexical explicit path-scope normalization for Resource-backed verification shorthands. Phase 4LY proves explicit local-file ResourceObservation from `--scope-path` with the observed fingerprint matching an independent content digest. Phase 4MB proves explicit unavailable/error applicability stamps against a real file baseline: both produce `applicability=unknown`, stable reason codes, empty observed data, and stale AC projection. Phase 4MC adds and dogfoods explicit local-file exact path re-observation for `verification cache-refresh --resource-content-from-scope-path`, creating a new ResourceObservation and preserving verified AC state when the file is unchanged. Phase 4MD adds and dogfoods deterministic local-file path-prefix aggregation for `verify --resource-content-from-scope-path-prefix` and `verification cache-refresh --resource-content-from-scope-path-prefix`, including unchanged, drift, unavailable, and error projections. Phase 4ME adds and dogfoods deterministic local-file glob aggregation for `verify --scope-glob --resource-content-from-scope-glob` and `verification cache-refresh --resource-content-from-scope-glob`, including unchanged, drift, missing-root unavailable, empty-match drift, and matched-directory error projections. Phase 4MF adds and dogfoods deterministic Git worktree aggregation for `verify --scope-git-worktree --resource-content-from-scope-git-worktree` and `verification cache-refresh --resource-content-from-scope-git-worktree`, including unchanged, tracked/untracked drift, missing-repo unavailable, and non-Git error projections. Phase 4MG adds explicit basis-aware refresh through `verification cache-refresh --resource-content-from-basis`, with focused proof for mixed supported local-file/Git basis entries, atomic unsupported-basis rejection, and read-only real-project dogfood. Broader symlink/case/rename policy, broader Git adapter semantics, and background re-observation scheduling remain Open. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. |
-| Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LW dogfoods cooperative Claim transfer and stale-gated forced takeover in a realistic read-only external-project continuation loop. Shared-Claim collaboration remains smoke-proven but not yet real-project dogfooded. |
+| Claim modes and guard behavior | Yes | Yes | Yes | Yes | Phase 4LW dogfoods cooperative Claim transfer and stale-gated forced takeover in a realistic read-only external-project continuation loop. Phase 4MI dogfoods shared-Claim collaboration against the same real external project: two Sessions hold shared Claims, `context` exposes the shared Claim set, non-unique shared guard blocks protected mutation with `reason=non_unique_shared_claim_set`, releasing one shared Claim restores `unique_shared_claimant` closeout, and the target file remains unchanged. Broader write-mode or read/write multi-operator maturity remains Open. |
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LR adds explicit packet scope and deterministic path-sensitive Knowledge filtering for `context --scope-json` and `claim next --context-scope-json`. Phase 4LS adds durable `context-packet save/show/list` snapshots for exact resolved packets. Phase 4LT projects recent non-empty ChangeSet rationale into bounded packet items so continuation Agents can see why recent state moved. Phase 4LX adds lexical path selector normalization and dogfoods `context --scope-path`, `claim next --context-scope-path`, and `context-packet save --scope-path-prefix` against a read-only external project. Continue with broader context and Resource resolver gaps before claiming release maturity. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics. Phase 4MA dogfoods a real external-project explanation across Task containment, Verification, Evidence, Record support, and Record-to-Knowledge support without adding display fields. Phase 4MH exposes `evolution` as a deferred relation family when the queried Entity anchors a first-parent-reachable ChangeSet, and dogfoods the behavior against a real external project. Full evolution traversal, epistemic explanation, and broader causal traversal remain Open. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover. Phase 4LV repeats focused Handoff creation/show after a read-only external-project closeout. Phase 4LW proves Claim transfer/takeover continuation around external-project Tasks; broader Handoff consumption across varied project and write-mode flows remains open. |
@@ -63,8 +63,8 @@ current user request supplies a narrower priority.
 4. Broaden larger Store and performance validation only when the next workload
    is meaningfully larger or more varied than Phase 4LQ; do not design indexes
    without evidence from that run.
-5. Dogfood shared-Claim collaboration on a real project only when a realistic
-   multi-operator read/write path needs it.
+5. Broaden shared-Claim collaboration into realistic write-mode or read/write
+   multi-operator flows only when a concrete dogfood loop needs it.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the
@@ -236,4 +236,14 @@ The following remain beyond V1 even if they would make dogfood easier:
   first-parent-reachable ChangeSet reports
   `deferred_relation_family.0=evolution`, while the superseded prior Decision
   in the same workflow reports no deferred family. The read-only `agent_soul`
-  dogfood proves the target project status is unchanged.
+  dogfood proves the target project status is unchanged. Phase 4MI dogfoods
+  shared-Claim collaboration against the same real external project in read-only
+  mode: two active Sessions claim one Task in `shared` mode, `context` shows the
+  second Session focus and shared Claim runnable candidate, `claim guard
+  --action structural-task` reports `allowed=false` with
+  `reason=non_unique_shared_claim_set` and two active shared Claims, protected
+  Task closeout is blocked until one shared Claim is released, the remaining
+  `unique_shared_claimant` closes the Task after Resource-backed verification,
+  and the target file status, hash, and stat remain unchanged. The dogfood also
+  records a release-guidance issue: AC status is `verified` at the verification
+  commit and becomes `stale` after Task closeout advances the Task version.

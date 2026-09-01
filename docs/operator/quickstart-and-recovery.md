@@ -475,7 +475,8 @@ non-applied outcome and leaves the target Branch head unchanged; with
 `--require-applied`, it fails.
 
 When an active Claim blocks another active Session and the claimant can hand
-work over, transfer the Claim:
+work over, transfer the Claim. The receiving Session should inspect the guard
+before doing terminal work:
 
 ```bash
 workvcs claim transfer "$STORE" \
@@ -550,7 +551,7 @@ workvcs claim guard "$STORE" \
 ```
 
 When a Session is ended, start a new Session rather than attempting to mutate
-the ended runtime row:
+the ended runtime row or resolve context through it:
 
 ```bash
 workvcs session start "$STORE" \
@@ -573,8 +574,8 @@ intended state transition.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.
-- Claim transfer/takeover still needs realistic continuation dogfood beyond
-  smoke and the stale-gated recovery run.
+- Shared-Claim collaboration still needs realistic continuation dogfood beyond
+  smoke.
 - Automatic stale detection remains open.
 - Merge lifecycle is locally dogfood-proven, but not yet another-project or
   larger-Store proven.

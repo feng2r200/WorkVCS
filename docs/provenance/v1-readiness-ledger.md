@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0437 / Phase 4LV
+Last refreshed: 2026-09-01 by ADR-0438 / Phase 4LW
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -37,10 +37,10 @@ not complete.
 | Verification command wrapper | Yes | Yes | Yes | Yes | Phase 4LV proves the top-level `verify` wrapper in another-project dogfood with evidence content, Resource observation, Resource basis, and applicability cache output. Extend beyond caller-supplied observation data only after Resource adapter/path normalization is confirmed; keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Phase 4LV uses Resource create/bind/associate and Resource-backed `verify` observation against a real external local project. Resource path/glob normalization and adapter-backed re-observation remain Open. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. |
-| Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LG dogfoods the blocked Handoff takeover recovery path with guard failure, explicit stale marking, stale-gated forced takeover, and recovered guard success; Claim transfer remains smoke-proven but not yet real-project dogfooded. |
+| Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LW dogfoods cooperative Claim transfer and stale-gated forced takeover in a realistic read-only external-project continuation loop. Shared-Claim collaboration remains smoke-proven but not yet real-project dogfooded. |
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LR adds explicit packet scope and deterministic path-sensitive Knowledge filtering for `context --scope-json` and `claim next --context-scope-json`. Phase 4LS adds durable `context-packet save/show/list` snapshots for exact resolved packets. Phase 4LT projects recent non-empty ChangeSet rationale into bounded packet items so continuation Agents can see why recent state moved. Continue with real dogfood friction and Resource resolver gaps before claiming release maturity. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics; next prove broader causal/evolution and real-project explanation paths. |
-| Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover. Phase 4LV repeats focused Handoff creation/show after a read-only external-project closeout; transfer/takeover still need realistic continuation repetition. |
+| Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover. Phase 4LV repeats focused Handoff creation/show after a read-only external-project closeout. Phase 4LW proves Claim transfer/takeover continuation around external-project Tasks; broader Handoff consumption across varied project and write-mode flows remains open. |
 | Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Repeat on another real project or larger Store before release maturity claims. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Phase 4LP defines the V1-local directory profile and keeps external Store canonical DAG activation outside the current profile. Phase 4LQ proves the profile against a bounded larger Store workload and fixes a Verification basis import ordering blocker. |
 | CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`. Phase 4LU reduces the Phase 4LG blocked-Claim recovery ID-capture friction by adding top-level `claim guard` stale-takeover hint fields. Continue reducing command friction only where dogfood shows repeated ID plumbing or workflow blockage. |
@@ -52,17 +52,17 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Dogfood Claim transfer/takeover in a realistic continuation path before
-   adding more guard or list detail.
-2. Reduce additional manual key-value capture in the operator CLI only where
-   the next dogfood loop shows repeated workflow blockage.
-3. Close Resource path/glob normalization or adapter-backed re-observation
+1. Close Resource path/glob normalization or adapter-backed re-observation
    only when the next continuation or verification workflow proves the need.
-4. Dogfood broader `why` paths, including causal/evolution explanation gaps,
+2. Dogfood broader `why` paths, including causal/evolution explanation gaps,
    before expanding explanation output again.
-5. Broaden larger Store and performance validation only when the next workload
+3. Reduce additional manual key-value capture in the operator CLI only where
+   the next dogfood loop shows repeated workflow blockage.
+4. Broaden larger Store and performance validation only when the next workload
    is meaningfully larger or more varied than Phase 4LQ; do not design indexes
    without evidence from that run.
+5. Dogfood shared-Claim collaboration on a real project only when a realistic
+   multi-operator read/write path needs it.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the
@@ -167,4 +167,11 @@ The following remain beyond V1 even if they would make dogfood easier:
   Resource through the `verify` wrapper, persists scoped and transition
   ContextPackets, completes Task/Plan/Goal closeout, authors a focused Handoff,
   passes Store integrity, and proves target project status/diff snapshots are
-  unchanged.
+  unchanged. Phase 4LW then dogfoods Claim transfer and stale-gated forced
+  takeover against the same real external project in read-only mode: cooperative
+  transfer hands a Claim from one active Session to another and closes the Task
+  with Resource-backed verification, while the takeover path proves blocked
+  guard hints, active-owner takeover rejection, explicit stale marking,
+  forced takeover with rationale, recovered guard success, verified closeout,
+  active-Session context boundaries, Store integrity, and unchanged target
+  project status/diff snapshots.

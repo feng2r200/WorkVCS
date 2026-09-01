@@ -15373,6 +15373,14 @@ fn git_worktree_observation_summary(
             CanonicalValue::String("git-worktree-manifest-v1".to_owned()),
         ),
         (
+            "rename_detection".to_owned(),
+            CanonicalValue::String("disabled".to_owned()),
+        ),
+        (
+            "rename_policy".to_owned(),
+            CanonicalValue::String("delete_add".to_owned()),
+        ),
+        (
             "source".to_owned(),
             CanonicalValue::String("verification cache-refresh".to_owned()),
         ),
@@ -41257,6 +41265,79 @@ mod tests {
             .fingerprint;
 
         assert_eq!(default_config, non_default_config);
+    }
+
+    #[test]
+    fn git_worktree_snapshot_reports_rename_policy_as_delete_add() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("original.txt"), b"alpha\nbeta\ngamma\n").expect("write baseline");
+        git_test(&repo, &["add", "original.txt"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+        let clean = git_worktree_snapshot(&repo)
+            .expect("clean git snapshot")
+            .fingerprint;
+
+        git_test(&repo, &["config", "diff.renames", "true"]);
+        git_test(&repo, &["mv", "original.txt", "renamed.txt"]);
+
+        let rename_detecting_diff = ProcessCommand::new("git")
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .arg("-C")
+            .arg(&repo)
+            .args([
+                "diff",
+                "--cached",
+                "--find-renames",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--unified=3",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+            ])
+            .output()
+            .expect("run rename-detecting git diff");
+        assert!(rename_detecting_diff.status.success());
+        let rename_detecting_diff =
+            String::from_utf8(rename_detecting_diff.stdout).expect("rename diff utf8");
+        assert!(rename_detecting_diff.contains("rename from original.txt"));
+        assert!(rename_detecting_diff.contains("rename to renamed.txt"));
+
+        let delete_add_diff = git_command_bytes(
+            &repo,
+            &[
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--no-indent-heuristic",
+                "--diff-algorithm=myers",
+                "--unified=3",
+                "-O/dev/null",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+            ],
+            "delete/add git diff",
+        )
+        .expect("delete/add git diff");
+        let delete_add_diff = String::from_utf8(delete_add_diff).expect("delete/add diff utf8");
+        assert!(delete_add_diff.contains("deleted file mode"));
+        assert!(delete_add_diff.contains("new file mode"));
+        assert!(delete_add_diff.contains("--- a/original.txt"));
+        assert!(delete_add_diff.contains("+++ b/renamed.txt"));
+
+        let renamed = git_worktree_snapshot(&repo).expect("renamed git snapshot");
+        assert_ne!(clean, renamed.fingerprint);
+        let summary_json = canonical_cli_json("git worktree observation summary", &renamed.summary)
+            .expect("summary JSON");
+        assert!(summary_json.contains(r#""rename_detection":"disabled""#));
+        assert!(summary_json.contains(r#""rename_policy":"delete_add""#));
     }
 
     #[test]

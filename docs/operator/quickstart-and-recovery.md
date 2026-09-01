@@ -231,13 +231,17 @@ workvcs verify "$STORE" \
   --adapter-kind git \
   --adapter-schema-version 1 \
   --scope-path crates/workvcs-core/src/runtime/context.rs \
-  --resource-content "observed resource content"
+  --resource-content-from-scope-path
 ```
 
 `verify --scope-path` and `verify --scope-path-prefix` default to
 `scope_kind=path` and `scope_schema_version=1`. Keep using
 `--scope-payload-json` with explicit `--scope-kind` and
-`--scope-schema-version` for advanced non-path payloads.
+`--scope-schema-version` for advanced non-path payloads. The opt-in
+`--resource-content-from-scope-path` reads the file named by `--scope-path` and
+uses its content digest as the ResourceObservation fingerprint. Use the older
+`--resource-fingerprint`, `--resource-content`, or `--resource-content-file`
+inputs when the observed content is not exactly the scoped local file.
 
 Capture the emitted `verification_entity_id` and `commit_id`. Use that
 `commit_id` as the next `HEAD_COMMIT_ID`. Before marking the Task done, inspect
@@ -601,9 +605,10 @@ intended state transition.
 - The documented loop has been repeated once against another real local
   project in read-only mode. It is not yet broad write-mode or multi-project
   maturity evidence.
-- Explicit path-scope lexical normalization is implemented for the common CLI
-  shorthands. Resource glob semantics and adapter-backed re-observation remain
-  open.
+- Explicit path-scope lexical normalization and opt-in local-file observation
+  from `verify --scope-path` are implemented for the common CLI shorthands.
+  Resource glob semantics, adapter contracts, unavailable/error observation
+  states, and automatic adapter-backed re-observation remain open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.

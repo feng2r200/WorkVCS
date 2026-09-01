@@ -659,7 +659,7 @@ enum ContextPacketCommand {
 #[command(group(
     ArgGroup::new("verify-resource-fingerprint")
         .multiple(false)
-        .args(["resource_fingerprint", "resource_content", "resource_content_file"])
+        .args(["resource_fingerprint", "resource_content", "resource_content_file", "resource_content_from_scope_path"])
 ))]
 #[command(group(
     ArgGroup::new("verify-resource-detail-source")
@@ -755,6 +755,9 @@ struct VerifyArgs {
 
     #[arg(long, value_name = "PATH")]
     resource_content_file: Option<PathBuf>,
+
+    #[arg(long)]
+    resource_content_from_scope_path: bool,
 
     #[arg(long, default_value = "{}")]
     resource_summary_json: String,
@@ -9084,7 +9087,13 @@ fn run(cli: Cli) -> Result<String> {
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let fingerprint = fingerprint_from_cli(fingerprint, content, content_file)?;
+            let fingerprint = fingerprint_from_cli(ResourceFingerprintArgs {
+                fingerprint,
+                content,
+                content_file,
+                content_from_scope_path: false,
+                scope_path: None,
+            })?;
             let mut options = ResourceObservationCreateOptions::new(
                 ResourceId::parse_canonical(&resource)?,
                 adapter_kind,
@@ -11996,6 +12005,7 @@ fn run_verify(args: Vec<String>) -> Result<String> {
         resource_fingerprint,
         resource_content,
         resource_content_file,
+        resource_content_from_scope_path,
         resource_summary_json,
         resource_detail_content,
         resource_detail_content_file,
@@ -12064,6 +12074,7 @@ fn run_verify(args: Vec<String>) -> Result<String> {
             resource_fingerprint,
             resource_content,
             resource_content_file,
+            resource_content_from_scope_path,
             resource_summary_json,
             resource_detail_content,
             resource_detail_content_file,
@@ -13079,16 +13090,30 @@ fn evidence_content_from_cli(args: EvidenceContentArgs) -> Result<Option<Evidenc
     Ok(Some(content))
 }
 
-fn fingerprint_from_cli(
+struct ResourceFingerprintArgs {
     fingerprint: Option<String>,
     content: Option<String>,
     content_file: Option<PathBuf>,
-) -> Result<Digest> {
-    match (fingerprint, content, content_file) {
-        (Some(fingerprint), None, None) => Digest::from_hex(&fingerprint),
-        (None, Some(content), None) => Ok(content_object_digest(content.as_bytes())),
-        (None, None, Some(path)) => {
+    content_from_scope_path: bool,
+    scope_path: Option<PathBuf>,
+}
+
+fn fingerprint_from_cli(args: ResourceFingerprintArgs) -> Result<Digest> {
+    match (
+        args.fingerprint,
+        args.content,
+        args.content_file,
+        args.content_from_scope_path,
+    ) {
+        (Some(fingerprint), None, None, false) => Digest::from_hex(&fingerprint),
+        (None, Some(content), None, false) => Ok(content_object_digest(content.as_bytes())),
+        (None, None, Some(path), false) => {
             let bytes = read_cli_file("resource observation content", &path)?;
+            Ok(content_object_digest(&bytes))
+        }
+        (None, None, None, true) => {
+            let path = required_arg("--scope-path", args.scope_path)?;
+            let bytes = read_cli_file("resource observation content from scope path", &path)?;
             Ok(content_object_digest(&bytes))
         }
         _ => Err(WorkVcsError::TaskInvalid(
@@ -13206,6 +13231,7 @@ struct VerifyResourceObservationArgs {
     resource_fingerprint: Option<String>,
     resource_content: Option<String>,
     resource_content_file: Option<PathBuf>,
+    resource_content_from_scope_path: bool,
     resource_summary_json: String,
     resource_detail_content: Option<String>,
     resource_detail_content_file: Option<PathBuf>,
@@ -13230,6 +13256,7 @@ fn verify_resource_observation_from_cli(
         || args.resource_fingerprint.is_some()
         || args.resource_content.is_some()
         || args.resource_content_file.is_some()
+        || args.resource_content_from_scope_path
         || args.resource_summary_json != "{}"
         || args.resource_detail_content.is_some()
         || args.resource_detail_content_file.is_some()
@@ -13241,11 +13268,13 @@ fn verify_resource_observation_from_cli(
         return Ok(None);
     }
 
-    let fingerprint = fingerprint_from_cli(
-        args.resource_fingerprint,
-        args.resource_content,
-        args.resource_content_file,
-    )?;
+    let fingerprint = fingerprint_from_cli(ResourceFingerprintArgs {
+        fingerprint: args.resource_fingerprint,
+        content: args.resource_content,
+        content_file: args.resource_content_file,
+        content_from_scope_path: args.resource_content_from_scope_path,
+        scope_path: args.scope_path.clone(),
+    })?;
     let mut observation = ResourceObservationCreateOptions::new(
         ResourceId::parse_canonical(&required_arg("--resource", args.resource)?)?,
         required_arg("--adapter-kind", args.adapter_kind)?,
@@ -21031,6 +21060,7 @@ mod tests {
         assert!(verify_help.contains("Run a single-target verification wrapper"));
         assert!(verify_help.contains("--evidence-content-role"));
         assert!(verify_help.contains("--scope-path"));
+        assert!(verify_help.contains("--resource-content-from-scope-path"));
         assert!(verify_help.contains("--resource-detail-content-file"));
     }
 
@@ -21065,6 +21095,16 @@ mod tests {
         })
         .expect_err("ambiguous verify resource detail source should fail");
         assert!(format!("{detail_error}").contains("--resource-detail-content"));
+
+        let scope_path_error = fingerprint_from_cli(ResourceFingerprintArgs {
+            fingerprint: None,
+            content: None,
+            content_file: None,
+            content_from_scope_path: true,
+            scope_path: None,
+        })
+        .expect_err("scope path content source without scope path should fail");
+        assert!(format!("{scope_path_error}").contains("--scope-path"));
     }
 
     #[test]
@@ -37623,6 +37663,11 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
+        let project_src = tempdir.path().join("project").join("src");
+        fs::create_dir_all(&project_src).expect("create scoped project path");
+        let resource_content = b"path scoped resource content";
+        fs::write(project_src.join("lib.rs"), resource_content).expect("write scoped resource");
+        let expected_fingerprint = content_object_digest(resource_content).to_string();
         let scope_path = tempdir
             .path()
             .join("project")
@@ -37722,8 +37767,7 @@ mod tests {
             "1",
             "--scope-path",
             scope_path,
-            "--resource-content",
-            "path scoped resource content",
+            "--resource-content-from-scope-path",
             "--resource-detail-content",
             "path scoped resource detail",
             "--resource-detail-media-type",
@@ -37754,6 +37798,10 @@ mod tests {
 
         assert_eq!(value(&verified, "resource_observation_recorded"), "true");
         assert_eq!(value(&verified, "resource_id"), resource_id);
+        assert_eq!(
+            value(&verified, "resource_fingerprint"),
+            expected_fingerprint
+        );
         assert_eq!(value(&verified, "resource_basis"), "1");
         assert_eq!(value(&verified, "applicability_cache_recorded"), "true");
         assert_eq!(value(&verified, "applicability"), "applicable");

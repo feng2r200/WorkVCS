@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0439 / Phase 4LX
+Last refreshed: 2026-09-01 by ADR-0440 / Phase 4LY
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -34,8 +34,8 @@ not complete.
 | Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | Partial | Phase 4LO dogfoods post-Bundle `restore` and `show-at` against a target Store; still prove Branch/diff workflows in a real implementation slice. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Yes | Yes | Partial | Partial | Phase 4LV uses WorkVCS Goal, Plan, and Task entities to manage a bounded external-project review through closeout. Ordering, dependencies, and containment still need broader real-project repetition before release maturity claims. |
 | Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Yes | Phase 4LE dogfoods AC/VR/Verification for an implementation closeout; repeat this in recovery and handoff-consumption scenarios. |
-| Verification command wrapper | Yes | Yes | Yes | Yes | Phase 4LV proves the top-level `verify` wrapper in another-project dogfood with evidence content, Resource observation, Resource basis, and applicability cache output. Phase 4LX adds and dogfoods `verify --scope-path` / `--scope-path-prefix`, defaulting those shorthands to `scope_kind=path` and `scope_schema_version=1` while preserving explicit JSON input for advanced callers. Keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
-| Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Phase 4LV uses Resource create/bind/associate and Resource-backed `verify` observation against a real external local project. Phase 4LX closes lexical explicit path-scope normalization for Resource-backed verification shorthands. Glob semantics and adapter-backed re-observation remain Open. |
+| Verification command wrapper | Yes | Yes | Yes | Yes | Phase 4LV proves the top-level `verify` wrapper in another-project dogfood with evidence content, Resource observation, Resource basis, and applicability cache output. Phase 4LX adds and dogfoods `verify --scope-path` / `--scope-path-prefix`, defaulting those shorthands to `scope_kind=path` and `scope_schema_version=1` while preserving explicit JSON input for advanced callers. Phase 4LY adds explicit `--resource-content-from-scope-path` so the wrapper can observe a real local file from `--scope-path`. Keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
+| Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Phase 4LV uses Resource create/bind/associate and Resource-backed `verify` observation against a real external local project. Phase 4LX closes lexical explicit path-scope normalization for Resource-backed verification shorthands. Phase 4LY proves explicit local-file ResourceObservation from `--scope-path` with the observed fingerprint matching an independent content digest. Glob semantics, Resource adapter contracts, unavailable/error observation states, and automatic adapter-backed re-observation remain Open. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. |
 | Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LW dogfoods cooperative Claim transfer and stale-gated forced takeover in a realistic read-only external-project continuation loop. Shared-Claim collaboration remains smoke-proven but not yet real-project dogfooded. |
 | Context resolver | Yes | Partial | Yes | Partial | Phase 4LR adds explicit packet scope and deterministic path-sensitive Knowledge filtering for `context --scope-json` and `claim next --context-scope-json`. Phase 4LS adds durable `context-packet save/show/list` snapshots for exact resolved packets. Phase 4LT projects recent non-empty ChangeSet rationale into bounded packet items so continuation Agents can see why recent state moved. Phase 4LX adds lexical path selector normalization and dogfoods `context --scope-path`, `claim next --context-scope-path`, and `context-packet save --scope-path-prefix` against a read-only external project. Continue with broader context and Resource resolver gaps before claiming release maturity. |
@@ -52,8 +52,9 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Close Resource glob semantics or adapter-backed re-observation only when
-   the next continuation or verification workflow proves the need.
+1. Close Resource adapter contracts, unavailable/error observation states,
+   glob semantics, or automatic re-observation policy only when the next
+   continuation or verification workflow proves the need.
 2. Dogfood broader `why` paths, including causal/evolution explanation gaps,
    before expanding explanation output again.
 3. Reduce additional manual key-value capture in the operator CLI only where
@@ -180,4 +181,8 @@ The following remain beyond V1 even if they would make dogfood easier:
   `agent_soul` dogfood proves matching Knowledge remains visible across
   lexical path variants, unrelated path Knowledge is filtered, `verify
   --scope-path` records Resource-backed evidence, and target project status is
-  unchanged.
+  unchanged. Phase 4LY then lets `verify` explicitly read ResourceObservation
+  content from `--scope-path` with `--resource-content-from-scope-path`; the
+  read-only `agent_soul` dogfood proves the observed fingerprint equals an
+  independent `canonical content-digest --content-file` result and that target
+  project status is unchanged.

@@ -554,6 +554,17 @@ For code-specific operator actions, use the current
 current WorkVCS business `error_code` and the top-level `cli_parse_error`
 syntax failure shape.
 
+To prove the current recovery surface end to end, run:
+
+```bash
+scripts/operator-recovery-maturity-v0.1.sh
+```
+
+The Phase 4NI script audits guide coverage against the current core error
+taxonomy and exercises representative CLI recovery for parse errors, branch
+head conflicts, Resource drift/unavailable/error states, stale-gated Claim
+takeover, and merge unresolved freeze guards.
+
 When a Store fails integrity or doctor checks, stop using it as an authority
 until the failure is understood:
 
@@ -966,4 +977,7 @@ message=error: unexpected argument ...
   key-value and JSON fields, and current per-code recovery guidance is
   documented in the operator error recovery guide. Maintained Store validator
   logs now include the final compact success summary at the preserved `run.log`
-  tail. Broader recovery maturity remains open.
+  tail. Phase 4NI adds a local operator recovery maturity script that proves
+  guide coverage, parse-error JSON recovery, branch-head retry, Resource
+  recovery, Claim stale takeover, and merge unresolved recovery. Further
+  command-friction reduction remains demand-driven.

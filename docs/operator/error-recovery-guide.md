@@ -1,6 +1,6 @@
 # WorkVCS Error Recovery Guide
 
-Status: Phase 4MO current V1-local operator guidance.
+Status: Phase 4NI current V1-local operator guidance.
 
 This guide covers the stable error fields emitted by the current CLI. It is
 intentionally an operator recovery contract, not a new recovery engine or Store
@@ -53,6 +53,15 @@ error taxonomy. Treat every other code as not directly retryable. Recovery for
 those codes starts by changing the input, selector, Store path, Resource state,
 or operator intent; then rerun the command with a fresh expected head or
 selector as applicable.
+
+## Recovery Matrix Script
+
+Run `scripts/operator-recovery-maturity-v0.1.sh` from the repository root when
+you need a current local proof that this guide still matches the CLI and core
+taxonomy. The script audits every current `ErrorCode::as_str()` value plus
+`cli_parse_error`, checks the retryability rule above, and exercises
+representative parse, branch-head, Resource, Claim, and merge recovery flows
+through current CLI output.
 
 ## Per-Code Recovery
 

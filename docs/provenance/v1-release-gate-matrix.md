@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-02 by ADR-0475 / Phase 4NH
+Last refreshed: 2026-09-02 by ADR-0476 / Phase 4NI
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4NH was main commit
-`e0d77c95ba7e71271e88cf332a1f12b489ed677a` and the V1 readiness ledger last
-refreshed by ADR-0474 / Phase 4NG. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4NI was main commit
+`70f7c63d0094bae1ddc0d46650f69df1da659a8f` and the V1 readiness ledger last
+refreshed by ADR-0475 / Phase 4NH. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -22,11 +22,11 @@ project documents or current validation evidence.
   every blocking gate below to `Pass` using fresh evidence from the candidate
   commit.
 
-V0.1 dogfood should continue. This matrix records a narrow `why` evolution
-operation-subject detail projection for causal-anchor ChangeSets; it does not
-close the remaining full evolution traversal, broader context/Resource
-resolver, broader operator recovery, or release-operation gaps named by the
-gates.
+V0.1 dogfood should continue. This matrix records local operator recovery
+maturity proof for current script-readable failure and recovery workflows. It
+does not close the remaining full evolution traversal, broader
+context/Resource resolver, broader causal traversal, or release-operation gaps
+named by the gates.
 
 ## Gate States
 
@@ -51,7 +51,7 @@ gates.
 | Context resolver, packets, and `why` explanations | Context packets and `why` output expose enough focused, causal, and explanatory state for continuation Agents without speculative LLM extraction. | Phases 4LR through 4LT and 4LX cover scoped packets and rationale projection; Phases 4MA, 4MH, and 4ML cover selected `why` relationships and causal anchors. Phase 4NC covers direct Record-to-Record and Record-to-Knowledge epistemic statement projections in `why`. Phase 4NG covers direct ChangeOperation Entity/Relation subject projection for causal-anchor ChangeSets in `why`. Phase 4NH covers current recognized subject detail for those direct operation subjects, including Record/Knowledge statements and Relation kind/source/target detail. | Partial | Yes | Prove broader context/Resource resolver behavior, full evolution traversal beyond direct operation subjects and subject detail, and broader causal traversal only through concrete dogfood gaps; broaden epistemic traversal only if a future concrete dogfood gap requires it. |
 | Handoff consumption | Handoff creation, display, focus consumption, blocked recovery, and continuation work across varied project and write-mode workflows. | Current evidence covers focused Handoff smoke, Handoff consumption, blocked recovery, read-only external-project Handoff creation/show, external-project continuation-adjacent Claim work, and Phase 4MS write-mode Handoff consumption with continuation Claim, VR-backed verification, Task closeout, and SessionDiff closeout. | Pass | No | Keep as regression foundation; remote/cloud Handoff, cross-Store synchronization, automatic takeover, and Agent orchestration remain outside V1 unless explicitly authorized. |
 | Merge lifecycle and conflict recovery | Divergent Work Branch resolution, freeze/continue/abort/restart recovery, and final WorkState proof hold in realistic write-mode external-project work. | Phase 4LN and Phase 4MM prove merge behavior in durable local Stores, including larger conflict sets and two-parent merge commits. Phase 4MT adds generated external local Git project write-mode merge proof. Phase 4MU repeats merge against pre-existing real `agent_soul` project content cloned into a write-mode sandbox with an actual Git conflict on existing `README.md`, WorkVCS conflict and auto merge items, unresolved freeze guard, explicit source-side resolutions, freeze/continue, a two-parent WorkVCS merge commit, final WorkState proof, Branch diff, SessionDiff closeout, original-project unchanged proof, and required-valid integrity/doctor. | Pass | No | Keep as regression foundation; semantic/LLM merge, remote or distributed merge, cross-Store synchronization, Agent orchestration, and direct mutation of an original external repository remain outside the bounded V1-local release gate unless separately authorized. |
-| Operator discoverability and actionable recovery | Operators and scripts can identify failures, choose recovery, and parse error output without source inspection. | Phase 4LZ, Phase 4MJ, Phase 4MK, and Phase 4MO cover stable key-value and JSON error output plus per-code recovery guidance for current error codes. Phase 4NF makes the maintained Store portability validator's successful preserved `run.log` self-contained by appending the final stdout summary to the log tail, proving stdout/log-tail equality in a real opt-in run. | Partial | Yes | Prove broader recovery maturity in realistic workflows and reduce command friction only where repeated dogfood blockage appears. |
+| Operator discoverability and actionable recovery | Operators and scripts can identify failures, choose recovery, and parse error output without source inspection. | Phase 4LZ, Phase 4MJ, Phase 4MK, and Phase 4MO cover stable key-value and JSON error output plus per-code recovery guidance for current error codes. Phase 4NF makes the maintained Store portability validator's successful preserved `run.log` self-contained by appending the final stdout summary to the log tail, proving stdout/log-tail equality in a real opt-in run. Phase 4NI adds a local recovery maturity matrix proving guide coverage for all 41 core business error codes plus `cli_parse_error`, the retryability rule, parse-error JSON recovery, branch-head retry, Resource drift/unavailable/error recovery to applicable, stale-gated Claim takeover, merge unresolved recovery, and final Store integrity. | Pass | No | Keep as regression foundation; reduce command friction only where future dogfood exposes repeated workflow blockage. |
 | Larger Store and performance evidence | Candidate release behavior is bounded by workload evidence that is larger and more varied than smoke, with integrity/doctor proof. | Phase 4LQ validates portability on a bounded larger Store; Phase 4MM validates a larger merge-path Store; Phase 4NE validates a larger maintained Store with five cycles, 112 final Tasks, 20 Verifications, 80 script-counted scheduling relation versions, five same-target applies, 647 final payload files, 1,817 final payload references, and source/target required-valid integrity/doctor in 331 seconds. | Pass | No | Keep as bounded regression evidence; do not design indexes or claim general performance maturity without future workload-specific profiling. |
 | Candidate release operation | A named candidate commit has a fresh full validation matrix, clean git state, closed governance Plan, refreshed release gate matrix, and explicit release authorization. | No candidate release has been authorized or prepared in this slice. | Blocked | Yes | After all functional/dogfood gates pass, run a release-candidate validation from the exact candidate commit and obtain explicit release authorization. |
 
@@ -66,10 +66,39 @@ Priority candidates:
 1. Expand context/Resource resolver or `why` behavior only when a dogfood
    continuation exposes a concrete causal, evolution, or broader explanation
    gap.
-2. Prove broader operator recovery maturity or reduce command friction only
-   where repeated dogfood blockage appears.
-3. Refresh this matrix after each blocking gate changes status and before any
+2. Reduce command friction only where future dogfood exposes repeated workflow
+   blockage.
+3. After all functional/dogfood gates pass, run release-candidate validation
+   from the exact candidate commit and obtain explicit release authorization.
+4. Refresh this matrix after each blocking gate changes status and before any
    release-ready or release-candidate claim.
+
+## Phase 4NI Update
+
+Phase 4NI refreshes this matrix after adding and running the local
+`scripts/operator-recovery-maturity-v0.1.sh` harness. The slice targeted the
+remaining Operator discoverability and actionable recovery blocker: current
+errors were stable and documented, but no single current workflow proved the
+broader recovery matrix through script-readable CLI output.
+
+The proof run reported `phase4ni_operator_recovery_maturity=PASS`,
+`core_error_codes=41`, `guide_error_codes=42`,
+`guide_coverage_missing=0`, `guide_coverage_extra=0`,
+`guide_retryability_matches_core_rule=true`,
+`cli_parse_error_json_recovery=passed`,
+`branch_head_conflict_recovery=passed`,
+`resource_drift_recovery=applicable`,
+`resource_unavailable_recovery=applicable`,
+`resource_error_recovery=applicable`, `claim_takeover_recovery=passed`,
+`merge_unresolved_recovery=completed`, and
+`final_integrity_valid_required=true`.
+
+This closes the Operator discoverability and actionable recovery gate for the
+bounded V1-local release scope, backed by
+`docs/provenance/phase-4ni-operator-recovery-maturity-dogfood.md`.
+The overall release decision remains false because the Context resolver,
+packets, and `why` explanations gate remains `Partial`, and the candidate
+release operation gate remains `Blocked`.
 
 ## Phase 4NH Update
 

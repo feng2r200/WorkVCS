@@ -467,6 +467,25 @@ workvcs verification cache-refresh "$STORE" \
   --verification "$VERIFICATION_ID"
 ```
 
+For an exact local-file path Resource basis, use the explicit adapter-backed
+refresh mode to re-read the current file and record a new ResourceObservation:
+
+```bash
+workvcs verification cache-refresh "$STORE" \
+  --branch "$BRANCH_ID" \
+  --verification "$VERIFICATION_ID" \
+  --resource-content-from-scope-path \
+  --expected-evaluated-commit "$HEAD_COMMIT_ID"
+```
+
+This mode supports only `adapter_kind=local-file`, `scope_kind=path`,
+`scope_schema_version=1`, and `scope_payload={"path":"..."}`. If the file is
+unchanged, the cache remains `applicability=applicable`. If content changed, it
+becomes `reason_code=resource_drift`. A missing file becomes
+`reason_code=resource_unavailable`; a failed read becomes
+`reason_code=resource_error`. Relative stored paths are read relative to the
+current working directory of the command.
+
 When a Resource-backed Verification cannot be re-observed because the Resource
 is temporarily unavailable, record that state explicitly and keep the AC stale:
 
@@ -663,9 +682,12 @@ intended state transition.
   maturity evidence.
 - Explicit path-scope lexical normalization and opt-in local-file observation
   from `verify --scope-path` are implemented for the common CLI shorthands.
-  Explicit unavailable/error applicability stamps are dogfood-proven. Resource
-  glob semantics, adapter contracts, adapter-produced unavailable/error
-  reporting, and automatic adapter-backed re-observation remain open.
+  Exact local-file path cache refresh is implemented behind
+  `verification cache-refresh --resource-content-from-scope-path`. Explicit
+  unavailable/error applicability stamps are dogfood-proven. Resource glob
+  semantics, path-prefix aggregation, Git working-tree adapters,
+  symlink/case/rename policy, and automatic re-observation scheduling remain
+  open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.

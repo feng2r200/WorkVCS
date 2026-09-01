@@ -4743,6 +4743,9 @@ enum VerificationCommand {
         #[arg(long)]
         verification: String,
 
+        #[arg(long)]
+        resource_content_from_scope_path: bool,
+
         #[arg(long, default_value = "{}")]
         detail_json: String,
 
@@ -9512,6 +9515,7 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 branch,
                 verification,
+                resource_content_from_scope_path,
                 detail_json,
                 expected_evaluated_commit,
                 expected_applicability,
@@ -9519,20 +9523,34 @@ fn run(cli: Cli) -> Result<String> {
                 expected_resource_stamps,
             } => {
                 let mut engine = Engine::open(store)?;
+                let branch_id = BranchId::parse_canonical(&branch)?;
+                let verification_entity_id = EntityId::parse_canonical(&verification)?;
+                let detail =
+                    parse_cli_object("verification applicability refresh detail", &detail_json)?;
+                let expected_evaluated_commit_id = expected_evaluated_commit
+                    .as_deref()
+                    .map(CommitId::parse_canonical)
+                    .transpose()?;
                 let mut options = VerificationApplicabilityRefreshOptions::new(
-                    BranchId::parse_canonical(&branch)?,
-                    EntityId::parse_canonical(&verification)?,
+                    branch_id,
+                    verification_entity_id,
                 )?
-                .with_detail(parse_cli_object(
-                    "verification applicability refresh detail",
-                    &detail_json,
-                )?)?;
-                if let Some(expected_evaluated_commit) = expected_evaluated_commit.as_deref() {
-                    options = options.with_expected_evaluated_commit_id(CommitId::parse_canonical(
-                        expected_evaluated_commit,
-                    )?);
+                .with_detail(detail.clone())?;
+                if let Some(expected_evaluated_commit_id) = expected_evaluated_commit_id {
+                    options =
+                        options.with_expected_evaluated_commit_id(expected_evaluated_commit_id);
                 }
-                let snapshot = engine.refresh_verification_applicability(options)?;
+                let snapshot = if resource_content_from_scope_path {
+                    refresh_verification_applicability_from_local_file_scope_path(
+                        &mut engine,
+                        branch_id,
+                        verification_entity_id,
+                        expected_evaluated_commit_id,
+                        detail,
+                    )?
+                } else {
+                    engine.refresh_verification_applicability(options)?
+                };
                 let mut output = render_verification_applicability_cache(&snapshot);
                 append_verification_cache_record_expectations(
                     &mut output,
@@ -13416,6 +13434,150 @@ fn applicability_stamp_from_cli(
         stamp = stamp.with_observation_id(ResourceObservationId::parse_canonical(&observation)?)?;
     }
     Ok(stamp)
+}
+
+fn refresh_verification_applicability_from_local_file_scope_path(
+    engine: &mut Engine,
+    branch_id: BranchId,
+    verification_entity_id: EntityId,
+    expected_evaluated_commit_id: Option<CommitId>,
+    detail: CanonicalValue,
+) -> Result<VerificationApplicabilityCacheSnapshot> {
+    let head = engine.branch_head(branch_id)?;
+    if let Some(expected_evaluated_commit_id) = expected_evaluated_commit_id
+        && head.head_commit_id != expected_evaluated_commit_id
+    {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            branch_id, expected_evaluated_commit_id, head.head_commit_id
+        )));
+    }
+    let verification = engine.verification_at(head.head_commit_id, verification_entity_id)?;
+    let resource_basis = verification.state.resource_basis.clone();
+    if resource_basis.is_empty() {
+        return Err(WorkVcsError::TaskInvalid(
+            "--resource-content-from-scope-path requires verification resource basis".to_owned(),
+        ));
+    }
+
+    let scoped_paths = resource_basis
+        .iter()
+        .map(local_file_scope_path_from_basis)
+        .collect::<Result<Vec<_>>>()?;
+    let mut resource_stamps = Vec::with_capacity(resource_basis.len());
+    for (index, (basis, path)) in resource_basis.iter().zip(scoped_paths.iter()).enumerate() {
+        resource_stamps.push(local_file_scope_path_applicability_stamp(
+            engine, index, basis, path,
+        )?);
+    }
+
+    engine.record_verification_applicability(
+        VerificationApplicabilityRecordOptions::new(
+            branch_id,
+            verification_entity_id,
+            head.head_commit_id,
+        )?
+        .with_resource_stamps(resource_stamps)?
+        .with_detail(detail)?,
+    )
+}
+
+fn local_file_scope_path_applicability_stamp(
+    engine: &mut Engine,
+    resource_basis_ordinal: usize,
+    basis: &VerificationResourceBasis,
+    path: &Path,
+) -> Result<ApplicabilityResourceStampInput> {
+    match fs::read(path) {
+        Ok(bytes) => {
+            let fingerprint = content_object_digest(&bytes);
+            let observation =
+                engine.record_resource_observation(ResourceObservationCreateOptions::new(
+                    basis.resource_id,
+                    basis.adapter_kind.clone(),
+                    basis.adapter_schema_version,
+                    fingerprint,
+                    local_file_scope_path_observation_summary(path)?,
+                )?)?;
+            ApplicabilityResourceStampInput::observed(
+                resource_basis_ordinal as i64,
+                basis.adapter_kind.clone(),
+                basis.adapter_schema_version,
+                basis.scope_schema_version,
+                fingerprint,
+            )?
+            .with_observation_id(observation.observation_id)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ApplicabilityResourceStampInput::unavailable(
+                resource_basis_ordinal as i64,
+                basis.adapter_kind.clone(),
+                basis.adapter_schema_version,
+                basis.scope_schema_version,
+            )
+        }
+        Err(_) => ApplicabilityResourceStampInput::error(
+            resource_basis_ordinal as i64,
+            basis.adapter_kind.clone(),
+            basis.adapter_schema_version,
+            basis.scope_schema_version,
+        ),
+    }
+}
+
+fn local_file_scope_path_from_basis(basis: &VerificationResourceBasis) -> Result<PathBuf> {
+    if basis.adapter_kind != "local-file" {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-scope-path supports adapter_kind local-file, found {:?}",
+            basis.adapter_kind
+        )));
+    }
+    if basis.scope_kind != "path" {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-scope-path supports scope_kind path, found {:?}",
+            basis.scope_kind
+        )));
+    }
+    if basis.scope_schema_version != 1 {
+        return Err(WorkVcsError::TaskInvalid(format!(
+            "--resource-content-from-scope-path supports scope_schema_version 1, found {}",
+            basis.scope_schema_version
+        )));
+    }
+
+    let CanonicalValue::Object(entries) = &basis.scope_payload else {
+        return Err(WorkVcsError::TaskInvalid(
+            "local-file scope-path refresh requires object scope payload".to_owned(),
+        ));
+    };
+    let Some((_, path)) = entries.iter().find(|(key, _)| key == "path") else {
+        return Err(WorkVcsError::TaskInvalid(
+            "local-file scope-path refresh requires scope payload field path".to_owned(),
+        ));
+    };
+    let CanonicalValue::String(path) = path else {
+        return Err(WorkVcsError::TaskInvalid(
+            "local-file scope-path refresh requires string scope payload field path".to_owned(),
+        ));
+    };
+    Ok(PathBuf::from(path))
+}
+
+fn local_file_scope_path_observation_summary(path: &Path) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        (
+            "adapter_contract".to_owned(),
+            CanonicalValue::String("local-file-scope-path-v1".to_owned()),
+        ),
+        (
+            "source".to_owned(),
+            CanonicalValue::String("verification cache-refresh".to_owned()),
+        ),
+        (
+            "path".to_owned(),
+            CanonicalValue::String(path.display().to_string()),
+        ),
+    ])
 }
 
 fn method_value(name: &str) -> CanonicalValue {
@@ -37701,6 +37863,559 @@ mod tests {
         .expect("parse verified after refresh"))
         .expect("verified after refresh");
         assert_eq!(verified_after_refresh, "status=verified\n");
+    }
+
+    #[test]
+    fn cli_refreshes_local_file_scope_path_applicability_cache() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = store_path.to_str().expect("store path text");
+        let project_src = tempdir.path().join("project").join("src");
+        fs::create_dir_all(&project_src).expect("create project src");
+        let scoped_file = project_src.join("lib.rs");
+        fs::write(&scoped_file, b"baseline local file").expect("write baseline file");
+        let scope_path = scoped_file.to_str().expect("scope path text");
+        let scope_payload = format!(r#"{{"path":"{scope_path}"}}"#);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "test local-file refresh",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let task_version = value(&task, "task_entity_version_id");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &task_version,
+            "--local-key",
+            "AC-LOCAL-FILE-REFRESH",
+            "--statement",
+            "local file cache refresh tracks current content",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+        head = value(&criterion, "commit_id");
+
+        let resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse resource"))
+        .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let baseline = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--content-file",
+            scope_path,
+        ])
+        .expect("parse baseline observation"))
+        .expect("record baseline observation");
+        let baseline_observation_id = value(&baseline, "observation_id");
+        let baseline_fingerprint = value(&baseline, "fingerprint");
+
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--acceptance-criterion",
+            &criterion_id,
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--scope-kind",
+            "path",
+            "--scope-schema-version",
+            "1",
+            "--scope-payload-json",
+            &scope_payload,
+            "--baseline-fingerprint",
+            &baseline_fingerprint,
+            "--baseline-observation",
+            &baseline_observation_id,
+        ])
+        .expect("parse verification"))
+        .expect("record verification");
+        let verification_id = value(&verification, "verification_entity_id");
+        head = value(&verification, "commit_id");
+
+        let applicable = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-path",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "applicable",
+            "--expected-reason-code",
+            "all_basis_applicable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse applicable cache refresh"))
+        .expect("refresh applicable cache");
+        assert_eq!(value(&applicable, "applicability"), "applicable");
+        assert_eq!(value(&applicable, "reason_code"), "all_basis_applicable");
+
+        let applicable_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse applicable cache show"))
+        .expect("show applicable cache");
+        assert_eq!(
+            value(&applicable_cache, "resource_stamp.0.observation_status"),
+            "observed"
+        );
+        assert_eq!(
+            value(&applicable_cache, "resource_stamp.0.observed_fingerprint"),
+            baseline_fingerprint
+        );
+        assert_ne!(
+            value(&applicable_cache, "resource_stamp.0.observation_id"),
+            baseline_observation_id
+        );
+
+        fs::write(&scoped_file, b"changed local file").expect("write changed file");
+        let changed_fingerprint = content_object_digest(b"changed local file").to_string();
+        let stale = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-path",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "stale",
+            "--expected-reason-code",
+            "resource_drift",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse stale cache refresh"))
+        .expect("refresh stale cache");
+        assert_eq!(value(&stale, "applicability"), "stale");
+        assert_eq!(value(&stale, "reason_code"), "resource_drift");
+
+        let stale_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse stale cache show"))
+        .expect("show stale cache");
+        assert_eq!(
+            value(&stale_cache, "resource_stamp.0.observation_status"),
+            "observed"
+        );
+        assert_eq!(
+            value(&stale_cache, "resource_stamp.0.observed_fingerprint"),
+            changed_fingerprint
+        );
+        assert_ne!(
+            value(&stale_cache, "resource_stamp.0.observation_id"),
+            "none"
+        );
+
+        let stale_status = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "status",
+            store,
+            "--branch",
+            &branch,
+            "--criterion",
+            &criterion_id,
+        ])
+        .expect("parse stale ac status"))
+        .expect("stale ac status");
+        assert_eq!(stale_status, "status=stale\n");
+
+        fs::remove_file(&scoped_file).expect("remove scoped file");
+        let unavailable = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-path",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "unknown",
+            "--expected-reason-code",
+            "resource_unavailable",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse unavailable cache refresh"))
+        .expect("refresh unavailable cache");
+        assert_eq!(value(&unavailable, "applicability"), "unknown");
+        assert_eq!(value(&unavailable, "reason_code"), "resource_unavailable");
+
+        let unavailable_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse unavailable cache show"))
+        .expect("show unavailable cache");
+        assert_eq!(
+            value(&unavailable_cache, "resource_stamp.0.observation_status"),
+            "unavailable"
+        );
+        assert_eq!(
+            value(&unavailable_cache, "resource_stamp.0.observed_fingerprint"),
+            "none"
+        );
+        assert_eq!(
+            value(&unavailable_cache, "resource_stamp.0.observation_id"),
+            "none"
+        );
+
+        fs::create_dir(&scoped_file).expect("create directory at scoped file path");
+        let error = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-path",
+            "--expected-evaluated-commit",
+            &head,
+            "--expected-applicability",
+            "unknown",
+            "--expected-reason-code",
+            "resource_error",
+            "--expected-resource-stamps",
+            "1",
+        ])
+        .expect("parse error cache refresh"))
+        .expect("refresh error cache");
+        assert_eq!(value(&error, "applicability"), "unknown");
+        assert_eq!(value(&error, "reason_code"), "resource_error");
+
+        let error_cache = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-show",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+        ])
+        .expect("parse error cache show"))
+        .expect("show error cache");
+        assert_eq!(
+            value(&error_cache, "resource_stamp.0.observation_status"),
+            "error"
+        );
+        assert_eq!(
+            value(&error_cache, "resource_stamp.0.observed_fingerprint"),
+            "none"
+        );
+        assert_eq!(
+            value(&error_cache, "resource_stamp.0.observation_id"),
+            "none"
+        );
+    }
+
+    #[test]
+    fn local_file_scope_path_cache_refresh_rejects_mixed_basis_without_observation_side_effect() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = store_path.to_str().expect("store path text");
+        let project_src = tempdir.path().join("project").join("src");
+        fs::create_dir_all(&project_src).expect("create project src");
+        let scoped_file = project_src.join("lib.rs");
+        fs::write(&scoped_file, b"baseline local file").expect("write baseline file");
+        let scope_path = scoped_file.to_str().expect("scope path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "test mixed local-file refresh",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let task_version = value(&task, "task_entity_version_id");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &task_version,
+            "--local-key",
+            "AC-MIXED-LOCAL-FILE-REFRESH",
+            "--statement",
+            "mixed basis refresh must fail without partial observation writes",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+        head = value(&criterion, "commit_id");
+
+        let local_resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse local resource"))
+        .expect("create local resource");
+        let local_resource_id = value(&local_resource, "resource_id");
+        let git_resource =
+            run(
+                Cli::try_parse_from(["workvcs", "resource", "create", store, "--kind", "git"])
+                    .expect("parse git resource"),
+            )
+            .expect("create git resource");
+        let git_resource_id = value(&git_resource, "resource_id");
+
+        let baseline = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &local_resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--content-file",
+            scope_path,
+        ])
+        .expect("parse baseline observation"))
+        .expect("record baseline observation");
+        let baseline_observation_id = value(&baseline, "observation_id");
+        let baseline_fingerprint = value(&baseline, "fingerprint");
+        let baseline_digest = Digest::from_hex(&baseline_fingerprint).expect("baseline digest");
+
+        let verification = {
+            let mut engine = Engine::open(store).expect("open engine");
+            let local_scope_payload = CanonicalValue::object(vec![(
+                "path".to_owned(),
+                CanonicalValue::String(scope_path.to_owned()),
+            )])
+            .expect("local scope payload");
+            let git_scope_payload = CanonicalValue::object(vec![(
+                "path".to_owned(),
+                CanonicalValue::String("src/lib.rs".to_owned()),
+            )])
+            .expect("git scope payload");
+            let local_basis = VerificationResourceBasis::new(
+                ResourceId::parse_canonical(&local_resource_id).expect("local resource id"),
+                "local-file",
+                1,
+                "path",
+                1,
+                local_scope_payload,
+                baseline_digest,
+            )
+            .expect("local basis")
+            .with_baseline_observation_id(
+                ResourceObservationId::parse_canonical(&baseline_observation_id)
+                    .expect("baseline observation id"),
+            )
+            .expect("local basis observation");
+            let git_basis = VerificationResourceBasis::new(
+                ResourceId::parse_canonical(&git_resource_id).expect("git resource id"),
+                "git",
+                1,
+                "path",
+                1,
+                git_scope_payload,
+                baseline_digest,
+            )
+            .expect("git basis");
+
+            engine
+                .create_verification(
+                    VerificationCreateOptions::new(
+                        BranchId::parse_canonical(&branch).expect("branch id"),
+                        CommitId::parse_canonical(&head).expect("head id"),
+                        VerificationTarget::AcceptanceCriterion(
+                            EntityId::parse_canonical(&criterion_id).expect("criterion id"),
+                        ),
+                        VerificationResult::Passed,
+                    )
+                    .expect("verification options")
+                    .with_resource_basis(vec![local_basis, git_basis])
+                    .expect("resource basis options"),
+                )
+                .expect("create mixed-basis verification")
+        };
+        let verification_id = verification.verification_entity_id.to_string();
+        let verification_head = verification.commit_id.to_string();
+        let before_observations = Engine::open(store)
+            .expect("open before count")
+            .resource_observations(ResourceObservationListOptions::all())
+            .expect("list before observations")
+            .observations
+            .len();
+        assert_eq!(before_observations, 1);
+
+        let error = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "cache-refresh",
+            store,
+            "--branch",
+            &branch,
+            "--verification",
+            &verification_id,
+            "--resource-content-from-scope-path",
+            "--expected-evaluated-commit",
+            &verification_head,
+        ])
+        .expect("parse mixed-basis cache refresh"))
+        .expect_err("reject mixed basis before recording observations");
+        assert!(format!("{error}").contains("supports adapter_kind local-file"));
+
+        let after_observations = Engine::open(store)
+            .expect("open after count")
+            .resource_observations(ResourceObservationListOptions::all())
+            .expect("list after observations")
+            .observations
+            .len();
+        assert_eq!(after_observations, before_observations);
     }
 
     #[test]

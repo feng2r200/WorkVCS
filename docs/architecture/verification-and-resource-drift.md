@@ -170,9 +170,13 @@ Adapter and scope contract versions are persisted, while WorkVCS hashes their
 canonical normalized bytes with the Store digest algorithm (BLAKE3-256 in V1).
 Verification target/Evidence keep one Relation authority and Applicability
 uses the confirmed physical constraints in
-[Physical Schema v0.1 Contract](physical-schema-v0.1.md). Final CLI names,
-adapter implementations shipped first, exact path normalization,
-non-Verification observation capture policy, performance indexes, and a
-possible future AC waiver operation remain unfixed. The executable schema,
-Rust implementation language, `rusqlite`, and the `workvcs-jcs-v1` canonical
-JSON profile are now closed by accepted implementation ADRs.
+[Physical Schema v0.1 Contract](physical-schema-v0.1.md). ADR-0444 adds the
+first executable adapter-backed refresh contract: exact `local-file` path
+Resource basis entries can be re-observed through
+`verification cache-refresh --resource-content-from-scope-path`. Final CLI
+names, broader adapter implementations, glob/path-prefix semantics, symlink,
+case, rename and deletion policy, non-Verification observation capture policy,
+performance indexes, and a possible future AC waiver operation remain unfixed.
+The executable schema, Rust implementation language, `rusqlite`, and the
+`workvcs-jcs-v1` canonical JSON profile are now closed by accepted
+implementation ADRs.

@@ -39,6 +39,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4LZ Stable Error Code Output Evidence](provenance/phase-4lz-stable-error-code-output.md)
 - [Phase 4MA Why Explanation Dogfood Evidence](provenance/phase-4ma-why-explanation-dogfood.md)
 - [Phase 4MB Resource Unavailable Error Dogfood Evidence](provenance/phase-4mb-resource-unavailable-error-dogfood.md)
+- [Phase 4MC Local File Cache Refresh Evidence](provenance/phase-4mc-local-file-cache-refresh.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -155,6 +156,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0441: Phase 4LZ Stable Error Code Output](decisions/adr/0441-phase-4lz-stable-error-code-output.md)
 - [ADR-0442: Phase 4MA Why Explanation Dogfood](decisions/adr/0442-phase-4ma-why-explanation-dogfood.md)
 - [ADR-0443: Phase 4MB Resource Unavailable Error Dogfood](decisions/adr/0443-phase-4mb-resource-unavailable-error-dogfood.md)
+- [ADR-0444: Phase 4MC Local File Cache Refresh](decisions/adr/0444-phase-4mc-local-file-cache-refresh.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

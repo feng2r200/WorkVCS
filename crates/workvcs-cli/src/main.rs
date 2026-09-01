@@ -45492,6 +45492,48 @@ mod tests {
         .expect("why prior");
         assert!(why_prior.contains("relation.0.relation_kind=record_supersedes"));
         assert!(why_prior.contains("relation.0.direction=incoming"));
+        assert_eq!(value(&why_prior, "deferred_relation_families"), "0");
+
+        let why_finding = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--entity",
+            &value(&finding, "record_entity_id"),
+        ])
+        .expect("parse why causal finding"))
+        .expect("why causal finding");
+        assert_eq!(value(&why_finding, "deferred_relation_families"), "1");
+        assert_eq!(
+            value(&why_finding, "deferred_relation_family.0"),
+            "evolution"
+        );
+
+        let filtered_why_finding = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&superseded, "commit_id"),
+            "--entity",
+            &value(&finding, "record_entity_id"),
+            "--relation-kind",
+            "record_derived_from",
+            "--relation-limit",
+            "1",
+        ])
+        .expect("parse filtered why causal finding"))
+        .expect("filtered why causal finding");
+        assert_eq!(
+            value(&filtered_why_finding, "deferred_relation_families"),
+            "1"
+        );
+        assert_eq!(
+            value(&filtered_why_finding, "deferred_relation_family.0"),
+            "evolution"
+        );
     }
 
     #[test]

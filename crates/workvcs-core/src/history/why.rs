@@ -7,18 +7,18 @@ use super::task::{
     VERIFICATION_REQUIREMENT_ENTITY_KIND,
 };
 use super::{
-    KnowledgeRelationListOptions, PrimaryContainmentEndpointKind,
+    HistoryQueryOptions, KnowledgeRelationListOptions, PrimaryContainmentEndpointKind,
     RecordKnowledgeRelationListOptions, RecordRelationListOptions, RecordRelationType,
     StructuralReferenceEndpointKind, VerificationTarget, branch_head, evidence, knowledge_exposure,
-    knowledge_relations_at, primary_containment_relations_at, record_knowledge_relations_at,
-    record_relations_at, state_at, structural_references_at, verification_evidence_relations_at,
-    verification_relations_at,
+    knowledge_relations_at, primary_containment_relations_at, query_history,
+    record_knowledge_relations_at, record_relations_at, state_at, structural_references_at,
+    verification_evidence_relations_at, verification_relations_at,
 };
 use crate::canonical::CanonicalValue;
 use crate::error::{Result, WorkVcsError};
 use crate::identity::{
-    BranchId, CommitId, Digest, EntityId, EntityVersionId, EvidenceId, ExposureId, RelationId,
-    RelationVersionId, WorkspaceId,
+    BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EvidenceId, ExposureId,
+    RelationId, RelationVersionId, WorkspaceId,
 };
 use crate::store::StoreConnection;
 use rusqlite::{OptionalExtension, params};
@@ -514,13 +514,79 @@ pub(crate) fn explain_why(
             })
     });
 
+    let deferred_relation_families =
+        why_deferred_relation_families(connection, &resolved, options.subject())?;
+
     Ok(WhyQueryResult {
         target: resolved.target,
         subject,
         relation_edges,
         scope_links,
-        deferred_relation_families: Vec::new(),
+        deferred_relation_families,
     })
+}
+
+fn why_deferred_relation_families(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    subject: WhyQuerySubject,
+) -> Result<Vec<WhyDeferredRelationFamily>> {
+    let mut families = Vec::new();
+    if first_parent_reachable_entity_causal_anchor_exists(connection, resolved, subject)? {
+        families.push(WhyDeferredRelationFamily::Evolution);
+    }
+    Ok(families)
+}
+
+fn first_parent_reachable_entity_causal_anchor_exists(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    subject: WhyQuerySubject,
+) -> Result<bool> {
+    let WhyQuerySubject::Entity(entity_id) = subject else {
+        return Ok(false);
+    };
+    let history = query_history(
+        connection,
+        &HistoryQueryOptions::from_commit(resolved.target.commit_id),
+    )?;
+    for entry in history.entries {
+        if entry.workspace_id != resolved.target.workspace_id {
+            continue;
+        }
+        if changeset_has_entity_causal_anchor(connection, entry.changeset_id, entity_id)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn changeset_has_entity_causal_anchor(
+    connection: &StoreConnection,
+    changeset_id: ChangeSetId,
+    entity_id: EntityId,
+) -> Result<bool> {
+    let row = connection
+        .inner()
+        .query_row(
+            "SELECT 1
+             FROM changeset_causal_anchor
+             JOIN object_identity
+               ON object_identity.object_id = changeset_causal_anchor.anchor_object_id
+             WHERE changeset_causal_anchor.changeset_id = ?1
+               AND changeset_causal_anchor.anchor_object_id = ?2
+               AND object_identity.object_kind = ?3
+             LIMIT 1",
+            params![
+                &changeset_id.raw_bytes()[..],
+                &entity_id.raw_bytes()[..],
+                ENTITY_OBJECT_KIND
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(crate::error::storage_error)?;
+    Ok(row.is_some())
 }
 
 fn handoff_focus_scope_links(

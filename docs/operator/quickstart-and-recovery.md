@@ -344,6 +344,12 @@ For a focused Handoff, the Handoff Record reports
 these read-only scope links; existing relation filters and limits apply to
 `relation_edges`, not to scope links.
 
+When querying a Record or other Entity that was used as a causal anchor for a
+ChangeSet reachable through first-parent history, `why` reports
+`deferred_relation_family.0=evolution`. This means WorkVCS can see that the
+Entity participates in an evolution explanation family, but full ChangeSet
+evolution traversal is still not implemented.
+
 Start a continuation Session, then consume the Handoff into that Session's
 focus:
 
@@ -806,7 +812,8 @@ intended state transition.
   re-observation scheduling remain open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
-- `why` does not yet expose the Handoff focus link as a relation.
+- `why` exposes focused Handoff scope links and anchored evolution as a deferred
+  family, but full evolution traversal and epistemic explanation remain open.
 - Shared-Claim collaboration still needs realistic continuation dogfood beyond
   smoke.
 - Automatic stale detection remains open.

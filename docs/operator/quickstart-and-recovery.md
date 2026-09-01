@@ -351,10 +351,19 @@ ChangeSet reachable through first-parent history, `why` reports
 `evolution_change_operation.<i>.*` fields for that ChangeSet. The operation
 fields include `subject_family` and `subject_object_id`, so an operator can see
 which Entity or Relation the causal anchor changed without running a separate
-`changeset operations` command. Use `--expected-evolution-change-operations`
-when a script needs to assert the projected operation count. Full ChangeSet
-evolution traversal is still not implemented, and relation filters and limits
-continue to apply only to `relation_edges`.
+`changeset operations` command.
+
+When querying an Entity that was directly changed by a first-parent-reachable
+ChangeOperation, `why` also reports that direct Entity-subject evolution
+operation even if the Entity was not the causal anchor. For example, a
+superseded prior Decision can report `causal_anchor_changesets=0` while still
+showing the direct `record.decision.supersede` operation that changed it.
+Initial Entity creation operations are not counted as this direct evolution
+slice. Use `--expected-evolution-change-operations` when a script needs to
+assert the projected operation count. Full ChangeSet evolution traversal,
+relation-subject traversal, and multi-hop evolution traversal are still not
+implemented, and relation filters and limits continue to apply only to
+`relation_edges`.
 
 Start a continuation Session, then consume the Handoff into that Session's
 focus:
@@ -952,9 +961,10 @@ message=error: unexpected argument ...
 - `why` exposes focused Handoff scope links, anchored evolution as a deferred
   family, causal anchor ChangeSet projections, direct evolution operation
   subjects for those ChangeSets, current recognized detail for those operation
-  subjects, and direct epistemic statement explanations.
-  Full evolution traversal, broader causal traversal, and broader
-  context/Resource resolver maturity remain open.
+  subjects, direct changed-Entity evolution operations, and direct epistemic
+  statement explanations. Relation-subject traversal, multi-hop/full evolution
+  traversal, broader causal traversal, and broader context/Resource resolver
+  maturity remain open.
 - Shared-Claim collaboration has read-only real-project and bounded
   write-mode/read-write dogfood evidence. Automatic ownership arbitration,
   distributed collaboration, and remote multi-operator coordination remain

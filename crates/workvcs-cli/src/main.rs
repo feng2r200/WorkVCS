@@ -47601,14 +47601,47 @@ mod tests {
             &value(&superseded, "commit_id"),
             "--entity",
             &value(&prior, "record_entity_id"),
+            "--expected-evolution-change-operations",
+            "1",
         ])
         .expect("parse why prior"))
         .expect("why prior");
         assert!(why_prior.contains("relation.0.relation_kind=record_supersedes"));
         assert!(why_prior.contains("relation.0.direction=incoming"));
         assert_eq!(value(&why_prior, "causal_anchor_changesets"), "0");
-        assert_eq!(value(&why_prior, "evolution_change_operations"), "0");
-        assert_eq!(value(&why_prior, "deferred_relation_families"), "0");
+        assert_eq!(value(&why_prior, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(&why_prior, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&why_prior, "evolution_change_operation.0.changeset_id"),
+            value(&superseded, "changeset_id")
+        );
+        assert_eq!(
+            value(
+                &why_prior,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "record.decision.supersede"
+        );
+        assert_eq!(
+            value(&why_prior, "evolution_change_operation.0.subject_family"),
+            "entity"
+        );
+        assert_eq!(
+            value(&why_prior, "evolution_change_operation.0.subject_object_id"),
+            value(&prior, "record_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why_prior,
+                "evolution_change_operation.0.subject_statement_json"
+            ),
+            "\"Use optimistic writes\""
+        );
+        assert_eq!(value(&why_prior, "deferred_relation_families"), "1");
+        assert_eq!(value(&why_prior, "deferred_relation_family.0"), "evolution");
 
         let why_finding = run(Cli::try_parse_from([
             "workvcs",

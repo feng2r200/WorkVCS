@@ -2,11 +2,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    CommitId, Engine, EntityId, RecordCreateCommit, RecordCreateOptions,
+    ChangeOperationSubject, CommitId, Engine, EntityId, RecordCreateCommit, RecordCreateOptions,
     RecordRelationCreateCommit, RecordRelationCreateOptions, RecordTransitionCommit,
-    RecordTransitionOptions, ResolvedWhyQuerySubject, StoreInitOptions, WhyEntityKind,
-    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
-    WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    RecordTransitionOptions, ResolvedWhyQuerySubject, StoreInitOptions, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
+    WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -135,6 +136,7 @@ fn why_reports_record_invalidates_edge_for_both_endpoints() {
         }
     );
     assert_deferred_families(&finding_why);
+    assert!(finding_why.evolution_change_operations.is_empty());
     assert_eq!(
         edge_facts(&finding_why),
         BTreeSet::from([(
@@ -158,7 +160,33 @@ fn why_reports_record_invalidates_edge_for_both_endpoints() {
             entity_kind: WhyEntityKind::Record,
         }
     );
-    assert_deferred_families(&assumption_why);
+    assert_eq!(
+        assumption_why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(assumption_why.evolution_change_operations.len(), 1);
+    let operation = &assumption_why.evolution_change_operations[0];
+    assert_eq!(operation.commit_id, invalidated.commit_id);
+    assert_eq!(operation.changeset_id, invalidated.changeset_id);
+    assert_eq!(operation.changeset_operation_type, "entity.transition");
+    assert_eq!(operation.operation_id, invalidated.operation_id);
+    assert_eq!(operation.ordinal, 0);
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Entity(assumption.record_entity_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Entity(detail)) = &operation.subject_detail else {
+        panic!("expected assumption entity subject detail")
+    };
+    assert_eq!(detail.entity_kind, WhyEntityKind::Record);
+    assert_eq!(
+        detail.entity_version_id,
+        invalidated.record_entity_version_id
+    );
+    assert_eq!(
+        detail.statement.as_deref(),
+        Some("Serialized writes are sufficient")
+    );
     assert_eq!(
         edge_facts(&assumption_why),
         BTreeSet::from([(
@@ -175,4 +203,9 @@ fn why_reports_record_invalidates_edge_for_both_endpoints() {
 
     let before_relation = why_commit(&engine, invalidated.commit_id, assumption.record_entity_id);
     assert!(before_relation.relation_edges.is_empty());
+    assert_eq!(
+        before_relation.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(before_relation.evolution_change_operations.len(), 1);
 }

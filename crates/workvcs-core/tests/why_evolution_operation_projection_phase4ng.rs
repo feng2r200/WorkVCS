@@ -210,7 +210,7 @@ fn why_causal_anchor_projects_direct_evolution_operations() {
 }
 
 #[test]
-fn why_non_anchor_keeps_evolution_operations_empty() {
+fn why_changed_entity_projects_own_direct_evolution_operation() {
     let (_tempdir, path) = store_path();
     let (mut engine, workspace) = create_workspace(&path);
     let fixture = create_supersede_fixture(&mut engine, &workspace);
@@ -223,6 +223,32 @@ fn why_non_anchor_keeps_evolution_operations_empty() {
         .expect("why prior decision");
 
     assert!(why.causal_anchor_changesets.is_empty());
-    assert!(why.evolution_change_operations.is_empty());
-    assert!(why.deferred_relation_families.is_empty());
+    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+
+    let operation = &why.evolution_change_operations[0];
+    assert_eq!(operation.commit_id, fixture.superseded.commit_id);
+    assert_eq!(operation.changeset_id, fixture.superseded.changeset_id);
+    assert_eq!(
+        operation.changeset_operation_type,
+        "record.decision.supersede"
+    );
+    assert_eq!(operation.changeset_operation_schema_version, 1);
+    assert_eq!(operation.ordinal, 0);
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Entity(fixture.prior.record_entity_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Entity(detail)) = &operation.subject_detail else {
+        panic!("expected changed entity subject detail")
+    };
+    assert_eq!(detail.entity_kind, WhyEntityKind::Record);
+    assert_eq!(
+        detail.entity_version_id,
+        fixture.superseded.prior_record_entity_version_id
+    );
+    assert_eq!(detail.statement.as_deref(), Some("Use optimistic writes"));
 }

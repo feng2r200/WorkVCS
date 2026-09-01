@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::goal::GOAL_ENTITY_KIND;
 use super::knowledge::{KNOWLEDGE_ENTITY_KIND, knowledge_at};
 use super::plan::PLAN_ENTITY_KIND;
@@ -7,13 +9,13 @@ use super::task::{
     VERIFICATION_REQUIREMENT_ENTITY_KIND,
 };
 use super::{
-    ChangeOperationSubject, HistoryQueryOptions, KnowledgeRelationListOptions,
-    PrimaryContainmentEndpointKind, RecordKnowledgeRelationListOptions, RecordRelationListOptions,
-    RecordRelationType, StructuralReferenceEndpointKind, VerificationTarget, branch_head,
-    changeset_operations, evidence, knowledge_exposure, knowledge_relations_at,
-    primary_containment_relations_at, query_history, record_knowledge_relations_at,
-    record_relations_at, state_at, structural_references_at, verification_evidence_relations_at,
-    verification_relations_at,
+    ChangeOperationSnapshot, ChangeOperationSubject, HistoryQueryOptions,
+    KnowledgeRelationListOptions, PrimaryContainmentEndpointKind,
+    RecordKnowledgeRelationListOptions, RecordRelationListOptions, RecordRelationType,
+    StructuralReferenceEndpointKind, VerificationTarget, branch_head, changeset_operations,
+    evidence, knowledge_exposure, knowledge_relations_at, primary_containment_relations_at,
+    query_history, record_knowledge_relations_at, record_relations_at, state_at,
+    structural_references_at, verification_evidence_relations_at, verification_relations_at,
 };
 use crate::canonical::CanonicalValue;
 use crate::error::{Result, WorkVcsError};
@@ -584,9 +586,14 @@ pub(crate) fn explain_why(
 
     let epistemic_explanations =
         why_epistemic_explanations(connection, resolved.target.commit_id, &relation_edges)?;
-    let evolution_change_operations =
-        why_evolution_change_operations(connection, &resolved, &causal_anchor_changesets)?;
-    let deferred_relation_families = why_deferred_relation_families(&causal_anchor_changesets);
+    let evolution_change_operations = why_evolution_change_operations(
+        connection,
+        &resolved,
+        options.subject(),
+        &causal_anchor_changesets,
+    )?;
+    let deferred_relation_families =
+        why_deferred_relation_families(&causal_anchor_changesets, &evolution_change_operations);
 
     Ok(WhyQueryResult {
         target: resolved.target,
@@ -603,28 +610,115 @@ pub(crate) fn explain_why(
 fn why_evolution_change_operations(
     connection: &StoreConnection,
     resolved: &ResolvedWhyTargetWithState,
+    subject: WhyQuerySubject,
     causal_anchor_changesets: &[WhyCausalAnchorChangeSet],
 ) -> Result<Vec<WhyEvolutionChangeOperation>> {
     let mut evolution_operations = Vec::new();
+    let mut seen_operation_ids = HashSet::new();
     for anchor in causal_anchor_changesets {
         for operation in changeset_operations(connection, anchor.changeset_id)?.operations {
-            let subject_detail =
-                why_evolution_subject_detail(connection, resolved, &operation.subject)?;
-            evolution_operations.push(WhyEvolutionChangeOperation {
-                commit_id: anchor.commit_id,
-                changeset_id: anchor.changeset_id,
-                changeset_operation_type: anchor.operation_type.clone(),
-                changeset_operation_schema_version: anchor.operation_schema_version,
-                operation_id: operation.operation_id,
-                ordinal: operation.ordinal,
-                subject: operation.subject,
-                subject_detail,
-                operation_payload_digest: operation.operation_payload_digest,
-                operation_payload_size_bytes: operation.operation_payload_size_bytes,
-            });
+            push_why_evolution_operation(
+                connection,
+                resolved,
+                &mut evolution_operations,
+                &mut seen_operation_ids,
+                WhyEvolutionOperationSource {
+                    commit_id: anchor.commit_id,
+                    changeset_id: anchor.changeset_id,
+                    operation_type: anchor.operation_type.as_str(),
+                    operation_schema_version: anchor.operation_schema_version,
+                },
+                operation,
+            )?;
+        }
+    }
+
+    let WhyQuerySubject::Entity(entity_id) = subject else {
+        return Ok(evolution_operations);
+    };
+    let history = query_history(
+        connection,
+        &HistoryQueryOptions::from_commit(resolved.target.commit_id),
+    )?;
+    for entry in history.entries {
+        if entry.workspace_id != resolved.target.workspace_id {
+            continue;
+        }
+        for operation in changeset_operations(connection, entry.changeset_id)?.operations {
+            if operation.subject != ChangeOperationSubject::Entity(entity_id) {
+                continue;
+            }
+            if !entity_operation_has_prior_version(connection, operation.operation_id)? {
+                continue;
+            }
+            push_why_evolution_operation(
+                connection,
+                resolved,
+                &mut evolution_operations,
+                &mut seen_operation_ids,
+                WhyEvolutionOperationSource {
+                    commit_id: entry.commit_id,
+                    changeset_id: entry.changeset_id,
+                    operation_type: entry.operation_type.as_str(),
+                    operation_schema_version: entry.operation_schema_version,
+                },
+                operation,
+            )?;
         }
     }
     Ok(evolution_operations)
+}
+
+fn entity_operation_has_prior_version(
+    connection: &StoreConnection,
+    operation_id: crate::identity::OperationId,
+) -> Result<bool> {
+    let before_entity_version_id = connection
+        .inner()
+        .query_row(
+            "SELECT before_entity_version_id
+             FROM entity_membership_change
+             WHERE operation_id = ?1",
+            params![&operation_id.raw_bytes()[..]],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()
+        .map_err(crate::error::storage_error)?;
+    Ok(before_entity_version_id.flatten().is_some())
+}
+
+struct WhyEvolutionOperationSource<'a> {
+    commit_id: CommitId,
+    changeset_id: ChangeSetId,
+    operation_type: &'a str,
+    operation_schema_version: i64,
+}
+
+fn push_why_evolution_operation(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    evolution_operations: &mut Vec<WhyEvolutionChangeOperation>,
+    seen_operation_ids: &mut HashSet<crate::identity::OperationId>,
+    source: WhyEvolutionOperationSource<'_>,
+    operation: ChangeOperationSnapshot,
+) -> Result<()> {
+    if !seen_operation_ids.insert(operation.operation_id) {
+        return Ok(());
+    }
+    let subject_detail = why_evolution_subject_detail(connection, resolved, &operation.subject)?;
+    evolution_operations.push(WhyEvolutionChangeOperation {
+        commit_id: source.commit_id,
+        changeset_id: source.changeset_id,
+        changeset_operation_type: source.operation_type.to_owned(),
+        changeset_operation_schema_version: source.operation_schema_version,
+        operation_id: operation.operation_id,
+        ordinal: operation.ordinal,
+        subject: operation.subject,
+        subject_detail,
+        operation_payload_digest: operation.operation_payload_digest,
+        operation_payload_size_bytes: operation.operation_payload_size_bytes,
+    });
+    Ok(())
 }
 
 fn why_evolution_subject_detail(
@@ -947,9 +1041,10 @@ fn why_endpoint_statement(
 
 fn why_deferred_relation_families(
     causal_anchor_changesets: &[WhyCausalAnchorChangeSet],
+    evolution_change_operations: &[WhyEvolutionChangeOperation],
 ) -> Vec<WhyDeferredRelationFamily> {
     let mut families = Vec::new();
-    if !causal_anchor_changesets.is_empty() {
+    if !causal_anchor_changesets.is_empty() || !evolution_change_operations.is_empty() {
         families.push(WhyDeferredRelationFamily::Evolution);
     }
     families

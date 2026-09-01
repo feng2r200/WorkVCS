@@ -4,16 +4,18 @@ use crate::canonical::{CanonicalValue, canonical_bytes, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history::{
     self, AcceptanceCriterionEffectiveStatus, AcceptanceCriterionSnapshot, BranchHead,
-    GoalSnapshot, KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationListOptions,
-    KnowledgeRelationListResult, KnowledgeStatus, PlanSnapshot, PrimaryContainmentEndpointKind,
-    PrimaryContainmentSnapshot, RecordKind, RecordKnowledgeRelationListOptions,
-    RecordKnowledgeRelationListResult, RecordListOptions, RecordListResult,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationSnapshot, RecordSnapshot,
-    RecordStatus, TaskSnapshot, VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget,
-    WhyRelationEdge, WhyRelationKind,
+    ChangeSetSnapshot, GoalSnapshot, HistoryQueryOptions, KnowledgeListOptions,
+    KnowledgeListResult, KnowledgeRelationListOptions, KnowledgeRelationListResult,
+    KnowledgeStatus, PlanSnapshot, PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
+    RecordKind, RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
+    RecordListOptions, RecordListResult, RecordRelationListOptions, RecordRelationListResult,
+    RecordRelationSnapshot, RecordSnapshot, RecordStatus, TaskSnapshot,
+    VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget, WhyRelationEdge,
+    WhyRelationKind,
 };
 use crate::identity::{
-    BranchId, CommitId, ContextPacketId, Digest, EntityId, RelationId, SessionId, WorkspaceId,
+    BranchId, ChangeSetId, CommitId, ContextPacketId, Digest, EntityId, RelationId, SessionId,
+    WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -23,6 +25,7 @@ use std::num::NonZeroUsize;
 const CONTEXT_PACKET_DIGEST_DOMAIN: &str = "context-packet-snapshot-v1";
 const CONTEXT_PACKET_FORMAT: &str = "workvcs-context-packet-v1";
 const CONTEXT_PACKET_FORMAT_VERSION: i64 = 1;
+const CONTEXT_TRANSITION_RATIONALE_HISTORY_LIMIT: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContextOverviewOptions {
@@ -171,6 +174,7 @@ pub enum ContextItemCategory {
     TaskReadiness,
     BlockedDependency,
     DirectCausalChain,
+    TransitionRationale,
     ActiveDecision,
     ActiveAssumption,
     FailedAttempt,
@@ -194,6 +198,7 @@ impl ContextItemCategory {
             Self::TaskReadiness => "task_readiness",
             Self::BlockedDependency => "blocked_dependency",
             Self::DirectCausalChain => "direct_causal_chain",
+            Self::TransitionRationale => "transition_rationale",
             Self::ActiveDecision => "active_decision",
             Self::ActiveAssumption => "active_assumption",
             Self::FailedAttempt => "failed_attempt",
@@ -247,6 +252,10 @@ pub enum ContextItemSubject {
     Relation {
         relation_id: RelationId,
     },
+    ChangeSet {
+        changeset_id: ChangeSetId,
+        commit_id: CommitId,
+    },
 }
 
 impl ContextItemSubject {
@@ -278,6 +287,10 @@ impl ContextItemSubject {
                 knowledge_entity_id,
             } => format!("knowledge:{knowledge_entity_id}"),
             Self::Relation { relation_id } => format!("relation:{relation_id}"),
+            Self::ChangeSet {
+                changeset_id,
+                commit_id,
+            } => format!("changeset:{changeset_id}@{commit_id}"),
         }
     }
 
@@ -467,6 +480,24 @@ pub struct ContextAcceptanceCriterionSnapshot {
     pub effective_status: AcceptanceCriterionEffectiveStatus,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContextTransitionRationaleSnapshot {
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub commit_kind: String,
+    pub committed_at_us: i64,
+    pub operation_type: String,
+    pub operation_schema_version: i64,
+    pub changeset_created_at_us: i64,
+    pub rationale_json: String,
+    pub rationale_digest: Digest,
+    pub rationale_size_bytes: i64,
+    pub origin_session_id: Option<SessionId>,
+    pub change_operation_count: i64,
+    pub causal_anchor_count: i64,
+    pub event_count: i64,
+}
+
 pub(crate) fn context_overview(
     connection: &StoreConnection,
     options: &ContextOverviewOptions,
@@ -613,7 +644,6 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
-
     Ok(ContextOverview {
         session,
         branch,
@@ -641,7 +671,17 @@ pub(crate) fn context_packet(
         connection,
         &ContextOverviewOptions::new(options.session_id()),
     )?;
-    let mut items = collect_context_items(&overview, options.profile(), options.scope())?;
+    let transition_rationales = transition_rationales_for_context(
+        connection,
+        overview.branch.workspace_id,
+        &overview.branch,
+    )?;
+    let mut items = collect_context_items(
+        &overview,
+        options.profile(),
+        options.scope(),
+        &transition_rationales,
+    )?;
     items.sort_by_key(|item| item.priority);
     let available_items = items.len();
     let limit = options
@@ -1235,10 +1275,67 @@ fn context_acceptance_criteria(
         .collect()
 }
 
+fn transition_rationales_for_context(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    branch: &BranchHead,
+) -> Result<Vec<ContextTransitionRationaleSnapshot>> {
+    let history = history::query_history(
+        connection,
+        &HistoryQueryOptions::from_commit(branch.head_commit_id)
+            .with_limit(CONTEXT_TRANSITION_RATIONALE_HISTORY_LIMIT)?,
+    )?;
+    let mut rationales = Vec::new();
+    for entry in history.entries {
+        if entry.workspace_id != workspace_id {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "context commit {} belongs to workspace {}, not {}",
+                entry.commit_id, entry.workspace_id, workspace_id
+            )));
+        }
+        let changeset = history::changeset(connection, entry.changeset_id)?;
+        if changeset.workspace_id != workspace_id {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "context ChangeSet {} belongs to workspace {}, not {}",
+                entry.changeset_id, changeset.workspace_id, workspace_id
+            )));
+        }
+        if !rationale_json_has_content(&changeset)? {
+            continue;
+        }
+        rationales.push(ContextTransitionRationaleSnapshot {
+            commit_id: entry.commit_id,
+            changeset_id: entry.changeset_id,
+            commit_kind: entry.commit_kind,
+            committed_at_us: entry.committed_at_us,
+            operation_type: changeset.operation_type,
+            operation_schema_version: changeset.operation_schema_version,
+            changeset_created_at_us: changeset.created_at_us,
+            rationale_json: changeset.rationale_json,
+            rationale_digest: changeset.rationale_digest,
+            rationale_size_bytes: changeset.rationale_size_bytes,
+            origin_session_id: changeset.origin_session_id,
+            change_operation_count: changeset.change_operation_count,
+            causal_anchor_count: changeset.causal_anchor_count,
+            event_count: changeset.event_count,
+        });
+    }
+    Ok(rationales)
+}
+
+fn rationale_json_has_content(changeset: &ChangeSetSnapshot) -> Result<bool> {
+    let rationale = parse_canonical_json(changeset.rationale_json.as_bytes())?;
+    Ok(!matches!(
+        rationale,
+        CanonicalValue::Object(entries) if entries.is_empty()
+    ))
+}
+
 fn collect_context_items(
     context: &ContextOverview,
     profile: ContextProfile,
     scope: Option<&CanonicalValue>,
+    transition_rationales: &[ContextTransitionRationaleSnapshot],
 ) -> Result<Vec<ContextItem>> {
     let mut items = Vec::new();
     let session = &context.session;
@@ -1525,6 +1622,19 @@ fn collect_context_items(
                 relation.source_record_entity_id,
                 relation.target_knowledge_entity_id
             ),
+        );
+    }
+    for rationale in transition_rationales {
+        push_context_item(
+            &mut items,
+            profile,
+            ContextPriority::P3,
+            ContextItemCategory::TransitionRationale,
+            ContextItemSubject::ChangeSet {
+                changeset_id: rationale.changeset_id,
+                commit_id: rationale.commit_id,
+            },
+            transition_rationale_context_summary(rationale),
         );
     }
     for record in &context.records.records {
@@ -2055,6 +2165,7 @@ fn profile_allows_category(profile: ContextProfile, category: ContextItemCategor
                 | ContextItemCategory::VerificationRequirement
                 | ContextItemCategory::TaskReadiness
                 | ContextItemCategory::BlockedDependency
+                | ContextItemCategory::TransitionRationale
                 | ContextItemCategory::ActiveDecision
                 | ContextItemCategory::ActiveAssumption
                 | ContextItemCategory::FailedAttempt
@@ -2120,6 +2231,30 @@ fn record_context_summary(
         record_relation_type_summary(record.record_entity_id, record_relations),
         record.state.statement
     ))
+}
+
+fn transition_rationale_context_summary(rationale: &ContextTransitionRationaleSnapshot) -> String {
+    let origin_session = rationale
+        .origin_session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    format!(
+        "transition rationale commit={} changeset={} commit_kind={} operation={} schema_version={} committed_at_us={} changeset_created_at_us={} rationale_digest={} rationale_size_bytes={} change_operations={} causal_anchors={} events={} origin_session={} rationale_json={}",
+        rationale.commit_id,
+        rationale.changeset_id,
+        rationale.commit_kind,
+        rationale.operation_type,
+        rationale.operation_schema_version,
+        rationale.committed_at_us,
+        rationale.changeset_created_at_us,
+        rationale.rationale_digest,
+        rationale.rationale_size_bytes,
+        rationale.change_operation_count,
+        rationale.causal_anchor_count,
+        rationale.event_count,
+        origin_session,
+        rationale.rationale_json
+    )
 }
 
 fn is_terminal_attempt_status(status: RecordStatus) -> bool {

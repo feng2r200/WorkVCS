@@ -4,10 +4,10 @@ use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateOptions, CanonicalValue,
     ContextItemCategory, ContextPacket, ContextPacketListOptions, ContextPacketOptions,
-    ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions, KnowledgeCreateOptions,
-    PlanCreateOptions, PrimaryContainmentCreateOptions, RecordCreateOptions,
-    RecordRelationCreateOptions, RecordTransitionOptions, SessionId, SessionStartOptions,
-    StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
+    ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions, GoalTransitionOptions,
+    KnowledgeCreateOptions, PlanCreateOptions, PrimaryContainmentCreateOptions,
+    RecordCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions, SessionId,
+    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
     VerificationRequirementCreateOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
     canonical_bytes,
 };
@@ -202,6 +202,10 @@ fn context_packet_profiles_filter_categories_deterministically() {
         &brief,
         ContextItemCategory::FailedAttempt
     ));
+    assert!(contains_category(
+        &brief,
+        ContextItemCategory::TransitionRationale
+    ));
     assert!(!contains_category(&brief, ContextItemCategory::Finding));
     assert!(!contains_category(
         &brief,
@@ -236,6 +240,131 @@ fn context_packet_profiles_filter_categories_deterministically() {
     ));
     assert!(normal.items.len() > brief.items.len());
     assert!(full.items.len() > normal.items.len());
+}
+
+#[test]
+fn context_packet_includes_recent_transition_rationales() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let goal = engine
+        .create_goal(
+            GoalCreateOptions::new(branch_id, head, "Close transition rationale context")
+                .expect("goal options"),
+        )
+        .expect("create goal");
+    head = goal.commit_id;
+    let achieved = engine
+        .transition_goal(
+            GoalTransitionOptions::achieve(
+                branch_id,
+                head,
+                goal.goal_entity_id,
+                goal.goal_entity_version_id,
+                "transition rationale helps continuation",
+            )
+            .expect("goal transition options"),
+        )
+        .expect("achieve goal");
+    head = achieved.commit_id;
+    let finding = engine
+        .create_record(
+            RecordCreateOptions::finding(branch_id, head, "Later empty-rationale write")
+                .expect("finding options"),
+        )
+        .expect("create finding");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let packet = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id)
+                .with_profile(ContextProfile::Brief)
+                .with_budget_items(3)
+                .expect("budgeted context options"),
+        )
+        .expect("context packet");
+
+    assert_eq!(packet.envelope.head_commit_id, finding.commit_id);
+    assert_eq!(packet.available_items, 3);
+    assert_eq!(packet.items.len(), 3);
+    let rationale_item = packet
+        .items
+        .iter()
+        .find(|item| item.category == ContextItemCategory::TransitionRationale)
+        .expect("transition rationale item");
+    assert_eq!(rationale_item.priority, ContextPriority::P3);
+    assert_eq!(
+        rationale_item.subject.as_ref_string(),
+        format!("changeset:{}@{}", achieved.changeset_id, achieved.commit_id)
+    );
+    assert!(
+        rationale_item
+            .summary
+            .contains("operation=entity.transition")
+    );
+    assert!(
+        rationale_item
+            .summary
+            .contains(&format!("changeset={}", achieved.changeset_id))
+    );
+    assert!(
+        rationale_item
+            .summary
+            .contains("rationale_json={\"reason\":\"transition rationale helps continuation\"}")
+    );
+    assert!(
+        !rationale_item
+            .summary
+            .contains("Later empty-rationale write")
+    );
+
+    let tight_packet = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id)
+                .with_profile(ContextProfile::Brief)
+                .with_budget_items(2)
+                .expect("tight budgeted context options"),
+        )
+        .expect("tight context packet");
+    assert_eq!(tight_packet.items.len(), 2);
+    assert!(
+        !tight_packet
+            .items
+            .iter()
+            .any(|item| item.category == ContextItemCategory::TransitionRationale)
+    );
+    assert!(
+        tight_packet
+            .omission_summary
+            .by_category
+            .iter()
+            .any(
+                |bucket| bucket.category == ContextItemCategory::TransitionRationale
+                    && bucket.omitted == 1
+            )
+    );
+
+    let saved = engine
+        .save_context_packet(
+            ContextPacketOptions::new(session.session_id)
+                .with_profile(ContextProfile::Brief)
+                .with_budget_items(3)
+                .expect("saved packet options"),
+        )
+        .expect("save context packet");
+    let packet_json = String::from_utf8(canonical_bytes(&saved.snapshot.packet_json).unwrap())
+        .expect("packet JSON is UTF-8");
+    assert_eq!(saved.snapshot.item_count, 3);
+    assert!(packet_json.contains("transition_rationale"));
+    assert!(packet_json.contains("transition rationale helps continuation"));
 }
 
 #[test]

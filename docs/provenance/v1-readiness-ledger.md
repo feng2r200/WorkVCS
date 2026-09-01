@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0434 / Phase 4LS
+Last refreshed: 2026-09-01 by ADR-0435 / Phase 4LT
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -38,7 +38,7 @@ not complete.
 | Resource registration, observation, applicability, and drift | Yes | Partial | Yes | Partial | Resource-backed stale-cache recovery from baseline observations is implemented; Resource path/glob normalization and adapter-backed re-observation remain Open. |
 | Session start/end/focus, Runnable projection, `claim next`, and `next` | Yes | Yes | Yes | Yes | Phase 4LG dogfoods a focused Handoff continuation that is initially blocked, then recovers and continues through the focused Task. |
 | Claim modes and guard behavior | Yes | Yes | Yes | Partial | Phase 4LG dogfoods the blocked Handoff takeover recovery path with guard failure, explicit stale marking, stale-gated forced takeover, and recovered guard success; Claim transfer remains smoke-proven but not yet real-project dogfooded. |
-| Context resolver | Yes | Partial | Yes | Partial | Phase 4LR adds explicit packet scope and deterministic path-sensitive Knowledge filtering for `context --scope-json` and `claim next --context-scope-json`. Phase 4LS adds durable `context-packet save/show/list` snapshots for exact resolved packets; remaining V1 gap is the transition-rationale projection decision. |
+| Context resolver | Yes | Partial | Yes | Partial | Phase 4LR adds explicit packet scope and deterministic path-sensitive Knowledge filtering for `context --scope-json` and `claim next --context-scope-json`. Phase 4LS adds durable `context-packet save/show/list` snapshots for exact resolved packets. Phase 4LT projects recent non-empty ChangeSet rationale into bounded packet items so continuation Agents can see why recent state moved. Continue with real dogfood friction and Resource resolver gaps before claiming release maturity. |
 | Record, Decision, Knowledge, and `why` neighborhoods | Yes | Yes | Partial | Partial | Phase 4LH exposes recognized focused Handoff focus as read-only `why` scope links while preserving stored relation semantics; next prove broader causal/evolution and real-project explanation paths. |
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover; repeat on another real project before claiming broad dogfood maturity. |
 | Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Repeat on another real project or larger Store before release maturity claims. |
@@ -52,16 +52,16 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. Complete the remaining V1 Context Resolver gap: the transition-rationale
-   projection decision.
-2. Reduce manual key-value capture in the operator CLI only where the dogfood
+1. Reduce manual key-value capture in the operator CLI only where the dogfood
    evidence shows repeated friction.
-3. Broaden larger Store and performance validation only when the next workload
+2. Broaden larger Store and performance validation only when the next workload
    is meaningfully larger or more varied than Phase 4LQ; do not design indexes
    without evidence from that run.
-4. Use WorkVCS on another real project before claiming broad dogfood maturity.
-5. Dogfood broader `why` paths, including causal/evolution explanation gaps,
+3. Use WorkVCS on another real project before claiming broad dogfood maturity.
+4. Dogfood broader `why` paths, including causal/evolution explanation gaps,
    before expanding explanation output again.
+5. Close Resource path/glob normalization or adapter-backed re-observation
+   only when the next continuation or verification workflow proves the need.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the
@@ -154,4 +154,7 @@ The following remain beyond V1 even if they would make dogfood easier:
   and `claim next --context-scope-json` packet output. Phase 4LS persists
   scoped, budgeted ContextPacket snapshots through real CLI
   `context-packet save/show/list` and verifies the saved packet digest,
-  canonical packet JSON, Session list entry, and Store doctor result.
+  canonical packet JSON, Session list entry, and Store doctor result. Phase
+  4LT projects recent non-empty ChangeSet rationale into brief/normal/full
+  ContextPacket output and dogfoods a Goal achievement rationale through
+  `context` and persisted `context-packet show` JSON.

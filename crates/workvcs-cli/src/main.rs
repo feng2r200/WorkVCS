@@ -38929,6 +38929,146 @@ mod tests {
     }
 
     #[test]
+    fn cli_context_packet_projects_transition_rationale() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Close transition rationale projection",
+        ])
+        .expect("parse goal"))
+        .expect("create goal");
+        let achieved = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "achieve",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal, "commit_id"),
+            "--goal",
+            &value(&goal, "goal_entity_id"),
+            "--goal-version",
+            &value(&goal, "goal_entity_version_id"),
+            "--rationale",
+            "transition rationale is needed for continuation",
+        ])
+        .expect("parse goal achieve"))
+        .expect("achieve goal");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "3",
+        ])
+        .expect("parse context packet"))
+        .expect("context packet");
+
+        assert_eq!(
+            value(&context, "head_commit_id"),
+            value(&achieved, "commit_id")
+        );
+        assert_eq!(value(&context, "context_profile"), "brief");
+        assert_eq!(value(&context, "context_available_items"), "3");
+        assert_eq!(value(&context, "context_items"), "3");
+        assert_eq!(
+            value(&context, "context_item.2.category"),
+            "transition_rationale"
+        );
+        assert_eq!(
+            value(&context, "context_item.2.subject"),
+            format!(
+                "changeset:{}@{}",
+                value(&achieved, "changeset_id"),
+                value(&achieved, "commit_id")
+            )
+        );
+        assert!(context.contains("operation=entity.transition"));
+        assert!(context.contains("transition rationale is needed for continuation"));
+
+        let saved = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "save",
+            store,
+            "--session",
+            &session_id,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "3",
+        ])
+        .expect("parse context packet save"))
+        .expect("save context packet");
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "show",
+            store,
+            "--packet",
+            &value(&saved, "context_packet_id"),
+        ])
+        .expect("parse context packet show"))
+        .expect("show context packet");
+        assert_eq!(value(&saved, "context_items"), "3");
+        assert!(value(&shown, "packet_json").contains("transition_rationale"));
+        assert!(
+            value(&shown, "packet_json")
+                .contains("transition rationale is needed for continuation")
+        );
+    }
+
+    #[test]
     fn cli_saves_shows_and_lists_context_packet_snapshots() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

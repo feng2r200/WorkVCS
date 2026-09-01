@@ -553,8 +553,8 @@ intended state transition.
   has not yet been repeated on another real project.
 - Resource path/glob normalization and adapter-backed re-observation remain
   open.
-- Context packet persistence is implemented; transition-rationale projection
-  remains open.
+- Context packet persistence and transition-rationale projection are
+  implemented; broader Context Resolver dogfood remains open.
 - `why` does not yet expose the Handoff focus link as a relation.
 - Automatic stale detection remains open.
 - Merge lifecycle is locally dogfood-proven, but not yet another-project or

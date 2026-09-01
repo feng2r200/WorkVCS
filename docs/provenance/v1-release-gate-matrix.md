@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-02 by ADR-0470 / Phase 4NC
+Last refreshed: 2026-09-02 by ADR-0471 / Phase 4ND
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4NC was main commit
-`a21fb59346d58a735d96a7d36a6c08e8546d9830` and the V1 readiness ledger last
-refreshed by ADR-0469 / Phase 4NB. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4ND was main commit
+`26b241dab7987ff2a440f4934589b563d7d38698` and the V1 readiness ledger last
+refreshed by ADR-0470 / Phase 4NC. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -22,10 +22,10 @@ project documents or current validation evidence.
   every blocking gate below to `Pass` using fresh evidence from the candidate
   commit.
 
-V0.1 dogfood should continue. This matrix closes the direct `why` epistemic
-statement lookup subgap; it does not close the remaining Store,
-context/explanation, operator recovery, larger workload, or release-operation
-gaps named by the gates.
+V0.1 dogfood should continue. This matrix closes the maintained Store
+portability subgap; it does not close the remaining context/explanation,
+operator recovery, larger workload/performance, or release-operation gaps named
+by the gates.
 
 ## Gate States
 
@@ -41,7 +41,7 @@ gaps named by the gates.
 | Gate | Required for V1 release maturity | Current evidence | Status | Blocks V1 release | Required next evidence |
 | --- | --- | --- | --- | --- | --- |
 | Product authority and V2 boundary | Confirmed product/domain/architecture/schema/ADR authorities define the release scope, and V2 exclusions remain explicit. | `docs/README.md`, product and architecture docs, schema v0.1, accepted ADRs, and the V2 exclusions in `v1-readiness-ledger.md`. | Pass | No | Keep future release claims bound to current authority and continue excluding transcript parsing, LLM semantics, orchestration, cloud sync, federation, and destructive compaction. |
-| Core Store, lineage, integrity, and local portability | Store bootstrap/open/manifest/lineage/doctor and local Bundle/Checkpoint portability work across ordinary and maintained Stores. | Smoke coverage plus Phase 4LO, Phase 4LP, and Phase 4LQ provenance, including bounded copied-target portability and larger Store portability. | Partial | Yes | Prove broader long-lived Store maintenance and repeated portability/doctor behavior beyond the bounded local profile runs. |
+| Core Store, lineage, integrity, and local portability | Store bootstrap/open/manifest/lineage/doctor and local Bundle/Checkpoint portability work across ordinary and maintained Stores. | Smoke coverage plus Phase 4LO, Phase 4LP, Phase 4LQ, and Phase 4ND provenance, including bounded copied-target portability, larger Store portability, and repeated maintained Store reopen/checkpoint/apply/integrity/doctor cycles. | Pass | No | Keep as regression foundation; broaden only if a future ordinary or maintained Store workflow exposes a concrete Store, lineage, integrity, or portability gap. |
 | Workspace, Branch, history, diff, show-at, and restore | Branch and state navigation workflows are proven in real implementation work, not only narrow smoke or post-Bundle inspection. | Current ledger marks this area implemented with partial smoke and dogfood evidence. Phase 4LO dogfoods `restore` and `show-at` against a target Store. Phase 4MQ dogfoods Branch fork, bidirectional Branch diff, Branch history, Branch `show-at`, and two-Branch integrity in a real repository delivery Store. | Pass | No | Keep as regression foundation; broaden only if a future real Branch/diff workflow exposes a concrete gap. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Work graph planning and dependency semantics are repeatedly used in real project workflows through closeout. | Phase 4LV dogfoods Goal/Plan/Task for a bounded external-project review. Phase 4NB repeats the workflow against a temporary clone of pre-existing `agent_soul` with one Goal, one Plan, three contained Tasks, two `depends_on` relations, two `ordered_before` relations, blocked dependency context, dependency readiness recovery, and Plan/Goal closeout. | Pass | No | Keep as regression foundation; broaden only if a future real workflow exposes a concrete ordering or containment gap. |
 | AC, VR, Verification, Evidence, and verification wrapper | Acceptance and verification records can close obligations through the CLI and remain understandable in recovery and handoff scenarios. | Ledger marks AC/VR/Verification/Evidence and the top-level `verify` wrapper as dogfood-proven for current covered scenarios. Phase 4NB proves AC/VR closure in a recovery Handoff scenario: stale Resource-backed applicability blocks Task closeout, explicit refresh projects `resource_drift`, and recovery `verify` records new evidence before Task/Plan/Goal closeout. | Pass | No | Keep as regression foundation; broaden only if a future recovery or handoff loop exposes a concrete evidence-closure gap. |
@@ -65,14 +65,40 @@ Priority candidates:
 1. Expand context/Resource resolver or `why` behavior only when a dogfood
    continuation exposes a concrete causal, evolution, or broader explanation
    gap.
-2. Prove broader long-lived Store maintenance and repeated portability/doctor
-   behavior only through a real maintenance or portability workflow.
-3. Prove broader operator recovery maturity or reduce command friction only
+2. Prove broader operator recovery maturity or reduce command friction only
    where repeated dogfood blockage appears.
-4. Run a meaningfully larger or more varied workload only when justified; do
+3. Run a meaningfully larger or more varied workload only when justified; do
    not design indexes from bounded runs alone.
-5. Refresh this matrix after each blocking gate changes status and before any
+4. Refresh this matrix after each blocking gate changes status and before any
    release-ready or release-candidate claim.
+
+## Phase 4ND Update
+
+Phase 4ND refreshes this matrix after maintained Store portability dogfood. The
+run initialized one source Store, copied one target Store after a seed
+baseline, then kept the same source and target Stores through three maintenance
+cycles. Each cycle reopened the source through public CLI commands, added V1
+semantic state, created a Checkpoint, exported and validated a Bundle
+directory, preflighted and applied the Bundle to the same target Store, proved
+target Branch head and WorkState digest convergence, validated the imported
+Checkpoint and import metadata, checked same-Store copied-target lineage-list
+output, and ran source and target integrity plus source and target doctor with
+require-valid mode.
+
+The same run proved target-local post-apply maintenance by forking a
+target-local Branch inside the same target Store, adding local work, restoring
+that Branch to the imported Bundle head, and confirming the target main Branch
+remained at the imported head so later Bundle cycles could continue. The final
+source and target head commit both ended at
+`01a05e8a-f88a-75d0-bb07-863de3b26c08` with WorkState digest
+`c05438072a235a9b6008f07d04ef879666a5fe9cc0126164fe91730358844484`.
+
+This closes the Core Store, lineage, integrity, and local portability gate for
+the bounded V1-local release scope, backed by
+`docs/provenance/phase-4nd-maintained-store-portability-dogfood.md`.
+
+The overall release decision remains false because other blocking gates remain
+`Partial` or `Blocked`.
 
 ## V2 Boundary
 

@@ -68,6 +68,7 @@ index is:
 - [Phase 4NA Resource Re-Observation Scheduling Policy Dogfood Evidence](provenance/phase-4na-resource-reobservation-scheduling-policy-dogfood.md)
 - [Phase 4NB Goal/Plan/Task and AC/VR Recovery Dogfood Evidence](provenance/phase-4nb-goal-plan-task-ac-vr-recovery-dogfood.md)
 - [Phase 4NC Why Epistemic Explanation Evidence](provenance/phase-4nc-why-epistemic-explanation.md)
+- [Phase 4ND Maintained Store Portability Dogfood Evidence](provenance/phase-4nd-maintained-store-portability-dogfood.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -211,6 +212,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0468: Phase 4NA Resource Re-Observation Scheduling Policy Dogfood](decisions/adr/0468-phase-4na-resource-reobservation-scheduling-policy-dogfood.md)
 - [ADR-0469: Phase 4NB Goal/Plan/Task and AC/VR Recovery Dogfood](decisions/adr/0469-phase-4nb-goal-plan-task-ac-vr-recovery-dogfood.md)
 - [ADR-0470: Phase 4NC Why Epistemic Explanation](decisions/adr/0470-phase-4nc-why-epistemic-explanation.md)
+- [ADR-0471: Phase 4ND Maintained Store Portability Dogfood](decisions/adr/0471-phase-4nd-maintained-store-portability-dogfood.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

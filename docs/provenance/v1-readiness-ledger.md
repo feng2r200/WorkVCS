@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-02 by ADR-0470 / Phase 4NC
+Last refreshed: 2026-09-02 by ADR-0471 / Phase 4ND
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -34,7 +34,7 @@ not complete.
 | V1 area | Design confirmed | Implemented | Smoke proven | Dogfood proven | Open / next action |
 | --- | --- | --- | --- | --- | --- |
 | Canonical IDs, digests, and WorkState hashing | Yes | Yes | Partial | No | Keep as regression foundation; no further work unless another V1 slice exposes a concrete compatibility gap. |
-| Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | Partial | Phase 4LQ proves source/target integrity and target doctor in a bounded larger Store portability run. Phase 4LS adds an explicit narrow migration for pre-4LS Stores missing only context packet snapshot schema objects; broader long-lived Store maintenance remains to be proven. |
+| Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | Yes | Phase 4LQ proves source/target integrity and target doctor in a bounded larger Store portability run. Phase 4LS adds an explicit narrow migration for pre-4LS Stores missing only context packet snapshot schema objects. Phase 4ND proves one maintained source Store and the same copied target Store across three reopen, Checkpoint, Bundle export/apply, lineage-list, integrity, and doctor cycles. Keep as regression foundation; broader scale/performance evidence is tracked separately. |
 | Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | Yes | Phase 4LO dogfoods post-Bundle `restore` and `show-at` against a target Store. Phase 4MQ dogfoods Branch fork, bidirectional Branch diff, Branch history, Branch `show-at`, and two-Branch integrity in a real repository delivery Store. Keep as regression foundation; broaden only if a future real Branch/diff workflow exposes a concrete gap. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Yes | Yes | Partial | Yes | Phase 4LV uses WorkVCS Goal, Plan, and Task entities to manage a bounded external-project review through closeout. Phase 4NB repeats the workflow against a temporary clone of pre-existing `agent_soul` with one Goal, one Plan, three contained Tasks, two `depends_on` relations, two `ordered_before` relations, blocked dependency context, dependency readiness recovery, and Plan/Goal closeout. Keep as regression foundation; broaden only if a future real workflow exposes a concrete ordering or containment gap. |
 | Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Yes | Phase 4LE dogfoods AC/VR/Verification for an implementation closeout. Phase 4MS repeats VR-backed evidence closure after focused Handoff consumption in a real write-mode repository delivery slice. Phase 4NB proves AC/VR closure in a recovery Handoff scenario: stale Resource-backed applicability blocks Task closeout, explicit refresh projects `resource_drift`, and recovery `verify` records new evidence before Task/Plan/Goal closeout. Keep as regression foundation; broaden only if a future recovery or handoff loop exposes a concrete evidence-closure gap. |
@@ -61,12 +61,10 @@ current user request supplies a narrower priority.
    speculatively.
 2. Reduce additional manual key-value capture in the operator CLI only where
    the next dogfood loop shows repeated workflow blockage.
-3. Prove broader long-lived Store maintenance and repeated portability/doctor
-   behavior beyond the bounded local profile runs.
-4. Broaden larger Store and performance validation only when the next workload
+3. Broaden larger Store and performance validation only when the next workload
    is meaningfully larger or more varied than Phase 4LQ; do not design indexes
    without evidence from that run.
-5. Refresh the V1 release gate matrix after any blocking gate changes status
+4. Refresh the V1 release gate matrix after any blocking gate changes status
    and before any release-ready or release-candidate claim.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
@@ -363,6 +361,15 @@ The following remain beyond V1 even if they would make dogfood easier:
   `validates`, and `invalidates` relations, while keeping full evolution
   traversal, broader causal traversal, and broader context/Resource resolver
   maturity Open.
+  Phase 4ND closes the maintained Store portability gap for the bounded
+  V1-local same-Store copied-target profile. The opt-in dogfood initializes one
+  source Store, copies one target Store after a seed baseline, then runs three
+  maintenance cycles with source reopen, semantic state creation, Checkpoint,
+  Bundle export/validate/preflight/apply, target Branch head and WorkState
+  digest convergence, imported Checkpoint validation, same-Store lineage-list
+  checks with zero cross-Store lineage records, source and target integrity,
+  source and target doctor, and target-local restore proof on a forked target
+  Branch without corrupting later main-Branch applies.
   Phase 4MM repeats merge lifecycle dogfood on a larger and more varied local
   Store: 12 shared Task conflicts, 8 source-only Tasks, 6 target-only Tasks, 4
   source-side scheduling Relations, all 24 merge items explicitly resolved,

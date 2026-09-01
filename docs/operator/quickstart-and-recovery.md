@@ -468,6 +468,33 @@ Use `WORKVCS_LARGER_STORE_TASKS`,
 `WORKVCS_LARGER_STORE_RELATION_PAIRS` to scale the run. Keep it opt-in until a
 larger default smoke matrix is explicitly justified.
 
+For repeated maintained-Store portability beyond the one-shot larger Store
+run, use the opt-in maintained Store dogfood:
+
+```bash
+WORKVCS_MAINTAINED_STORE_OUTPUT_ROOT=.work-governance/runtime/logs/phase-4nd \
+  ./scripts/maintained-store-portability-v0.1.sh
+```
+
+The default run initializes one source Store, copies one same-Store target
+after a seed baseline, then performs three maintenance cycles against the same
+source and target Stores. Each cycle reopens the source, adds current V1
+semantic state, creates a Checkpoint, exports and validates a Bundle directory,
+preflights and applies the Bundle to the target, checks target Branch
+head/state-digest convergence, runs source and target integrity plus doctor,
+and confirms same-Store copied-target lineage lists zero cross-Store lineage
+records.
+
+The script also proves target-local post-apply maintenance by forking a
+target-local Branch, adding local work, restoring that Branch to the imported
+Bundle head, and checking that the target main Branch remains available for
+later fast-forward applies. Use `WORKVCS_MAINTAINED_STORE_CYCLES`,
+`WORKVCS_MAINTAINED_STORE_SEED_TASKS`,
+`WORKVCS_MAINTAINED_STORE_TASKS_PER_CYCLE`,
+`WORKVCS_MAINTAINED_STORE_VERIFICATIONS_PER_CYCLE`, and
+`WORKVCS_MAINTAINED_STORE_RELATION_PAIRS_PER_CYCLE` to scale the run. Keep it
+opt-in until default smoke expansion is explicitly justified.
+
 ## Common Recovery Actions
 
 When a WorkVCS business command fails, read stderr as line-oriented key-value
@@ -854,9 +881,10 @@ message=error: unexpected argument ...
 
 ## Still Open For V1
 
-- The documented loop has been repeated once against another real local
-  project in read-only mode. It is not yet broad write-mode or multi-project
-  maturity evidence.
+- The documented loop has read-only another-project and bounded write-mode
+  repository dogfood evidence. Direct mutation of original external projects,
+  remote operation, and broad multi-project maturity remain outside V1 unless
+  separately authorized.
 - Explicit path-scope lexical normalization and opt-in local-file observation
   from `verify --scope-path` and `verify --scope-path-prefix` are implemented
   for the common CLI shorthands.
@@ -877,18 +905,27 @@ message=error: unexpected argument ...
   daemons, watchers, automatic polling, and implicit refresh remain disabled.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
-- `why` exposes focused Handoff scope links and anchored evolution as a deferred
-  family, but full evolution traversal and epistemic explanation remain open.
-- Shared-Claim collaboration has read-only real-project dogfood evidence.
-  Broader write-mode or read/write multi-operator maturity remains open.
+- `why` exposes focused Handoff scope links, anchored evolution as a deferred
+  family, causal anchor ChangeSet projections, and direct epistemic statement
+  explanations. Full evolution traversal, broader causal traversal, and broader
+  context/Resource resolver maturity remain open.
+- Shared-Claim collaboration has read-only real-project and bounded
+  write-mode/read-write dogfood evidence. Automatic ownership arbitration,
+  distributed collaboration, and remote multi-operator coordination remain
+  outside V1.
 - Automatic stale detection remains open.
-- Merge lifecycle is locally dogfood-proven, but not yet another-project or
-  larger-Store proven.
+- Merge lifecycle is dogfood-proven for the bounded V1-local scope, including
+  larger local Stores and pre-existing external-project write-mode merge loops.
+  Semantic/LLM, remote, distributed, cross-Store, Agent-orchestrated, and direct
+  original-repository mutation merge flows remain outside V1.
 - Bundle portability is locally dogfood-proven for copied-target same-Store
-  operation. The V1-local directory profile is defined, but packaged archives,
-  exchange APIs, and external Store canonical DAG activation remain open.
+  operation. The V1-local directory profile is defined, bounded larger Store
+  portability is proven, and maintained Store repeated reopen/apply/doctor
+  portability is proven. Packaged archives, exchange APIs, and external Store
+  canonical DAG activation remain open.
 - Larger Store validation has one bounded local run; broader and more varied
   performance evidence remains open.
 - WorkVCS business errors and top-level clap syntax errors now emit stable
-  key-value fields, and current per-code recovery guidance is documented in the
-  operator error recovery guide. JSON error output remains open.
+  key-value and JSON fields, and current per-code recovery guidance is
+  documented in the operator error recovery guide. Broader recovery maturity
+  remains open.

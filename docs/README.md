@@ -55,6 +55,7 @@ index is:
 - [Phase 4MM Merge Maturity Dogfood Evidence](provenance/phase-4mm-merge-maturity-dogfood.md)
 - [Phase 4MN Batch Basis Refresh Evidence](provenance/phase-4mn-batch-basis-refresh.md)
 - [Phase 4MO JSON Error Output Evidence](provenance/phase-4mo-json-error-output.md)
+- [Phase 4MQ Branch Diff Dogfood Evidence](provenance/phase-4mq-branch-diff-dogfood.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -185,6 +186,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0455: Phase 4MN Batch Basis Refresh](decisions/adr/0455-phase-4mn-batch-basis-refresh.md)
 - [ADR-0456: Phase 4MO JSON Error Output](decisions/adr/0456-phase-4mo-json-error-output.md)
 - [ADR-0457: Phase 4MP V1 Release Gate Matrix](decisions/adr/0457-phase-4mp-v1-release-gate-matrix.md)
+- [ADR-0458: Phase 4MQ Branch Diff Dogfood](decisions/adr/0458-phase-4mq-branch-diff-dogfood.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

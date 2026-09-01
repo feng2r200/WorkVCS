@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0457 / Phase 4MP
+Last refreshed: 2026-09-01 by ADR-0458 / Phase 4MQ
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -35,7 +35,7 @@ not complete.
 | --- | --- | --- | --- | --- | --- |
 | Canonical IDs, digests, and WorkState hashing | Yes | Yes | Partial | No | Keep as regression foundation; no further work unless another V1 slice exposes a concrete compatibility gap. |
 | Store bootstrap, open, manifest, lineage, and doctor | Yes | Yes | Yes | Partial | Phase 4LQ proves source/target integrity and target doctor in a bounded larger Store portability run. Phase 4LS adds an explicit narrow migration for pre-4LS Stores missing only context packet snapshot schema objects; broader long-lived Store maintenance remains to be proven. |
-| Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | Partial | Phase 4LO dogfoods post-Bundle `restore` and `show-at` against a target Store; still prove Branch/diff workflows in a real implementation slice. |
+| Workspace, Branch, history, show-at, diff, and restore | Yes | Yes | Partial | Yes | Phase 4LO dogfoods post-Bundle `restore` and `show-at` against a target Store. Phase 4MQ dogfoods Branch fork, bidirectional Branch diff, Branch history, Branch `show-at`, and two-Branch integrity in a real repository delivery Store. Keep as regression foundation; broaden only if a future real Branch/diff workflow exposes a concrete gap. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Yes | Yes | Partial | Partial | Phase 4LV uses WorkVCS Goal, Plan, and Task entities to manage a bounded external-project review through closeout. Ordering, dependencies, and containment still need broader real-project repetition before release maturity claims. |
 | Acceptance Criteria, Verification Requirements, Verification, and Evidence closure | Yes | Yes | Yes | Yes | Phase 4LE dogfoods AC/VR/Verification for an implementation closeout; repeat this in recovery and handoff-consumption scenarios. |
 | Verification command wrapper | Yes | Yes | Yes | Yes | Phase 4LV proves the top-level `verify` wrapper in another-project dogfood with evidence content, Resource observation, Resource basis, and applicability cache output. Phase 4LX adds and dogfoods `verify --scope-path` / `--scope-path-prefix`, defaulting those shorthands to `scope_kind=path` and `scope_schema_version=1` while preserving explicit JSON input for advanced callers. Phase 4LY adds explicit `--resource-content-from-scope-path` so the wrapper can observe a real local file from `--scope-path`. Phase 4MD adds explicit `--resource-content-from-scope-path-prefix` so the wrapper can observe a deterministic local-file path-prefix manifest from `--scope-path-prefix`. Phase 4ME adds explicit `--scope-glob` / `--resource-content-from-scope-glob` for deterministic local-file glob manifests. Phase 4MF adds explicit `--scope-git-worktree` / `--resource-content-from-scope-git-worktree` for deterministic Git worktree manifests. Keep multi-target, shell execution, and LLM extraction outside V1 unless re-authorized. |
@@ -277,6 +277,14 @@ The following remain beyond V1 even if they would make dogfood easier:
   release-maturity gate view that records `V1_RELEASE_READY=false`,
   `V0_1_DOGFOOD_COMPLETE=false`, and `RELEASE_CANDIDATE_ALLOWED=false` until
   blocking gates receive fresh pass evidence from a candidate commit.
+  Phase 4MQ closes the Branch/diff dogfood gap named by that matrix with a real
+  repository delivery Store: it forks a base Branch into an implementation
+  Branch, records implementation-branch work, proves one added entity in the
+  forward Branch diff, one removed entity in the reverse Branch diff, expected
+  first-parent histories, expected `show-at` WorkState digests, and two-Branch
+  required-valid integrity. The run records `final_dogfood=pass` while keeping
+  `V1_RELEASE_READY=false`, `V0_1_DOGFOOD_COMPLETE=false`, and
+  `RELEASE_CANDIDATE_ALLOWED=false`.
   Phase 4ML closes a concrete `why` dogfood gap: Decision supersede ChangeSets
   already had causal anchors visible through `changeset anchors`, but `why`
   could not report which first-parent-reachable commit/ChangeSet the queried

@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-01 by ADR-0457 / Phase 4MP
+Last refreshed: 2026-09-01 by ADR-0458 / Phase 4MQ
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4MP was main commit
-`710262e59ea44b8fcbe5664f8e4682083c563b0f` and the V1 readiness ledger last
-refreshed by ADR-0456 / Phase 4MO. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4MQ was main commit
+`24e184d6ba4393b9e4494b6ddca1859432c4ff2c` and the V1 readiness ledger last
+refreshed by ADR-0457 / Phase 4MP. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -41,7 +41,7 @@ dogfood, or release-operation gaps named by the gates.
 | --- | --- | --- | --- | --- | --- |
 | Product authority and V2 boundary | Confirmed product/domain/architecture/schema/ADR authorities define the release scope, and V2 exclusions remain explicit. | `docs/README.md`, product and architecture docs, schema v0.1, accepted ADRs, and the V2 exclusions in `v1-readiness-ledger.md`. | Pass | No | Keep future release claims bound to current authority and continue excluding transcript parsing, LLM semantics, orchestration, cloud sync, federation, and destructive compaction. |
 | Core Store, lineage, integrity, and local portability | Store bootstrap/open/manifest/lineage/doctor and local Bundle/Checkpoint portability work across ordinary and maintained Stores. | Smoke coverage plus Phase 4LO, Phase 4LP, and Phase 4LQ provenance, including bounded copied-target portability and larger Store portability. | Partial | Yes | Prove broader long-lived Store maintenance and repeated portability/doctor behavior beyond the bounded local profile runs. |
-| Workspace, Branch, history, diff, show-at, and restore | Branch and state navigation workflows are proven in real implementation work, not only narrow smoke or post-Bundle inspection. | Current ledger marks this area implemented with partial smoke and dogfood evidence; Phase 4LO dogfoods `restore` and `show-at` against a target Store. | Partial | Yes | Dogfood Branch and diff workflows in a real implementation slice with current evidence and no display-only overclaim. |
+| Workspace, Branch, history, diff, show-at, and restore | Branch and state navigation workflows are proven in real implementation work, not only narrow smoke or post-Bundle inspection. | Current ledger marks this area implemented with partial smoke and dogfood evidence. Phase 4LO dogfoods `restore` and `show-at` against a target Store. Phase 4MQ dogfoods Branch fork, bidirectional Branch diff, Branch history, Branch `show-at`, and two-Branch integrity in a real repository delivery Store. | Pass | No | Keep as regression foundation; broaden only if a future real Branch/diff workflow exposes a concrete gap. |
 | Goal, Plan, Task, ordering, dependencies, and containment | Work graph planning and dependency semantics are repeatedly used in real project workflows through closeout. | Phase 4LV dogfoods Goal/Plan/Task for a bounded external-project review; ordering, dependencies, and containment remain broader repetition gaps. | Partial | Yes | Repeat planning, dependency, ordering, and containment usage in varied real-project continuation or implementation loops. |
 | AC, VR, Verification, Evidence, and verification wrapper | Acceptance and verification records can close obligations through the CLI and remain understandable in recovery and handoff scenarios. | Ledger marks AC/VR/Verification/Evidence and the top-level `verify` wrapper as dogfood-proven for current covered scenarios. | Partial | Yes | Repeat obligation closure in recovery and handoff-consumption scenarios, including Resource-backed stale/recovery behavior where relevant. |
 | Resource registration, observation, applicability, and drift | Resource-backed verification covers explicit basis refresh, unavailable/error states, drift projection, adapter boundaries, and re-observation policy. | Phases 4LV, 4LX through 4MG, and 4MN cover exact path, path-prefix, glob, Git worktree, persisted-basis, and batch basis refresh scenarios. | Partial | Yes | Decide and prove broader symlink/case/rename policy, broader Git adapter semantics, and background re-observation scheduling only when a real workflow demands them. |
@@ -61,14 +61,13 @@ over speculative broadening.
 
 Priority candidates:
 
-1. Dogfood Branch and diff workflows in a real implementation slice.
-2. Broaden shared-Claim collaboration into realistic write-mode or read/write
+1. Broaden shared-Claim collaboration into realistic write-mode or read/write
    multi-operator flows.
-3. Consume Handoffs in varied project and write-mode flows.
-4. Repeat merge in a real write-mode external-project workflow.
-5. Close Resource adapter policy or background re-observation gaps only when
+2. Consume Handoffs in varied project and write-mode flows.
+3. Repeat merge in a real write-mode external-project workflow.
+4. Close Resource adapter policy or background re-observation gaps only when
    the next continuation or verification workflow proves the need.
-6. Refresh this matrix after each blocking gate changes status and before any
+5. Refresh this matrix after each blocking gate changes status and before any
    release-ready or release-candidate claim.
 
 ## V2 Boundary
@@ -97,3 +96,13 @@ that the matrix does not overclaim release readiness, preserves the broader
 recovery-maturity blocker after removing the obsolete open action to create the
 matrix, and keeps release/release-candidate operations behind explicit
 authorization.
+
+## Phase 4MQ Update
+
+Phase 4MQ refreshes this matrix after real Branch/diff dogfood. The
+Workspace, Branch, history, diff, show-at, and restore gate is now `Pass` for
+the bounded V1-local scope, backed by
+`docs/provenance/phase-4mq-branch-diff-dogfood.md`.
+
+The overall release decision remains false because other blocking gates remain
+`Partial` or `Blocked`.

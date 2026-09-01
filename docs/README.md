@@ -64,6 +64,7 @@ index is:
 - [Phase 4MW Git Symlink Resource Policy Dogfood Evidence](provenance/phase-4mw-git-symlink-resource-policy-dogfood.md)
 - [Phase 4MX Git Submodule Resource Policy Dogfood Evidence](provenance/phase-4mx-git-submodule-resource-policy-dogfood.md)
 - [Phase 4MY Git Sparse Checkout Resource Policy Dogfood Evidence](provenance/phase-4my-git-sparse-checkout-resource-policy-dogfood.md)
+- [Phase 4MZ Resource Case-Folding Policy Dogfood Evidence](provenance/phase-4mz-resource-case-folding-policy-dogfood.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -203,6 +204,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0464: Phase 4MW Git Symlink Resource Policy Dogfood](decisions/adr/0464-phase-4mw-git-symlink-resource-policy-dogfood.md)
 - [ADR-0465: Phase 4MX Git Submodule Resource Policy Dogfood](decisions/adr/0465-phase-4mx-git-submodule-resource-policy-dogfood.md)
 - [ADR-0466: Phase 4MY Git Sparse Checkout Resource Policy Dogfood](decisions/adr/0466-phase-4my-git-sparse-checkout-resource-policy-dogfood.md)
+- [ADR-0467: Phase 4MZ Resource Case-Folding Policy Dogfood](decisions/adr/0467-phase-4mz-resource-case-folding-policy-dogfood.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

@@ -144,9 +144,10 @@ exact path, path-prefix, and glob Resource observations, plus a narrow Git
 worktree contract for the currently checked-out repository state. ADR-0463,
 ADR-0464, ADR-0465, and ADR-0466 make the bounded Git rename, symlink,
 submodule, and sparse-checkout policies explicit for that V1-local adapter.
-Broader case-folding, deletion policy details not already fixed by the current
-adapter contracts, and adapter rules remain implementation specifications, not
-confirmed choices here.
+ADR-0467 makes bounded path case handling explicit for current local-file and
+Git worktree Resource adapters. Broader deletion policy details not already
+fixed by the current adapter contracts and adapter rules remain implementation
+specifications, not confirmed choices here.
 
 For Git-backed Resources, an observation used for Verification must represent
 the actually verified state, including relevant index or working-tree changes;
@@ -198,11 +199,14 @@ handling explicit as Git index/diff material plus unsupported non-regular
 untracked entries, and ADR-0465 makes Git submodule handling explicit as parent
 Git gitlink/status/diff material with recursion disabled. ADR-0466 makes Git
 sparse-checkout handling explicit as parent Git index/status/diff material with
-expansion disabled. Final CLI names outside these explicit flags, broader
-adapter implementations, case-folding policy, deletion policy details not
-already fixed by the current adapter contracts, non-Verification observation
-capture policy, background refresh scheduling, performance indexes, and a
-possible future AC waiver operation remain unfixed.
+expansion disabled. ADR-0467 makes path case handling explicit as no WorkVCS
+case folding, filesystem-native local-file exact path and path-prefix
+observation, case-sensitive local-file glob matching, and parent-Git path
+reporting for Git worktree observation. Final CLI names outside these explicit
+flags, broader adapter implementations, deletion policy details not already
+fixed by the current adapter contracts, non-Verification observation capture
+policy, background refresh scheduling, performance indexes, and a possible
+future AC waiver operation remain unfixed.
 The executable schema, Rust implementation language, `rusqlite`, and the
 `workvcs-jcs-v1` canonical JSON profile are now closed by accepted
 implementation ADRs.

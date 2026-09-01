@@ -15031,6 +15031,15 @@ fn local_file_scope_glob_observation_summary(
             CanonicalValue::String("verification cache-refresh".to_owned()),
         ),
         (
+            "path_case_folding".to_owned(),
+            CanonicalValue::String("disabled".to_owned()),
+        ),
+        (
+            "path_case_policy".to_owned(),
+            CanonicalValue::String("case_sensitive_glob_pattern".to_owned()),
+        ),
+        ("glob_case_sensitive".to_owned(), CanonicalValue::Bool(true)),
+        (
             "glob".to_owned(),
             CanonicalValue::String(scope.pattern.clone()),
         ),
@@ -15389,6 +15398,14 @@ fn git_worktree_observation_summary(
             CanonicalValue::String("unsupported_resource_error".to_owned()),
         ),
         (
+            "path_case_folding".to_owned(),
+            CanonicalValue::String("disabled".to_owned()),
+        ),
+        (
+            "path_case_policy".to_owned(),
+            CanonicalValue::String("parent_git_path_reporting".to_owned()),
+        ),
+        (
             "submodule_policy".to_owned(),
             CanonicalValue::String("parent_gitlink_status_diff".to_owned()),
         ),
@@ -15465,6 +15482,14 @@ fn local_file_scope_path_prefix_observation_summary(
             CanonicalValue::String("verification cache-refresh".to_owned()),
         ),
         (
+            "path_case_folding".to_owned(),
+            CanonicalValue::String("disabled".to_owned()),
+        ),
+        (
+            "path_case_policy".to_owned(),
+            CanonicalValue::String("filesystem_native_entry_names".to_owned()),
+        ),
+        (
             "path_prefix".to_owned(),
             CanonicalValue::String(path_prefix.display().to_string()),
         ),
@@ -15488,6 +15513,14 @@ fn local_file_scope_path_observation_summary(path: &Path) -> Result<CanonicalVal
         (
             "source".to_owned(),
             CanonicalValue::String("verification cache-refresh".to_owned()),
+        ),
+        (
+            "path_case_folding".to_owned(),
+            CanonicalValue::String("disabled".to_owned()),
+        ),
+        (
+            "path_case_policy".to_owned(),
+            CanonicalValue::String("filesystem_native_path_resolution".to_owned()),
         ),
         (
             "path".to_owned(),
@@ -23529,6 +23562,77 @@ mod tests {
                 CanonicalValue::String("src/**/*.rs".to_owned()),
             )])
             .expect("glob scope object")
+        );
+    }
+
+    #[test]
+    fn local_file_resource_summaries_report_no_case_folding_policy() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let project = tempdir.path().join("Project");
+        let data = project.join("Data");
+        fs::create_dir_all(&data).expect("create data dir");
+        let mixed_case_file = data.join("CaseName.TXT");
+        fs::write(&mixed_case_file, b"mixed case\n").expect("write mixed case file");
+
+        assert_eq!(
+            normalize_cli_scope_path(PathBuf::from("Src/../Src/MixedCase.TXT"))
+                .expect("normalize mixed-case scope path"),
+            "Src/MixedCase.TXT"
+        );
+
+        let path_summary_json = canonical_cli_json(
+            "local-file path observation summary",
+            &local_file_scope_path_observation_summary(&mixed_case_file)
+                .expect("local-file path summary"),
+        )
+        .expect("local-file path summary JSON");
+        assert!(path_summary_json.contains(r#""path_case_folding":"disabled""#));
+        assert!(
+            path_summary_json.contains(r#""path_case_policy":"filesystem_native_path_resolution""#)
+        );
+        assert!(path_summary_json.contains("CaseName.TXT"));
+
+        let prefix_snapshot =
+            local_file_path_prefix_snapshot(&data).expect("mixed-case path-prefix snapshot");
+        let prefix_summary_json = canonical_cli_json(
+            "local-file path-prefix observation summary",
+            &prefix_snapshot.summary,
+        )
+        .expect("local-file path-prefix summary JSON");
+        assert!(prefix_summary_json.contains(r#""path_case_folding":"disabled""#));
+        assert!(
+            prefix_summary_json.contains(r#""path_case_policy":"filesystem_native_entry_names""#)
+        );
+        assert!(prefix_summary_json.contains(r#""files":1"#));
+
+        let upper_glob = format!("{}/*.TXT", data.display());
+        let upper_glob_snapshot =
+            local_file_glob_snapshot(&upper_glob).expect("upper-case glob snapshot");
+        let upper_glob_summary_json = canonical_cli_json(
+            "local-file glob observation summary",
+            &upper_glob_snapshot.summary,
+        )
+        .expect("local-file glob summary JSON");
+        assert!(upper_glob_summary_json.contains(r#""path_case_folding":"disabled""#));
+        assert!(
+            upper_glob_summary_json.contains(r#""path_case_policy":"case_sensitive_glob_pattern""#)
+        );
+        assert!(upper_glob_summary_json.contains(r#""glob_case_sensitive":true"#));
+        assert!(upper_glob_summary_json.contains(r#""files":1"#));
+
+        let lower_glob = format!("{}/*.txt", data.display());
+        let lower_glob_snapshot =
+            local_file_glob_snapshot(&lower_glob).expect("lower-case glob snapshot");
+        let lower_glob_summary_json = canonical_cli_json(
+            "lower-case local-file glob observation summary",
+            &lower_glob_snapshot.summary,
+        )
+        .expect("lower-case local-file glob summary JSON");
+        assert!(lower_glob_summary_json.contains(r#""glob_case_sensitive":true"#));
+        assert!(lower_glob_summary_json.contains(r#""files":0"#));
+        assert_ne!(
+            upper_glob_snapshot.fingerprint,
+            lower_glob_snapshot.fingerprint
         );
     }
 
@@ -41218,6 +41322,75 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn git_worktree_snapshot_reports_path_case_policy_from_parent_git_view() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::create_dir_all(repo.join("src")).expect("create src dir");
+        fs::write(repo.join("ReadMe.md"), b"readme baseline\n").expect("write readme");
+        fs::write(repo.join("src/MixedCase.rs"), b"fn mixed_case() {}\n")
+            .expect("write mixed-case tracked file");
+        git_test(&repo, &["add", "ReadMe.md", "src/MixedCase.rs"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+
+        let clean_index = git_command_bytes(&repo, &["ls-files", "-s", "-z"], "git index")
+            .expect("read clean git index");
+        let clean_index = String::from_utf8(clean_index).expect("clean git index utf8");
+        assert!(clean_index.contains("ReadMe.md"));
+        assert!(clean_index.contains("src/MixedCase.rs"));
+
+        let clean = git_worktree_snapshot(&repo).expect("clean mixed-case git snapshot");
+        let clean_summary_json =
+            canonical_cli_json("git worktree observation summary", &clean.summary)
+                .expect("clean mixed-case git summary JSON");
+        assert!(clean_summary_json.contains(r#""path_case_folding":"disabled""#));
+        assert!(clean_summary_json.contains(r#""path_case_policy":"parent_git_path_reporting""#));
+
+        fs::write(
+            repo.join("src/MixedCase.rs"),
+            b"fn mixed_case() {}\nfn changed() {}\n",
+        )
+        .expect("write mixed-case tracked update");
+        let dirty_status = git_command_bytes(
+            &repo,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            "mixed-case dirty status",
+        )
+        .expect("read mixed-case dirty status");
+        let dirty_status = String::from_utf8(dirty_status).expect("dirty git status utf8");
+        assert!(dirty_status.contains(" M src/MixedCase.rs"));
+        let dirty = git_worktree_snapshot(&repo).expect("dirty mixed-case git snapshot");
+        assert_ne!(clean.fingerprint, dirty.fingerprint);
+        let dirty_summary_json =
+            canonical_cli_json("git worktree observation summary", &dirty.summary)
+                .expect("dirty mixed-case git summary JSON");
+        assert!(dirty_summary_json.contains(r#""path_case_folding":"disabled""#));
+        assert!(dirty_summary_json.contains(r#""path_case_policy":"parent_git_path_reporting""#));
+
+        fs::create_dir_all(repo.join("LooseDir")).expect("create loose dir");
+        fs::write(repo.join("LooseDir/LooseCase.TXT"), b"loose mixed case\n")
+            .expect("write mixed-case untracked file");
+        let untracked_paths = git_command_bytes(
+            &repo,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            "mixed-case untracked files",
+        )
+        .expect("read mixed-case untracked files");
+        let untracked_paths = String::from_utf8(untracked_paths).expect("untracked git paths utf8");
+        assert!(untracked_paths.contains("LooseDir/LooseCase.TXT"));
+        let untracked = git_worktree_snapshot(&repo).expect("untracked mixed-case git snapshot");
+        assert_ne!(dirty.fingerprint, untracked.fingerprint);
+        let untracked_summary_json =
+            canonical_cli_json("git worktree observation summary", &untracked.summary)
+                .expect("untracked mixed-case git summary JSON");
+        assert!(untracked_summary_json.contains(r#""path_case_folding":"disabled""#));
+        assert!(
+            untracked_summary_json.contains(r#""path_case_policy":"parent_git_path_reporting""#)
+        );
+        assert!(untracked_summary_json.contains(r#""untracked_files":1"#));
     }
 
     #[test]

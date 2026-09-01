@@ -870,9 +870,9 @@ message=error: unexpected argument ...
   `verification cache-refresh --resource-content-from-scope-git-worktree`.
   Basis-aware cache refresh is implemented behind
   `verification cache-refresh --resource-content-from-basis`.
-  Explicit unavailable/error applicability stamps are dogfood-proven. Broader
-  symlink/case/rename, broader Git adapter policy, and background
-  re-observation scheduling remain open.
+  Explicit unavailable/error applicability stamps are dogfood-proven. Bounded
+  rename, symlink, submodule, sparse-checkout, and path case policies are
+  dogfood-proven. Background re-observation scheduling remains open.
 - Context packet persistence and transition-rationale projection are
   implemented; broader Context Resolver dogfood remains open.
 - `why` exposes focused Handoff scope links and anchored evolution as a deferred

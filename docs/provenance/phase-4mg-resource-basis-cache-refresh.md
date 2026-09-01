@@ -120,6 +120,16 @@ glob basis entries were supported by the implementation but lacked direct
 both persisted basis forms through the basis-aware flag, and re-review found no
 remaining blocker/high/medium findings.
 
+## Delivery Closeout
+
+- Implementation commit: `eb8006174522cbac34f65fb8f56a2c6e68b0d50d`.
+- Fast-forward merged to `main`.
+- Worktree cleanup proof:
+  `/tmp/workvcs-4mg-cleanup-20260901T072206Z`.
+- Cleanup proof fields:
+  `clean=yes`, `attached=yes`, `unlocked=yes`, `covered_by_main=yes`,
+  `removed=yes`, `branch_retained=yes`.
+
 ## Remaining Open
 
 - Background Resource re-observation scheduling remains Open.

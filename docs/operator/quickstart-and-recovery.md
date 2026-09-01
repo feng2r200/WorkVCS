@@ -940,7 +940,8 @@ message=error: unexpected argument ...
   implemented; broader Context Resolver dogfood remains open.
 - `why` exposes focused Handoff scope links, anchored evolution as a deferred
   family, causal anchor ChangeSet projections, direct evolution operation
-  subjects for those ChangeSets, and direct epistemic statement explanations.
+  subjects for those ChangeSets, current recognized detail for those operation
+  subjects, and direct epistemic statement explanations.
   Full evolution traversal, broader causal traversal, and broader
   context/Resource resolver maturity remain open.
 - Shared-Claim collaboration has read-only real-project and bounded

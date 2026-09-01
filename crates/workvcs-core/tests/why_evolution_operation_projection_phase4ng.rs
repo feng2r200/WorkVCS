@@ -4,7 +4,8 @@ use tempfile::TempDir;
 use workvcs_core::{
     ChangeOperationSubject, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Engine,
     RecordCreateCommit, RecordCreateOptions, StoreInitOptions, WhyDeferredRelationFamily,
-    WhyQueryOptions, WhyQueryTarget, WorkspaceInfo, WorkspaceInitOptions,
+    WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryTarget, WhyRelationEndpoint,
+    WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 struct SupersedeFixture {
@@ -118,21 +119,90 @@ fn why_causal_anchor_projects_direct_evolution_operations() {
         operation.subject,
         ChangeOperationSubject::Entity(fixture.prior.record_entity_id)
     );
+    let Some(WhyEvolutionSubjectDetail::Entity(detail)) = &operation.subject_detail else {
+        panic!("expected entity subject detail")
+    };
+    assert_eq!(detail.entity_kind, WhyEntityKind::Record);
+    assert_eq!(
+        detail.entity_version_id,
+        fixture.superseded.prior_record_entity_version_id
+    );
+    assert_eq!(detail.statement.as_deref(), Some("Use optimistic writes"));
 
-    assert!(why.evolution_change_operations.iter().any(|operation| {
-        operation.ordinal == 1
-            && operation.subject == ChangeOperationSubject::Relation(fixture.superseded.relation_id)
-    }));
-    assert!(why.evolution_change_operations.iter().any(|operation| {
-        operation.ordinal == 2
-            && operation.subject
-                == ChangeOperationSubject::Relation(
-                    fixture
-                        .superseded
-                        .causal_relation_id
-                        .expect("causal relation id"),
-                )
-    }));
+    let supersedes_operation = why
+        .evolution_change_operations
+        .iter()
+        .find(|operation| operation.ordinal == 1)
+        .expect("supersedes relation operation");
+    assert_eq!(
+        supersedes_operation.subject,
+        ChangeOperationSubject::Relation(fixture.superseded.relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &supersedes_operation.subject_detail
+    else {
+        panic!("expected supersedes relation subject detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::RecordSupersedes);
+    assert_eq!(
+        detail.relation_version_id,
+        fixture.superseded.relation_version_id
+    );
+    assert_eq!(
+        detail.source,
+        WhyRelationEndpoint::entity(
+            fixture.superseded.replacement_record_entity_id,
+            WhyEntityKind::Record
+        )
+    );
+    assert_eq!(
+        detail.target,
+        WhyRelationEndpoint::entity(fixture.prior.record_entity_id, WhyEntityKind::Record)
+    );
+    assert_eq!(
+        detail.state_digest,
+        fixture.superseded.relation_state_digest
+    );
+
+    let causal_operation = why
+        .evolution_change_operations
+        .iter()
+        .find(|operation| operation.ordinal == 2)
+        .expect("causal relation operation");
+    assert_eq!(
+        causal_operation.subject,
+        ChangeOperationSubject::Relation(
+            fixture
+                .superseded
+                .causal_relation_id
+                .expect("causal relation id")
+        )
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &causal_operation.subject_detail else {
+        panic!("expected causal relation subject detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::RecordDerivedFrom);
+    assert_eq!(
+        detail.relation_version_id,
+        fixture
+            .superseded
+            .causal_relation_version_id
+            .expect("causal relation version id")
+    );
+    assert_eq!(
+        detail.source,
+        WhyRelationEndpoint::entity(
+            fixture.superseded.replacement_record_entity_id,
+            WhyEntityKind::Record
+        )
+    );
+    assert_eq!(
+        detail.target,
+        WhyRelationEndpoint::entity(fixture.finding.record_entity_id, WhyEntityKind::Record)
+    );
+    assert_eq!(
+        Some(detail.state_digest),
+        fixture.superseded.causal_relation_state_digest
+    );
     assert!(why.evolution_change_operations.iter().all(|operation| {
         operation.operation_payload_size_bytes > 0
             && !operation.operation_payload_digest.to_string().is_empty()

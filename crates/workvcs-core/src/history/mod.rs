@@ -173,6 +173,7 @@ pub use task::{
 pub use why::{
     ResolvedWhyQuerySubject, ResolvedWhyQueryTarget, WhyCausalAnchorChangeSet,
     WhyDeferredRelationFamily, WhyEntityKind, WhyEpistemicExplanation, WhyEvolutionChangeOperation,
+    WhyEvolutionSubjectDetail, WhyEvolutionSubjectEntityDetail, WhyEvolutionSubjectRelationDetail,
     WhyQueryOptions, WhyQueryResult, WhyQuerySubject, WhyQueryTarget, WhyRelationDirection,
     WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WhyScopeLink, WhyScopeLinkKind,
 };

@@ -337,8 +337,32 @@ pub struct WhyEvolutionChangeOperation {
     pub operation_id: crate::identity::OperationId,
     pub ordinal: i64,
     pub subject: ChangeOperationSubject,
+    pub subject_detail: Option<WhyEvolutionSubjectDetail>,
     pub operation_payload_digest: Digest,
     pub operation_payload_size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WhyEvolutionSubjectDetail {
+    Entity(WhyEvolutionSubjectEntityDetail),
+    Relation(WhyEvolutionSubjectRelationDetail),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhyEvolutionSubjectEntityDetail {
+    pub entity_kind: WhyEntityKind,
+    pub entity_version_id: EntityVersionId,
+    pub statement: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhyEvolutionSubjectRelationDetail {
+    pub relation_kind: WhyRelationKind,
+    pub relation_version_id: RelationVersionId,
+    pub relation_label: Option<String>,
+    pub source: WhyRelationEndpoint,
+    pub target: WhyRelationEndpoint,
+    pub state_digest: Digest,
 }
 
 pub(crate) fn explain_why(
@@ -561,7 +585,7 @@ pub(crate) fn explain_why(
     let epistemic_explanations =
         why_epistemic_explanations(connection, resolved.target.commit_id, &relation_edges)?;
     let evolution_change_operations =
-        why_evolution_change_operations(connection, &causal_anchor_changesets)?;
+        why_evolution_change_operations(connection, &resolved, &causal_anchor_changesets)?;
     let deferred_relation_families = why_deferred_relation_families(&causal_anchor_changesets);
 
     Ok(WhyQueryResult {
@@ -578,11 +602,14 @@ pub(crate) fn explain_why(
 
 fn why_evolution_change_operations(
     connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
     causal_anchor_changesets: &[WhyCausalAnchorChangeSet],
 ) -> Result<Vec<WhyEvolutionChangeOperation>> {
     let mut evolution_operations = Vec::new();
     for anchor in causal_anchor_changesets {
         for operation in changeset_operations(connection, anchor.changeset_id)?.operations {
+            let subject_detail =
+                why_evolution_subject_detail(connection, resolved, &operation.subject)?;
             evolution_operations.push(WhyEvolutionChangeOperation {
                 commit_id: anchor.commit_id,
                 changeset_id: anchor.changeset_id,
@@ -591,12 +618,262 @@ fn why_evolution_change_operations(
                 operation_id: operation.operation_id,
                 ordinal: operation.ordinal,
                 subject: operation.subject,
+                subject_detail,
                 operation_payload_digest: operation.operation_payload_digest,
                 operation_payload_size_bytes: operation.operation_payload_size_bytes,
             });
         }
     }
     Ok(evolution_operations)
+}
+
+fn why_evolution_subject_detail(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    subject: &ChangeOperationSubject,
+) -> Result<Option<WhyEvolutionSubjectDetail>> {
+    match subject {
+        ChangeOperationSubject::Entity(entity_id) => {
+            why_evolution_entity_subject_detail(connection, resolved, *entity_id)
+        }
+        ChangeOperationSubject::Relation(relation_id) => {
+            why_evolution_relation_subject_detail(connection, resolved, *relation_id)
+        }
+    }
+}
+
+fn why_evolution_entity_subject_detail(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    entity_id: EntityId,
+) -> Result<Option<WhyEvolutionSubjectDetail>> {
+    let Some(entity_version_id) = current_entity_version_id(&resolved.state, entity_id) else {
+        return Ok(None);
+    };
+    let Some(entity_kind) =
+        load_evolution_subject_entity_kind(connection, resolved.target.workspace_id, entity_id)?
+    else {
+        return Ok(None);
+    };
+    let statement = why_endpoint_statement(
+        connection,
+        resolved.target.commit_id,
+        WhyRelationEndpoint::entity(entity_id, entity_kind),
+    )?;
+    Ok(Some(WhyEvolutionSubjectDetail::Entity(
+        WhyEvolutionSubjectEntityDetail {
+            entity_kind,
+            entity_version_id,
+            statement,
+        },
+    )))
+}
+
+fn why_evolution_relation_subject_detail(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    relation_id: RelationId,
+) -> Result<Option<WhyEvolutionSubjectDetail>> {
+    let Some(relation_version_id) = current_relation_version_id(&resolved.state, relation_id)
+    else {
+        return Ok(None);
+    };
+
+    for relation in primary_containment_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source =
+                WhyRelationEndpoint::entity(relation.parent_entity_id, relation.parent_kind.into());
+            let target =
+                WhyRelationEndpoint::entity(relation.child_entity_id, relation.child_kind.into());
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::PrimaryContainment,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in structural_references_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.referrer_entity_id,
+                relation.referrer_kind.into(),
+            );
+            let target =
+                WhyRelationEndpoint::entity(relation.target_entity_id, relation.target_kind.into());
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::StructuralReference,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in verification_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let target_entity_id = relation.target.entity_id();
+            let source = WhyRelationEndpoint::entity(
+                relation.source_verification_entity_id,
+                WhyEntityKind::Verification,
+            );
+            let target = WhyRelationEndpoint::entity(target_entity_id, relation.target.into());
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::Verifies,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in verification_evidence_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.source_verification_entity_id,
+                WhyEntityKind::Verification,
+            );
+            let target = WhyRelationEndpoint::evidence(relation.evidence_id);
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::EvidencedBy,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in record_relations_at(
+        connection,
+        &RecordRelationListOptions::new(resolved.target.commit_id),
+    )?
+    .relations
+    {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.source_record_entity_id,
+                WhyEntityKind::Record,
+            );
+            let target = WhyRelationEndpoint::entity(
+                relation.target_record_entity_id,
+                WhyEntityKind::Record,
+            );
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: record_relation_kind(relation.relation_type),
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: relation.relation_label.clone(),
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in record_knowledge_relations_at(
+        connection,
+        &RecordKnowledgeRelationListOptions::new(resolved.target.commit_id),
+    )?
+    .relations
+    {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.source_record_entity_id,
+                WhyEntityKind::Record,
+            );
+            let target = WhyRelationEndpoint::entity(
+                relation.target_knowledge_entity_id,
+                WhyEntityKind::Knowledge,
+            );
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: record_relation_kind(relation.relation_type),
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in knowledge_relations_at(
+        connection,
+        &KnowledgeRelationListOptions::new(resolved.target.commit_id),
+    )?
+    .relations
+    {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.replacement_knowledge_entity_id,
+                WhyEntityKind::Knowledge,
+            );
+            let target = WhyRelationEndpoint::entity(
+                relation.prior_knowledge_entity_id,
+                WhyEntityKind::Knowledge,
+            );
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::KnowledgeSupersedes,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in knowledge_exposure_derived_from_relations_at(connection, resolved)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.source_knowledge_entity_id,
+                WhyEntityKind::Knowledge,
+            );
+            let target = WhyRelationEndpoint::knowledge_exposure(relation.exposure_id);
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::KnowledgeExposureDerivedFrom,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+
+    Ok(None)
 }
 
 fn why_epistemic_explanations(
@@ -812,6 +1089,18 @@ fn current_entity_version_id(
         .iter()
         .find_map(|(current_entity_id, entity_version_id)| {
             (*current_entity_id == entity_id).then_some(*entity_version_id)
+        })
+}
+
+fn current_relation_version_id(
+    state: &crate::canonical::WorkState,
+    relation_id: RelationId,
+) -> Option<RelationVersionId> {
+    state
+        .relations()
+        .iter()
+        .find_map(|(current_relation_id, relation_version_id)| {
+            (*current_relation_id == relation_id).then_some(*relation_version_id)
         })
 }
 
@@ -1033,6 +1322,24 @@ fn load_subject_entity_kind(
     workspace_id: WorkspaceId,
     entity_id: EntityId,
 ) -> Result<WhyEntityKind> {
+    let entity_kind = load_subject_entity_kind_text(connection, workspace_id, entity_id)?;
+    parse_why_entity_kind(&entity_kind)
+}
+
+fn load_evolution_subject_entity_kind(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    entity_id: EntityId,
+) -> Result<Option<WhyEntityKind>> {
+    let entity_kind = load_subject_entity_kind_text(connection, workspace_id, entity_id)?;
+    Ok(parse_supported_why_entity_kind(&entity_kind))
+}
+
+fn load_subject_entity_kind_text(
+    connection: &StoreConnection,
+    workspace_id: WorkspaceId,
+    entity_id: EntityId,
+) -> Result<String> {
     let row = connection
         .inner()
         .query_row(
@@ -1071,22 +1378,28 @@ fn load_subject_entity_kind(
             "entity {entity_id} belongs to workspace {entity_workspace_id}, not {workspace_id}"
         )));
     }
-    parse_why_entity_kind(&entity_kind)
+    Ok(entity_kind)
 }
 
 fn parse_why_entity_kind(entity_kind: &str) -> Result<WhyEntityKind> {
+    parse_supported_why_entity_kind(entity_kind).ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "entity kind {entity_kind:?} is not supported by why"
+        ))
+    })
+}
+
+fn parse_supported_why_entity_kind(entity_kind: &str) -> Option<WhyEntityKind> {
     match entity_kind {
-        GOAL_ENTITY_KIND => Ok(WhyEntityKind::Goal),
-        PLAN_ENTITY_KIND => Ok(WhyEntityKind::Plan),
-        TASK_ENTITY_KIND => Ok(WhyEntityKind::Task),
-        ACCEPTANCE_CRITERION_ENTITY_KIND => Ok(WhyEntityKind::AcceptanceCriterion),
-        VERIFICATION_REQUIREMENT_ENTITY_KIND => Ok(WhyEntityKind::VerificationRequirement),
-        VERIFICATION_ENTITY_KIND => Ok(WhyEntityKind::Verification),
-        RECORD_ENTITY_KIND => Ok(WhyEntityKind::Record),
-        KNOWLEDGE_ENTITY_KIND => Ok(WhyEntityKind::Knowledge),
-        other => Err(WorkVcsError::QueryInvalid(format!(
-            "entity kind {other:?} is not supported by why"
-        ))),
+        GOAL_ENTITY_KIND => Some(WhyEntityKind::Goal),
+        PLAN_ENTITY_KIND => Some(WhyEntityKind::Plan),
+        TASK_ENTITY_KIND => Some(WhyEntityKind::Task),
+        ACCEPTANCE_CRITERION_ENTITY_KIND => Some(WhyEntityKind::AcceptanceCriterion),
+        VERIFICATION_REQUIREMENT_ENTITY_KIND => Some(WhyEntityKind::VerificationRequirement),
+        VERIFICATION_ENTITY_KIND => Some(WhyEntityKind::Verification),
+        RECORD_ENTITY_KIND => Some(WhyEntityKind::Record),
+        KNOWLEDGE_ENTITY_KIND => Some(WhyEntityKind::Knowledge),
+        _ => None,
     }
 }
 

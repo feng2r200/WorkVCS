@@ -133,6 +133,7 @@ pub struct WhyQueryResult {
     pub subject: ResolvedWhyQuerySubject,
     pub relation_edges: Vec<WhyRelationEdge>,
     pub scope_links: Vec<WhyScopeLink>,
+    pub causal_anchor_changesets: Vec<WhyCausalAnchorChangeSet>,
     pub deferred_relation_families: Vec<WhyDeferredRelationFamily>,
 }
 
@@ -297,6 +298,18 @@ pub struct WhyScopeLink {
     pub source_entity_version_id: EntityVersionId,
     pub target_entity_version_id: EntityVersionId,
     pub source_state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhyCausalAnchorChangeSet {
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub operation_type: String,
+    pub operation_schema_version: i64,
+    pub committed_at_us: i64,
+    pub changeset_created_at_us: i64,
+    pub anchor_object_id: EntityId,
+    pub anchor_object_kind: String,
 }
 
 pub(crate) fn explain_why(
@@ -493,6 +506,8 @@ pub(crate) fn explain_why(
         }
     }
     let mut scope_links = handoff_focus_scope_links(connection, &resolved, options.subject())?;
+    let causal_anchor_changesets =
+        why_causal_anchor_changesets(connection, &resolved, options.subject())?;
     relation_edges.sort_by(|left, right| {
         left.relation_kind
             .cmp(&right.relation_kind)
@@ -514,38 +529,37 @@ pub(crate) fn explain_why(
             })
     });
 
-    let deferred_relation_families =
-        why_deferred_relation_families(connection, &resolved, options.subject())?;
+    let deferred_relation_families = why_deferred_relation_families(&causal_anchor_changesets);
 
     Ok(WhyQueryResult {
         target: resolved.target,
         subject,
         relation_edges,
         scope_links,
+        causal_anchor_changesets,
         deferred_relation_families,
     })
 }
 
 fn why_deferred_relation_families(
-    connection: &StoreConnection,
-    resolved: &ResolvedWhyTargetWithState,
-    subject: WhyQuerySubject,
-) -> Result<Vec<WhyDeferredRelationFamily>> {
+    causal_anchor_changesets: &[WhyCausalAnchorChangeSet],
+) -> Vec<WhyDeferredRelationFamily> {
     let mut families = Vec::new();
-    if first_parent_reachable_entity_causal_anchor_exists(connection, resolved, subject)? {
+    if !causal_anchor_changesets.is_empty() {
         families.push(WhyDeferredRelationFamily::Evolution);
     }
-    Ok(families)
+    families
 }
 
-fn first_parent_reachable_entity_causal_anchor_exists(
+fn why_causal_anchor_changesets(
     connection: &StoreConnection,
     resolved: &ResolvedWhyTargetWithState,
     subject: WhyQuerySubject,
-) -> Result<bool> {
+) -> Result<Vec<WhyCausalAnchorChangeSet>> {
     let WhyQuerySubject::Entity(entity_id) = subject else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
+    let mut anchors = Vec::new();
     let history = query_history(
         connection,
         &HistoryQueryOptions::from_commit(resolved.target.commit_id),
@@ -555,10 +569,19 @@ fn first_parent_reachable_entity_causal_anchor_exists(
             continue;
         }
         if changeset_has_entity_causal_anchor(connection, entry.changeset_id, entity_id)? {
-            return Ok(true);
+            anchors.push(WhyCausalAnchorChangeSet {
+                commit_id: entry.commit_id,
+                changeset_id: entry.changeset_id,
+                operation_type: entry.operation_type,
+                operation_schema_version: entry.operation_schema_version,
+                committed_at_us: entry.committed_at_us,
+                changeset_created_at_us: entry.changeset_created_at_us,
+                anchor_object_id: entity_id,
+                anchor_object_kind: ENTITY_OBJECT_KIND.to_owned(),
+            });
         }
     }
-    Ok(false)
+    Ok(anchors)
 }
 
 fn changeset_has_entity_causal_anchor(

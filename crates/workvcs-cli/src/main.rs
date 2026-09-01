@@ -22295,6 +22295,62 @@ fn render_why(result: &WhyQueryResult) -> String {
     }
     writeln!(
         output,
+        "causal_anchor_changesets={}",
+        result.causal_anchor_changesets.len()
+    )
+    .expect("write to String");
+    for (index, anchor) in result.causal_anchor_changesets.iter().enumerate() {
+        writeln!(
+            output,
+            "causal_anchor_changeset.{index}.commit_id={}",
+            anchor.commit_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "causal_anchor_changeset.{index}.changeset_id={}",
+            anchor.changeset_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "causal_anchor_changeset.{index}.operation_type={}",
+            anchor.operation_type
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "causal_anchor_changeset.{index}.operation_schema_version={}",
+            anchor.operation_schema_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "causal_anchor_changeset.{index}.committed_at_us={}",
+            anchor.committed_at_us
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "causal_anchor_changeset.{index}.changeset_created_at_us={}",
+            anchor.changeset_created_at_us
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "causal_anchor_changeset.{index}.anchor_object_id={}",
+            anchor.anchor_object_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "causal_anchor_changeset.{index}.anchor_object_kind={}",
+            anchor.anchor_object_kind
+        )
+        .expect("write to String");
+    }
+    writeln!(
+        output,
         "deferred_relation_families={}",
         result.deferred_relation_families.len()
     )
@@ -45583,6 +45639,7 @@ mod tests {
         .expect("why prior");
         assert!(why_prior.contains("relation.0.relation_kind=record_supersedes"));
         assert!(why_prior.contains("relation.0.direction=incoming"));
+        assert_eq!(value(&why_prior, "causal_anchor_changesets"), "0");
         assert_eq!(value(&why_prior, "deferred_relation_families"), "0");
 
         let why_finding = run(Cli::try_parse_from([
@@ -45596,6 +45653,27 @@ mod tests {
         ])
         .expect("parse why causal finding"))
         .expect("why causal finding");
+        assert_eq!(value(&why_finding, "causal_anchor_changesets"), "1");
+        assert_eq!(
+            value(&why_finding, "causal_anchor_changeset.0.commit_id"),
+            value(&superseded, "commit_id")
+        );
+        assert_eq!(
+            value(&why_finding, "causal_anchor_changeset.0.changeset_id"),
+            value(&superseded, "changeset_id")
+        );
+        assert_eq!(
+            value(&why_finding, "causal_anchor_changeset.0.operation_type"),
+            "record.decision.supersede"
+        );
+        assert_eq!(
+            value(&why_finding, "causal_anchor_changeset.0.anchor_object_id"),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(&why_finding, "causal_anchor_changeset.0.anchor_object_kind"),
+            "entity"
+        );
         assert_eq!(value(&why_finding, "deferred_relation_families"), "1");
         assert_eq!(
             value(&why_finding, "deferred_relation_family.0"),
@@ -45617,6 +45695,10 @@ mod tests {
         ])
         .expect("parse filtered why causal finding"))
         .expect("filtered why causal finding");
+        assert_eq!(
+            value(&filtered_why_finding, "causal_anchor_changesets"),
+            "1"
+        );
         assert_eq!(
             value(&filtered_why_finding, "deferred_relation_families"),
             "1"

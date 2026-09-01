@@ -171,9 +171,10 @@ pub use task::{
     VerificationSemanticDependency, VerificationSnapshot, VerificationState, VerificationTarget,
 };
 pub use why::{
-    ResolvedWhyQuerySubject, ResolvedWhyQueryTarget, WhyDeferredRelationFamily, WhyEntityKind,
-    WhyQueryOptions, WhyQueryResult, WhyQuerySubject, WhyQueryTarget, WhyRelationDirection,
-    WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WhyScopeLink, WhyScopeLinkKind,
+    ResolvedWhyQuerySubject, ResolvedWhyQueryTarget, WhyCausalAnchorChangeSet,
+    WhyDeferredRelationFamily, WhyEntityKind, WhyQueryOptions, WhyQueryResult, WhyQuerySubject,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind,
+    WhyScopeLink, WhyScopeLinkKind,
 };
 
 pub(crate) use branch::{fork_branch, list_branches};

@@ -111,3 +111,14 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 scripts/smoke-v0.1-cli-workflow.sh
 ```
+
+## Delivery Closeout
+
+- Implementation commit:
+  `122e01804211dc0510ddb5414717d06d5128fb5e`.
+- Fast-forward merged to `main`.
+- Worktree cleanup proof:
+  `/tmp/workvcs-4mj-cleanup-20260901T090157Z`.
+- Cleanup proof fields:
+  `clean=yes`, `attached=yes`, `unlocked=yes`, `covered_by_main=yes`,
+  `removed=yes`, `branch_retained=yes`.

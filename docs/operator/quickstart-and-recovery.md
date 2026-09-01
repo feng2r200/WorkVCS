@@ -830,6 +830,18 @@ the script, rerun the failing command with `workvcs ... --help` open for that
 subcommand, and only update expectations after the command output proves the
 intended state transition.
 
+Top-level syntax failures use stable key-value stderr. Branch on
+`error_code=cli_parse_error` and `clap_error_kind` for stale flags or removed
+subcommands; do not parse the human `message` except for display:
+
+```text
+error_code=cli_parse_error
+error_category=usage
+retryable=false
+clap_error_kind=unknown_argument
+message=error: unexpected argument ...
+```
+
 ## Still Open For V1
 
 - The documented loop has been repeated once against another real local
@@ -865,6 +877,6 @@ intended state transition.
   exchange APIs, and external Store canonical DAG activation remain open.
 - Larger Store validation has one bounded local run; broader and more varied
   performance evidence remains open.
-- WorkVCS business errors now emit stable key-value fields. Full per-code
-  recovery guidance, JSON error output, and top-level clap syntax-error
-  normalization remain open.
+- WorkVCS business errors and top-level clap syntax errors now emit stable
+  key-value fields. Full per-code recovery guidance and JSON error output
+  remain open.

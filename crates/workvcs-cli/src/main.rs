@@ -4851,13 +4851,44 @@ enum VerificationCommand {
 }
 
 fn main() {
-    match run(Cli::parse()) {
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => handle_clap_parse_error(error),
+    };
+    match run(cli) {
         Ok(output) => print!("{output}"),
         Err(error) => {
             eprint!("{}", render_workvcs_error(&error));
             std::process::exit(1);
         }
     }
+}
+
+fn handle_clap_parse_error(error: clap::Error) -> ! {
+    if matches!(
+        error.kind(),
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+    ) {
+        let exit_code = error.exit_code();
+        let _ = error.print();
+        std::process::exit(exit_code);
+    }
+    eprint!("{}", render_clap_parse_error(&error));
+    std::process::exit(error.exit_code());
+}
+
+fn render_clap_parse_error(error: &clap::Error) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "error_code=cli_parse_error");
+    let _ = writeln!(output, "error_category=usage");
+    let _ = writeln!(output, "retryable=false");
+    let _ = writeln!(
+        output,
+        "clap_error_kind={}",
+        clap_error_kind_label(error.kind())
+    );
+    let _ = writeln!(output, "message={}", escape_key_value(&error.to_string()));
+    output
 }
 
 fn render_workvcs_error(error: &WorkVcsError) -> String {
@@ -4875,6 +4906,31 @@ fn escape_key_value(value: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
+}
+
+fn clap_error_kind_label(kind: ErrorKind) -> &'static str {
+    match kind {
+        ErrorKind::InvalidValue => "invalid_value",
+        ErrorKind::UnknownArgument => "unknown_argument",
+        ErrorKind::InvalidSubcommand => "invalid_subcommand",
+        ErrorKind::NoEquals => "no_equals",
+        ErrorKind::ValueValidation => "value_validation",
+        ErrorKind::TooManyValues => "too_many_values",
+        ErrorKind::TooFewValues => "too_few_values",
+        ErrorKind::WrongNumberOfValues => "wrong_number_of_values",
+        ErrorKind::ArgumentConflict => "argument_conflict",
+        ErrorKind::MissingRequiredArgument => "missing_required_argument",
+        ErrorKind::MissingSubcommand => "missing_subcommand",
+        ErrorKind::InvalidUtf8 => "invalid_utf8",
+        ErrorKind::DisplayHelp => "display_help",
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+            "display_help_on_missing_argument_or_subcommand"
+        }
+        ErrorKind::DisplayVersion => "display_version",
+        ErrorKind::Io => "io",
+        ErrorKind::Format => "format",
+        _ => "unknown",
+    }
 }
 
 fn run(cli: Cli) -> Result<String> {
@@ -22719,6 +22775,41 @@ mod tests {
             value(&output, "message"),
             "branch head conflict: branch moved"
         );
+    }
+
+    #[test]
+    fn cli_renders_stable_clap_parse_error_fields() {
+        let error = Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "show",
+            "store.sqlite",
+            "--workspace",
+            "01a05c0f-90a6-7890-9964-ff8f9a2d588f",
+            "--expected-head",
+            "01a05c0f-92f4-7873-8c9d-c00a64fdd3d4",
+        ])
+        .expect_err("unknown clap argument should fail before run");
+        let output = render_clap_parse_error(&error);
+
+        assert_eq!(error.exit_code(), 2);
+        assert_eq!(value(&output, "error_code"), "cli_parse_error");
+        assert_eq!(value(&output, "error_category"), "usage");
+        assert_eq!(value(&output, "retryable"), "false");
+        assert_eq!(value(&output, "clap_error_kind"), "unknown_argument");
+        assert!(value(&output, "message").contains("unexpected argument"));
+        assert!(value(&output, "message").contains("--expected-head"));
+        assert!(value(&output, "message").contains("\\n"));
+    }
+
+    #[test]
+    fn cli_keeps_help_and_version_as_clap_display() {
+        let help = Cli::try_parse_from(["workvcs", "--help"])
+            .expect_err("help should be represented as a clap display error");
+
+        assert_eq!(help.kind(), ErrorKind::DisplayHelp);
+        assert_eq!(help.exit_code(), 0);
+        assert!(!help.use_stderr());
     }
 
     #[test]

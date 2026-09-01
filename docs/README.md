@@ -46,6 +46,7 @@ The current V1 implementation-readiness and dogfood gap ledger is:
 - [Phase 4MG Resource Basis Cache Refresh Evidence](provenance/phase-4mg-resource-basis-cache-refresh.md)
 - [Phase 4MH Why Evolution Deferred Family Evidence](provenance/phase-4mh-why-evolution-deferred-family.md)
 - [Phase 4MI Shared Claim Dogfood Evidence](provenance/phase-4mi-shared-claim-dogfood.md)
+- [Phase 4MJ Clap Error Normalization Evidence](provenance/phase-4mj-clap-error-normalization.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -169,6 +170,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0448: Phase 4MG Resource Basis Cache Refresh](decisions/adr/0448-phase-4mg-resource-basis-cache-refresh.md)
 - [ADR-0449: Phase 4MH Why Evolution Deferred Family](decisions/adr/0449-phase-4mh-why-evolution-deferred-family.md)
 - [ADR-0450: Phase 4MI Shared Claim Dogfood](decisions/adr/0450-phase-4mi-shared-claim-dogfood.md)
+- [ADR-0451: Phase 4MJ Clap Error Normalization](decisions/adr/0451-phase-4mj-clap-error-normalization.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger. The local Rust V0.1

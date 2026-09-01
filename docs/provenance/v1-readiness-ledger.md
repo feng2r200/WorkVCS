@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-01 by ADR-0450 / Phase 4MI
+Last refreshed: 2026-09-01 by ADR-0451 / Phase 4MJ
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -43,8 +43,8 @@ not complete.
 | Handoff | Yes | Yes | Yes | Yes | Phase 4LG proves focused Handoff continuation and blocked recovery through stale-gated Claim takeover. Phase 4LV repeats focused Handoff creation/show after a read-only external-project closeout. Phase 4LW proves Claim transfer/takeover continuation around external-project Tasks; broader Handoff consumption across varied project and write-mode flows remains open. |
 | Merge lifecycle | Yes | Yes | Yes | Yes | Phase 4LN dogfoods divergent Work Branch resolution, unresolved freeze guard, target/source moved-head continue rejection, abort/restart recovery, and completed two-parent merge commits. Repeat on another real project or larger Store before release maturity claims. |
 | Checkpoint and Bundle portability | Yes | Yes | Yes | Yes | Phase 4LO dogfoods local copied-target export/validate/preflight/apply, imported Checkpoint validation, restore, and divergence refusal. Phase 4LP defines the V1-local directory profile and keeps external Store canonical DAG activation outside the current profile. Phase 4LQ proves the profile against a bounded larger Store workload and fixes a Verification basis import ordering blocker. |
-| CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`. Phase 4LU reduces the Phase 4LG blocked-Claim recovery ID-capture friction by adding top-level `claim guard` stale-takeover hint fields. Phase 4LX reduces repeated scope JSON authoring for local-file Context and Resource-backed verification workflows with path shorthands. Continue reducing command friction only where dogfood shows repeated ID plumbing or workflow blockage. |
-| Actionable errors and recovery | Yes | Partial | Yes | Partial | Phase 4LN documents merge unresolved and moved-head recovery; Phase 4LO documents Bundle divergence refusal and restore/checkpoint selector boundaries. Phase 4LQ records a concrete apply-ordering failure and recovery. Phase 4LZ adds stable process-level key-value fields for WorkVCS business errors: `error_code`, `error_category`, `retryable`, and escaped `message`. Per-code recovery guidance and top-level clap parse normalization remain Open. |
+| CLI discoverability and operator use | Partial | Partial | Partial | Partial | Phase 4LF reduces Handoff focus-copy friction with `handoff consume`. Phase 4LU reduces the Phase 4LG blocked-Claim recovery ID-capture friction by adding top-level `claim guard` stale-takeover hint fields. Phase 4LX reduces repeated scope JSON authoring for local-file Context and Resource-backed verification workflows with path shorthands. Phase 4MJ reduces stale command-spelling recovery friction by normalizing top-level clap usage failures into stable key-value stderr. Continue reducing command friction only where dogfood shows repeated ID plumbing or workflow blockage. |
+| Actionable errors and recovery | Yes | Partial | Yes | Partial | Phase 4LN documents merge unresolved and moved-head recovery; Phase 4LO documents Bundle divergence refusal and restore/checkpoint selector boundaries. Phase 4LQ records a concrete apply-ordering failure and recovery. Phase 4LZ adds stable process-level key-value fields for WorkVCS business errors: `error_code`, `error_category`, `retryable`, and escaped `message`. Phase 4MJ adds the same script-readable shape for top-level clap parse errors, with `error_code=cli_parse_error`, `error_category=usage`, `retryable=false`, `clap_error_kind`, escaped `message`, and preserved help display. Per-code recovery guidance and JSON error output remain Open. |
 | Larger Store and performance evidence | Partial | Partial | No | Yes | Phase 4LQ runs the opt-in larger Store portability validation with 48 Tasks, 8 Verification records, 32 scheduling relation inputs, 267 payload files, 749 payload references, apply, restore, and integrity/doctor in 22 seconds. This is bounded local portability dogfood, not broad performance maturity. |
 
 ## Dogfood-Biased Next Queue
@@ -247,3 +247,8 @@ The following remain beyond V1 even if they would make dogfood easier:
   and the target file status, hash, and stat remain unchanged. The dogfood also
   records a release-guidance issue: AC status is `verified` at the verification
   commit and becomes `stale` after Task closeout advances the Task version.
+  Phase 4MJ normalizes top-level clap usage failures observed during 4MI:
+  stale arguments and invalid subcommands now exit 2 with
+  `error_code=cli_parse_error`, `error_category=usage`, `retryable=false`,
+  stable `clap_error_kind`, and escaped `message`, while `workvcs --help`
+  remains exit 0 with usage on stdout, empty stderr, and no `error_code`.

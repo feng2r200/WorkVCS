@@ -7,8 +7,8 @@ use workvcs_core::{
     ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions, GoalTransitionOptions,
     KnowledgeCreateOptions, PlanCreateOptions, PrimaryContainmentCreateOptions,
     RecordCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions,
-    ResourceCreateOptions, ResourceObservationCreateOptions, SessionId, SessionStartOptions,
-    StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
+    ResourceCreateOptions, ResourceObservationCreateOptions, SessionFocusOptions, SessionId,
+    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
     VerificationCreateOptions, VerificationRequirementCreateOptions, VerificationResourceBasis,
     VerificationResult, VerificationTarget, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
     canonical_bytes, content_object_digest,
@@ -1708,6 +1708,165 @@ fn context_packet_explains_blocked_dependency_tasks() {
     assert!(blocker.summary.contains("dependency_status=pending"));
     assert!(blocker.summary.contains("dependency_priority=0"));
     assert!(blocker.summary.contains("Ready prerequisite task"));
+}
+
+#[test]
+fn context_packet_summarizes_resource_basis_recovery_for_blocked_dependency_requirements() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let dependent = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Blocked dependent needs prerequisite")
+                .expect("dependent task options"),
+        )
+        .expect("create dependent task");
+    head = dependent.commit_id;
+    let prerequisite = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Prerequisite has resource-backed proof")
+                .expect("prerequisite task options"),
+        )
+        .expect("create prerequisite task");
+    head = prerequisite.commit_id;
+    let criterion = engine
+        .create_acceptance_criterion(
+            AcceptanceCriterionCreateOptions::new(
+                branch_id,
+                head,
+                prerequisite.task_entity_id,
+                prerequisite.task_entity_version_id,
+                "AC-prereq-resource",
+                "Prerequisite proof remains recoverable from context.",
+                AcceptanceCriterionClassification::Required,
+            )
+            .expect("acceptance criterion options"),
+        )
+        .expect("create prerequisite acceptance criterion");
+    head = criterion.commit_id;
+    let requirement = engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                branch_id,
+                head,
+                criterion.acceptance_criterion_entity_id,
+                criterion.acceptance_criterion_entity_version_id,
+                "VR-prereq-resource",
+                "Refresh the prerequisite Resource basis.",
+            )
+            .expect("verification requirement options"),
+        )
+        .expect("create prerequisite verification requirement");
+    head = requirement.commit_id;
+
+    let (basis, baseline_observation_id) = resource_basis(&mut engine, "docs/prerequisite.md");
+    let verification = engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                branch_id,
+                head,
+                VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+            )
+            .expect("verification options")
+            .with_resource_basis(vec![basis.clone()])
+            .expect("verification resource basis"),
+        )
+        .expect("create resource-backed prerequisite verification");
+    head = verification.commit_id;
+    let relation = engine
+        .create_task_scheduling_relation(
+            TaskSchedulingRelationCreateOptions::depends_on(
+                branch_id,
+                head,
+                dependent.task_entity_id,
+                prerequisite.task_entity_id,
+            )
+            .expect("dependency options"),
+        )
+        .expect("create dependency");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    engine
+        .set_session_focus(SessionFocusOptions::new(
+            session.session_id,
+            dependent.task_entity_id,
+        ))
+        .expect("focus session on dependent task");
+    let options = ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief);
+    let packet = engine
+        .context_packet(options.clone())
+        .expect("brief context packet");
+
+    assert_eq!(packet.envelope.head_commit_id, relation.commit_id);
+    let blocker = packet
+        .items
+        .iter()
+        .find(|item| item.category == ContextItemCategory::BlockedDependency)
+        .expect("blocked dependency item");
+    assert_eq!(
+        blocker.subject.as_ref_string(),
+        format!(
+            "blocked_dependency:{}:{}",
+            dependent.task_entity_id, prerequisite.task_entity_id
+        )
+    );
+    assert!(
+        blocker
+            .summary
+            .contains("dependency_resource_requirements=1")
+    );
+    assert!(blocker.summary.contains(&format!(
+        "dependency_acceptance_criterion={}",
+        criterion.acceptance_criterion_entity_id
+    )));
+    assert!(blocker.summary.contains(&format!(
+        "dependency_verification_requirement={}",
+        requirement.verification_requirement_entity_id
+    )));
+    assert!(
+        blocker
+            .summary
+            .contains("dependency_vr_local_key=VR-prereq-resource")
+    );
+    assert!(blocker.summary.contains("resource_basis=1"));
+    assert!(blocker.summary.contains(&format!(
+        "verification_id={}",
+        verification.verification_entity_id
+    )));
+    assert!(
+        blocker
+            .summary
+            .contains(&format!("resource_id={}", basis.resource_id))
+    );
+    assert!(blocker.summary.contains("adapter=local-file@1"));
+    assert!(blocker.summary.contains("scope=path@1"));
+    assert!(blocker.summary.contains(&format!(
+        "baseline_observation_id={baseline_observation_id}"
+    )));
+    assert!(blocker.summary.contains(&format!(
+        "refresh_hint=\"verification cache-refresh --verification {} --resource-content-from-basis\"",
+        verification.verification_entity_id
+    )));
+
+    let saved = engine
+        .save_context_packet(options)
+        .expect("save brief context packet");
+    let packet_json =
+        String::from_utf8(canonical_bytes(&saved.snapshot.packet_json).expect("json"))
+            .expect("packet json is utf8");
+    assert!(packet_json.contains("\"summary\""));
+    assert!(!packet_json.contains("\"resource_basis\":"));
+    assert!(!packet_json.contains("\"refresh_hint\":"));
 }
 
 #[test]

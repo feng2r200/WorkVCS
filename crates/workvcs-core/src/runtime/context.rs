@@ -1559,6 +1559,23 @@ fn collect_context_items(
                     candidate.task.task_entity_id, dependency_task_entity_id
                 ))
             })?;
+            let mut summary = format!(
+                "blocked dependency task={} dependency={} dependency_status={} dependency_priority={}: {}",
+                candidate.task.task_entity_id,
+                dependency_task.task_entity_id,
+                dependency_task.state.status,
+                dependency_task.state.priority,
+                dependency_task.state.description
+            );
+            if let Some(resource_summary) = blocked_dependency_resource_basis_context_summary(
+                dependency_task,
+                &criteria_by_id,
+                &requirements_by_id,
+                &resource_backed_verifications,
+            )? {
+                summary.push(' ');
+                summary.push_str(&resource_summary);
+            }
             push_context_item(
                 &mut items,
                 profile,
@@ -1568,14 +1585,7 @@ fn collect_context_items(
                     task_entity_id: candidate.task.task_entity_id,
                     dependency_task_entity_id: *dependency_task_entity_id,
                 },
-                format!(
-                    "blocked dependency task={} dependency={} dependency_status={} dependency_priority={}: {}",
-                    candidate.task.task_entity_id,
-                    dependency_task.task_entity_id,
-                    dependency_task.state.status,
-                    dependency_task.state.priority,
-                    dependency_task.state.description
-                ),
+                summary,
             );
         }
     }
@@ -1725,6 +1735,85 @@ fn resource_backed_verifications_by_requirement(
         verifications.sort_by_key(|verification| verification.verification_entity_id);
     }
     by_requirement
+}
+
+fn blocked_dependency_resource_basis_context_summary(
+    dependency_task: &TaskSnapshot,
+    criteria_by_id: &BTreeMap<EntityId, &ContextAcceptanceCriterionSnapshot>,
+    requirements_by_id: &BTreeMap<EntityId, &VerificationRequirementSnapshot>,
+    resource_backed_verifications: &BTreeMap<EntityId, Vec<&VerificationSnapshot>>,
+) -> Result<Option<String>> {
+    let mut resource_backed_requirements = 0usize;
+    let mut selected_summary = None;
+
+    for criterion_ref in &dependency_task.state.acceptance_criteria {
+        let criterion = criteria_by_id
+            .get(&criterion_ref.acceptance_criterion_entity_id)
+            .ok_or_else(|| {
+                WorkVcsError::TaskInvalid(format!(
+                    "task {} references missing acceptance criterion {}",
+                    dependency_task.task_entity_id, criterion_ref.acceptance_criterion_entity_id
+                ))
+            })?;
+        if criterion.snapshot.task_entity_id != dependency_task.task_entity_id
+            || criterion.snapshot.local_key != criterion_ref.local_key
+        {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "task {} acceptance criterion reference {} does not match stored identity",
+                dependency_task.task_entity_id, criterion_ref.local_key
+            )));
+        }
+
+        for requirement_ref in &criterion.snapshot.state.verification_requirements {
+            let requirement = requirements_by_id
+                .get(&requirement_ref.verification_requirement_entity_id)
+                .ok_or_else(|| {
+                    WorkVcsError::TaskInvalid(format!(
+                        "acceptance criterion {} references missing verification requirement {}",
+                        criterion.snapshot.acceptance_criterion_entity_id,
+                        requirement_ref.verification_requirement_entity_id
+                    ))
+                })?;
+            if requirement.acceptance_criterion_entity_id
+                != criterion.snapshot.acceptance_criterion_entity_id
+                || requirement.local_key != requirement_ref.local_key
+            {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "acceptance criterion {} verification requirement reference {} does not match stored identity",
+                    criterion.snapshot.acceptance_criterion_entity_id, requirement_ref.local_key
+                )));
+            }
+
+            let Some(verifications) =
+                resource_backed_verifications.get(&requirement.verification_requirement_entity_id)
+            else {
+                continue;
+            };
+            resource_backed_requirements += 1;
+            if selected_summary.is_none() {
+                selected_summary = Some((
+                    criterion.snapshot.acceptance_criterion_entity_id,
+                    requirement.verification_requirement_entity_id,
+                    requirement.local_key.clone(),
+                    verification_requirement_resource_basis_context_summary(verifications),
+                ));
+            }
+        }
+    }
+
+    let Some((criterion_id, requirement_id, requirement_local_key, resource_summary)) =
+        selected_summary
+    else {
+        return Ok(None);
+    };
+    Ok(Some(format!(
+        "dependency_resource_requirements={} dependency_acceptance_criterion={} dependency_verification_requirement={} dependency_vr_local_key={} {}",
+        resource_backed_requirements,
+        criterion_id,
+        requirement_id,
+        requirement_local_key,
+        resource_summary
+    )))
 }
 
 fn verification_requirement_resource_basis_context_summary(

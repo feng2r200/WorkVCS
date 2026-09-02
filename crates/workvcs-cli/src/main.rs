@@ -45708,6 +45708,272 @@ mod tests {
     }
 
     #[test]
+    fn cli_context_brief_exposes_resource_basis_recovery_hint_for_blocked_dependency() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        let project = tempdir.path().join("project");
+        fs::create_dir_all(&project).expect("create project dir");
+        let scoped_file = project.join("prerequisite.md");
+        fs::write(&scoped_file, b"baseline blocked dependency resource")
+            .expect("write scoped file");
+        let scope_path = scoped_file.to_str().expect("scope path text");
+        let scope_payload = format!(r#"{{"path":"{scope_path}"}}"#);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let dependent = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Blocked dependent needs prerequisite",
+        ])
+        .expect("parse dependent task"))
+        .expect("create dependent task");
+        head = value(&dependent, "commit_id");
+        let prerequisite = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Prerequisite has resource-backed verification",
+        ])
+        .expect("parse prerequisite task"))
+        .expect("create prerequisite task");
+        head = value(&prerequisite, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &value(&prerequisite, "task_entity_id"),
+            "--task-version",
+            &value(&prerequisite, "task_entity_version_id"),
+            "--local-key",
+            "AC-prereq-resource",
+            "--statement",
+            "Prerequisite proof remains recoverable from context.",
+        ])
+        .expect("parse ac"))
+        .expect("create prerequisite ac");
+        head = value(&criterion, "commit_id");
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-prereq-resource",
+            "--statement",
+            "Refresh the prerequisite Resource basis.",
+        ])
+        .expect("parse vr"))
+        .expect("create prerequisite vr");
+        head = value(&requirement, "commit_id");
+
+        let resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse resource"))
+        .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let baseline = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--content-file",
+            scope_path,
+        ])
+        .expect("parse resource observation"))
+        .expect("record resource observation");
+        let baseline_observation_id = value(&baseline, "observation_id");
+        let baseline_fingerprint = value(&baseline, "fingerprint");
+
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification-requirement",
+            &value(&requirement, "verification_requirement_entity_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--scope-kind",
+            "path",
+            "--scope-schema-version",
+            "1",
+            "--scope-payload-json",
+            &scope_payload,
+            "--baseline-fingerprint",
+            &baseline_fingerprint,
+            "--baseline-observation",
+            &baseline_observation_id,
+        ])
+        .expect("parse verification"))
+        .expect("record verification");
+        head = value(&verification, "commit_id");
+
+        let dependency = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "depends-on",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &value(&dependent, "task_entity_id"),
+            "--depends-on",
+            &value(&prerequisite, "task_entity_id"),
+        ])
+        .expect("parse dependency"))
+        .expect("create dependency");
+        assert_eq!(value(&dependency, "relation_type"), "depends_on");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+        let dependent_id = value(&dependent, "task_entity_id");
+        let focused = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &session_id,
+            "--focus",
+            &dependent_id,
+        ])
+        .expect("parse focus set"))
+        .expect("focus dependent task");
+        assert_eq!(value(&focused, "focus_entity_id"), dependent_id);
+
+        let context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "20",
+        ])
+        .expect("parse brief context"))
+        .expect("brief context");
+        assert_eq!(value(&context, "focus_entity_id"), dependent_id);
+
+        let summary_json = context
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key.ends_with(".summary_json") && value.contains("blocked dependency"))
+                    .then_some(value.to_owned())
+            })
+            .unwrap_or_else(|| panic!("missing blocked dependency summary in output:\n{context}"));
+        assert!(summary_json.contains("dependency_resource_requirements=1"));
+        assert!(summary_json.contains(&format!(
+            "dependency_acceptance_criterion={}",
+            value(&criterion, "acceptance_criterion_entity_id")
+        )));
+        assert!(summary_json.contains(&format!(
+            "dependency_verification_requirement={}",
+            value(&requirement, "verification_requirement_entity_id")
+        )));
+        assert!(summary_json.contains("dependency_vr_local_key=VR-prereq-resource"));
+        assert!(summary_json.contains("resource_basis=1"));
+        assert!(summary_json.contains(&format!("resource_id={resource_id}")));
+        assert!(summary_json.contains("adapter=local-file@1"));
+        assert!(summary_json.contains("scope=path@1"));
+        assert!(summary_json.contains(&format!(
+            "baseline_observation_id={baseline_observation_id}"
+        )));
+        assert!(summary_json.contains(&format!(
+            "verification cache-refresh --verification {} --resource-content-from-basis",
+            value(&verification, "verification_entity_id")
+        )));
+    }
+
+    #[test]
     fn cli_context_includes_current_active_knowledge_summary() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

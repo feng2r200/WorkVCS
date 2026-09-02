@@ -132,7 +132,12 @@ names the Resource basis count, `verification_id`, `resource_id`,
 `baseline_observation_id`, and a `refresh_hint` for basis-aware
 `verification cache-refresh`. When a Task is blocked by an unsatisfied
 dependency, brief packets also include `blocked_dependency` items that name the
-blocking Task and summarize its current status. Failed Attempts appear as
+blocking Task and summarize its current status. If the blocking Task has
+current-head Resource-backed Verification Requirements, the
+`blocked_dependency` summary also names `dependency_resource_requirements`,
+`dependency_acceptance_criterion`, `dependency_verification_requirement`,
+`dependency_vr_local_key`, Resource basis details, `baseline_observation_id`,
+and a basis-aware `refresh_hint`. Failed Attempts appear as
 `failed_attempt` items in brief packets; normal packets also include running,
 succeeded, and inconclusive `attempt` items. Attempt summaries expose status,
 terminality, current Record version and digest, canonical scope, and nearby
@@ -708,7 +713,9 @@ Resource basis before observing any Resource. Unsupported or malformed basis
 entries fail the command instead of producing a partial refresh.
 If you are recovering from `context --profile brief`, use the
 `verification_id` and `refresh_hint` shown on the relevant
-`verification_requirement` item.
+`verification_requirement` item. For a focused Task blocked by a prerequisite,
+use the `dependency_verification_requirement` and `refresh_hint` shown on the
+`blocked_dependency` item for the blocking Task.
 
 When a Resource-backed Verification cannot be re-observed because the Resource
 is temporarily unavailable, record that state explicitly and keep the AC stale:
@@ -977,9 +984,10 @@ message=error: unexpected argument ...
   dogfood-proven. Batch Resource-basis refresh is the V1-local explicit
   foreground re-observation scheduling policy; background re-observation,
   daemons, watchers, automatic polling, and implicit refresh remain disabled.
-- Context packet persistence, transition-rationale projection, and brief
-  Resource-backed Verification Requirement recovery hints are implemented;
-  broader Context/Resource resolver dogfood remains open.
+- Context packet persistence, transition-rationale projection, current-task
+  Resource-backed Verification Requirement recovery hints, and focused
+  blocked-dependency Resource-backed Verification Requirement recovery hints
+  are implemented; broader Context/Resource resolver dogfood remains open.
 - `why` exposes focused Handoff scope links, anchored evolution as a deferred
   family, causal anchor ChangeSet projections, direct evolution operation
   subjects for those ChangeSets, current recognized detail for those operation

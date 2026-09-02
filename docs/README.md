@@ -80,6 +80,7 @@ index is:
 - [Phase 4NM Why Knowledge Relation Endpoint Evolution Evidence](provenance/phase-4nm-why-knowledge-relation-endpoint-evolution.md)
 - [Phase 4NN Context Resource Basis Packet Recovery Evidence](provenance/phase-4nn-context-resource-basis-packet.md)
 - [Phase 4NO Why Relation Create Endpoint Evolution Evidence](provenance/phase-4no-why-relation-create-endpoint-evolution.md)
+- [Phase 4NP Blocked Dependency Resource Context Evidence](provenance/phase-4np-blocked-dependency-resource-context.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -235,6 +236,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0480: Phase 4NM Why Knowledge Relation Endpoint Evolution](decisions/adr/0480-phase-4nm-why-knowledge-relation-endpoint-evolution.md)
 - [ADR-0481: Phase 4NN Context Resource Basis Packet Recovery](decisions/adr/0481-phase-4nn-context-resource-basis-packet.md)
 - [ADR-0482: Phase 4NO Why Relation Create Endpoint Evolution](decisions/adr/0482-phase-4no-why-relation-create-endpoint-evolution.md)
+- [ADR-0483: Phase 4NP Blocked Dependency Resource Context](decisions/adr/0483-phase-4np-blocked-dependency-resource-context.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

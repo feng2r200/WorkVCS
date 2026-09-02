@@ -7,11 +7,12 @@ use workvcs_core::{
     ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions, GoalTransitionOptions,
     KnowledgeCreateOptions, PlanCreateOptions, PrimaryContainmentCreateOptions,
     RecordCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions,
-    ResourceCreateOptions, ResourceObservationCreateOptions, SessionFocusOptions, SessionId,
-    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
-    VerificationCreateOptions, VerificationRequirementCreateOptions, VerificationResourceBasis,
-    VerificationResult, VerificationTarget, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
-    canonical_bytes, content_object_digest,
+    ResourceCreateOptions, ResourceObservationCreateOptions, RunnableTasksOptions,
+    SessionFocusOptions, SessionId, SessionStartOptions, StoreInitOptions, TaskCreateOptions,
+    TaskSchedulingRelationCreateOptions, VerificationCreateOptions,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    content_object_digest,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -1867,6 +1868,226 @@ fn context_packet_summarizes_resource_basis_recovery_for_blocked_dependency_requ
     assert!(packet_json.contains("\"summary\""));
     assert!(!packet_json.contains("\"resource_basis\":"));
     assert!(!packet_json.contains("\"refresh_hint\":"));
+}
+
+#[test]
+fn context_packet_summarizes_same_plan_peer_resource_recovery_when_focused_on_task() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let goal = engine
+        .create_goal(
+            GoalCreateOptions::new(branch_id, head, "Coordinate same-plan resource recovery")
+                .expect("goal options"),
+        )
+        .expect("create goal");
+    head = goal.commit_id;
+    let plan = engine
+        .create_plan(
+            PlanCreateOptions::new(
+                branch_id,
+                head,
+                "Keep peer verification recovery visible",
+                "Surface only direct same-plan runnable peer recovery hints",
+            )
+            .expect("plan options"),
+        )
+        .expect("create plan");
+    head = plan.commit_id;
+    let focused = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Focused task without Resource-backed VR")
+                .expect("focused task options"),
+        )
+        .expect("create focused task");
+    head = focused.commit_id;
+    let peer = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Runnable peer has Resource-backed VR")
+                .expect("peer task options"),
+        )
+        .expect("create peer task");
+    head = peer.commit_id;
+    let goal_plan = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                branch_id,
+                head,
+                goal.goal_entity_id,
+                plan.plan_entity_id,
+            )
+            .expect("goal-plan containment options"),
+        )
+        .expect("create goal-plan containment");
+    head = goal_plan.commit_id;
+    let focused_relation = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                branch_id,
+                head,
+                plan.plan_entity_id,
+                focused.task_entity_id,
+            )
+            .expect("plan-focused containment options"),
+        )
+        .expect("create plan-focused containment");
+    head = focused_relation.commit_id;
+    let peer_relation = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                branch_id,
+                head,
+                plan.plan_entity_id,
+                peer.task_entity_id,
+            )
+            .expect("plan-peer containment options"),
+        )
+        .expect("create plan-peer containment");
+    head = peer_relation.commit_id;
+
+    let criterion = engine
+        .create_acceptance_criterion(
+            AcceptanceCriterionCreateOptions::new(
+                branch_id,
+                head,
+                peer.task_entity_id,
+                peer.task_entity_version_id,
+                "AC-peer-resource",
+                "Peer proof remains recoverable from focused context.",
+                AcceptanceCriterionClassification::Required,
+            )
+            .expect("acceptance criterion options"),
+        )
+        .expect("create peer acceptance criterion");
+    head = criterion.commit_id;
+    let requirement = engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                branch_id,
+                head,
+                criterion.acceptance_criterion_entity_id,
+                criterion.acceptance_criterion_entity_version_id,
+                "VR-peer-resource",
+                "Refresh the peer Resource basis.",
+            )
+            .expect("verification requirement options"),
+        )
+        .expect("create peer verification requirement");
+    head = requirement.commit_id;
+
+    let (basis, baseline_observation_id) = resource_basis(&mut engine, "docs/peer.md");
+    let verification = engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                branch_id,
+                head,
+                VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+            )
+            .expect("verification options")
+            .with_resource_basis(vec![basis.clone()])
+            .expect("verification resource basis"),
+        )
+        .expect("create peer resource-backed verification");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    let unfocused_runnable = engine
+        .runnable_tasks(RunnableTasksOptions::new(session.session_id))
+        .expect("unfocused runnable tasks");
+    assert!(
+        unfocused_runnable
+            .candidates
+            .iter()
+            .any(
+                |candidate| candidate.task.task_entity_id == peer.task_entity_id
+                    && candidate.runnable
+            )
+    );
+    engine
+        .set_session_focus(SessionFocusOptions::new(
+            session.session_id,
+            focused.task_entity_id,
+        ))
+        .expect("focus session on current task");
+
+    let brief = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+        )
+        .expect("brief context packet");
+    assert!(
+        !brief
+            .items
+            .iter()
+            .any(|item| item.summary.contains("same_plan_peer_task="))
+    );
+
+    for profile in [ContextProfile::Normal, ContextProfile::Full] {
+        let packet = engine
+            .context_packet(ContextPacketOptions::new(session.session_id).with_profile(profile))
+            .expect("context packet");
+        let peer_item = packet
+            .items
+            .iter()
+            .find(|item| {
+                item.category == ContextItemCategory::VerificationRequirement
+                    && item.summary.contains("local_key=VR-peer-resource")
+            })
+            .unwrap_or_else(|| {
+                panic!("missing same-plan peer VR item in {profile:?}: {packet:#?}")
+            });
+        assert_eq!(peer_item.priority, ContextPriority::P2);
+        assert_eq!(
+            peer_item.subject.as_ref_string(),
+            format!(
+                "verification_requirement:{}",
+                requirement.verification_requirement_entity_id
+            )
+        );
+        assert!(
+            peer_item
+                .summary
+                .contains(&format!("same_plan_peer_task={}", peer.task_entity_id))
+        );
+        assert!(
+            peer_item
+                .summary
+                .contains(&format!("parent_plan={}", plan.plan_entity_id))
+        );
+        assert!(peer_item.summary.contains("peer_runnable=true"));
+        assert!(peer_item.summary.contains(&format!(
+            "criterion={}",
+            criterion.acceptance_criterion_entity_id
+        )));
+        assert!(peer_item.summary.contains("resource_basis=1"));
+        assert!(peer_item.summary.contains(&format!(
+            "verification_id={}",
+            verification.verification_entity_id
+        )));
+        assert!(
+            peer_item
+                .summary
+                .contains(&format!("resource_id={}", basis.resource_id))
+        );
+        assert!(peer_item.summary.contains("adapter=local-file@1"));
+        assert!(peer_item.summary.contains("scope=path@1"));
+        assert!(peer_item.summary.contains(&format!(
+            "baseline_observation_id={baseline_observation_id}"
+        )));
+        assert!(peer_item.summary.contains(&format!(
+            "refresh_hint=\"verification cache-refresh --verification {} --resource-content-from-basis\"",
+            verification.verification_entity_id
+        )));
+    }
 }
 
 #[test]

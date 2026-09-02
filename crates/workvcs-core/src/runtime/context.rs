@@ -686,9 +686,31 @@ pub(crate) fn context_packet(
         overview.branch.workspace_id,
         &overview.branch,
     )?;
+    let workspace_runnable_tasks = if needs_workspace_runnable_context_for_focused_task(
+        options.profile(),
+        &overview,
+    ) {
+        let workspace_runnable_tasks = runnable::runnable_tasks(
+            connection,
+            &RunnableTasksOptions::new(options.session_id()).with_workspace_wide_scope(),
+        )?;
+        if workspace_runnable_tasks.workspace_id != overview.branch.workspace_id
+            || workspace_runnable_tasks.branch_id != overview.branch.branch_id
+            || workspace_runnable_tasks.head_commit_id != overview.branch.head_commit_id
+        {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "session {} workspace-wide runnable context anchor changed while resolving packet",
+                options.session_id()
+            )));
+        }
+        Some(workspace_runnable_tasks)
+    } else {
+        None
+    };
     let mut items = collect_context_items(
         &overview,
         &verifications,
+        workspace_runnable_tasks.as_ref(),
         options.profile(),
         options.scope(),
         &transition_rationales,
@@ -1345,6 +1367,7 @@ fn rationale_json_has_content(changeset: &ChangeSetSnapshot) -> Result<bool> {
 fn collect_context_items(
     context: &ContextOverview,
     verifications: &[VerificationSnapshot],
+    workspace_runnable_tasks: Option<&RunnableTasksProjection>,
     profile: ContextProfile,
     scope: Option<&CanonicalValue>,
     transition_rationales: &[ContextTransitionRationaleSnapshot],
@@ -1362,6 +1385,11 @@ fn collect_context_items(
         .map(|requirement| (requirement.verification_requirement_entity_id, requirement))
         .collect::<BTreeMap<_, _>>();
     let resource_backed_verifications = resource_backed_verifications_by_requirement(verifications);
+    let resource_requirement_indexes = ResourceRequirementContextIndexes {
+        criteria_by_id: &criteria_by_id,
+        requirements_by_id: &requirements_by_id,
+        resource_backed_verifications: &resource_backed_verifications,
+    };
     let tasks_by_id = context
         .tasks
         .iter()
@@ -1589,6 +1617,14 @@ fn collect_context_items(
             );
         }
     }
+    push_same_plan_peer_resource_requirement_context_items(
+        &mut items,
+        context,
+        workspace_runnable_tasks,
+        profile,
+        &primary_parent_by_child,
+        &resource_requirement_indexes,
+    )?;
     for relation in &context.knowledge_relations.relations {
         push_context_item(
             &mut items,
@@ -1714,6 +1750,182 @@ fn collect_context_items(
         );
     }
     Ok(items)
+}
+
+fn needs_workspace_runnable_context_for_focused_task(
+    profile: ContextProfile,
+    context: &ContextOverview,
+) -> bool {
+    if profile == ContextProfile::Brief {
+        return false;
+    }
+    let Some(focus) = &context.session.focus else {
+        return false;
+    };
+    context
+        .tasks
+        .iter()
+        .any(|task| task.task_entity_id == focus.focus_entity_id)
+}
+
+fn push_same_plan_peer_resource_requirement_context_items(
+    items: &mut Vec<ContextItem>,
+    context: &ContextOverview,
+    workspace_runnable_tasks: Option<&RunnableTasksProjection>,
+    profile: ContextProfile,
+    primary_parent_by_child: &BTreeMap<EntityId, &PrimaryContainmentSnapshot>,
+    resource_requirement_indexes: &ResourceRequirementContextIndexes<'_>,
+) -> Result<()> {
+    if profile == ContextProfile::Brief {
+        return Ok(());
+    }
+    let Some(workspace_runnable_tasks) = workspace_runnable_tasks else {
+        return Ok(());
+    };
+    let Some(focus) = &context.session.focus else {
+        return Ok(());
+    };
+    let focused_task_id = focus.focus_entity_id;
+    if !context
+        .tasks
+        .iter()
+        .any(|task| task.task_entity_id == focused_task_id)
+    {
+        return Ok(());
+    }
+    let Some(focused_parent) = primary_parent_by_child.get(&focused_task_id) else {
+        return Ok(());
+    };
+    if focused_parent.child_kind != PrimaryContainmentEndpointKind::Task {
+        return Err(WorkVcsError::RelationInvalid(format!(
+            "primary containment relation {} child kind {} does not match focused task {}",
+            focused_parent.relation_id, focused_parent.child_kind, focused_task_id
+        )));
+    }
+    if focused_parent.parent_kind != PrimaryContainmentEndpointKind::Plan {
+        return Ok(());
+    }
+    let parent_plan_id = focused_parent.parent_entity_id;
+    let focused_candidate_ids = context
+        .runnable_tasks
+        .candidates
+        .iter()
+        .map(|candidate| candidate.task.task_entity_id)
+        .collect::<BTreeSet<_>>();
+
+    for candidate in &workspace_runnable_tasks.candidates {
+        if !candidate.runnable
+            || candidate.task.task_entity_id == focused_task_id
+            || focused_candidate_ids.contains(&candidate.task.task_entity_id)
+        {
+            continue;
+        }
+        let Some(peer_parent) = primary_parent_by_child.get(&candidate.task.task_entity_id) else {
+            continue;
+        };
+        if peer_parent.child_kind != PrimaryContainmentEndpointKind::Task {
+            return Err(WorkVcsError::RelationInvalid(format!(
+                "primary containment relation {} child kind {} does not match peer task {}",
+                peer_parent.relation_id, peer_parent.child_kind, candidate.task.task_entity_id
+            )));
+        }
+        if peer_parent.parent_kind != PrimaryContainmentEndpointKind::Plan
+            || peer_parent.parent_entity_id != parent_plan_id
+        {
+            continue;
+        }
+        push_task_resource_requirement_context_items(
+            items,
+            &candidate.task,
+            parent_plan_id,
+            profile,
+            resource_requirement_indexes,
+        )?;
+    }
+    Ok(())
+}
+
+struct ResourceRequirementContextIndexes<'a> {
+    criteria_by_id: &'a BTreeMap<EntityId, &'a ContextAcceptanceCriterionSnapshot>,
+    requirements_by_id: &'a BTreeMap<EntityId, &'a VerificationRequirementSnapshot>,
+    resource_backed_verifications: &'a BTreeMap<EntityId, Vec<&'a VerificationSnapshot>>,
+}
+
+fn push_task_resource_requirement_context_items(
+    items: &mut Vec<ContextItem>,
+    peer_task: &TaskSnapshot,
+    parent_plan_id: EntityId,
+    profile: ContextProfile,
+    resource_requirement_indexes: &ResourceRequirementContextIndexes<'_>,
+) -> Result<()> {
+    for criterion_ref in &peer_task.state.acceptance_criteria {
+        let criterion = resource_requirement_indexes
+            .criteria_by_id
+            .get(&criterion_ref.acceptance_criterion_entity_id)
+            .ok_or_else(|| {
+                WorkVcsError::TaskInvalid(format!(
+                    "task {} references missing acceptance criterion {}",
+                    peer_task.task_entity_id, criterion_ref.acceptance_criterion_entity_id
+                ))
+            })?;
+        if criterion.snapshot.task_entity_id != peer_task.task_entity_id
+            || criterion.snapshot.local_key != criterion_ref.local_key
+        {
+            return Err(WorkVcsError::TaskInvalid(format!(
+                "task {} acceptance criterion reference {} does not match stored identity",
+                peer_task.task_entity_id, criterion_ref.local_key
+            )));
+        }
+
+        for requirement_ref in &criterion.snapshot.state.verification_requirements {
+            let requirement = resource_requirement_indexes
+                .requirements_by_id
+                .get(&requirement_ref.verification_requirement_entity_id)
+                .ok_or_else(|| {
+                    WorkVcsError::TaskInvalid(format!(
+                        "acceptance criterion {} references missing verification requirement {}",
+                        criterion.snapshot.acceptance_criterion_entity_id,
+                        requirement_ref.verification_requirement_entity_id
+                    ))
+                })?;
+            if requirement.acceptance_criterion_entity_id
+                != criterion.snapshot.acceptance_criterion_entity_id
+                || requirement.local_key != requirement_ref.local_key
+            {
+                return Err(WorkVcsError::TaskInvalid(format!(
+                    "acceptance criterion {} verification requirement reference {} does not match stored identity",
+                    criterion.snapshot.acceptance_criterion_entity_id, requirement_ref.local_key
+                )));
+            }
+
+            let Some(verifications) = resource_requirement_indexes
+                .resource_backed_verifications
+                .get(&requirement.verification_requirement_entity_id)
+            else {
+                continue;
+            };
+            push_context_item(
+                items,
+                profile,
+                ContextPriority::P2,
+                ContextItemCategory::VerificationRequirement,
+                ContextItemSubject::VerificationRequirement {
+                    verification_requirement_entity_id: requirement
+                        .verification_requirement_entity_id,
+                },
+                format!(
+                    "same_plan_peer_task={} parent_plan={} peer_runnable=true criterion={} local_key={}: {} {}",
+                    peer_task.task_entity_id,
+                    parent_plan_id,
+                    requirement.acceptance_criterion_entity_id,
+                    requirement.local_key,
+                    requirement.state.statement,
+                    verification_requirement_resource_basis_context_summary(verifications)
+                ),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn resource_backed_verifications_by_requirement(

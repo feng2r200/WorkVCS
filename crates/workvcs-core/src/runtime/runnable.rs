@@ -16,15 +16,28 @@ const SHARED_CLAIM_MODE: &str = "shared";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunnableTasksOptions {
     session_id: SessionId,
+    workspace_wide_scope: bool,
 }
 
 impl RunnableTasksOptions {
     pub fn new(session_id: SessionId) -> Self {
-        Self { session_id }
+        Self {
+            session_id,
+            workspace_wide_scope: false,
+        }
     }
 
     pub fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub(crate) fn with_workspace_wide_scope(mut self) -> Self {
+        self.workspace_wide_scope = true;
+        self
+    }
+
+    fn workspace_wide_scope(&self) -> bool {
+        self.workspace_wide_scope
     }
 }
 
@@ -145,8 +158,11 @@ pub(crate) fn runnable_tasks(
     let scheduling_relations =
         history::task_scheduling_relations_at(connection, anchor.head_commit_id)?;
     let dependency_readiness = dependency_readiness_by_task(&all_tasks, &scheduling_relations)?;
-    let candidate_scope =
-        candidate_scope_for_focus(connection, anchor.head_commit_id, anchor.focus.as_ref())?;
+    let candidate_scope = if options.workspace_wide_scope() {
+        CandidateScope::workspace_wide()
+    } else {
+        candidate_scope_for_focus(connection, anchor.head_commit_id, anchor.focus.as_ref())?
+    };
     let claim_coordination = load_active_claim_coordination(
         connection,
         anchor.workspace_id,

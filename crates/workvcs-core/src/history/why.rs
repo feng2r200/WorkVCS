@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use super::goal::GOAL_ENTITY_KIND;
 use super::knowledge::{KNOWLEDGE_ENTITY_KIND, knowledge_at};
 use super::plan::PLAN_ENTITY_KIND;
-use super::record::{RECORD_ENTITY_KIND, RecordKind, record_at};
+use super::record::{
+    RECORD_ENTITY_KIND, RECORD_RELATION_REMOVE_OPERATION_TYPE,
+    RECORD_RELATION_RESTORE_OPERATION_TYPE, RecordKind, load_record_relation_version, record_at,
+};
 use super::task::{
     ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_ENTITY_KIND,
     VERIFICATION_REQUIREMENT_ENTITY_KIND,
@@ -646,39 +649,80 @@ fn why_evolution_change_operations(
             continue;
         }
         for operation in changeset_operations(connection, entry.changeset_id)?.operations {
-            if operation.subject != ChangeOperationSubject::Entity(entity_id) {
-                continue;
-            }
-            let Some(membership_change) =
-                load_direct_entity_evolution_membership_change(connection, operation.operation_id)?
-            else {
-                continue;
-            };
-            let subject_detail = membership_change
-                .after_entity_version_id
-                .map(|entity_version_id| {
-                    why_direct_entity_operation_subject_detail(
+            match &operation.subject {
+                ChangeOperationSubject::Entity(subject_entity_id)
+                    if *subject_entity_id == entity_id =>
+                {
+                    let Some(membership_change) = load_direct_entity_evolution_membership_change(
+                        connection,
+                        operation.operation_id,
+                    )?
+                    else {
+                        continue;
+                    };
+                    let subject_detail = membership_change
+                        .after_entity_version_id
+                        .map(|entity_version_id| {
+                            why_direct_entity_operation_subject_detail(
+                                connection,
+                                resolved,
+                                entity_id,
+                                entry.commit_id,
+                                entity_version_id,
+                            )
+                        })
+                        .transpose()?
+                        .flatten();
+                    push_why_evolution_operation(
+                        &mut evolution_operations,
+                        &mut seen_operation_ids,
+                        WhyEvolutionOperationSource {
+                            commit_id: entry.commit_id,
+                            changeset_id: entry.changeset_id,
+                            operation_type: entry.operation_type.as_str(),
+                            operation_schema_version: entry.operation_schema_version,
+                        },
+                        operation,
+                        subject_detail,
+                    )?;
+                }
+                ChangeOperationSubject::Relation(relation_id)
+                    if is_direct_record_relation_evolution_operation(
+                        entry.operation_type.as_str(),
+                    ) =>
+                {
+                    let Some(membership_change) = load_direct_relation_evolution_membership_change(
+                        connection,
+                        operation.operation_id,
+                    )?
+                    else {
+                        continue;
+                    };
+                    let Some(subject_detail) = why_direct_record_relation_operation_subject_detail(
                         connection,
                         resolved,
-                        entity_id,
-                        entry.commit_id,
-                        entity_version_id,
-                    )
-                })
-                .transpose()?
-                .flatten();
-            push_why_evolution_operation(
-                &mut evolution_operations,
-                &mut seen_operation_ids,
-                WhyEvolutionOperationSource {
-                    commit_id: entry.commit_id,
-                    changeset_id: entry.changeset_id,
-                    operation_type: entry.operation_type.as_str(),
-                    operation_schema_version: entry.operation_schema_version,
-                },
-                operation,
-                subject_detail,
-            )?;
+                        subject,
+                        *relation_id,
+                        membership_change.relation_version_id,
+                    )?
+                    else {
+                        continue;
+                    };
+                    push_why_evolution_operation(
+                        &mut evolution_operations,
+                        &mut seen_operation_ids,
+                        WhyEvolutionOperationSource {
+                            commit_id: entry.commit_id,
+                            changeset_id: entry.changeset_id,
+                            operation_type: entry.operation_type.as_str(),
+                            operation_schema_version: entry.operation_schema_version,
+                        },
+                        operation,
+                        Some(subject_detail),
+                    )?;
+                }
+                _ => continue,
+            }
         }
     }
     Ok(evolution_operations)
@@ -686,6 +730,10 @@ fn why_evolution_change_operations(
 
 struct DirectEntityEvolutionMembershipChange {
     after_entity_version_id: Option<EntityVersionId>,
+}
+
+struct DirectRelationEvolutionMembershipChange {
+    relation_version_id: RelationVersionId,
 }
 
 fn load_direct_entity_evolution_membership_change(
@@ -718,6 +766,48 @@ fn load_direct_entity_evolution_membership_change(
         .transpose()?;
     Ok(Some(DirectEntityEvolutionMembershipChange {
         after_entity_version_id,
+    }))
+}
+
+fn is_direct_record_relation_evolution_operation(operation_type: &str) -> bool {
+    matches!(
+        operation_type,
+        RECORD_RELATION_REMOVE_OPERATION_TYPE | RECORD_RELATION_RESTORE_OPERATION_TYPE
+    )
+}
+
+fn load_direct_relation_evolution_membership_change(
+    connection: &StoreConnection,
+    operation_id: crate::identity::OperationId,
+) -> Result<Option<DirectRelationEvolutionMembershipChange>> {
+    let membership_change = connection
+        .inner()
+        .query_row(
+            "SELECT before_relation_version_id, after_relation_version_id
+             FROM relation_membership_change
+             WHERE operation_id = ?1",
+            params![&operation_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Option<Vec<u8>>>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(crate::error::storage_error)?;
+    let Some((before_relation_version_id, after_relation_version_id)) = membership_change else {
+        return Ok(None);
+    };
+    let Some(relation_version_id) = after_relation_version_id.or(before_relation_version_id) else {
+        return Ok(None);
+    };
+    let relation_version_id = decode_relation_version_id(
+        "relation_membership_change.relation_version_id",
+        relation_version_id,
+    )?;
+    Ok(Some(DirectRelationEvolutionMembershipChange {
+        relation_version_id,
     }))
 }
 
@@ -817,6 +907,41 @@ fn why_direct_entity_operation_subject_detail(
             entity_kind,
             entity_version_id,
             statement,
+        },
+    )))
+}
+
+fn why_direct_record_relation_operation_subject_detail(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    subject: WhyQuerySubject,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+) -> Result<Option<WhyEvolutionSubjectDetail>> {
+    let Some(relation) = load_record_relation_version(
+        connection,
+        resolved.target.workspace_id,
+        relation_id,
+        relation_version_id,
+    )?
+    else {
+        return Ok(None);
+    };
+    let source =
+        WhyRelationEndpoint::entity(relation.source_record_entity_id, WhyEntityKind::Record);
+    let target =
+        WhyRelationEndpoint::entity(relation.target_record_entity_id, WhyEntityKind::Record);
+    if !endpoint_matches_subject(subject, source) && !endpoint_matches_subject(subject, target) {
+        return Ok(None);
+    }
+    Ok(Some(WhyEvolutionSubjectDetail::Relation(
+        WhyEvolutionSubjectRelationDetail {
+            relation_kind: record_relation_kind(relation.relation_type),
+            relation_version_id: relation.relation_version_id,
+            relation_label: relation.relation_label,
+            source,
+            target,
+            state_digest: relation.state_digest,
         },
     )))
 }
@@ -1610,6 +1735,12 @@ fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
 fn decode_entity_version_id(column: &str, bytes: Vec<u8>) -> Result<EntityVersionId> {
     let bytes = decode_16(column, bytes)?;
     EntityVersionId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(error.to_string()))
+}
+
+fn decode_relation_version_id(column: &str, bytes: Vec<u8>) -> Result<RelationVersionId> {
+    let bytes = decode_16(column, bytes)?;
+    RelationVersionId::from_bytes(bytes)
         .map_err(|error| WorkVcsError::QueryInvalid(error.to_string()))
 }
 

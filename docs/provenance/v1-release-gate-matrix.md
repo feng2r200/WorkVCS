@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-02 by ADR-0478 / Phase 4NK
+Last refreshed: 2026-09-02 by ADR-0479 / Phase 4NL
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4NK was main commit
-`7a4ad9fa00d3ac96a80b2124eca222b605146e6f` and the V1 readiness ledger last
-refreshed by ADR-0477 / Phase 4NJ. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4NL was main commit
+`a7679f7e7ec182d5c03af19395aebc0483d8907c` and the V1 readiness ledger last
+refreshed by ADR-0478 / Phase 4NK. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -24,10 +24,12 @@ project documents or current validation evidence.
 
 V0.1 dogfood should continue. This matrix records local operator recovery
 maturity proof, direct queried-Entity evolution operation projection, and
-operation-local direct Entity evolution detail for `workvcs why`. It does not
-close the remaining relation-subject traversal, multi-hop/full evolution
-traversal, broader context/Resource resolver, broader causal traversal, or
-release-operation gaps named by the gates.
+operation-local direct Entity evolution detail for `workvcs why`, plus direct
+Record relation remove/restore endpoint evolution projection. It does not close
+the remaining full relation-subject traversal beyond that direct Record
+remove/restore slice, multi-hop/full evolution traversal, broader
+context/Resource resolver, broader causal traversal, or release-operation gaps
+named by the gates.
 
 ## Gate States
 
@@ -49,7 +51,7 @@ release-operation gaps named by the gates.
 | AC, VR, Verification, Evidence, and verification wrapper | Acceptance and verification records can close obligations through the CLI and remain understandable in recovery and handoff scenarios. | Ledger marks AC/VR/Verification/Evidence and the top-level `verify` wrapper as dogfood-proven for current covered scenarios. Phase 4NB proves AC/VR closure in a recovery Handoff scenario: stale Resource-backed applicability blocks Task closeout, explicit refresh projects `resource_drift`, and recovery `verify` records new evidence before Task/Plan/Goal closeout. | Pass | No | Keep as regression foundation; broaden only if a future recovery or handoff loop exposes a concrete evidence-closure gap. |
 | Resource registration, observation, applicability, and drift | Resource-backed verification covers explicit basis refresh, unavailable/error states, drift projection, adapter boundaries, and re-observation policy. | Phases 4LV, 4LX through 4MG, and 4MN cover exact path, path-prefix, glob, Git worktree, persisted-basis, and batch basis refresh scenarios; Phase 4MV covers explicit no-renames/delete-add Git rename-policy scenarios; Phase 4MW covers explicit tracked-symlink Git index/diff and untracked-non-regular Resource error-policy scenarios; Phase 4MX covers explicit parent-Git submodule gitlink/status/diff and disabled-recursion policy scenarios; Phase 4MY covers explicit parent-Git sparse-checkout index/status/diff and disabled-expansion policy scenarios; Phase 4MZ covers explicit no-WorkVCS-case-folding scenarios for local-file exact path, path-prefix, glob, and Git worktree Resource observations; Phase 4NA covers explicit foreground operator-triggered re-observation scheduling through current-head Resource-backed batch refresh, with background re-observation disabled. | Pass | No | Keep as regression foundation; background daemons, watchers, automatic polling, implicit refresh, and Agent orchestration remain outside V1. |
 | Session, Claim, Runnable, `claim next`, and `next` | Continuation, focus, and Claim guard flows remain usable across stale recovery and multi-operator scenarios. | Ledger marks the current Session/Runnable/claim-next surface dogfood-proven. Phase 4LW and Phase 4MI cover Claim transfer, stale takeover, and shared read-only collaboration. Phase 4MR covers shared-Claim write/read-write coordination in this repository: non-unique shared Claims block protected writer mutation, then reader release restores unique-writer closeout. | Pass | No | Keep as regression foundation; automatic ownership arbitration, distributed collaboration, and remote multi-operator coordination remain outside V1 unless explicitly authorized. |
-| Context resolver, packets, and `why` explanations | Context packets and `why` output expose enough focused, causal, and explanatory state for continuation Agents without speculative LLM extraction. | Phases 4LR through 4LT and 4LX cover scoped packets and rationale projection; Phases 4MA, 4MH, and 4ML cover selected `why` relationships and causal anchors. Phase 4NC covers direct Record-to-Record and Record-to-Knowledge epistemic statement projections in `why`. Phase 4NG covers direct ChangeOperation Entity/Relation subject projection for causal-anchor ChangeSets in `why`. Phase 4NH covers current recognized subject detail for those direct operation subjects, including Record/Knowledge statements and Relation kind/source/target detail. Phase 4NJ covers direct first-parent Entity-subject evolution operations for queried changed Entities that are not causal anchors. Phase 4NK covers operation-local Entity detail for multiple direct queried-Entity evolution operations. | Partial | Yes | Prove broader context/Resource resolver behavior, relation-subject and multi-hop/full evolution traversal beyond direct Entity subject operations and operation-local direct Entity detail, and broader causal traversal only through concrete dogfood gaps; broaden epistemic traversal only if a future concrete dogfood gap requires it. |
+| Context resolver, packets, and `why` explanations | Context packets and `why` output expose enough focused, causal, and explanatory state for continuation Agents without speculative LLM extraction. | Phases 4LR through 4LT and 4LX cover scoped packets and rationale projection; Phases 4MA, 4MH, and 4ML cover selected `why` relationships and causal anchors. Phase 4NC covers direct Record-to-Record and Record-to-Knowledge epistemic statement projections in `why`. Phase 4NG covers direct ChangeOperation Entity/Relation subject projection for causal-anchor ChangeSets in `why`. Phase 4NH covers current recognized subject detail for those direct operation subjects, including Record/Knowledge statements and Relation kind/source/target detail. Phase 4NJ covers direct first-parent Entity-subject evolution operations for queried changed Entities that are not causal anchors. Phase 4NK covers operation-local Entity detail for multiple direct queried-Entity evolution operations. Phase 4NL covers direct Record-to-Record relation remove/restore operations as endpoint evolution for queried Entity endpoints, including operation-local relation detail when a removed relation is absent from current `relation_edges`. | Partial | Yes | Prove broader context/Resource resolver behavior, full relation-subject traversal beyond direct Record relation remove/restore endpoint evolution, multi-hop/full evolution traversal, and broader causal traversal only through concrete dogfood gaps; broaden epistemic traversal only if a future concrete dogfood gap requires it. |
 | Handoff consumption | Handoff creation, display, focus consumption, blocked recovery, and continuation work across varied project and write-mode workflows. | Current evidence covers focused Handoff smoke, Handoff consumption, blocked recovery, read-only external-project Handoff creation/show, external-project continuation-adjacent Claim work, and Phase 4MS write-mode Handoff consumption with continuation Claim, VR-backed verification, Task closeout, and SessionDiff closeout. | Pass | No | Keep as regression foundation; remote/cloud Handoff, cross-Store synchronization, automatic takeover, and Agent orchestration remain outside V1 unless explicitly authorized. |
 | Merge lifecycle and conflict recovery | Divergent Work Branch resolution, freeze/continue/abort/restart recovery, and final WorkState proof hold in realistic write-mode external-project work. | Phase 4LN and Phase 4MM prove merge behavior in durable local Stores, including larger conflict sets and two-parent merge commits. Phase 4MT adds generated external local Git project write-mode merge proof. Phase 4MU repeats merge against pre-existing real `agent_soul` project content cloned into a write-mode sandbox with an actual Git conflict on existing `README.md`, WorkVCS conflict and auto merge items, unresolved freeze guard, explicit source-side resolutions, freeze/continue, a two-parent WorkVCS merge commit, final WorkState proof, Branch diff, SessionDiff closeout, original-project unchanged proof, and required-valid integrity/doctor. | Pass | No | Keep as regression foundation; semantic/LLM merge, remote or distributed merge, cross-Store synchronization, Agent orchestration, and direct mutation of an original external repository remain outside the bounded V1-local release gate unless separately authorized. |
 | Operator discoverability and actionable recovery | Operators and scripts can identify failures, choose recovery, and parse error output without source inspection. | Phase 4LZ, Phase 4MJ, Phase 4MK, and Phase 4MO cover stable key-value and JSON error output plus per-code recovery guidance for current error codes. Phase 4NF makes the maintained Store portability validator's successful preserved `run.log` self-contained by appending the final stdout summary to the log tail, proving stdout/log-tail equality in a real opt-in run. Phase 4NI adds a local recovery maturity matrix proving guide coverage for all 41 core business error codes plus `cli_parse_error`, the retryability rule, parse-error JSON recovery, branch-head retry, Resource drift/unavailable/error recovery to applicable, stale-gated Claim takeover, merge unresolved recovery, and final Store integrity. | Pass | No | Keep as regression foundation; reduce command friction only where future dogfood exposes repeated workflow blockage. |
@@ -73,6 +75,35 @@ Priority candidates:
    from the exact candidate commit and obtain explicit release authorization.
 4. Refresh this matrix after each blocking gate changes status and before any
    release-ready or release-candidate claim.
+
+## Phase 4NL Update
+
+Phase 4NL refreshes this matrix after making direct Record-to-Record relation
+remove/restore operations visible as endpoint evolution from
+`workvcs why --entity <Record endpoint>`. The change was driven by the post-4NK
+gap where a removed supports relation changed a queried Decision endpoint's
+neighborhood, but the operation subject was the Relation, not the Decision
+Entity, so `why` reported no evolution operation.
+
+The old-main/new-binary dogfood run used one Store and one relation removal
+commit. The previous main binary proved `old_relation_edges=0`,
+`old_causal_anchor_changesets=0`, `old_evolution_change_operations=0`,
+`old_deferred_relation_families=0`, and
+`old_expected_status=1` for `--expected-evolution-change-operations 1`. The
+Phase 4NL binary preserved `new_relation_edges=0` after removal and proved
+`new_evolution_change_operations=1`, `new_expected_match=true`,
+`new_subject_family=relation`, `new_subject_relation_kind=record_supports`,
+matching operation-local relation version, and matching Finding source plus
+Decision target endpoint ids.
+
+This advances the Context resolver, packets, and `why` explanations gate by
+removing one concrete direct Record relation remove/restore endpoint evolution
+gap, backed by
+`docs/provenance/phase-4nl-why-relation-subject-endpoint-evolution.md`. The
+gate remains `Partial` because full relation-subject traversal beyond this
+direct Record remove/restore slice, multi-hop/full evolution traversal,
+broader causal traversal, and broader context/Resource resolver maturity are
+still open. The overall release decision remains false.
 
 ## Phase 4NK Update
 

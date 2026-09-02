@@ -3682,14 +3682,14 @@ struct DecisionRecordSupersedeRows {
     now_us: i64,
 }
 
-struct LoadedRecordRelationVersion {
-    relation_id: RelationId,
-    relation_version_id: RelationVersionId,
-    relation_type: RecordRelationType,
-    relation_label: Option<String>,
-    source_record_entity_id: EntityId,
-    target_record_entity_id: EntityId,
-    state_digest: Digest,
+pub(crate) struct LoadedRecordRelationVersion {
+    pub(crate) relation_id: RelationId,
+    pub(crate) relation_version_id: RelationVersionId,
+    pub(crate) relation_type: RecordRelationType,
+    pub(crate) relation_label: Option<String>,
+    pub(crate) source_record_entity_id: EntityId,
+    pub(crate) target_record_entity_id: EntityId,
+    pub(crate) state_digest: Digest,
 }
 
 struct LoadedRecordKnowledgeRelationVersion {
@@ -5364,7 +5364,7 @@ fn load_record_version(
     })
 }
 
-fn load_record_relation_version(
+pub(crate) fn load_record_relation_version(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     relation_id: RelationId,

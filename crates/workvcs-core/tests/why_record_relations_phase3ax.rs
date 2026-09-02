@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     ChangeOperationSubject, CommitId, Engine, EntityId, RecordCreateCommit, RecordCreateOptions,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordTransitionCommit,
-    RecordTransitionOptions, ResolvedWhyQuerySubject, StoreInitOptions, WhyDeferredRelationFamily,
-    WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
+    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationRemoveOptions,
+    RecordRelationRestoreOptions, RecordTransitionCommit, RecordTransitionOptions,
+    ResolvedWhyQuerySubject, StoreInitOptions, WhyDeferredRelationFamily, WhyEntityKind,
+    WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
     WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
     WorkspaceInitOptions,
 };
@@ -131,6 +132,49 @@ fn create_validated_then_invalidated_assumption(
         )
         .expect("invalidate assumption");
     (assumption, validated, invalidated)
+}
+
+fn create_supported_decision_with_finding(
+    engine: &mut Engine,
+    workspace: &WorkspaceInfo,
+) -> (
+    RecordCreateCommit,
+    RecordCreateCommit,
+    RecordRelationCreateCommit,
+) {
+    let decision = engine
+        .create_record(
+            RecordCreateOptions::decision(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Use serialized writes",
+            )
+            .expect("decision options"),
+        )
+        .expect("create decision");
+    let finding = engine
+        .create_record(
+            RecordCreateOptions::finding(
+                workspace.initial_branch_id,
+                decision.commit_id,
+                "Concurrent write tests require serialization",
+            )
+            .expect("finding options"),
+        )
+        .expect("create finding");
+    let relation = engine
+        .create_record_relation(
+            RecordRelationCreateOptions::supports(
+                workspace.initial_branch_id,
+                finding.commit_id,
+                finding.record_entity_id,
+                decision.record_entity_id,
+                "Finding supports the decision",
+            )
+            .expect("relation options"),
+        )
+        .expect("create supports relation");
+    (decision, finding, relation)
 }
 
 fn why_commit(engine: &Engine, commit_id: CommitId, subject_entity_id: EntityId) -> WhyQueryResult {
@@ -316,5 +360,119 @@ fn why_reports_operation_local_entity_detail_for_multiple_direct_assumption_chan
     assert_eq!(
         detail.statement.as_deref(),
         Some("The cache is always fresh")
+    );
+}
+
+#[test]
+fn why_projects_removed_record_relation_as_endpoint_evolution() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (decision, finding, relation) =
+        create_supported_decision_with_finding(&mut engine, &workspace);
+
+    let removed = engine
+        .remove_record_relation(
+            RecordRelationRemoveOptions::new(
+                workspace.initial_branch_id,
+                relation.commit_id,
+                relation.relation_id,
+                relation.relation_version_id,
+                "Finding no longer supports the decision",
+            )
+            .expect("remove options"),
+        )
+        .expect("remove relation");
+
+    let why = why_commit(&engine, removed.commit_id, decision.record_entity_id);
+    assert!(why.relation_edges.is_empty());
+    assert!(why.causal_anchor_changesets.is_empty());
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 1);
+
+    let operation = &why.evolution_change_operations[0];
+    assert_eq!(operation.commit_id, removed.commit_id);
+    assert_eq!(operation.changeset_id, removed.changeset_id);
+    assert_eq!(operation.operation_id, removed.operation_id);
+    assert_eq!(operation.changeset_operation_type, "record.relation.remove");
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(relation.relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected operation-local relation detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::RecordSupports);
+    assert_eq!(detail.relation_version_id, relation.relation_version_id);
+    assert_eq!(detail.relation_label, None);
+    assert_eq!(detail.source, record_endpoint(finding.record_entity_id));
+    assert_eq!(detail.target, record_endpoint(decision.record_entity_id));
+    assert_eq!(detail.state_digest, relation.relation_state_digest);
+}
+
+#[test]
+fn why_projects_restored_record_relation_as_endpoint_evolution() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (decision, finding, relation) =
+        create_supported_decision_with_finding(&mut engine, &workspace);
+    let removed = engine
+        .remove_record_relation(
+            RecordRelationRemoveOptions::new(
+                workspace.initial_branch_id,
+                relation.commit_id,
+                relation.relation_id,
+                relation.relation_version_id,
+                "Finding no longer supports the decision",
+            )
+            .expect("remove options"),
+        )
+        .expect("remove relation");
+    let restored = engine
+        .restore_record_relation(
+            RecordRelationRestoreOptions::new(
+                workspace.initial_branch_id,
+                removed.commit_id,
+                relation.relation_id,
+                relation.relation_version_id,
+                "Restore support relation",
+            )
+            .expect("restore options"),
+        )
+        .expect("restore relation");
+
+    let why = why_commit(&engine, restored.commit_id, decision.record_entity_id);
+    assert_eq!(why.relation_edges.len(), 1);
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 2);
+
+    let newest = &why.evolution_change_operations[0];
+    assert_eq!(newest.commit_id, restored.commit_id);
+    assert_eq!(newest.operation_id, restored.operation_id);
+    assert_eq!(newest.changeset_operation_type, "record.relation.restore");
+    assert_eq!(
+        newest.subject,
+        ChangeOperationSubject::Relation(relation.relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &newest.subject_detail else {
+        panic!("expected restored relation detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::RecordSupports);
+    assert_eq!(detail.relation_version_id, relation.relation_version_id);
+    assert_eq!(detail.source, record_endpoint(finding.record_entity_id));
+    assert_eq!(detail.target, record_endpoint(decision.record_entity_id));
+
+    let older = &why.evolution_change_operations[1];
+    assert_eq!(older.commit_id, removed.commit_id);
+    assert_eq!(older.operation_id, removed.operation_id);
+    assert_eq!(older.changeset_operation_type, "record.relation.remove");
+    assert_eq!(
+        older.subject,
+        ChangeOperationSubject::Relation(relation.relation_id)
     );
 }

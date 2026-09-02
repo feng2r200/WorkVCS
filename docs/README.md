@@ -76,6 +76,7 @@ index is:
 - [Phase 4NI Operator Recovery Maturity Dogfood Evidence](provenance/phase-4ni-operator-recovery-maturity-dogfood.md)
 - [Phase 4NJ Why Subject Evolution Projection Evidence](provenance/phase-4nj-why-subject-evolution-projection.md)
 - [Phase 4NK Why Operation-Local Entity Detail Evidence](provenance/phase-4nk-why-operation-local-entity-detail.md)
+- [Phase 4NL Why Relation-Subject Endpoint Evolution Evidence](provenance/phase-4nl-why-relation-subject-endpoint-evolution.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -227,6 +228,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0476: Phase 4NI Operator Recovery Maturity Dogfood](decisions/adr/0476-phase-4ni-operator-recovery-maturity-dogfood.md)
 - [ADR-0477: Phase 4NJ Why Subject Evolution Projection](decisions/adr/0477-phase-4nj-why-subject-evolution-projection.md)
 - [ADR-0478: Phase 4NK Why Operation-Local Entity Detail](decisions/adr/0478-phase-4nk-why-operation-local-entity-detail.md)
+- [ADR-0479: Phase 4NL Why Relation-Subject Endpoint Evolution](decisions/adr/0479-phase-4nl-why-relation-subject-endpoint-evolution.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

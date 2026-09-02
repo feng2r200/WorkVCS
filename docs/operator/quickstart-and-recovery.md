@@ -125,13 +125,18 @@ brief packets include a `goal_plan_path` item that summarizes the current
 hierarchy. If the selected Task has Acceptance Criteria or Verification
 Requirements, brief packets include `acceptance_criterion` and
 `verification_requirement` context items whose subjects can be reused with
-`workvcs verify`. When a Task is blocked by an unsatisfied dependency, brief
-packets also include `blocked_dependency` items that name the blocking Task and
-summarize its current status. Failed Attempts appear as `failed_attempt` items
-in brief packets; normal packets also include running, succeeded, and
-inconclusive `attempt` items. Attempt summaries expose status, terminality,
-current Record version and digest, canonical scope, and nearby Record relation
-counts.
+`workvcs verify`. If a current-head Resource-backed Verification targets one
+of those Verification Requirements, the `verification_requirement` summary also
+names the Resource basis count, `verification_id`, `resource_id`,
+`adapter=<kind>@<version>`, `scope=<kind>@<version>`,
+`baseline_observation_id`, and a `refresh_hint` for basis-aware
+`verification cache-refresh`. When a Task is blocked by an unsatisfied
+dependency, brief packets also include `blocked_dependency` items that name the
+blocking Task and summarize its current status. Failed Attempts appear as
+`failed_attempt` items in brief packets; normal packets also include running,
+succeeded, and inconclusive `attempt` items. Attempt summaries expose status,
+terminality, current Record version and digest, canonical scope, and nearby
+Record relation counts.
 
 Inspect continuation context:
 
@@ -700,6 +705,9 @@ This explicit mode supports the current exact local-file path, local-file
 path-prefix, local-file glob, and Git worktree contracts. It validates every
 Resource basis before observing any Resource. Unsupported or malformed basis
 entries fail the command instead of producing a partial refresh.
+If you are recovering from `context --profile brief`, use the
+`verification_id` and `refresh_hint` shown on the relevant
+`verification_requirement` item.
 
 When a Resource-backed Verification cannot be re-observed because the Resource
 is temporarily unavailable, record that state explicitly and keep the AC stale:
@@ -968,8 +976,9 @@ message=error: unexpected argument ...
   dogfood-proven. Batch Resource-basis refresh is the V1-local explicit
   foreground re-observation scheduling policy; background re-observation,
   daemons, watchers, automatic polling, and implicit refresh remain disabled.
-- Context packet persistence and transition-rationale projection are
-  implemented; broader Context Resolver dogfood remains open.
+- Context packet persistence, transition-rationale projection, and brief
+  Resource-backed Verification Requirement recovery hints are implemented;
+  broader Context/Resource resolver dogfood remains open.
 - `why` exposes focused Handoff scope links, anchored evolution as a deferred
   family, causal anchor ChangeSet projections, direct evolution operation
   subjects for those ChangeSets, current recognized detail for those operation

@@ -10,8 +10,8 @@ use crate::history::{
     RecordKind, RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordListOptions, RecordListResult, RecordRelationListOptions, RecordRelationListResult,
     RecordRelationSnapshot, RecordSnapshot, RecordStatus, TaskSnapshot,
-    VerificationRequirementSnapshot, WhyQueryOptions, WhyQueryTarget, WhyRelationEdge,
-    WhyRelationKind,
+    VerificationRequirementSnapshot, VerificationSnapshot, VerificationTarget, WhyQueryOptions,
+    WhyQueryTarget, WhyRelationEdge, WhyRelationKind,
 };
 use crate::identity::{
     BranchId, ChangeSetId, CommitId, ContextPacketId, Digest, EntityId, RelationId, SessionId,
@@ -671,6 +671,16 @@ pub(crate) fn context_packet(
         connection,
         &ContextOverviewOptions::new(options.session_id()),
     )?;
+    let verifications = history::verifications_at(connection, overview.branch.head_commit_id)?;
+    if verifications.iter().any(|verification| {
+        verification.workspace_id != overview.branch.workspace_id
+            || verification.commit_id != overview.branch.head_commit_id
+    }) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} verification context anchor changed while resolving packet",
+            options.session_id()
+        )));
+    }
     let transition_rationales = transition_rationales_for_context(
         connection,
         overview.branch.workspace_id,
@@ -678,6 +688,7 @@ pub(crate) fn context_packet(
     )?;
     let mut items = collect_context_items(
         &overview,
+        &verifications,
         options.profile(),
         options.scope(),
         &transition_rationales,
@@ -1333,6 +1344,7 @@ fn rationale_json_has_content(changeset: &ChangeSetSnapshot) -> Result<bool> {
 
 fn collect_context_items(
     context: &ContextOverview,
+    verifications: &[VerificationSnapshot],
     profile: ContextProfile,
     scope: Option<&CanonicalValue>,
     transition_rationales: &[ContextTransitionRationaleSnapshot],
@@ -1349,6 +1361,7 @@ fn collect_context_items(
         .iter()
         .map(|requirement| (requirement.verification_requirement_entity_id, requirement))
         .collect::<BTreeMap<_, _>>();
+    let resource_backed_verifications = resource_backed_verifications_by_requirement(verifications);
     let tasks_by_id = context
         .tasks
         .iter()
@@ -1495,6 +1508,20 @@ fn collect_context_items(
                         requirement_ref.local_key
                     )));
                 }
+                let mut summary = format!(
+                    "verification requirement criterion={} local_key={}: {}",
+                    requirement.acceptance_criterion_entity_id,
+                    requirement.local_key,
+                    requirement.state.statement
+                );
+                if let Some(verifications) = resource_backed_verifications
+                    .get(&requirement.verification_requirement_entity_id)
+                {
+                    summary.push(' ');
+                    summary.push_str(&verification_requirement_resource_basis_context_summary(
+                        verifications,
+                    ));
+                }
                 push_context_item(
                     &mut items,
                     profile,
@@ -1504,12 +1531,7 @@ fn collect_context_items(
                         verification_requirement_entity_id: requirement
                             .verification_requirement_entity_id,
                     },
-                    format!(
-                        "verification requirement criterion={} local_key={}: {}",
-                        requirement.acceptance_criterion_entity_id,
-                        requirement.local_key,
-                        requirement.state.statement
-                    ),
+                    summary,
                 );
             }
         }
@@ -1682,6 +1704,86 @@ fn collect_context_items(
         );
     }
     Ok(items)
+}
+
+fn resource_backed_verifications_by_requirement(
+    verifications: &[VerificationSnapshot],
+) -> BTreeMap<EntityId, Vec<&VerificationSnapshot>> {
+    let mut by_requirement = BTreeMap::<EntityId, Vec<&VerificationSnapshot>>::new();
+    for verification in verifications {
+        if verification.state.resource_basis.is_empty() {
+            continue;
+        }
+        if let VerificationTarget::VerificationRequirement(requirement_id) = verification.target {
+            by_requirement
+                .entry(requirement_id)
+                .or_default()
+                .push(verification);
+        }
+    }
+    for verifications in by_requirement.values_mut() {
+        verifications.sort_by_key(|verification| verification.verification_entity_id);
+    }
+    by_requirement
+}
+
+fn verification_requirement_resource_basis_context_summary(
+    verifications: &[&VerificationSnapshot],
+) -> String {
+    let resource_basis_count = verifications
+        .iter()
+        .map(|verification| verification.state.resource_basis.len())
+        .sum::<usize>();
+    let selected_verification = verifications
+        .iter()
+        .find(|verification| {
+            !verification.state.resource_basis.is_empty()
+                && verification
+                    .state
+                    .resource_basis
+                    .iter()
+                    .all(|basis| basis.baseline_observation_id.is_some())
+        })
+        .or_else(|| {
+            verifications
+                .iter()
+                .find(|verification| !verification.state.resource_basis.is_empty())
+        });
+    let Some(selected_verification) = selected_verification else {
+        return "resource_basis=0".to_owned();
+    };
+    let Some(selected_basis) = selected_verification.state.resource_basis.first() else {
+        return "resource_basis=0".to_owned();
+    };
+    let baseline_observation_id = selected_basis
+        .baseline_observation_id
+        .map(|observation_id| observation_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let refresh_hint = if selected_verification
+        .state
+        .resource_basis
+        .iter()
+        .all(|basis| basis.baseline_observation_id.is_some())
+    {
+        format!(
+            "\"verification cache-refresh --verification {} --resource-content-from-basis\"",
+            selected_verification.verification_entity_id
+        )
+    } else {
+        "unavailable_missing_baseline_observation".to_owned()
+    };
+    format!(
+        "resource_basis={} verification_id={} resource_id={} adapter={}@{} scope={}@{} baseline_observation_id={} refresh_hint={}",
+        resource_basis_count,
+        selected_verification.verification_entity_id,
+        selected_basis.resource_id,
+        selected_basis.adapter_kind,
+        selected_basis.adapter_schema_version,
+        selected_basis.scope_kind,
+        selected_basis.scope_schema_version,
+        baseline_observation_id,
+        refresh_hint
+    )
 }
 
 #[derive(Default)]

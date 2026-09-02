@@ -6,10 +6,12 @@ use workvcs_core::{
     ContextItemCategory, ContextPacket, ContextPacketListOptions, ContextPacketOptions,
     ContextPriority, ContextProfile, Engine, ErrorCode, GoalCreateOptions, GoalTransitionOptions,
     KnowledgeCreateOptions, PlanCreateOptions, PrimaryContainmentCreateOptions,
-    RecordCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions, SessionId,
-    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
-    VerificationRequirementCreateOptions, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
-    canonical_bytes,
+    RecordCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions,
+    ResourceCreateOptions, ResourceObservationCreateOptions, SessionId, SessionStartOptions,
+    StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
+    VerificationCreateOptions, VerificationRequirementCreateOptions, VerificationResourceBasis,
+    VerificationResult, VerificationTarget, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
+    canonical_bytes, content_object_digest,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -54,6 +56,62 @@ fn string(value: &str) -> CanonicalValue {
 
 fn array(values: Vec<CanonicalValue>) -> CanonicalValue {
     CanonicalValue::Array(values)
+}
+
+fn resource_basis(
+    engine: &mut Engine,
+    path: &str,
+) -> (
+    VerificationResourceBasis,
+    workvcs_core::ResourceObservationId,
+) {
+    let resource = engine
+        .create_resource(ResourceCreateOptions::new("local-file").expect("resource options"))
+        .expect("create resource");
+    let fingerprint = content_object_digest(format!("resource basis for {path}").as_bytes());
+    let observation = engine
+        .record_resource_observation(
+            ResourceObservationCreateOptions::new(
+                resource.resource_id,
+                "local-file",
+                1,
+                fingerprint,
+                object(vec![("path", string(path))]),
+            )
+            .expect("resource observation options"),
+        )
+        .expect("record resource observation");
+    let basis = VerificationResourceBasis::new(
+        resource.resource_id,
+        "local-file",
+        1,
+        "path",
+        1,
+        object(vec![("path", string(path))]),
+        fingerprint,
+    )
+    .expect("resource basis")
+    .with_baseline_observation_id(observation.observation_id)
+    .expect("baseline observation basis");
+    (basis, observation.observation_id)
+}
+
+fn resource_basis_without_baseline(engine: &mut Engine, path: &str) -> VerificationResourceBasis {
+    let resource = engine
+        .create_resource(ResourceCreateOptions::new("local-file").expect("resource options"))
+        .expect("create resource");
+    let fingerprint =
+        content_object_digest(format!("unobserved resource basis for {path}").as_bytes());
+    VerificationResourceBasis::new(
+        resource.resource_id,
+        "local-file",
+        1,
+        "path",
+        1,
+        object(vec![("path", string(path))]),
+        fingerprint,
+    )
+    .expect("resource basis without baseline")
 }
 
 fn scoped_knowledge_summaries(packet: &ContextPacket) -> Vec<&str> {
@@ -1173,6 +1231,262 @@ fn context_packet_includes_current_task_verification_obligations() {
                 |bucket| bucket.category == ContextItemCategory::TaskReadiness
                     && bucket.omitted == 1
             )
+    );
+}
+
+#[test]
+fn context_packet_summarizes_resource_basis_recovery_for_current_task_requirements() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Recover resource-backed verification")
+                .expect("task options"),
+        )
+        .expect("create task");
+    head = task.commit_id;
+    let criterion = engine
+        .create_acceptance_criterion(
+            AcceptanceCriterionCreateOptions::new(
+                branch_id,
+                head,
+                task.task_entity_id,
+                task.task_entity_version_id,
+                "AC-resource",
+                "Packet must expose resource recovery without schema changes.",
+                AcceptanceCriterionClassification::Required,
+            )
+            .expect("acceptance criterion options"),
+        )
+        .expect("create acceptance criterion");
+    head = criterion.commit_id;
+    let backed_requirement = engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                branch_id,
+                head,
+                criterion.acceptance_criterion_entity_id,
+                criterion.acceptance_criterion_entity_version_id,
+                "VR-backed",
+                "Refresh the local file basis.",
+            )
+            .expect("backed requirement options"),
+        )
+        .expect("create backed verification requirement");
+    head = backed_requirement.commit_id;
+    let plain_requirement = engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                branch_id,
+                head,
+                criterion.acceptance_criterion_entity_id,
+                backed_requirement.acceptance_criterion_entity_version_id,
+                "VR-plain",
+                "Run the non-resource proof.",
+            )
+            .expect("plain requirement options"),
+        )
+        .expect("create plain verification requirement");
+    head = plain_requirement.commit_id;
+
+    let (basis, baseline_observation_id) = resource_basis(&mut engine, "docs/operator.md");
+    let verification = engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                branch_id,
+                head,
+                VerificationTarget::VerificationRequirement(
+                    backed_requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+            )
+            .expect("verification options")
+            .with_resource_basis(vec![basis.clone()])
+            .expect("verification resource basis"),
+        )
+        .expect("create resource-backed verification");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    let options = ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief);
+    let packet = engine
+        .context_packet(options.clone())
+        .expect("brief context packet");
+
+    let backed_item = packet
+        .items
+        .iter()
+        .find(|item| {
+            item.category == ContextItemCategory::VerificationRequirement
+                && item.summary.contains("local_key=VR-backed")
+        })
+        .expect("backed requirement context item");
+    assert!(backed_item.summary.contains("resource_basis=1"));
+    assert!(
+        backed_item
+            .summary
+            .contains(&format!("resource_id={}", basis.resource_id))
+    );
+    assert!(backed_item.summary.contains("adapter=local-file@1"));
+    assert!(backed_item.summary.contains("scope=path@1"));
+    assert!(backed_item.summary.contains(&format!(
+        "baseline_observation_id={baseline_observation_id}"
+    )));
+    assert!(backed_item.summary.contains(&format!(
+        "refresh_hint=\"verification cache-refresh --verification {} --resource-content-from-basis\"",
+        verification.verification_entity_id
+    )));
+
+    let plain_item = packet
+        .items
+        .iter()
+        .find(|item| {
+            item.category == ContextItemCategory::VerificationRequirement
+                && item.summary.contains("local_key=VR-plain")
+        })
+        .expect("plain requirement context item");
+    assert!(!plain_item.summary.contains("resource_basis="));
+    assert!(!plain_item.summary.contains("refresh_hint="));
+
+    let saved = engine
+        .save_context_packet(options)
+        .expect("save brief context packet");
+    let packet_json =
+        String::from_utf8(canonical_bytes(&saved.snapshot.packet_json).expect("json"))
+            .expect("packet json is utf8");
+    assert!(packet_json.contains("\"summary\""));
+    assert!(!packet_json.contains("\"resource_basis\":"));
+    assert!(!packet_json.contains("\"refresh_hint\":"));
+}
+
+#[test]
+fn context_packet_prefers_refreshable_resource_basis_for_requirement_summary() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Prefer refreshable basis")
+                .expect("task options"),
+        )
+        .expect("create task");
+    head = task.commit_id;
+    let criterion = engine
+        .create_acceptance_criterion(
+            AcceptanceCriterionCreateOptions::new(
+                branch_id,
+                head,
+                task.task_entity_id,
+                task.task_entity_version_id,
+                "AC-resource",
+                "Packet should pick a basis-refreshable verification.",
+                AcceptanceCriterionClassification::Required,
+            )
+            .expect("acceptance criterion options"),
+        )
+        .expect("create acceptance criterion");
+    head = criterion.commit_id;
+    let requirement = engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                branch_id,
+                head,
+                criterion.acceptance_criterion_entity_id,
+                criterion.acceptance_criterion_entity_version_id,
+                "VR-refreshable",
+                "Use the refreshable Resource basis.",
+            )
+            .expect("requirement options"),
+        )
+        .expect("create verification requirement");
+    head = requirement.commit_id;
+
+    let missing_baseline_basis =
+        resource_basis_without_baseline(&mut engine, "docs/missing-baseline.md");
+    let unrefreshable = engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                branch_id,
+                head,
+                VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+            )
+            .expect("unrefreshable verification options")
+            .with_resource_basis(vec![missing_baseline_basis])
+            .expect("unrefreshable resource basis"),
+        )
+        .expect("create unrefreshable verification");
+    head = unrefreshable.commit_id;
+
+    let (refreshable_basis, baseline_observation_id) =
+        resource_basis(&mut engine, "docs/refreshable.md");
+    let refreshable = engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                branch_id,
+                head,
+                VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+            )
+            .expect("refreshable verification options")
+            .with_resource_basis(vec![refreshable_basis.clone()])
+            .expect("refreshable resource basis"),
+        )
+        .expect("create refreshable verification");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    let packet = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+        )
+        .expect("brief context packet");
+
+    let item = packet
+        .items
+        .iter()
+        .find(|item| {
+            item.category == ContextItemCategory::VerificationRequirement
+                && item.summary.contains("local_key=VR-refreshable")
+        })
+        .expect("requirement context item");
+    assert!(item.summary.contains("resource_basis=2"));
+    assert!(item.summary.contains(&format!(
+        "verification_id={}",
+        refreshable.verification_entity_id
+    )));
+    assert!(
+        item.summary
+            .contains(&format!("resource_id={}", refreshable_basis.resource_id))
+    );
+    assert!(item.summary.contains(&format!(
+        "baseline_observation_id={baseline_observation_id}"
+    )));
+    assert!(item.summary.contains(&format!(
+        "refresh_hint=\"verification cache-refresh --verification {} --resource-content-from-basis\"",
+        refreshable.verification_entity_id
+    )));
+    assert!(
+        !item
+            .summary
+            .contains("refresh_hint=unavailable_missing_baseline_observation")
     );
 }
 

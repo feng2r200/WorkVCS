@@ -23781,6 +23781,65 @@ mod tests {
     }
 
     #[test]
+    fn cli_context_packet_renders_resource_basis_recovery_hint_summary() {
+        let verification_entity_id = EntityId::new_v7();
+        let resource_id = ResourceId::new_v7();
+        let observation_id = ResourceObservationId::new_v7();
+        let packet = ContextPacket {
+            envelope: workvcs_core::ContextPacketEnvelope {
+                session_id: SessionId::new_v7(),
+                lifecycle_state: SessionLifecycleState::Active,
+                workspace_id: WorkspaceId::new_v7(),
+                branch_id: BranchId::new_v7(),
+                branch_name: "main".to_owned(),
+                head_commit_id: CommitId::new_v7(),
+                state_digest: content_object_digest(b"context packet cli summary"),
+                started_at_us: 1,
+                last_activity_at_us: None,
+                focus_entity_id: None,
+            },
+            profile: ContextProfile::Brief,
+            budget_items: None,
+            scope: None,
+            available_items: 1,
+            items: vec![workvcs_core::ContextItem {
+                priority: workvcs_core::ContextPriority::P1,
+                category: workvcs_core::ContextItemCategory::VerificationRequirement,
+                subject: workvcs_core::ContextItemSubject::VerificationRequirement {
+                    verification_requirement_entity_id: EntityId::new_v7(),
+                },
+                item_key: "p1.verification_requirement.example".to_owned(),
+                summary: format!(
+                    "verification requirement criterion={} local_key=VR-backed: Refresh the local file basis. resource_basis=1 resource_id={} adapter=local-file@1 scope=path@1 baseline_observation_id={} refresh_hint=\"verification cache-refresh --verification {} --resource-content-from-basis\"",
+                    EntityId::new_v7(),
+                    resource_id,
+                    observation_id,
+                    verification_entity_id
+                ),
+            }],
+            omission_summary: workvcs_core::ContextOmissionSummary {
+                total: 0,
+                by_priority: Vec::new(),
+                by_category: Vec::new(),
+            },
+        };
+
+        let output = render_context_packet(&packet);
+
+        assert_eq!(value(&output, "context_profile"), "brief");
+        assert_eq!(
+            value(&output, "context_item.0.category"),
+            "verification_requirement"
+        );
+        let summary_json = value(&output, "context_item.0.summary_json");
+        assert!(summary_json.contains("resource_basis=1"));
+        assert!(summary_json.contains(&format!("resource_id={resource_id}")));
+        assert!(summary_json.contains(&format!(
+            "verification cache-refresh --verification {verification_entity_id} --resource-content-from-basis"
+        )));
+    }
+
+    #[test]
     fn cli_verify_content_errors_use_verify_flag_labels() {
         let evidence_error = evidence_content_from_cli(EvidenceContentArgs {
             role: None,
@@ -45444,6 +45503,208 @@ mod tests {
                 "context_record.0.record_statement_json=\"The context resolver should expose current findings\""
             )
         );
+    }
+
+    #[test]
+    fn cli_context_brief_exposes_resource_basis_recovery_hint_for_requirement() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        let project = tempdir.path().join("project");
+        fs::create_dir_all(&project).expect("create project dir");
+        let scoped_file = project.join("operator.md");
+        fs::write(&scoped_file, b"baseline context packet resource").expect("write scoped file");
+        let scope_path = scoped_file.to_str().expect("scope path text");
+        let scope_payload = format!(r#"{{"path":"{scope_path}"}}"#);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Recover resource-backed verification",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-resource",
+            "--statement",
+            "Packet must expose resource recovery.",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        head = value(&criterion, "commit_id");
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-resource",
+            "--statement",
+            "Refresh the local file basis.",
+        ])
+        .expect("parse vr"))
+        .expect("create vr");
+        head = value(&requirement, "commit_id");
+
+        let resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse resource"))
+        .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let baseline = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--content-file",
+            scope_path,
+        ])
+        .expect("parse resource observation"))
+        .expect("record resource observation");
+        let baseline_observation_id = value(&baseline, "observation_id");
+        let baseline_fingerprint = value(&baseline, "fingerprint");
+
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification-requirement",
+            &value(&requirement, "verification_requirement_entity_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--scope-kind",
+            "path",
+            "--scope-schema-version",
+            "1",
+            "--scope-payload-json",
+            &scope_payload,
+            "--baseline-fingerprint",
+            &baseline_fingerprint,
+            "--baseline-observation",
+            &baseline_observation_id,
+        ])
+        .expect("parse verification"))
+        .expect("record verification");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let context = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &value(&session, "session_id"),
+            "--profile",
+            "brief",
+        ])
+        .expect("parse brief context"))
+        .expect("brief context");
+
+        let summary_json = context
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key.ends_with(".summary_json") && value.contains("local_key=VR-resource"))
+                    .then_some(value.to_owned())
+            })
+            .unwrap_or_else(|| panic!("missing VR-resource summary in output:\n{context}"));
+        assert!(summary_json.contains("resource_basis=1"));
+        assert!(summary_json.contains(&format!("resource_id={resource_id}")));
+        assert!(summary_json.contains("adapter=local-file@1"));
+        assert!(summary_json.contains("scope=path@1"));
+        assert!(summary_json.contains(&format!(
+            "baseline_observation_id={baseline_observation_id}"
+        )));
+        assert!(summary_json.contains(&format!(
+            "verification cache-refresh --verification {} --resource-content-from-basis",
+            value(&verification, "verification_entity_id")
+        )));
     }
 
     #[test]

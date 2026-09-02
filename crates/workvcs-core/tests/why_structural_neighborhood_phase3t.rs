@@ -6,9 +6,10 @@ use workvcs_core::{
     BranchId, CommitId, Engine, EntityId, ErrorCategory, ErrorCode, EventId, GoalCreateOptions,
     GoalSnapshot, PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateCommit,
     PrimaryContainmentCreateOptions, StoreInitOptions, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, TaskCreateOptions, TaskSnapshot, WhyEntityKind,
-    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge,
-    WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    StructuralReferenceCreateOptions, TaskCreateOptions, TaskSnapshot, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
+    WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,8 +271,22 @@ fn assert_edges_are_sorted(edges: &[WhyRelationEdge]) {
     }
 }
 
-fn assert_deferred_families(why: &WhyQueryResult) {
-    assert!(why.deferred_relation_families.is_empty());
+fn assert_primary_containment_evolution_only(why: &WhyQueryResult, expected_operations: usize) {
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), expected_operations);
+    for operation in &why.evolution_change_operations {
+        assert_eq!(
+            operation.changeset_operation_type,
+            "primary_containment.create"
+        );
+        let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+            panic!("expected relation subject detail");
+        };
+        assert_eq!(detail.relation_kind, WhyRelationKind::PrimaryContainment);
+    }
 }
 
 #[test]
@@ -322,7 +337,7 @@ fn why_reports_structural_neighborhood_for_plan_subject() {
         plan.plan_entity_version_id,
         WhyEntityKind::Plan,
     );
-    assert_deferred_families(&why);
+    assert_primary_containment_evolution_only(&why, 2);
     assert_eq!(
         edge_facts(&why),
         BTreeSet::from([
@@ -406,7 +421,7 @@ fn why_reports_incoming_references_for_task_subject_deterministically() {
         task.task_entity_version_id,
         WhyEntityKind::Task,
     );
-    assert_deferred_families(&why);
+    assert_primary_containment_evolution_only(&why, 1);
     assert_eq!(
         edge_facts(&why),
         BTreeSet::from([

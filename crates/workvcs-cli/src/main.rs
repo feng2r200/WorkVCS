@@ -37084,6 +37084,239 @@ mod tests {
     }
 
     #[test]
+    fn cli_why_projects_primary_containment_create_as_endpoint_evolution() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Containment probe goal",
+        ])
+        .expect("parse goal"))
+        .expect("create goal");
+        let plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal, "commit_id"),
+            "--description",
+            "Containment probe plan",
+            "--strategy",
+            "Keep containment explicit",
+        ])
+        .expect("parse plan"))
+        .expect("create plan");
+        let goal_to_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&plan, "commit_id"),
+            "--parent",
+            &value(&goal, "goal_entity_id"),
+            "--child",
+            &value(&plan, "plan_entity_id"),
+        ])
+        .expect("parse goal to plan containment"))
+        .expect("create goal to plan containment");
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&goal_to_plan, "commit_id"),
+            "--description",
+            "Containment probe task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let plan_to_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--parent",
+            &value(&plan, "plan_entity_id"),
+            "--child",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse plan to task containment"))
+        .expect("create plan to task containment");
+
+        let plan_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&goal_to_plan, "commit_id"),
+            "--entity",
+            &value(&plan, "plan_entity_id"),
+            "--relation-kind",
+            "primary_containment",
+            "--expected-relation-edges",
+            "1",
+            "--expected-evolution-change-operations",
+            "1",
+        ])
+        .expect("parse plan containment why"))
+        .expect("plan containment why");
+        assert_eq!(value(&plan_why, "relation_edges"), "1");
+        assert_eq!(
+            value(&plan_why, "relation.0.relation_kind"),
+            "primary_containment"
+        );
+        assert_eq!(value(&plan_why, "relation.0.direction"), "incoming");
+        assert_eq!(
+            value(&plan_why, "relation.0.relation_id"),
+            value(&goal_to_plan, "relation_id")
+        );
+        assert_eq!(value(&plan_why, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(
+                &plan_why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "primary_containment.create"
+        );
+        assert_eq!(
+            value(&plan_why, "evolution_change_operation.0.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(&plan_why, "evolution_change_operation.0.subject_object_id"),
+            value(&goal_to_plan, "relation_id")
+        );
+        assert_eq!(
+            value(
+                &plan_why,
+                "evolution_change_operation.0.subject_detail_kind"
+            ),
+            "relation"
+        );
+        assert_eq!(
+            value(
+                &plan_why,
+                "evolution_change_operation.0.subject_relation_kind"
+            ),
+            "primary_containment"
+        );
+        assert_eq!(
+            value(
+                &plan_why,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            value(&goal, "goal_entity_id")
+        );
+        assert_eq!(
+            value(
+                &plan_why,
+                "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&plan, "plan_entity_id")
+        );
+        assert_eq!(value(&plan_why, "deferred_relation_families"), "1");
+        assert_eq!(value(&plan_why, "deferred_relation_family.0"), "evolution");
+
+        let task_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&plan_to_task, "commit_id"),
+            "--entity",
+            &value(&task, "task_entity_id"),
+            "--relation-kind",
+            "primary_containment",
+            "--expected-relation-edges",
+            "1",
+            "--expected-evolution-change-operations",
+            "1",
+        ])
+        .expect("parse task containment why"))
+        .expect("task containment why");
+        assert_eq!(value(&task_why, "relation_edges"), "1");
+        assert_eq!(
+            value(&task_why, "relation.0.relation_kind"),
+            "primary_containment"
+        );
+        assert_eq!(value(&task_why, "relation.0.direction"), "incoming");
+        assert_eq!(
+            value(&task_why, "relation.0.relation_id"),
+            value(&plan_to_task, "relation_id")
+        );
+        assert_eq!(value(&task_why, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(
+                &task_why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "primary_containment.create"
+        );
+        assert_eq!(
+            value(
+                &task_why,
+                "evolution_change_operation.0.subject_relation_kind"
+            ),
+            "primary_containment"
+        );
+        assert_eq!(
+            value(
+                &task_why,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            value(&plan, "plan_entity_id")
+        );
+        assert_eq!(
+            value(
+                &task_why,
+                "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&task, "task_entity_id")
+        );
+    }
+
+    #[test]
     fn cli_creates_structural_task_relations_with_actor_session() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

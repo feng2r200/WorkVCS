@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use super::containment::PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE;
 use super::goal::GOAL_ENTITY_KIND;
 use super::knowledge::{KNOWLEDGE_ENTITY_KIND, knowledge_at};
 use super::plan::PLAN_ENTITY_KIND;
@@ -797,7 +798,8 @@ fn load_direct_entity_evolution_membership_change(
 fn is_direct_relation_evolution_operation(operation_type: &str) -> bool {
     matches!(
         operation_type,
-        RECORD_RELATION_CREATE_OPERATION_TYPE
+        PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE
+            | RECORD_RELATION_CREATE_OPERATION_TYPE
             | RECORD_RELATION_REMOVE_OPERATION_TYPE
             | RECORD_RELATION_RESTORE_OPERATION_TYPE
             | KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE
@@ -949,6 +951,30 @@ fn why_direct_relation_operation_subject_detail(
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
 ) -> Result<Option<WhyEvolutionSubjectDetail>> {
+    for relation in primary_containment_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source =
+                WhyRelationEndpoint::entity(relation.parent_entity_id, relation.parent_kind.into());
+            let target =
+                WhyRelationEndpoint::entity(relation.child_entity_id, relation.child_kind.into());
+            if endpoint_matches_subject(subject, source)
+                || endpoint_matches_subject(subject, target)
+            {
+                return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                    WhyEvolutionSubjectRelationDetail {
+                        relation_kind: WhyRelationKind::PrimaryContainment,
+                        relation_version_id: relation.relation_version_id,
+                        relation_label: None,
+                        source,
+                        target,
+                        state_digest: relation.state_digest,
+                    },
+                )));
+            }
+        }
+    }
     if let Some(relation) = load_record_relation_version(
         connection,
         resolved.target.workspace_id,

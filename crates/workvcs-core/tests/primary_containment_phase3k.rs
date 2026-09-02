@@ -2,11 +2,15 @@ use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    BranchId, CanonicalValue, ClaimTaskOptions, CommitId, Digest, Engine, EntityTransitionOptions,
-    ErrorCategory, ErrorCode, PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateOptions,
-    PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot, RelationId, RelationVersionId,
-    SessionStartOptions, StoreInitOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
-    TaskSnapshot, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes, relation_version_digest,
+    BranchId, CanonicalValue, ChangeOperationSubject, ClaimTaskOptions, CommitId, Digest, Engine,
+    EntityId, EntityTransitionOptions, ErrorCategory, ErrorCode, GoalCreateOptions, GoalSnapshot,
+    PlanCreateOptions, PlanSnapshot, PrimaryContainmentCreateCommit,
+    PrimaryContainmentCreateOptions, PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
+    RelationId, RelationVersionId, SessionStartOptions, StoreInitOptions, TaskCreateOptions,
+    TaskSchedulingRelationCreateOptions, TaskSnapshot, WhyDeferredRelationFamily, WhyEntityKind,
+    WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryTarget, WhyRelationDirection,
+    WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    relation_version_digest,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,6 +169,27 @@ fn create_plan_snapshot(
         .expect("plan snapshot")
 }
 
+fn create_goal_snapshot(
+    engine: &mut Engine,
+    workspace: &WorkspaceInfo,
+    expected_head_commit_id: CommitId,
+    description: &str,
+) -> GoalSnapshot {
+    let goal = engine
+        .create_goal(
+            GoalCreateOptions::new(
+                workspace.initial_branch_id,
+                expected_head_commit_id,
+                description,
+            )
+            .expect("goal options"),
+        )
+        .expect("create goal");
+    engine
+        .goal_at(goal.commit_id, goal.goal_entity_id)
+        .expect("goal snapshot")
+}
+
 fn create_task_snapshot(
     engine: &mut Engine,
     workspace: &WorkspaceInfo,
@@ -184,6 +209,82 @@ fn create_task_snapshot(
     engine
         .task_at(task.commit_id, task.task_entity_id)
         .expect("task snapshot")
+}
+
+fn primary_endpoint(
+    entity_id: EntityId,
+    kind: PrimaryContainmentEndpointKind,
+) -> WhyRelationEndpoint {
+    let entity_kind = match kind {
+        PrimaryContainmentEndpointKind::Goal => WhyEntityKind::Goal,
+        PrimaryContainmentEndpointKind::Plan => WhyEntityKind::Plan,
+        PrimaryContainmentEndpointKind::Task => WhyEntityKind::Task,
+    };
+    WhyRelationEndpoint::entity(entity_id, entity_kind)
+}
+
+fn assert_single_primary_containment_edge(
+    why: &workvcs_core::WhyQueryResult,
+    relation: &PrimaryContainmentCreateCommit,
+    direction: WhyRelationDirection,
+) {
+    assert_eq!(why.relation_edges.len(), 1);
+    let edge = &why.relation_edges[0];
+    assert_eq!(edge.relation_kind, WhyRelationKind::PrimaryContainment);
+    assert_eq!(edge.direction, direction);
+    assert_eq!(edge.relation_id, relation.relation_id);
+    assert_eq!(edge.relation_version_id, relation.relation_version_id);
+    assert_eq!(edge.relation_label, None);
+    assert_eq!(
+        edge.source,
+        primary_endpoint(relation.parent_entity_id, relation.parent_kind)
+    );
+    assert_eq!(
+        edge.target,
+        primary_endpoint(relation.child_entity_id, relation.child_kind)
+    );
+    assert_eq!(edge.state_digest, relation.relation_state_digest);
+}
+
+fn assert_single_primary_containment_evolution(
+    why: &workvcs_core::WhyQueryResult,
+    relation: &PrimaryContainmentCreateCommit,
+) {
+    assert_eq!(why.causal_anchor_changesets.len(), 0);
+    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    let operation = &why.evolution_change_operations[0];
+    assert_eq!(operation.commit_id, relation.commit_id);
+    assert_eq!(operation.changeset_id, relation.changeset_id);
+    assert_eq!(
+        operation.changeset_operation_type,
+        "primary_containment.create"
+    );
+    assert_eq!(operation.changeset_operation_schema_version, 1);
+    assert_eq!(operation.ordinal, 0);
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(relation.relation_id)
+    );
+    assert_eq!(operation.operation_id, relation.operation_id);
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected relation subject detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::PrimaryContainment);
+    assert_eq!(detail.relation_version_id, relation.relation_version_id);
+    assert_eq!(detail.relation_label, None);
+    assert_eq!(
+        detail.source,
+        primary_endpoint(relation.parent_entity_id, relation.parent_kind)
+    );
+    assert_eq!(
+        detail.target,
+        primary_endpoint(relation.child_entity_id, relation.child_kind)
+    );
+    assert_eq!(detail.state_digest, relation.relation_state_digest);
 }
 
 fn assert_relation_create_delta(before: &HistoryCounts, after: &HistoryCounts) {
@@ -216,6 +317,92 @@ fn assert_counts_and_head_unchanged(
     let connection = raw_connection(path);
     assert_eq!(history_counts(&connection), *before_counts);
     assert_eq!(branch_head(&connection, branch_id), before_head);
+}
+
+#[test]
+fn why_projects_primary_containment_create_as_endpoint_evolution() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let goal = create_goal_snapshot(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Probe goal",
+    );
+    let plan = create_plan_snapshot(&mut engine, &workspace, goal.commit_id, "Probe plan");
+    let goal_to_plan = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                workspace.initial_branch_id,
+                plan.commit_id,
+                goal.goal_entity_id,
+                plan.plan_entity_id,
+            )
+            .expect("goal contains plan options"),
+        )
+        .expect("goal contains plan");
+    let task = create_task_snapshot(
+        &mut engine,
+        &workspace,
+        goal_to_plan.commit_id,
+        "Probe task",
+    );
+    let plan_to_task = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                workspace.initial_branch_id,
+                task.commit_id,
+                plan.plan_entity_id,
+                task.task_entity_id,
+            )
+            .expect("plan contains task options"),
+        )
+        .expect("plan contains task");
+
+    let goal_why = engine
+        .why(WhyQueryOptions::for_entity(
+            WhyQueryTarget::commit(goal_to_plan.commit_id),
+            goal.goal_entity_id,
+        ))
+        .expect("why goal");
+    assert_eq!(goal_why.subject.entity_kind(), Some(WhyEntityKind::Goal));
+    assert_single_primary_containment_edge(
+        &goal_why,
+        &goal_to_plan,
+        WhyRelationDirection::Outgoing,
+    );
+    assert_single_primary_containment_evolution(&goal_why, &goal_to_plan);
+
+    let plan_as_child_why = engine
+        .why(WhyQueryOptions::for_entity(
+            WhyQueryTarget::commit(goal_to_plan.commit_id),
+            plan.plan_entity_id,
+        ))
+        .expect("why plan as child");
+    assert_eq!(
+        plan_as_child_why.subject.entity_kind(),
+        Some(WhyEntityKind::Plan)
+    );
+    assert_single_primary_containment_edge(
+        &plan_as_child_why,
+        &goal_to_plan,
+        WhyRelationDirection::Incoming,
+    );
+    assert_single_primary_containment_evolution(&plan_as_child_why, &goal_to_plan);
+
+    let task_why = engine
+        .why(WhyQueryOptions::for_entity(
+            WhyQueryTarget::commit(plan_to_task.commit_id),
+            task.task_entity_id,
+        ))
+        .expect("why task");
+    assert_eq!(task_why.subject.entity_kind(), Some(WhyEntityKind::Task));
+    assert_single_primary_containment_edge(
+        &task_why,
+        &plan_to_task,
+        WhyRelationDirection::Incoming,
+    );
+    assert_single_primary_containment_evolution(&task_why, &plan_to_task);
 }
 
 #[test]

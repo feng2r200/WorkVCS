@@ -49490,6 +49490,146 @@ mod tests {
     }
 
     #[test]
+    fn cli_why_projects_created_record_relation_as_endpoint_evolution() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let decision = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "decision",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Use serialized writes",
+        ])
+        .expect("parse decision"))
+        .expect("create decision");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&decision, "commit_id"),
+            "--statement",
+            "Concurrent write tests require serialization",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-record",
+            &value(&decision, "record_entity_id"),
+            "--rationale",
+            "Finding supports the decision",
+        ])
+        .expect("parse link supports"))
+        .expect("link supports");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&relation, "commit_id"),
+            "--entity",
+            &value(&decision, "record_entity_id"),
+            "--relation-kind",
+            "record_supports",
+            "--relation-limit",
+            "1",
+            "--expected-evolution-change-operations",
+            "1",
+        ])
+        .expect("parse why decision"))
+        .expect("why decision");
+        assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(value(&why, "causal_anchor_changesets"), "0");
+        assert_eq!(value(&why, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(&why, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.operation_id"),
+            value(&relation, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "record.relation.create"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_object_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_detail_kind"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_relation_kind"),
+            "record_supports"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&decision, "record_entity_id")
+        );
+        assert_eq!(value(&why, "deferred_relation_families"), "1");
+        assert_eq!(value(&why, "deferred_relation_family.0"), "evolution");
+    }
+
+    #[test]
     fn cli_why_projects_removed_record_relation_as_endpoint_evolution() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
@@ -49591,13 +49731,13 @@ mod tests {
             "--relation-limit",
             "1",
             "--expected-evolution-change-operations",
-            "1",
+            "2",
         ])
         .expect("parse why decision"))
         .expect("why decision");
         assert_eq!(value(&why, "relation_edges"), "0");
         assert_eq!(value(&why, "causal_anchor_changesets"), "0");
-        assert_eq!(value(&why, "evolution_change_operations"), "1");
+        assert_eq!(value(&why, "evolution_change_operations"), "2");
         assert_eq!(
             value(&why, "evolution_change_operations_match_expected"),
             "true"
@@ -49605,6 +49745,13 @@ mod tests {
         assert_eq!(
             value(&why, "evolution_change_operation.0.operation_id"),
             value(&removed, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "record.relation.remove"
         );
         assert_eq!(
             value(&why, "evolution_change_operation.0.subject_family"),
@@ -49640,6 +49787,43 @@ mod tests {
             value(
                 &why,
                 "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&decision, "record_entity_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.operation_id"),
+            value(&relation, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.changeset_operation_type"
+            ),
+            "record.relation.create"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_object_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_relation_kind"),
+            "record_supports"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.subject_relation_source_entity_id"
+            ),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.subject_relation_target_entity_id"
             ),
             value(&decision, "record_entity_id")
         );
@@ -49749,13 +49933,13 @@ mod tests {
             "--relation-limit",
             "1",
             "--expected-evolution-change-operations",
-            "1",
+            "2",
         ])
         .expect("parse why knowledge"))
         .expect("why knowledge endpoint");
         assert_eq!(value(&why, "relation_edges"), "0");
         assert_eq!(value(&why, "causal_anchor_changesets"), "0");
-        assert_eq!(value(&why, "evolution_change_operations"), "1");
+        assert_eq!(value(&why, "evolution_change_operations"), "2");
         assert_eq!(
             value(&why, "evolution_change_operations_match_expected"),
             "true"
@@ -49763,6 +49947,13 @@ mod tests {
         assert_eq!(
             value(&why, "evolution_change_operation.0.operation_id"),
             value(&removed, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "record.relation.remove"
         );
         assert_eq!(
             value(&why, "evolution_change_operation.0.subject_family"),
@@ -49791,6 +49982,43 @@ mod tests {
             value(
                 &why,
                 "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&knowledge, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.operation_id"),
+            value(&relation, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.changeset_operation_type"
+            ),
+            "record.relation.create"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_object_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_relation_kind"),
+            "record_supports"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.subject_relation_source_entity_id"
+            ),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.subject_relation_target_entity_id"
             ),
             value(&knowledge, "knowledge_entity_id")
         );
@@ -51156,13 +51384,13 @@ mod tests {
             "--relation-limit",
             "1",
             "--expected-evolution-change-operations",
-            "1",
+            "2",
         ])
         .expect("parse why replacement"))
         .expect("why replacement endpoint");
         assert_eq!(value(&why, "relation_edges"), "0");
         assert_eq!(value(&why, "causal_anchor_changesets"), "0");
-        assert_eq!(value(&why, "evolution_change_operations"), "1");
+        assert_eq!(value(&why, "evolution_change_operations"), "2");
         assert_eq!(
             value(&why, "evolution_change_operations_match_expected"),
             "true"
@@ -51170,6 +51398,13 @@ mod tests {
         assert_eq!(
             value(&why, "evolution_change_operation.0.operation_id"),
             value(&removed, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "knowledge.relation.remove"
         );
         assert_eq!(
             value(&why, "evolution_change_operation.0.subject_family"),
@@ -51190,6 +51425,43 @@ mod tests {
             value(
                 &why,
                 "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&prior, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.operation_id"),
+            value(&relation, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.changeset_operation_type"
+            ),
+            "knowledge.relation.create"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_object_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_relation_kind"),
+            "knowledge_supersedes"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.subject_relation_source_entity_id"
+            ),
+            value(&replacement, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.subject_relation_target_entity_id"
             ),
             value(&prior, "knowledge_entity_id")
         );

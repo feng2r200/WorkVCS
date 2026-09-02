@@ -371,16 +371,17 @@ commit. Initial Entity creation operations are not counted as this direct
 evolution slice.
 
 When querying a Record or Knowledge Entity that is the source or target
-endpoint of a first-parent-reachable direct relation removal or restore, `why`
-also reports that direct Relation-subject evolution operation for currently
-recognized Record-to-Record, Record-to-Knowledge, and Knowledge-to-Knowledge
-relation shapes. Removed relations can therefore have operation-local relation
-`subject_detail` even when `relation_edges=0` at the queried commit. Use
-`--expected-evolution-change-operations` when a script needs to assert the
-projected operation count. Full ChangeSet evolution traversal, full
-relation-subject traversal beyond these direct remove/restore endpoint slices,
-and multi-hop evolution traversal are still not implemented, and relation
-filters and limits continue to apply only to `relation_edges`.
+endpoint of a first-parent-reachable direct relation create, removal, or
+restore, `why` also reports that direct Relation-subject evolution operation
+for currently recognized Record-to-Record, Record-to-Knowledge, and
+Knowledge-to-Knowledge relation shapes. Removed relations can therefore have
+operation-local relation `subject_detail` even when `relation_edges=0` at the
+queried commit. Use `--expected-evolution-change-operations` when a script
+needs to assert the projected operation count. Full ChangeSet evolution
+traversal, full relation-subject traversal beyond these direct
+create/remove/restore endpoint slices, and multi-hop evolution traversal are
+still not implemented, and relation filters and limits continue to apply only
+to `relation_edges`.
 
 Start a continuation Session, then consume the Handoff into that Session's
 focus:
@@ -983,11 +984,13 @@ message=error: unexpected argument ...
   family, causal anchor ChangeSet projections, direct evolution operation
   subjects for those ChangeSets, current recognized detail for those operation
   subjects, direct changed-Entity evolution operations, operation-local Entity
-  detail for direct queried-Entity evolution operations, direct Record
-  relation remove/restore endpoint evolution operations, and direct epistemic
-  statement explanations. Full relation-subject traversal beyond that direct
-  Record relation slice, multi-hop/full evolution traversal, broader causal
-  traversal, and broader context/Resource resolver maturity remain open.
+  detail for direct queried-Entity evolution operations, direct relation
+  create/remove/restore endpoint evolution operations for recognized
+  Record-to-Record, Record-to-Knowledge, and Knowledge-to-Knowledge shapes, and
+  direct epistemic statement explanations. Full relation-subject traversal
+  beyond those direct endpoint slices, multi-hop/full evolution traversal,
+  broader causal traversal, and broader context/Resource resolver maturity
+  remain open.
 - Shared-Claim collaboration has read-only real-project and bounded
   write-mode/read-write dogfood evidence. Automatic ownership arbitration,
   distributed collaboration, and remote multi-operator coordination remain

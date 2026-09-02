@@ -6,9 +6,9 @@ use workvcs_core::{
     KnowledgeRelationRestoreOptions, KnowledgeTransitionOptions, RecordCreateCommit,
     RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreOptions, StoreInitOptions,
-    WhyDeferredRelationFamily, WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions,
-    WhyQueryResult, WhyQueryTarget, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
-    WorkspaceInitOptions,
+    WhyDeferredRelationFamily, WhyEntityKind, WhyEvolutionChangeOperation,
+    WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
+    WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -149,6 +149,88 @@ fn knowledge_endpoint(entity_id: EntityId) -> WhyRelationEndpoint {
     WhyRelationEndpoint::entity(entity_id, WhyEntityKind::Knowledge)
 }
 
+fn assert_record_knowledge_relation_create_evolution(
+    operation: &WhyEvolutionChangeOperation,
+    relation: &RecordKnowledgeRelationCreateCommit,
+    source_record_entity_id: EntityId,
+    target_knowledge_entity_id: EntityId,
+) {
+    assert_eq!(operation.commit_id, relation.commit_id);
+    assert_eq!(operation.changeset_id, relation.changeset_id);
+    assert_eq!(operation.operation_id, relation.operation_id);
+    assert_eq!(operation.changeset_operation_type, "record.relation.create");
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(relation.relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected record knowledge relation create detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::RecordSupports);
+    assert_eq!(detail.relation_version_id, relation.relation_version_id);
+    assert_eq!(detail.relation_label, None);
+    assert_eq!(detail.source, record_endpoint(source_record_entity_id));
+    assert_eq!(
+        detail.target,
+        knowledge_endpoint(target_knowledge_entity_id)
+    );
+    assert_eq!(detail.state_digest, relation.relation_state_digest);
+}
+
+fn assert_knowledge_relation_create_evolution(
+    operation: &WhyEvolutionChangeOperation,
+    relation: &KnowledgeRelationCreateCommit,
+    replacement_knowledge_entity_id: EntityId,
+    prior_knowledge_entity_id: EntityId,
+) {
+    assert_eq!(operation.commit_id, relation.commit_id);
+    assert_eq!(operation.changeset_id, relation.changeset_id);
+    assert_eq!(operation.operation_id, relation.operation_id);
+    assert_eq!(
+        operation.changeset_operation_type,
+        "knowledge.relation.create"
+    );
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(relation.relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected knowledge relation create detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::KnowledgeSupersedes);
+    assert_eq!(detail.relation_version_id, relation.relation_version_id);
+    assert_eq!(detail.relation_label, None);
+    assert_eq!(
+        detail.source,
+        knowledge_endpoint(replacement_knowledge_entity_id)
+    );
+    assert_eq!(detail.target, knowledge_endpoint(prior_knowledge_entity_id));
+    assert_eq!(detail.state_digest, relation.relation_state_digest);
+}
+
+#[test]
+fn why_projects_created_record_knowledge_relation_as_knowledge_endpoint_evolution() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (knowledge, finding, relation) =
+        create_record_to_knowledge_support(&mut engine, &workspace);
+
+    let why = why_commit(&engine, relation.commit_id, knowledge.knowledge_entity_id);
+    assert_eq!(why.relation_edges.len(), 1);
+    assert!(why.causal_anchor_changesets.is_empty());
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_record_knowledge_relation_create_evolution(
+        &why.evolution_change_operations[0],
+        &relation,
+        finding.record_entity_id,
+        knowledge.knowledge_entity_id,
+    );
+}
+
 #[test]
 fn why_projects_removed_record_knowledge_relation_as_knowledge_endpoint_evolution() {
     let (_tempdir, path) = store_path();
@@ -176,7 +258,7 @@ fn why_projects_removed_record_knowledge_relation_as_knowledge_endpoint_evolutio
         why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_eq!(why.evolution_change_operations.len(), 2);
 
     let operation = &why.evolution_change_operations[0];
     assert_eq!(operation.commit_id, removed.commit_id);
@@ -199,6 +281,13 @@ fn why_projects_removed_record_knowledge_relation_as_knowledge_endpoint_evolutio
         knowledge_endpoint(knowledge.knowledge_entity_id)
     );
     assert_eq!(detail.state_digest, relation.relation_state_digest);
+
+    assert_record_knowledge_relation_create_evolution(
+        &why.evolution_change_operations[1],
+        &relation,
+        finding.record_entity_id,
+        knowledge.knowledge_entity_id,
+    );
 }
 
 #[test]
@@ -238,7 +327,7 @@ fn why_projects_restored_record_knowledge_relation_as_knowledge_endpoint_evoluti
         why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(why.evolution_change_operations.len(), 2);
+    assert_eq!(why.evolution_change_operations.len(), 3);
 
     let newest = &why.evolution_change_operations[0];
     assert_eq!(newest.commit_id, restored.commit_id);
@@ -259,6 +348,36 @@ fn why_projects_restored_record_knowledge_relation_as_knowledge_endpoint_evoluti
     assert_eq!(older.commit_id, removed.commit_id);
     assert_eq!(older.operation_id, removed.operation_id);
     assert_eq!(older.changeset_operation_type, "record.relation.remove");
+
+    assert_record_knowledge_relation_create_evolution(
+        &why.evolution_change_operations[2],
+        &relation,
+        finding.record_entity_id,
+        knowledge.knowledge_entity_id,
+    );
+}
+
+#[test]
+fn why_projects_created_knowledge_relation_as_replacement_endpoint_evolution() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (prior, replacement, relation) =
+        create_knowledge_supersedes_relation(&mut engine, &workspace);
+
+    let why = why_commit(&engine, relation.commit_id, replacement.knowledge_entity_id);
+    assert_eq!(why.relation_edges.len(), 1);
+    assert!(why.causal_anchor_changesets.is_empty());
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_knowledge_relation_create_evolution(
+        &why.evolution_change_operations[0],
+        &relation,
+        replacement.knowledge_entity_id,
+        prior.knowledge_entity_id,
+    );
 }
 
 #[test]
@@ -288,7 +407,7 @@ fn why_projects_removed_knowledge_relation_as_replacement_endpoint_evolution() {
         why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_eq!(why.evolution_change_operations.len(), 2);
 
     let operation = &why.evolution_change_operations[0];
     assert_eq!(operation.commit_id, removed.commit_id);
@@ -314,6 +433,13 @@ fn why_projects_removed_knowledge_relation_as_replacement_endpoint_evolution() {
     );
     assert_eq!(detail.target, knowledge_endpoint(prior.knowledge_entity_id));
     assert_eq!(detail.state_digest, relation.relation_state_digest);
+
+    assert_knowledge_relation_create_evolution(
+        &why.evolution_change_operations[1],
+        &relation,
+        replacement.knowledge_entity_id,
+        prior.knowledge_entity_id,
+    );
 }
 
 #[test]
@@ -343,7 +469,7 @@ fn why_projects_removed_knowledge_relation_as_prior_endpoint_evolution() {
         why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(why.evolution_change_operations.len(), 2);
+    assert_eq!(why.evolution_change_operations.len(), 3);
 
     let operation = why
         .evolution_change_operations
@@ -372,6 +498,18 @@ fn why_projects_removed_knowledge_relation_as_prior_endpoint_evolution() {
     );
     assert_eq!(detail.target, knowledge_endpoint(prior.knowledge_entity_id));
     assert_eq!(detail.state_digest, relation.relation_state_digest);
+
+    let create_operation = why
+        .evolution_change_operations
+        .iter()
+        .find(|operation| operation.operation_id == relation.operation_id)
+        .expect("created relation operation");
+    assert_knowledge_relation_create_evolution(
+        create_operation,
+        &relation,
+        replacement.knowledge_entity_id,
+        prior.knowledge_entity_id,
+    );
 }
 
 #[test]
@@ -411,7 +549,7 @@ fn why_projects_restored_knowledge_relation_as_replacement_endpoint_evolution() 
         why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(why.evolution_change_operations.len(), 2);
+    assert_eq!(why.evolution_change_operations.len(), 3);
 
     let newest = &why.evolution_change_operations[0];
     assert_eq!(newest.commit_id, restored.commit_id);
@@ -435,4 +573,11 @@ fn why_projects_restored_knowledge_relation_as_replacement_endpoint_evolution() 
     assert_eq!(older.commit_id, removed.commit_id);
     assert_eq!(older.operation_id, removed.operation_id);
     assert_eq!(older.changeset_operation_type, "knowledge.relation.remove");
+
+    assert_knowledge_relation_create_evolution(
+        &why.evolution_change_operations[2],
+        &relation,
+        replacement.knowledge_entity_id,
+        prior.knowledge_entity_id,
+    );
 }

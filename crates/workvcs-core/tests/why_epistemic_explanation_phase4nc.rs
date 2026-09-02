@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    Engine, EntityId, KnowledgeCreateOptions, KnowledgeRelationCreateOptions,
-    KnowledgeTransitionOptions, RecordCreateOptions, RecordKnowledgeRelationCreateOptions,
-    RecordRelationCreateOptions, RecordTransitionOptions, StoreInitOptions, WhyEntityKind,
+    ChangeOperationSubject, Engine, EntityId, KnowledgeCreateOptions,
+    KnowledgeRelationCreateOptions, KnowledgeTransitionOptions, RecordCreateOptions,
+    RecordKnowledgeRelationCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions,
+    StoreInitOptions, WhyDeferredRelationFamily, WhyEntityKind, WhyEvolutionSubjectDetail,
     WhyQueryOptions, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind,
     WorkspaceInfo, WorkspaceInitOptions,
 };
@@ -83,7 +84,11 @@ fn why_explains_record_supports_knowledge_with_statements() {
 
     assert_eq!(why.relation_edges.len(), 1);
     assert_eq!(why.epistemic_explanations.len(), 1);
-    assert!(why.deferred_relation_families.is_empty());
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 1);
     let edge = &why.relation_edges[0];
     let explanation = &why.epistemic_explanations[0];
     assert_eq!(explanation.relation_kind, WhyRelationKind::RecordSupports);
@@ -102,6 +107,27 @@ fn why_explains_record_supports_knowledge_with_statements() {
     assert_eq!(explanation.source_statement, finding_statement);
     assert_eq!(explanation.target_statement, knowledge_statement);
     assert_eq!(explanation.state_digest, relation.relation_state_digest);
+
+    let operation = &why.evolution_change_operations[0];
+    assert_eq!(operation.commit_id, relation.commit_id);
+    assert_eq!(operation.changeset_id, relation.changeset_id);
+    assert_eq!(operation.operation_id, relation.operation_id);
+    assert_eq!(operation.changeset_operation_type, "record.relation.create");
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(relation.relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected supports knowledge relation create detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::RecordSupports);
+    assert_eq!(detail.relation_version_id, relation.relation_version_id);
+    assert_eq!(detail.source, record_endpoint(finding.record_entity_id));
+    assert_eq!(
+        detail.target,
+        knowledge_endpoint(knowledge.knowledge_entity_id)
+    );
+    assert_eq!(detail.state_digest, relation.relation_state_digest);
 }
 
 #[test]

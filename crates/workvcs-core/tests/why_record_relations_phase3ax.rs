@@ -6,8 +6,8 @@ use workvcs_core::{
     RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationRemoveOptions,
     RecordRelationRestoreOptions, RecordTransitionCommit, RecordTransitionOptions,
     ResolvedWhyQuerySubject, StoreInitOptions, WhyDeferredRelationFamily, WhyEntityKind,
-    WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
-    WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
+    WhyEvolutionChangeOperation, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult,
+    WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
     WorkspaceInitOptions,
 };
 
@@ -204,8 +204,30 @@ fn record_endpoint(record_entity_id: EntityId) -> WhyRelationEndpoint {
     WhyRelationEndpoint::entity(record_entity_id, WhyEntityKind::Record)
 }
 
-fn assert_deferred_families(why: &WhyQueryResult) {
-    assert!(why.deferred_relation_families.is_empty());
+fn assert_record_relation_create_evolution(
+    operation: &WhyEvolutionChangeOperation,
+    relation: &RecordRelationCreateCommit,
+    relation_kind: WhyRelationKind,
+    source: WhyRelationEndpoint,
+    target: WhyRelationEndpoint,
+) {
+    assert_eq!(operation.commit_id, relation.commit_id);
+    assert_eq!(operation.changeset_id, relation.changeset_id);
+    assert_eq!(operation.operation_id, relation.operation_id);
+    assert_eq!(operation.changeset_operation_type, "record.relation.create");
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(relation.relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected relation create detail")
+    };
+    assert_eq!(detail.relation_kind, relation_kind);
+    assert_eq!(detail.relation_version_id, relation.relation_version_id);
+    assert_eq!(detail.relation_label, None);
+    assert_eq!(detail.source, source);
+    assert_eq!(detail.target, target);
+    assert_eq!(detail.state_digest, relation.relation_state_digest);
 }
 
 #[test]
@@ -224,8 +246,18 @@ fn why_reports_record_invalidates_edge_for_both_endpoints() {
             entity_kind: WhyEntityKind::Record,
         }
     );
-    assert_deferred_families(&finding_why);
-    assert!(finding_why.evolution_change_operations.is_empty());
+    assert_eq!(
+        finding_why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(finding_why.evolution_change_operations.len(), 1);
+    assert_record_relation_create_evolution(
+        &finding_why.evolution_change_operations[0],
+        &relation,
+        WhyRelationKind::RecordInvalidates,
+        record_endpoint(finding.record_entity_id),
+        record_endpoint(assumption.record_entity_id),
+    );
     assert_eq!(
         edge_facts(&finding_why),
         BTreeSet::from([(
@@ -253,8 +285,15 @@ fn why_reports_record_invalidates_edge_for_both_endpoints() {
         assumption_why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(assumption_why.evolution_change_operations.len(), 1);
-    let operation = &assumption_why.evolution_change_operations[0];
+    assert_eq!(assumption_why.evolution_change_operations.len(), 2);
+    assert_record_relation_create_evolution(
+        &assumption_why.evolution_change_operations[0],
+        &relation,
+        WhyRelationKind::RecordInvalidates,
+        record_endpoint(finding.record_entity_id),
+        record_endpoint(assumption.record_entity_id),
+    );
+    let operation = &assumption_why.evolution_change_operations[1];
     assert_eq!(operation.commit_id, invalidated.commit_id);
     assert_eq!(operation.changeset_id, invalidated.changeset_id);
     assert_eq!(operation.changeset_operation_type, "entity.transition");
@@ -364,6 +403,30 @@ fn why_reports_operation_local_entity_detail_for_multiple_direct_assumption_chan
 }
 
 #[test]
+fn why_projects_created_record_relation_as_endpoint_evolution() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (decision, finding, relation) =
+        create_supported_decision_with_finding(&mut engine, &workspace);
+
+    let why = why_commit(&engine, relation.commit_id, decision.record_entity_id);
+    assert_eq!(why.relation_edges.len(), 1);
+    assert!(why.causal_anchor_changesets.is_empty());
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_record_relation_create_evolution(
+        &why.evolution_change_operations[0],
+        &relation,
+        WhyRelationKind::RecordSupports,
+        record_endpoint(finding.record_entity_id),
+        record_endpoint(decision.record_entity_id),
+    );
+}
+
+#[test]
 fn why_projects_removed_record_relation_as_endpoint_evolution() {
     let (_tempdir, path) = store_path();
     let (mut engine, workspace) = create_workspace(&path);
@@ -390,7 +453,7 @@ fn why_projects_removed_record_relation_as_endpoint_evolution() {
         why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_eq!(why.evolution_change_operations.len(), 2);
 
     let operation = &why.evolution_change_operations[0];
     assert_eq!(operation.commit_id, removed.commit_id);
@@ -410,6 +473,14 @@ fn why_projects_removed_record_relation_as_endpoint_evolution() {
     assert_eq!(detail.source, record_endpoint(finding.record_entity_id));
     assert_eq!(detail.target, record_endpoint(decision.record_entity_id));
     assert_eq!(detail.state_digest, relation.relation_state_digest);
+
+    assert_record_relation_create_evolution(
+        &why.evolution_change_operations[1],
+        &relation,
+        WhyRelationKind::RecordSupports,
+        record_endpoint(finding.record_entity_id),
+        record_endpoint(decision.record_entity_id),
+    );
 }
 
 #[test]
@@ -449,7 +520,7 @@ fn why_projects_restored_record_relation_as_endpoint_evolution() {
         why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(why.evolution_change_operations.len(), 2);
+    assert_eq!(why.evolution_change_operations.len(), 3);
 
     let newest = &why.evolution_change_operations[0];
     assert_eq!(newest.commit_id, restored.commit_id);
@@ -474,5 +545,13 @@ fn why_projects_restored_record_relation_as_endpoint_evolution() {
     assert_eq!(
         older.subject,
         ChangeOperationSubject::Relation(relation.relation_id)
+    );
+
+    assert_record_relation_create_evolution(
+        &why.evolution_change_operations[2],
+        &relation,
+        WhyRelationKind::RecordSupports,
+        record_endpoint(finding.record_entity_id),
+        record_endpoint(decision.record_entity_id),
     );
 }

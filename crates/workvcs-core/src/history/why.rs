@@ -4,8 +4,9 @@ use super::goal::GOAL_ENTITY_KIND;
 use super::knowledge::{KNOWLEDGE_ENTITY_KIND, knowledge_at};
 use super::plan::PLAN_ENTITY_KIND;
 use super::record::{
-    KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE, KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE,
-    RECORD_ENTITY_KIND, RECORD_RELATION_REMOVE_OPERATION_TYPE,
+    KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE, KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE,
+    KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE, RECORD_ENTITY_KIND,
+    RECORD_RELATION_CREATE_OPERATION_TYPE, RECORD_RELATION_REMOVE_OPERATION_TYPE,
     RECORD_RELATION_RESTORE_OPERATION_TYPE, RecordKind, load_knowledge_relation_version,
     load_record_knowledge_relation_version, load_record_relation_version, record_at,
 };
@@ -772,8 +773,10 @@ fn load_direct_entity_evolution_membership_change(
 fn is_direct_relation_evolution_operation(operation_type: &str) -> bool {
     matches!(
         operation_type,
-        RECORD_RELATION_REMOVE_OPERATION_TYPE
+        RECORD_RELATION_CREATE_OPERATION_TYPE
+            | RECORD_RELATION_REMOVE_OPERATION_TYPE
             | RECORD_RELATION_RESTORE_OPERATION_TYPE
+            | KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE
             | KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE
             | KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE
     )

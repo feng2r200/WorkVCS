@@ -11,9 +11,12 @@ schema in [schema-v0.1.sql](../../schema/schema-v0.1.sql). The install and
 bootstrap validation harness is
 [validate-schema-v0.1.sh](../../scripts/validate-schema-v0.1.sh).
 
-The executable schema contains the confirmed 67 v0.1 tables and correctness
-indexes only. It deliberately does not add performance/query indexes, new table
-families, or storage-engine business implementation.
+The executable schema contains the confirmed 68 v0.1 tables and correctness
+indexes only. The count includes the additive
+`context_packet_snapshot` runtime-provenance table accepted in
+[ADR-0434](../decisions/adr/0434-phase-4ls-context-packet-persistence.md). It
+deliberately does not add performance/query indexes, new table families, or
+storage-engine business implementation.
 
 ## Predecessor closure carried forward
 

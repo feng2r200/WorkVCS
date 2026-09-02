@@ -358,12 +358,16 @@ ChangeOperation, `why` also reports that direct Entity-subject evolution
 operation even if the Entity was not the causal anchor. For example, a
 superseded prior Decision can report `causal_anchor_changesets=0` while still
 showing the direct `record.decision.supersede` operation that changed it.
-Initial Entity creation operations are not counted as this direct evolution
-slice. Use `--expected-evolution-change-operations` when a script needs to
-assert the projected operation count. Full ChangeSet evolution traversal,
-relation-subject traversal, and multi-hop evolution traversal are still not
-implemented, and relation filters and limits continue to apply only to
-`relation_edges`.
+For these direct queried-Entity operations, recognized Entity detail is
+operation-local when the operation has an after Entity version:
+`subject_entity_version_id` identifies the version produced by that
+ChangeOperation, and `subject_statement_json` is looked up at that operation's
+commit. Initial Entity creation operations are not counted as this direct
+evolution slice. Use `--expected-evolution-change-operations` when a script
+needs to assert the projected operation count. Full ChangeSet evolution
+traversal, relation-subject traversal, and multi-hop evolution traversal are
+still not implemented, and relation filters and limits continue to apply only
+to `relation_edges`.
 
 Start a continuation Session, then consume the Handoff into that Session's
 focus:
@@ -961,7 +965,8 @@ message=error: unexpected argument ...
 - `why` exposes focused Handoff scope links, anchored evolution as a deferred
   family, causal anchor ChangeSet projections, direct evolution operation
   subjects for those ChangeSets, current recognized detail for those operation
-  subjects, direct changed-Entity evolution operations, and direct epistemic
+  subjects, direct changed-Entity evolution operations, operation-local Entity
+  detail for direct queried-Entity evolution operations, and direct epistemic
   statement explanations. Relation-subject traversal, multi-hop/full evolution
   traversal, broader causal traversal, and broader context/Resource resolver
   maturity remain open.

@@ -88,6 +88,51 @@ fn create_invalidated_assumption_with_finding(
     (assumption, finding, invalidated, relation)
 }
 
+fn create_validated_then_invalidated_assumption(
+    engine: &mut Engine,
+    workspace: &WorkspaceInfo,
+) -> (
+    RecordCreateCommit,
+    RecordTransitionCommit,
+    RecordTransitionCommit,
+) {
+    let assumption = engine
+        .create_record(
+            RecordCreateOptions::assumption(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "The cache is always fresh",
+            )
+            .expect("assumption options"),
+        )
+        .expect("create assumption");
+    let validated = engine
+        .transition_record(
+            RecordTransitionOptions::validate_assumption(
+                workspace.initial_branch_id,
+                assumption.commit_id,
+                assumption.record_entity_id,
+                assumption.record_entity_version_id,
+                "Freshness check passed",
+            )
+            .expect("validate options"),
+        )
+        .expect("validate assumption");
+    let invalidated = engine
+        .transition_record(
+            RecordTransitionOptions::invalidate_assumption(
+                workspace.initial_branch_id,
+                validated.commit_id,
+                assumption.record_entity_id,
+                validated.record_entity_version_id,
+                "Freshness check failed later",
+            )
+            .expect("invalidate options"),
+        )
+        .expect("invalidate assumption");
+    (assumption, validated, invalidated)
+}
+
 fn why_commit(engine: &Engine, commit_id: CommitId, subject_entity_id: EntityId) -> WhyQueryResult {
     engine
         .why(WhyQueryOptions::new(
@@ -208,4 +253,68 @@ fn why_reports_record_invalidates_edge_for_both_endpoints() {
         vec![WhyDeferredRelationFamily::Evolution]
     );
     assert_eq!(before_relation.evolution_change_operations.len(), 1);
+}
+
+#[test]
+fn why_reports_operation_local_entity_detail_for_multiple_direct_assumption_changes() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let (assumption, validated, invalidated) =
+        create_validated_then_invalidated_assumption(&mut engine, &workspace);
+
+    let why = why_commit(&engine, invalidated.commit_id, assumption.record_entity_id);
+    assert_eq!(
+        why.subject,
+        ResolvedWhyQuerySubject::Entity {
+            entity_id: assumption.record_entity_id,
+            entity_version_id: invalidated.record_entity_version_id,
+            entity_kind: WhyEntityKind::Record,
+        }
+    );
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 2);
+
+    let newest = &why.evolution_change_operations[0];
+    assert_eq!(newest.commit_id, invalidated.commit_id);
+    assert_eq!(newest.changeset_id, invalidated.changeset_id);
+    assert_eq!(newest.operation_id, invalidated.operation_id);
+    assert_eq!(newest.changeset_operation_type, "entity.transition");
+    assert_eq!(
+        newest.subject,
+        ChangeOperationSubject::Entity(assumption.record_entity_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Entity(detail)) = &newest.subject_detail else {
+        panic!("expected newest operation entity detail")
+    };
+    assert_eq!(detail.entity_kind, WhyEntityKind::Record);
+    assert_eq!(
+        detail.entity_version_id,
+        invalidated.record_entity_version_id
+    );
+    assert_eq!(
+        detail.statement.as_deref(),
+        Some("The cache is always fresh")
+    );
+
+    let older = &why.evolution_change_operations[1];
+    assert_eq!(older.commit_id, validated.commit_id);
+    assert_eq!(older.changeset_id, validated.changeset_id);
+    assert_eq!(older.operation_id, validated.operation_id);
+    assert_eq!(older.changeset_operation_type, "entity.transition");
+    assert_eq!(
+        older.subject,
+        ChangeOperationSubject::Entity(assumption.record_entity_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Entity(detail)) = &older.subject_detail else {
+        panic!("expected older operation entity detail")
+    };
+    assert_eq!(detail.entity_kind, WhyEntityKind::Record);
+    assert_eq!(detail.entity_version_id, validated.record_entity_version_id);
+    assert_eq!(
+        detail.statement.as_deref(),
+        Some("The cache is always fresh")
+    );
 }

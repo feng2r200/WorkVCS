@@ -48932,6 +48932,134 @@ mod tests {
     }
 
     #[test]
+    fn cli_why_reports_operation_local_entity_detail_for_multiple_direct_assumption_changes() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let assumption = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "assumption",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "The cache is always fresh",
+        ])
+        .expect("parse assumption"))
+        .expect("create assumption");
+        let validated = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "assumption-status",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&assumption, "commit_id"),
+            "--record",
+            &value(&assumption, "record_entity_id"),
+            "--record-version",
+            &value(&assumption, "record_entity_version_id"),
+            "--status",
+            "validated",
+            "--rationale",
+            "Freshness check passed",
+        ])
+        .expect("parse validation"))
+        .expect("validate assumption");
+        let invalidated = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "assumption-status",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&validated, "commit_id"),
+            "--record",
+            &value(&assumption, "record_entity_id"),
+            "--record-version",
+            &value(&validated, "record_entity_version_id"),
+            "--status",
+            "invalidated",
+            "--rationale",
+            "Freshness check failed later",
+        ])
+        .expect("parse invalidation"))
+        .expect("invalidate assumption");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&invalidated, "commit_id"),
+            "--entity",
+            &value(&assumption, "record_entity_id"),
+            "--expected-evolution-change-operations",
+            "2",
+        ])
+        .expect("parse why"))
+        .expect("why assumption");
+
+        assert_eq!(value(&why, "evolution_change_operations"), "2");
+        assert_eq!(
+            value(&why, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.operation_id"),
+            value(&invalidated, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_entity_version_id"
+            ),
+            value(&invalidated, "record_entity_version_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.operation_id"),
+            value(&validated, "operation_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.subject_entity_version_id"
+            ),
+            value(&validated, "record_entity_version_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_statement_json"),
+            "\"The cache is always fresh\""
+        );
+        assert_eq!(value(&why, "deferred_relation_families"), "1");
+        assert_eq!(value(&why, "deferred_relation_family.0"), "evolution");
+    }
+
+    #[test]
     fn cli_links_finding_to_supported_decision() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

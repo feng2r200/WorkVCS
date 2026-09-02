@@ -617,9 +617,9 @@ fn why_evolution_change_operations(
     let mut seen_operation_ids = HashSet::new();
     for anchor in causal_anchor_changesets {
         for operation in changeset_operations(connection, anchor.changeset_id)?.operations {
+            let subject_detail =
+                why_evolution_subject_detail(connection, resolved, &operation.subject)?;
             push_why_evolution_operation(
-                connection,
-                resolved,
                 &mut evolution_operations,
                 &mut seen_operation_ids,
                 WhyEvolutionOperationSource {
@@ -629,6 +629,7 @@ fn why_evolution_change_operations(
                     operation_schema_version: anchor.operation_schema_version,
                 },
                 operation,
+                subject_detail,
             )?;
         }
     }
@@ -648,12 +649,25 @@ fn why_evolution_change_operations(
             if operation.subject != ChangeOperationSubject::Entity(entity_id) {
                 continue;
             }
-            if !entity_operation_has_prior_version(connection, operation.operation_id)? {
+            let Some(membership_change) =
+                load_direct_entity_evolution_membership_change(connection, operation.operation_id)?
+            else {
                 continue;
-            }
+            };
+            let subject_detail = membership_change
+                .after_entity_version_id
+                .map(|entity_version_id| {
+                    why_direct_entity_operation_subject_detail(
+                        connection,
+                        resolved,
+                        entity_id,
+                        entry.commit_id,
+                        entity_version_id,
+                    )
+                })
+                .transpose()?
+                .flatten();
             push_why_evolution_operation(
-                connection,
-                resolved,
                 &mut evolution_operations,
                 &mut seen_operation_ids,
                 WhyEvolutionOperationSource {
@@ -663,28 +677,48 @@ fn why_evolution_change_operations(
                     operation_schema_version: entry.operation_schema_version,
                 },
                 operation,
+                subject_detail,
             )?;
         }
     }
     Ok(evolution_operations)
 }
 
-fn entity_operation_has_prior_version(
+struct DirectEntityEvolutionMembershipChange {
+    after_entity_version_id: Option<EntityVersionId>,
+}
+
+fn load_direct_entity_evolution_membership_change(
     connection: &StoreConnection,
     operation_id: crate::identity::OperationId,
-) -> Result<bool> {
-    let before_entity_version_id = connection
+) -> Result<Option<DirectEntityEvolutionMembershipChange>> {
+    let membership_change = connection
         .inner()
         .query_row(
-            "SELECT before_entity_version_id
+            "SELECT before_entity_version_id, after_entity_version_id
              FROM entity_membership_change
              WHERE operation_id = ?1",
             params![&operation_id.raw_bytes()[..]],
-            |row| row.get::<_, Option<Vec<u8>>>(0),
+            |row| {
+                Ok((
+                    row.get::<_, Option<Vec<u8>>>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                ))
+            },
         )
         .optional()
         .map_err(crate::error::storage_error)?;
-    Ok(before_entity_version_id.flatten().is_some())
+    let Some((Some(_before_entity_version_id), after_entity_version_id)) = membership_change else {
+        return Ok(None);
+    };
+    let after_entity_version_id = after_entity_version_id
+        .map(|bytes| {
+            decode_entity_version_id("entity_membership_change.after_entity_version_id", bytes)
+        })
+        .transpose()?;
+    Ok(Some(DirectEntityEvolutionMembershipChange {
+        after_entity_version_id,
+    }))
 }
 
 struct WhyEvolutionOperationSource<'a> {
@@ -695,17 +729,15 @@ struct WhyEvolutionOperationSource<'a> {
 }
 
 fn push_why_evolution_operation(
-    connection: &StoreConnection,
-    resolved: &ResolvedWhyTargetWithState,
     evolution_operations: &mut Vec<WhyEvolutionChangeOperation>,
     seen_operation_ids: &mut HashSet<crate::identity::OperationId>,
     source: WhyEvolutionOperationSource<'_>,
     operation: ChangeOperationSnapshot,
+    subject_detail: Option<WhyEvolutionSubjectDetail>,
 ) -> Result<()> {
     if !seen_operation_ids.insert(operation.operation_id) {
         return Ok(());
     }
-    let subject_detail = why_evolution_subject_detail(connection, resolved, &operation.subject)?;
     evolution_operations.push(WhyEvolutionChangeOperation {
         commit_id: source.commit_id,
         changeset_id: source.changeset_id,
@@ -752,6 +784,32 @@ fn why_evolution_entity_subject_detail(
     let statement = why_endpoint_statement(
         connection,
         resolved.target.commit_id,
+        WhyRelationEndpoint::entity(entity_id, entity_kind),
+    )?;
+    Ok(Some(WhyEvolutionSubjectDetail::Entity(
+        WhyEvolutionSubjectEntityDetail {
+            entity_kind,
+            entity_version_id,
+            statement,
+        },
+    )))
+}
+
+fn why_direct_entity_operation_subject_detail(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    entity_id: EntityId,
+    commit_id: CommitId,
+    entity_version_id: EntityVersionId,
+) -> Result<Option<WhyEvolutionSubjectDetail>> {
+    let Some(entity_kind) =
+        load_evolution_subject_entity_kind(connection, resolved.target.workspace_id, entity_id)?
+    else {
+        return Ok(None);
+    };
+    let statement = why_endpoint_statement(
+        connection,
+        commit_id,
         WhyRelationEndpoint::entity(entity_id, entity_kind),
     )?;
     Ok(Some(WhyEvolutionSubjectDetail::Entity(
@@ -1547,6 +1605,12 @@ fn decode_workspace_id(column: &str, bytes: Vec<u8>) -> Result<WorkspaceId> {
 fn decode_entity_id(column: &str, bytes: Vec<u8>) -> Result<EntityId> {
     let bytes = decode_16(column, bytes)?;
     EntityId::from_bytes(bytes).map_err(|error| WorkVcsError::QueryInvalid(error.to_string()))
+}
+
+fn decode_entity_version_id(column: &str, bytes: Vec<u8>) -> Result<EntityVersionId> {
+    let bytes = decode_16(column, bytes)?;
+    EntityVersionId::from_bytes(bytes)
+        .map_err(|error| WorkVcsError::QueryInvalid(error.to_string()))
 }
 
 fn decode_exposure_id(column: &str, bytes: Vec<u8>) -> Result<ExposureId> {

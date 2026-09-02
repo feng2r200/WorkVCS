@@ -2581,6 +2581,8 @@ fn why_relation_kind_summary(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::RecordSupports => "record_supports",
         WhyRelationKind::RecordSupersedes => "record_supersedes",
         WhyRelationKind::RecordValidates => "record_validates",
+        WhyRelationKind::TaskDependsOn => "task_depends_on",
+        WhyRelationKind::TaskOrderedBefore => "task_ordered_before",
         WhyRelationKind::KnowledgeExposureDerivedFrom => "knowledge_exposure_derived_from",
         WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
     }

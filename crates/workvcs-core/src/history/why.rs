@@ -11,8 +11,9 @@ use super::record::{
     load_record_knowledge_relation_version, load_record_relation_version, record_at,
 };
 use super::task::{
-    ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_ENTITY_KIND,
-    VERIFICATION_REQUIREMENT_ENTITY_KIND,
+    ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND,
+    TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE, TaskSchedulingRelationType,
+    VERIFICATION_ENTITY_KIND, VERIFICATION_REQUIREMENT_ENTITY_KIND,
 };
 use super::{
     ChangeOperationSnapshot, ChangeOperationSubject, HistoryQueryOptions,
@@ -21,7 +22,8 @@ use super::{
     StructuralReferenceEndpointKind, VerificationTarget, branch_head, changeset_operations,
     evidence, knowledge_exposure, knowledge_relations_at, primary_containment_relations_at,
     query_history, record_knowledge_relations_at, record_relations_at, state_at,
-    structural_references_at, verification_evidence_relations_at, verification_relations_at,
+    structural_references_at, task_scheduling_relations_at, verification_evidence_relations_at,
+    verification_relations_at,
 };
 use crate::canonical::CanonicalValue;
 use crate::error::{Result, WorkVcsError};
@@ -224,6 +226,8 @@ pub enum WhyRelationKind {
     RecordSupports,
     RecordSupersedes,
     RecordValidates,
+    TaskDependsOn,
+    TaskOrderedBefore,
     KnowledgeExposureDerivedFrom,
     KnowledgeSupersedes,
 }
@@ -411,6 +415,26 @@ pub(crate) fn explain_why(
         {
             relation_edges.push(WhyRelationEdge {
                 relation_kind: WhyRelationKind::StructuralReference,
+                direction: relation_direction(options.subject(), source, target),
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                relation_label: None,
+                source,
+                target,
+                state_digest: relation.state_digest,
+            });
+        }
+    }
+    for relation in task_scheduling_relations_at(connection, resolved.target.commit_id)? {
+        let source =
+            WhyRelationEndpoint::entity(relation.source_task_entity_id, WhyEntityKind::Task);
+        let target =
+            WhyRelationEndpoint::entity(relation.target_task_entity_id, WhyEntityKind::Task);
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
+        {
+            relation_edges.push(WhyRelationEdge {
+                relation_kind: task_scheduling_relation_kind(relation.relation_type),
                 direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
@@ -779,6 +803,7 @@ fn is_direct_relation_evolution_operation(operation_type: &str) -> bool {
             | KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE
             | KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE
             | KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE
+            | TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE
     )
 }
 
@@ -997,6 +1022,30 @@ fn why_direct_relation_operation_subject_detail(
                     state_digest: relation.state_digest,
                 },
             )));
+        }
+    }
+    for relation in task_scheduling_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source =
+                WhyRelationEndpoint::entity(relation.source_task_entity_id, WhyEntityKind::Task);
+            let target =
+                WhyRelationEndpoint::entity(relation.target_task_entity_id, WhyEntityKind::Task);
+            if endpoint_matches_subject(subject, source)
+                || endpoint_matches_subject(subject, target)
+            {
+                return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                    WhyEvolutionSubjectRelationDetail {
+                        relation_kind: task_scheduling_relation_kind(relation.relation_type),
+                        relation_version_id: relation.relation_version_id,
+                        relation_label: None,
+                        source,
+                        target,
+                        state_digest: relation.state_digest,
+                    },
+                )));
+            }
         }
     }
     Ok(None)
@@ -1746,6 +1795,13 @@ fn record_relation_kind(relation_type: RecordRelationType) -> WhyRelationKind {
         RecordRelationType::Supports => WhyRelationKind::RecordSupports,
         RecordRelationType::Supersedes => WhyRelationKind::RecordSupersedes,
         RecordRelationType::Validates => WhyRelationKind::RecordValidates,
+    }
+}
+
+fn task_scheduling_relation_kind(relation_type: TaskSchedulingRelationType) -> WhyRelationKind {
+    match relation_type {
+        TaskSchedulingRelationType::DependsOn => WhyRelationKind::TaskDependsOn,
+        TaskSchedulingRelationType::OrderedBefore => WhyRelationKind::TaskOrderedBefore,
     }
 }
 

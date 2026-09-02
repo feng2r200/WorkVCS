@@ -375,6 +375,16 @@ ChangeOperation, and `subject_statement_json` is looked up at that operation's
 commit. Initial Entity creation operations are not counted as this direct
 evolution slice.
 
+When querying a Task endpoint of a current scheduling relation, `why` reports
+the scheduling relation as a normal relation edge. `depends_on` renders as
+`task_depends_on`, `ordered_before` renders as `task_ordered_before`, and both
+source and target endpoints use `entity_kind=task`. The source endpoint
+reports `direction=outgoing`; the target endpoint reports
+`direction=incoming`. Direct `task.scheduling_relation.create` operations are
+also reported as endpoint evolution for the source or target Task, with
+relation subject detail for the relation kind, relation version, Task
+endpoints, and state digest.
+
 When querying a Record or Knowledge Entity that is the source or target
 endpoint of a first-parent-reachable direct relation create, removal, or
 restore, `why` also reports that direct Relation-subject evolution operation
@@ -995,10 +1005,12 @@ message=error: unexpected argument ...
   detail for direct queried-Entity evolution operations, direct relation
   create/remove/restore endpoint evolution operations for recognized
   Record-to-Record, Record-to-Knowledge, and Knowledge-to-Knowledge shapes, and
-  direct epistemic statement explanations. Full relation-subject traversal
-  beyond those direct endpoint slices, multi-hop/full evolution traversal,
-  broader causal traversal, and broader context/Resource resolver maturity
-  remain open.
+  current Task scheduling relation edges plus direct scheduling create
+  endpoint evolution for `depends_on` and `ordered_before`, and direct
+  epistemic statement explanations. Full relation-subject traversal beyond
+  those direct endpoint slices, multi-hop/full evolution traversal, broader
+  causal traversal, and broader context/Resource resolver maturity remain
+  open.
 - Shared-Claim collaboration has read-only real-project and bounded
   write-mode/read-write dogfood evidence. Automatic ownership arbitration,
   distributed collaboration, and remote multi-operator coordination remain

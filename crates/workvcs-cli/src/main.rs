@@ -23130,6 +23130,8 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::RecordSupports => "record_supports",
         WhyRelationKind::RecordSupersedes => "record_supersedes",
         WhyRelationKind::RecordValidates => "record_validates",
+        WhyRelationKind::TaskDependsOn => "task_depends_on",
+        WhyRelationKind::TaskOrderedBefore => "task_ordered_before",
         WhyRelationKind::KnowledgeExposureDerivedFrom => "knowledge_exposure_derived_from",
         WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
     }
@@ -23170,6 +23172,8 @@ fn is_supported_why_relation_kind_filter(value: &str) -> bool {
             | "record_supports"
             | "record_supersedes"
             | "record_validates"
+            | "task_depends_on"
+            | "task_ordered_before"
             | "knowledge_exposure_derived_from"
             | "knowledge_supersedes"
     )
@@ -37435,6 +37439,177 @@ mod tests {
             ),
             "true"
         );
+
+        let dependent_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&dependency, "commit_id"),
+            "--entity",
+            &second_task,
+            "--relation-kind",
+            "task_depends_on",
+            "--relation-limit",
+            "1",
+            "--expected-relation-edges",
+            "1",
+            "--expected-evolution-change-operations",
+            "1",
+        ])
+        .expect("parse dependent scheduling why"))
+        .expect("dependent scheduling why");
+        assert_eq!(value(&dependent_why, "relation_edges"), "1");
+        assert_eq!(
+            value(&dependent_why, "relation_edges_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&dependent_why, "relation.0.relation_kind"),
+            "task_depends_on"
+        );
+        assert_eq!(value(&dependent_why, "relation.0.direction"), "outgoing");
+        assert_eq!(
+            value(&dependent_why, "relation.0.relation_id"),
+            value(&dependency, "relation_id")
+        );
+        assert_eq!(
+            value(&dependent_why, "relation.0.relation_version_id"),
+            value(&dependency, "relation_version_id")
+        );
+        assert_eq!(value(&dependent_why, "relation.0.source_kind"), "entity");
+        assert_eq!(
+            value(&dependent_why, "relation.0.source_entity_kind"),
+            "task"
+        );
+        assert_eq!(
+            value(&dependent_why, "relation.0.source_entity_id"),
+            second_task
+        );
+        assert_eq!(value(&dependent_why, "relation.0.target_kind"), "entity");
+        assert_eq!(
+            value(&dependent_why, "relation.0.target_entity_kind"),
+            "task"
+        );
+        assert_eq!(
+            value(&dependent_why, "relation.0.target_entity_id"),
+            first_task
+        );
+        assert_eq!(value(&dependent_why, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(&dependent_why, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &dependent_why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "task.scheduling_relation.create"
+        );
+        assert_eq!(
+            value(
+                &dependent_why,
+                "evolution_change_operation.0.subject_family"
+            ),
+            "relation"
+        );
+        assert_eq!(
+            value(
+                &dependent_why,
+                "evolution_change_operation.0.subject_object_id"
+            ),
+            value(&dependency, "relation_id")
+        );
+        assert_eq!(
+            value(
+                &dependent_why,
+                "evolution_change_operation.0.subject_detail_kind"
+            ),
+            "relation"
+        );
+        assert_eq!(
+            value(
+                &dependent_why,
+                "evolution_change_operation.0.subject_relation_kind"
+            ),
+            "task_depends_on"
+        );
+        assert_eq!(
+            value(
+                &dependent_why,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            second_task
+        );
+        assert_eq!(
+            value(
+                &dependent_why,
+                "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            first_task
+        );
+
+        let ordered_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&order, "commit_id"),
+            "--entity",
+            &first_task,
+            "--relation-kind",
+            "task_ordered_before",
+            "--expected-relation-edges",
+            "1",
+            "--expected-evolution-change-operations",
+            "2",
+        ])
+        .expect("parse ordered scheduling why"))
+        .expect("ordered scheduling why");
+        assert_eq!(value(&ordered_why, "relation_edges"), "1");
+        assert_eq!(
+            value(&ordered_why, "relation.0.relation_kind"),
+            "task_ordered_before"
+        );
+        assert_eq!(value(&ordered_why, "relation.0.direction"), "outgoing");
+        assert_eq!(
+            value(&ordered_why, "relation.0.relation_id"),
+            value(&order, "relation_id")
+        );
+        assert_eq!(value(&ordered_why, "evolution_change_operations"), "2");
+        assert!(ordered_why.contains("subject_relation_kind=task_depends_on"));
+        assert!(ordered_why.contains("subject_relation_kind=task_ordered_before"));
+
+        let later_task_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&order, "commit_id"),
+            "--entity",
+            &second_task,
+            "--direction",
+            "incoming",
+            "--source-entity-kind",
+            "task",
+            "--target-entity-kind",
+            "task",
+            "--expected-relation-edges",
+            "1",
+        ])
+        .expect("parse later task scheduling why"))
+        .expect("later task scheduling why");
+        assert_eq!(value(&later_task_why, "relation_edges"), "1");
+        assert_eq!(
+            value(&later_task_why, "relation_edges_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&later_task_why, "relation.0.relation_kind"),
+            "task_ordered_before"
+        );
+        assert_eq!(value(&later_task_why, "relation.0.direction"), "incoming");
 
         let containment_list = run(Cli::try_parse_from([
             "workvcs",

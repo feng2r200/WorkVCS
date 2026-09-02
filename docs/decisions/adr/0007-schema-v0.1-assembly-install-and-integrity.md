@@ -25,8 +25,11 @@ The minimal executable harness is
 1. `schema-v0.1.sql` is the first complete executable SQLite schema for v0.1.
    It is separate from connection bootstrap. Foreign-key enforcement is still
    explicitly enabled and verified per Engine connection.
-2. The schema contains the confirmed 67 physical tables and correctness
-   indexes only. No performance/query index design is part of this ADR.
+2. The current schema contains the confirmed 68 physical tables and correctness
+   indexes only. The current count includes the additive
+   `context_packet_snapshot` runtime-provenance table accepted later in
+   [ADR-0434](0434-phase-4ls-context-packet-persistence.md). No
+   performance/query index design is part of this ADR.
 3. The only deferred foreign key in v0.1 is the real Workspace/Genesis cycle:
    `workspace.genesis_commit_id` references `workstate_commit(commit_id)`
    `DEFERRABLE INITIALLY DEFERRED`. All other foreign keys remain immediate.

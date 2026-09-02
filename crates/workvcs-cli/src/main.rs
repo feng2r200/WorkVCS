@@ -49387,6 +49387,157 @@ mod tests {
     }
 
     #[test]
+    fn cli_why_projects_removed_record_knowledge_relation_as_endpoint_evolution() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let head = value(&workspace, "genesis_commit_id");
+
+        let knowledge = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--statement",
+            "Knowledge endpoint should explain relation removal",
+        ])
+        .expect("parse knowledge create"))
+        .expect("create knowledge");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&knowledge, "commit_id"),
+            "--statement",
+            "Finding supports the Knowledge endpoint",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "link-supports-knowledge",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&finding, "commit_id"),
+            "--source-record",
+            &value(&finding, "record_entity_id"),
+            "--target-knowledge",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--rationale",
+            "Finding supports the Knowledge statement",
+        ])
+        .expect("parse link supports knowledge"))
+        .expect("link supports knowledge");
+        let removed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "knowledge-relation-remove",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--relation-version",
+            &value(&relation, "relation_version_id"),
+            "--rationale",
+            "Remove the Record-to-Knowledge support edge",
+        ])
+        .expect("parse record knowledge relation remove"))
+        .expect("remove record knowledge relation");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&removed, "commit_id"),
+            "--entity",
+            &value(&knowledge, "knowledge_entity_id"),
+            "--relation-kind",
+            "record_supports",
+            "--relation-limit",
+            "1",
+            "--expected-evolution-change-operations",
+            "1",
+        ])
+        .expect("parse why knowledge"))
+        .expect("why knowledge endpoint");
+        assert_eq!(value(&why, "relation_edges"), "0");
+        assert_eq!(value(&why, "causal_anchor_changesets"), "0");
+        assert_eq!(value(&why, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(&why, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.operation_id"),
+            value(&removed, "operation_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_object_id"),
+            value(&relation, "relation_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_detail_kind"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_relation_kind"),
+            "record_supports"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            value(&finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&knowledge, "knowledge_entity_id")
+        );
+        assert_eq!(value(&why, "deferred_relation_families"), "1");
+        assert_eq!(value(&why, "deferred_relation_family.0"), "evolution");
+    }
+
+    #[test]
     fn cli_links_finding_to_contradicted_decision() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
@@ -50623,6 +50774,166 @@ mod tests {
             value(&why_after_restore, "relation.0.relation_kind"),
             "knowledge_supersedes"
         );
+    }
+
+    #[test]
+    fn cli_why_projects_removed_knowledge_relation_as_endpoint_evolution() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+
+        let prior = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&workspace, "genesis_commit_id"),
+            "--statement",
+            "Use the old context summary format",
+        ])
+        .expect("parse prior knowledge create"))
+        .expect("create prior knowledge");
+        let replacement = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&prior, "commit_id"),
+            "--statement",
+            "Use the scoped context summary format",
+        ])
+        .expect("parse replacement knowledge create"))
+        .expect("create replacement knowledge");
+        let superseded = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "supersede",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&replacement, "commit_id"),
+            "--knowledge",
+            &value(&prior, "knowledge_entity_id"),
+            "--knowledge-version",
+            &value(&prior, "knowledge_entity_version_id"),
+            "--rationale",
+            "The scoped context summary format replaced it",
+        ])
+        .expect("parse knowledge supersede"))
+        .expect("supersede prior knowledge");
+        let relation = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "link-supersedes",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&superseded, "commit_id"),
+            "--replacement-knowledge",
+            &value(&replacement, "knowledge_entity_id"),
+            "--prior-knowledge",
+            &value(&prior, "knowledge_entity_id"),
+            "--rationale",
+            "The replacement Knowledge supersedes the prior statement",
+        ])
+        .expect("parse knowledge link supersedes"))
+        .expect("link knowledge supersedes");
+        let removed = run(Cli::try_parse_from([
+            "workvcs",
+            "knowledge",
+            "relation-remove",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&relation, "commit_id"),
+            "--relation",
+            &value(&relation, "relation_id"),
+            "--relation-version",
+            &value(&relation, "relation_version_id"),
+            "--rationale",
+            "Remove the Knowledge supersedes edge",
+        ])
+        .expect("parse knowledge relation remove"))
+        .expect("remove knowledge relation");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--commit",
+            &value(&removed, "commit_id"),
+            "--entity",
+            &value(&replacement, "knowledge_entity_id"),
+            "--relation-kind",
+            "knowledge_supersedes",
+            "--relation-limit",
+            "1",
+            "--expected-evolution-change-operations",
+            "1",
+        ])
+        .expect("parse why replacement"))
+        .expect("why replacement endpoint");
+        assert_eq!(value(&why, "relation_edges"), "0");
+        assert_eq!(value(&why, "causal_anchor_changesets"), "0");
+        assert_eq!(value(&why, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(&why, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.operation_id"),
+            value(&removed, "operation_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_relation_kind"),
+            "knowledge_supersedes"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            value(&replacement, "knowledge_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&prior, "knowledge_entity_id")
+        );
+        assert_eq!(value(&why, "deferred_relation_families"), "1");
+        assert_eq!(value(&why, "deferred_relation_family.0"), "evolution");
     }
 
     #[test]

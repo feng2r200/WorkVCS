@@ -365,16 +365,17 @@ ChangeOperation, and `subject_statement_json` is looked up at that operation's
 commit. Initial Entity creation operations are not counted as this direct
 evolution slice.
 
-When querying a Record Entity that is the source or target endpoint of a
-first-parent-reachable Record-to-Record relation removal or restore, `why` also
-reports that direct Relation-subject evolution operation. Removed relations can
-therefore have operation-local relation `subject_detail` even when
-`relation_edges=0` at the queried commit. Use
+When querying a Record or Knowledge Entity that is the source or target
+endpoint of a first-parent-reachable direct relation removal or restore, `why`
+also reports that direct Relation-subject evolution operation for currently
+recognized Record-to-Record, Record-to-Knowledge, and Knowledge-to-Knowledge
+relation shapes. Removed relations can therefore have operation-local relation
+`subject_detail` even when `relation_edges=0` at the queried commit. Use
 `--expected-evolution-change-operations` when a script needs to assert the
 projected operation count. Full ChangeSet evolution traversal, full
-relation-subject traversal beyond this direct Record relation remove/restore
-endpoint slice, and multi-hop evolution traversal are still not implemented,
-and relation filters and limits continue to apply only to `relation_edges`.
+relation-subject traversal beyond these direct remove/restore endpoint slices,
+and multi-hop evolution traversal are still not implemented, and relation
+filters and limits continue to apply only to `relation_edges`.
 
 Start a continuation Session, then consume the Handoff into that Session's
 focus:

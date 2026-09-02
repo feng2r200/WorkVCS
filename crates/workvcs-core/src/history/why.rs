@@ -4,8 +4,10 @@ use super::goal::GOAL_ENTITY_KIND;
 use super::knowledge::{KNOWLEDGE_ENTITY_KIND, knowledge_at};
 use super::plan::PLAN_ENTITY_KIND;
 use super::record::{
+    KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE, KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE,
     RECORD_ENTITY_KIND, RECORD_RELATION_REMOVE_OPERATION_TYPE,
-    RECORD_RELATION_RESTORE_OPERATION_TYPE, RecordKind, load_record_relation_version, record_at,
+    RECORD_RELATION_RESTORE_OPERATION_TYPE, RecordKind, load_knowledge_relation_version,
+    load_record_knowledge_relation_version, load_record_relation_version, record_at,
 };
 use super::task::{
     ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_ENTITY_KIND,
@@ -687,9 +689,7 @@ fn why_evolution_change_operations(
                     )?;
                 }
                 ChangeOperationSubject::Relation(relation_id)
-                    if is_direct_record_relation_evolution_operation(
-                        entry.operation_type.as_str(),
-                    ) =>
+                    if is_direct_relation_evolution_operation(entry.operation_type.as_str()) =>
                 {
                     let Some(membership_change) = load_direct_relation_evolution_membership_change(
                         connection,
@@ -698,7 +698,7 @@ fn why_evolution_change_operations(
                     else {
                         continue;
                     };
-                    let Some(subject_detail) = why_direct_record_relation_operation_subject_detail(
+                    let Some(subject_detail) = why_direct_relation_operation_subject_detail(
                         connection,
                         resolved,
                         subject,
@@ -769,10 +769,13 @@ fn load_direct_entity_evolution_membership_change(
     }))
 }
 
-fn is_direct_record_relation_evolution_operation(operation_type: &str) -> bool {
+fn is_direct_relation_evolution_operation(operation_type: &str) -> bool {
     matches!(
         operation_type,
-        RECORD_RELATION_REMOVE_OPERATION_TYPE | RECORD_RELATION_RESTORE_OPERATION_TYPE
+        RECORD_RELATION_REMOVE_OPERATION_TYPE
+            | RECORD_RELATION_RESTORE_OPERATION_TYPE
+            | KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE
+            | KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE
     )
 }
 
@@ -911,39 +914,89 @@ fn why_direct_entity_operation_subject_detail(
     )))
 }
 
-fn why_direct_record_relation_operation_subject_detail(
+fn why_direct_relation_operation_subject_detail(
     connection: &StoreConnection,
     resolved: &ResolvedWhyTargetWithState,
     subject: WhyQuerySubject,
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
 ) -> Result<Option<WhyEvolutionSubjectDetail>> {
-    let Some(relation) = load_record_relation_version(
+    if let Some(relation) = load_record_relation_version(
         connection,
         resolved.target.workspace_id,
         relation_id,
         relation_version_id,
-    )?
-    else {
-        return Ok(None);
-    };
-    let source =
-        WhyRelationEndpoint::entity(relation.source_record_entity_id, WhyEntityKind::Record);
-    let target =
-        WhyRelationEndpoint::entity(relation.target_record_entity_id, WhyEntityKind::Record);
-    if !endpoint_matches_subject(subject, source) && !endpoint_matches_subject(subject, target) {
-        return Ok(None);
+    )? {
+        let source =
+            WhyRelationEndpoint::entity(relation.source_record_entity_id, WhyEntityKind::Record);
+        let target =
+            WhyRelationEndpoint::entity(relation.target_record_entity_id, WhyEntityKind::Record);
+        if endpoint_matches_subject(subject, source) || endpoint_matches_subject(subject, target) {
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: record_relation_kind(relation.relation_type),
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: relation.relation_label,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
     }
-    Ok(Some(WhyEvolutionSubjectDetail::Relation(
-        WhyEvolutionSubjectRelationDetail {
-            relation_kind: record_relation_kind(relation.relation_type),
-            relation_version_id: relation.relation_version_id,
-            relation_label: relation.relation_label,
-            source,
-            target,
-            state_digest: relation.state_digest,
-        },
-    )))
+    if let Some(relation) = load_record_knowledge_relation_version(
+        connection,
+        resolved.target.workspace_id,
+        relation_id,
+        relation_version_id,
+    )? {
+        let source =
+            WhyRelationEndpoint::entity(relation.source_record_entity_id, WhyEntityKind::Record);
+        let target = WhyRelationEndpoint::entity(
+            relation.target_knowledge_entity_id,
+            WhyEntityKind::Knowledge,
+        );
+        if endpoint_matches_subject(subject, source) || endpoint_matches_subject(subject, target) {
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: record_relation_kind(relation.relation_type),
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    if let Some(relation) = load_knowledge_relation_version(
+        connection,
+        resolved.target.workspace_id,
+        relation_id,
+        relation_version_id,
+    )? {
+        let source = WhyRelationEndpoint::entity(
+            relation.replacement_knowledge_entity_id,
+            WhyEntityKind::Knowledge,
+        );
+        let target = WhyRelationEndpoint::entity(
+            relation.prior_knowledge_entity_id,
+            WhyEntityKind::Knowledge,
+        );
+        if endpoint_matches_subject(subject, source) || endpoint_matches_subject(subject, target) {
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::KnowledgeSupersedes,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    Ok(None)
 }
 
 fn why_evolution_relation_subject_detail(

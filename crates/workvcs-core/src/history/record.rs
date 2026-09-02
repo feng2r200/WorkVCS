@@ -3692,22 +3692,22 @@ pub(crate) struct LoadedRecordRelationVersion {
     pub(crate) state_digest: Digest,
 }
 
-struct LoadedRecordKnowledgeRelationVersion {
-    relation_id: RelationId,
-    relation_version_id: RelationVersionId,
-    relation_type: RecordRelationType,
-    source_record_entity_id: EntityId,
-    target_knowledge_entity_id: EntityId,
-    state_digest: Digest,
+pub(crate) struct LoadedRecordKnowledgeRelationVersion {
+    pub(crate) relation_id: RelationId,
+    pub(crate) relation_version_id: RelationVersionId,
+    pub(crate) relation_type: RecordRelationType,
+    pub(crate) source_record_entity_id: EntityId,
+    pub(crate) target_knowledge_entity_id: EntityId,
+    pub(crate) state_digest: Digest,
 }
 
-struct LoadedKnowledgeRelationVersion {
-    relation_id: RelationId,
-    relation_version_id: RelationVersionId,
-    relation_type: RecordRelationType,
-    replacement_knowledge_entity_id: EntityId,
-    prior_knowledge_entity_id: EntityId,
-    state_digest: Digest,
+pub(crate) struct LoadedKnowledgeRelationVersion {
+    pub(crate) relation_id: RelationId,
+    pub(crate) relation_version_id: RelationVersionId,
+    pub(crate) relation_type: RecordRelationType,
+    pub(crate) replacement_knowledge_entity_id: EntityId,
+    pub(crate) prior_knowledge_entity_id: EntityId,
+    pub(crate) state_digest: Digest,
 }
 
 struct BranchRow {
@@ -5504,7 +5504,7 @@ pub(crate) fn load_record_relation_version(
     }))
 }
 
-fn load_record_knowledge_relation_version(
+pub(crate) fn load_record_knowledge_relation_version(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     relation_id: RelationId,
@@ -5649,7 +5649,7 @@ fn load_record_knowledge_relation_version(
     }))
 }
 
-fn load_knowledge_relation_version(
+pub(crate) fn load_knowledge_relation_version(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     relation_id: RelationId,

@@ -37317,6 +37317,177 @@ mod tests {
     }
 
     #[test]
+    fn cli_why_projects_verifies_create_as_endpoint_evolution() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Verify why relation evolution",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "The verifies relation creation is explainable from endpoints.",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-1",
+            "--statement",
+            "The focused command output is preserved.",
+        ])
+        .expect("parse vr"))
+        .expect("create vr");
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&requirement, "commit_id"),
+            "--verification-requirement",
+            &value(&requirement, "verification_requirement_entity_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+        ])
+        .expect("parse verification"))
+        .expect("record verification");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--entity",
+            &value(&requirement, "verification_requirement_entity_id"),
+            "--relation-kind",
+            "verifies",
+            "--expected-relation-edges",
+            "1",
+            "--expected-evolution-change-operations",
+            "1",
+        ])
+        .expect("parse verifies why"))
+        .expect("verifies why");
+
+        assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(value(&why, "relation_edges_match_expected"), "true");
+        assert_eq!(value(&why, "relation.0.relation_kind"), "verifies");
+        assert_eq!(value(&why, "relation.0.direction"), "incoming");
+        assert_eq!(
+            value(&why, "relation.0.relation_id"),
+            value(&verification, "verifies_relation_id")
+        );
+        assert_eq!(
+            value(&why, "relation.0.relation_version_id"),
+            value(&verification, "verifies_relation_version_id")
+        );
+        assert_eq!(value(&why, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(&why, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "verification.record"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_family"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_object_id"),
+            value(&verification, "verifies_relation_id")
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_detail_kind"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_relation_kind"),
+            "verifies"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            value(&verification, "verification_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_target_entity_id"
+            ),
+            value(&requirement, "verification_requirement_entity_id")
+        );
+    }
+
+    #[test]
     fn cli_creates_structural_task_relations_with_actor_session() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

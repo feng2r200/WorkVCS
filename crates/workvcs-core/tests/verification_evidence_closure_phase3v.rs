@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
-    AcceptanceCriterionCreateOptions, BranchId, CanonicalValue, CommitId, Engine, EntityId,
-    ErrorCategory, ErrorCode, EvidenceContentInput, EvidenceCreateOptions, EvidenceId,
-    StoreInitOptions, TaskCreateOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationResult, VerificationTarget, WhyQueryOptions, WhyQueryTarget, WhyRelationKind,
-    WorkspaceInfo, WorkspaceInitOptions, content_object_digest,
+    AcceptanceCriterionCreateOptions, BranchId, CanonicalValue, ChangeOperationSubject, CommitId,
+    Engine, EntityId, ErrorCategory, ErrorCode, EvidenceContentInput, EvidenceCreateOptions,
+    EvidenceId, StoreInitOptions, TaskCreateOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryTarget, WhyRelationEndpoint,
+    WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions, content_object_digest,
 };
 
 struct CriterionFixture {
@@ -362,7 +363,39 @@ fn verification_creation_records_evidenced_by_closure_atomically() {
             .count(),
         1
     );
-    assert!(why.deferred_relation_families.is_empty());
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 1);
+    let operation = &why.evolution_change_operations[0];
+    assert_eq!(operation.changeset_operation_type, "verification.record");
+    assert_eq!(
+        operation.operation_id,
+        verification.verifies_relation_operation_id
+    );
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(verification.verifies_relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected verifies relation subject detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::Verifies);
+    assert_eq!(
+        detail.source,
+        WhyRelationEndpoint::entity(
+            verification.verification_entity_id,
+            WhyEntityKind::Verification
+        )
+    );
+    assert_eq!(
+        detail.target,
+        WhyRelationEndpoint::entity(
+            fixture.criterion.acceptance_criterion_entity_id,
+            WhyEntityKind::AcceptanceCriterion
+        )
+    );
 }
 
 #[test]

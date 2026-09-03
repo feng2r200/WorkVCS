@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
-    AcceptanceCriterionCreateOptions, BranchId, CommitId, Engine, EntityId, ErrorCategory,
-    ErrorCode, EventId, RelationId, StoreInitOptions, TaskCreateOptions, VerificationCreateCommit,
-    VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResult, VerificationTarget, WhyEntityKind,
-    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge,
-    WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    AcceptanceCriterionCreateOptions, BranchId, ChangeOperationSubject, CommitId, Engine, EntityId,
+    ErrorCategory, ErrorCode, EventId, RelationId, StoreInitOptions, TaskCreateOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResult, VerificationTarget,
+    WhyDeferredRelationFamily, WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions,
+    WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint,
+    WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,8 +243,52 @@ fn assert_edges_are_sorted(edges: &[WhyRelationEdge]) {
     }
 }
 
-fn assert_deferred_families(why: &WhyQueryResult) {
-    assert!(why.deferred_relation_families.is_empty());
+fn assert_single_verifies_evolution(
+    why: &WhyQueryResult,
+    verification: &VerificationCreateCommit,
+    target: WhyRelationEndpoint,
+) {
+    assert_eq!(why.causal_anchor_changesets.len(), 0);
+    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    let operation = &why.evolution_change_operations[0];
+    assert_eq!(operation.commit_id, verification.commit_id);
+    assert_eq!(operation.changeset_id, verification.changeset_id);
+    assert_eq!(operation.changeset_operation_type, "verification.record");
+    assert_eq!(operation.changeset_operation_schema_version, 1);
+    assert_eq!(
+        operation.operation_id,
+        verification.verifies_relation_operation_id
+    );
+    assert_eq!(operation.ordinal, 1);
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(verification.verifies_relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected verifies relation subject detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::Verifies);
+    assert_eq!(
+        detail.relation_version_id,
+        verification.verifies_relation_version_id
+    );
+    assert_eq!(detail.relation_label, None);
+    assert_eq!(
+        detail.source,
+        entity_endpoint(
+            verification.verification_entity_id,
+            WhyEntityKind::Verification
+        )
+    );
+    assert_eq!(detail.target, target);
+    assert_eq!(
+        detail.state_digest,
+        verification.verifies_relation_state_digest
+    );
 }
 
 #[test]
@@ -281,7 +326,6 @@ fn why_reports_direct_acceptance_criterion_verification_from_both_endpoints() {
         fixture.criterion.acceptance_criterion_entity_version_id,
         WhyEntityKind::AcceptanceCriterion,
     );
-    assert_deferred_families(&criterion_why);
     assert_eq!(
         edge_facts(&criterion_why),
         BTreeSet::from([(
@@ -297,6 +341,14 @@ fn why_reports_direct_acceptance_criterion_verification_from_both_endpoints() {
             ),
         )])
     );
+    assert_single_verifies_evolution(
+        &criterion_why,
+        &verification,
+        entity_endpoint(
+            fixture.criterion.acceptance_criterion_entity_id,
+            WhyEntityKind::AcceptanceCriterion,
+        ),
+    );
 
     assert_entity_subject(
         &verification_why,
@@ -304,7 +356,6 @@ fn why_reports_direct_acceptance_criterion_verification_from_both_endpoints() {
         verification.verification_entity_version_id,
         WhyEntityKind::Verification,
     );
-    assert_deferred_families(&verification_why);
     assert_eq!(
         edge_facts(&verification_why),
         BTreeSet::from([(
@@ -319,6 +370,14 @@ fn why_reports_direct_acceptance_criterion_verification_from_both_endpoints() {
                 WhyEntityKind::AcceptanceCriterion
             ),
         )])
+    );
+    assert_single_verifies_evolution(
+        &verification_why,
+        &verification,
+        entity_endpoint(
+            fixture.criterion.acceptance_criterion_entity_id,
+            WhyEntityKind::AcceptanceCriterion,
+        ),
     );
 }
 
@@ -354,7 +413,6 @@ fn why_reports_verification_requirement_target_relation() {
         requirement.verification_requirement_entity_version_id,
         WhyEntityKind::VerificationRequirement,
     );
-    assert_deferred_families(&requirement_why);
     assert_eq!(
         edge_facts(&requirement_why),
         BTreeSet::from([(
@@ -369,6 +427,14 @@ fn why_reports_verification_requirement_target_relation() {
                 WhyEntityKind::VerificationRequirement
             ),
         )])
+    );
+    assert_single_verifies_evolution(
+        &requirement_why,
+        &verification,
+        entity_endpoint(
+            requirement.verification_requirement_entity_id,
+            WhyEntityKind::VerificationRequirement,
+        ),
     );
 }
 

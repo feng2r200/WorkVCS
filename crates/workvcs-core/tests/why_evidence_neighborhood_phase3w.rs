@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
-    AcceptanceCriterionCreateOptions, BranchId, CanonicalValue, CommitId, Engine, EntityId,
-    ErrorCategory, ErrorCode, EvidenceCreateOptions, EvidenceId, ResolvedWhyQuerySubject,
-    StoreInitOptions, TaskCreateOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationResult, VerificationTarget, WhyEntityKind, WhyQueryOptions, WhyQueryResult,
-    WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind,
-    WorkspaceInfo, WorkspaceInitOptions,
+    AcceptanceCriterionCreateOptions, BranchId, CanonicalValue, ChangeOperationSubject, CommitId,
+    Engine, EntityId, ErrorCategory, ErrorCode, EvidenceCreateOptions, EvidenceId,
+    ResolvedWhyQuerySubject, StoreInitOptions, TaskCreateOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationResult, VerificationTarget, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
+    WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
+    WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -256,6 +257,46 @@ fn assert_deferred_families(why: &WhyQueryResult) {
     assert!(why.deferred_relation_families.is_empty());
 }
 
+fn assert_single_verifies_evolution(
+    why: &WhyQueryResult,
+    verification: &VerificationCreateCommit,
+    criterion: &AcceptanceCriterionCreateCommit,
+) {
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 1);
+    let operation = &why.evolution_change_operations[0];
+    assert_eq!(operation.changeset_operation_type, "verification.record");
+    assert_eq!(
+        operation.operation_id,
+        verification.verifies_relation_operation_id
+    );
+    assert_eq!(
+        operation.subject,
+        ChangeOperationSubject::Relation(verification.verifies_relation_id)
+    );
+    let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+        panic!("expected verifies relation subject detail")
+    };
+    assert_eq!(detail.relation_kind, WhyRelationKind::Verifies);
+    assert_eq!(
+        detail.source,
+        entity_endpoint(
+            verification.verification_entity_id,
+            WhyEntityKind::Verification,
+        )
+    );
+    assert_eq!(
+        detail.target,
+        entity_endpoint(
+            criterion.acceptance_criterion_entity_id,
+            WhyEntityKind::AcceptanceCriterion,
+        )
+    );
+}
+
 #[test]
 fn why_verification_subject_reports_evidenced_by_edges_to_evidence_endpoints() {
     let (_tempdir, path) = store_path();
@@ -285,7 +326,7 @@ fn why_verification_subject_reports_evidenced_by_edges_to_evidence_endpoints() {
             entity_kind: WhyEntityKind::Verification,
         }
     );
-    assert_deferred_families(&why);
+    assert_single_verifies_evolution(&why, &verification, &criterion);
     assert_eq!(
         edge_facts(&why),
         BTreeSet::from([

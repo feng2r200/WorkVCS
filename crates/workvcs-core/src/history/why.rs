@@ -14,7 +14,8 @@ use super::record::{
 use super::task::{
     ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND,
     TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE, TaskSchedulingRelationType,
-    VERIFICATION_ENTITY_KIND, VERIFICATION_REQUIREMENT_ENTITY_KIND,
+    VERIFICATION_ENTITY_KIND, VERIFICATION_RECORD_OPERATION_TYPE,
+    VERIFICATION_REQUIREMENT_ENTITY_KIND,
 };
 use super::{
     ChangeOperationSnapshot, ChangeOperationSubject, HistoryQueryOptions,
@@ -806,6 +807,7 @@ fn is_direct_relation_evolution_operation(operation_type: &str) -> bool {
             | KNOWLEDGE_RELATION_REMOVE_OPERATION_TYPE
             | KNOWLEDGE_RELATION_RESTORE_OPERATION_TYPE
             | TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE
+            | VERIFICATION_RECORD_OPERATION_TYPE
     )
 }
 
@@ -1048,6 +1050,32 @@ fn why_direct_relation_operation_subject_detail(
                     state_digest: relation.state_digest,
                 },
             )));
+        }
+    }
+    for relation in verification_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let target_entity_id = relation.target.entity_id();
+            let source = WhyRelationEndpoint::entity(
+                relation.source_verification_entity_id,
+                WhyEntityKind::Verification,
+            );
+            let target = WhyRelationEndpoint::entity(target_entity_id, relation.target.into());
+            if endpoint_matches_subject(subject, source)
+                || endpoint_matches_subject(subject, target)
+            {
+                return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                    WhyEvolutionSubjectRelationDetail {
+                        relation_kind: WhyRelationKind::Verifies,
+                        relation_version_id: relation.relation_version_id,
+                        relation_label: None,
+                        source,
+                        target,
+                        state_digest: relation.state_digest,
+                    },
+                )));
+            }
         }
     }
     for relation in task_scheduling_relations_at(connection, resolved.target.commit_id)? {

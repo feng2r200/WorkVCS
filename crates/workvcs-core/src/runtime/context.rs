@@ -1617,7 +1617,7 @@ fn collect_context_items(
             );
         }
     }
-    push_same_plan_peer_resource_requirement_context_items(
+    push_focused_peer_resource_requirement_context_items(
         &mut items,
         context,
         workspace_runnable_tasks,
@@ -1768,7 +1768,7 @@ fn needs_workspace_runnable_context_for_focused_task(
         .any(|task| task.task_entity_id == focus.focus_entity_id)
 }
 
-fn push_same_plan_peer_resource_requirement_context_items(
+fn push_focused_peer_resource_requirement_context_items(
     items: &mut Vec<ContextItem>,
     context: &ContextOverview,
     workspace_runnable_tasks: Option<&RunnableTasksProjection>,
@@ -1805,7 +1805,8 @@ fn push_same_plan_peer_resource_requirement_context_items(
     if focused_parent.parent_kind != PrimaryContainmentEndpointKind::Plan {
         return Ok(());
     }
-    let parent_plan_id = focused_parent.parent_entity_id;
+    let focused_plan_id = focused_parent.parent_entity_id;
+    let focused_goal_id = direct_goal_parent_for_plan(focused_plan_id, primary_parent_by_child)?;
     let focused_candidate_ids = context
         .runnable_tasks
         .candidates
@@ -1829,20 +1830,66 @@ fn push_same_plan_peer_resource_requirement_context_items(
                 peer_parent.relation_id, peer_parent.child_kind, candidate.task.task_entity_id
             )));
         }
-        if peer_parent.parent_kind != PrimaryContainmentEndpointKind::Plan
-            || peer_parent.parent_entity_id != parent_plan_id
-        {
+        if peer_parent.parent_kind != PrimaryContainmentEndpointKind::Plan {
             continue;
         }
+        let peer_plan_id = peer_parent.parent_entity_id;
+        let peer_context = if peer_plan_id == focused_plan_id {
+            FocusedPeerResourceContext::SamePlan {
+                parent_plan_id: focused_plan_id,
+            }
+        } else if let Some(parent_goal_id) = focused_goal_id {
+            if direct_goal_parent_for_plan(peer_plan_id, primary_parent_by_child)?
+                != Some(parent_goal_id)
+            {
+                continue;
+            }
+            FocusedPeerResourceContext::SameGoal {
+                parent_goal_id,
+                focused_plan_id,
+                peer_plan_id,
+            }
+        } else {
+            continue;
+        };
         push_task_resource_requirement_context_items(
             items,
             &candidate.task,
-            parent_plan_id,
+            peer_context,
             profile,
             resource_requirement_indexes,
         )?;
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum FocusedPeerResourceContext {
+    SamePlan {
+        parent_plan_id: EntityId,
+    },
+    SameGoal {
+        parent_goal_id: EntityId,
+        focused_plan_id: EntityId,
+        peer_plan_id: EntityId,
+    },
+}
+
+impl FocusedPeerResourceContext {
+    fn summary_prefix(self, peer_task_id: EntityId) -> String {
+        match self {
+            Self::SamePlan { parent_plan_id } => {
+                format!("same_plan_peer_task={peer_task_id} parent_plan={parent_plan_id}")
+            }
+            Self::SameGoal {
+                parent_goal_id,
+                focused_plan_id,
+                peer_plan_id,
+            } => format!(
+                "same_goal_peer_task={peer_task_id} parent_goal={parent_goal_id} focused_plan={focused_plan_id} peer_plan={peer_plan_id}"
+            ),
+        }
+    }
 }
 
 struct ResourceRequirementContextIndexes<'a> {
@@ -1854,7 +1901,7 @@ struct ResourceRequirementContextIndexes<'a> {
 fn push_task_resource_requirement_context_items(
     items: &mut Vec<ContextItem>,
     peer_task: &TaskSnapshot,
-    parent_plan_id: EntityId,
+    peer_context: FocusedPeerResourceContext,
     profile: ContextProfile,
     resource_requirement_indexes: &ResourceRequirementContextIndexes<'_>,
 ) -> Result<()> {
@@ -1914,9 +1961,8 @@ fn push_task_resource_requirement_context_items(
                         .verification_requirement_entity_id,
                 },
                 format!(
-                    "same_plan_peer_task={} parent_plan={} peer_runnable=true criterion={} local_key={}: {} {}",
-                    peer_task.task_entity_id,
-                    parent_plan_id,
+                    "{} peer_runnable=true criterion={} local_key={}: {} {}",
+                    peer_context.summary_prefix(peer_task.task_entity_id),
                     requirement.acceptance_criterion_entity_id,
                     requirement.local_key,
                     requirement.state.statement,
@@ -1926,6 +1972,26 @@ fn push_task_resource_requirement_context_items(
         }
     }
     Ok(())
+}
+
+fn direct_goal_parent_for_plan(
+    plan_entity_id: EntityId,
+    primary_parent_by_child: &BTreeMap<EntityId, &PrimaryContainmentSnapshot>,
+) -> Result<Option<EntityId>> {
+    let Some(parent) = primary_parent_by_child.get(&plan_entity_id) else {
+        return Ok(None);
+    };
+    if parent.child_kind != PrimaryContainmentEndpointKind::Plan {
+        return Err(WorkVcsError::RelationInvalid(format!(
+            "primary containment relation {} child kind {} does not match plan {}",
+            parent.relation_id, parent.child_kind, plan_entity_id
+        )));
+    }
+    if parent.parent_kind == PrimaryContainmentEndpointKind::Goal {
+        Ok(Some(parent.parent_entity_id))
+    } else {
+        Ok(None)
+    }
 }
 
 fn resource_backed_verifications_by_requirement(

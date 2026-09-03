@@ -47422,6 +47422,424 @@ mod tests {
     }
 
     #[test]
+    fn cli_context_normal_exposes_same_goal_cross_plan_peer_resource_basis_recovery_hint() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        let project = tempdir.path().join("project");
+        fs::create_dir_all(&project).expect("create project dir");
+        let scoped_file = project.join("cross-plan-peer.md");
+        fs::write(&scoped_file, b"baseline cross-plan peer resource").expect("write scoped file");
+        let scope_path = scoped_file.to_str().expect("scope path text");
+        let scope_payload = format!(r#"{{"path":"{scope_path}"}}"#);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Coordinate cross-plan resource recovery",
+        ])
+        .expect("parse goal"))
+        .expect("create goal");
+        head = value(&goal, "commit_id");
+
+        let focused_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Current continuation plan",
+            "--strategy",
+            "Keep current focus narrow",
+        ])
+        .expect("parse focused plan"))
+        .expect("create focused plan");
+        head = value(&focused_plan, "commit_id");
+
+        let peer_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Adjacent runnable plan",
+            "--strategy",
+            "Recover peer Resource-backed verification",
+        ])
+        .expect("parse peer plan"))
+        .expect("create peer plan");
+        head = value(&peer_plan, "commit_id");
+
+        let focused = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Focused current-plan Task without Resource-backed VR",
+            "--priority",
+            "5",
+        ])
+        .expect("parse focused task"))
+        .expect("create focused task");
+        head = value(&focused, "commit_id");
+
+        let peer = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Cross-plan runnable Task with Resource-backed VR",
+            "--priority",
+            "4",
+        ])
+        .expect("parse peer task"))
+        .expect("create peer task");
+        head = value(&peer, "commit_id");
+
+        let containment = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--parent",
+            &value(&goal, "goal_entity_id"),
+            "--child",
+            &value(&focused_plan, "plan_entity_id"),
+        ])
+        .expect("parse goal-focused-plan containment"))
+        .expect("create goal-focused-plan containment");
+        head = value(&containment, "commit_id");
+
+        let containment = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--parent",
+            &value(&goal, "goal_entity_id"),
+            "--child",
+            &value(&peer_plan, "plan_entity_id"),
+        ])
+        .expect("parse goal-peer-plan containment"))
+        .expect("create goal-peer-plan containment");
+        head = value(&containment, "commit_id");
+
+        let containment = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--parent",
+            &value(&focused_plan, "plan_entity_id"),
+            "--child",
+            &value(&focused, "task_entity_id"),
+        ])
+        .expect("parse focused-plan-task containment"))
+        .expect("create focused-plan-task containment");
+        head = value(&containment, "commit_id");
+
+        let containment = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--parent",
+            &value(&peer_plan, "plan_entity_id"),
+            "--child",
+            &value(&peer, "task_entity_id"),
+        ])
+        .expect("parse peer-plan-task containment"))
+        .expect("create peer-plan-task containment");
+        head = value(&containment, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &value(&peer, "task_entity_id"),
+            "--task-version",
+            &value(&peer, "task_entity_version_id"),
+            "--local-key",
+            "AC-cross-plan-resource",
+            "--statement",
+            "Cross-plan peer proof remains recoverable from focused context.",
+        ])
+        .expect("parse ac"))
+        .expect("create peer ac");
+        head = value(&criterion, "commit_id");
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-cross-plan-resource",
+            "--statement",
+            "Refresh the cross-plan peer Resource basis.",
+        ])
+        .expect("parse vr"))
+        .expect("create peer vr");
+        head = value(&requirement, "commit_id");
+
+        let resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse resource"))
+        .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let baseline = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--content-file",
+            scope_path,
+        ])
+        .expect("parse resource observation"))
+        .expect("record resource observation");
+        let baseline_observation_id = value(&baseline, "observation_id");
+        let baseline_fingerprint = value(&baseline, "fingerprint");
+
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification-requirement",
+            &value(&requirement, "verification_requirement_entity_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--scope-kind",
+            "path",
+            "--scope-schema-version",
+            "1",
+            "--scope-payload-json",
+            &scope_payload,
+            "--baseline-fingerprint",
+            &baseline_fingerprint,
+            "--baseline-observation",
+            &baseline_observation_id,
+        ])
+        .expect("parse verification"))
+        .expect("record verification");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+        let runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            store,
+            "--session",
+            &session_id,
+            "--expected-candidates",
+            "2",
+        ])
+        .expect("parse runnable tasks"))
+        .expect("list runnable tasks");
+        assert_eq!(value(&runnable, "candidates_match_expected"), "true");
+        assert!(runnable.contains(&value(&peer, "task_entity_id")));
+
+        let focused_task_id = value(&focused, "task_entity_id");
+        let focused = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &session_id,
+            "--focus",
+            &focused_task_id,
+        ])
+        .expect("parse focus set"))
+        .expect("focus current task");
+        assert_eq!(value(&focused, "focus_entity_id"), focused_task_id);
+
+        let brief = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "20",
+        ])
+        .expect("parse brief context"))
+        .expect("brief context");
+        assert!(!brief.contains("same_goal_peer_task="));
+
+        let normal = run(Cli::try_parse_from([
+            "workvcs",
+            "context",
+            store,
+            "--session",
+            &session_id,
+            "--profile",
+            "normal",
+            "--budget-items",
+            "50",
+        ])
+        .expect("parse normal context"))
+        .expect("normal context");
+        assert_eq!(value(&normal, "focus_entity_id"), focused_task_id);
+
+        let summary_json = normal
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key.ends_with(".summary_json")
+                    && value.contains("local_key=VR-cross-plan-resource"))
+                .then_some(value.to_owned())
+            })
+            .unwrap_or_else(|| panic!("missing same-goal peer VR summary in output:\n{normal}"));
+        assert!(summary_json.contains(&format!(
+            "same_goal_peer_task={}",
+            value(&peer, "task_entity_id")
+        )));
+        assert!(summary_json.contains(&format!("parent_goal={}", value(&goal, "goal_entity_id"))));
+        assert!(summary_json.contains(&format!(
+            "focused_plan={}",
+            value(&focused_plan, "plan_entity_id")
+        )));
+        assert!(summary_json.contains(&format!(
+            "peer_plan={}",
+            value(&peer_plan, "plan_entity_id")
+        )));
+        assert!(summary_json.contains("peer_runnable=true"));
+        assert!(summary_json.contains(&format!(
+            "criterion={}",
+            value(&criterion, "acceptance_criterion_entity_id")
+        )));
+        assert!(summary_json.contains("resource_basis=1"));
+        assert!(summary_json.contains(&format!(
+            "verification_id={}",
+            value(&verification, "verification_entity_id")
+        )));
+        assert!(summary_json.contains(&format!("resource_id={resource_id}")));
+        assert!(summary_json.contains("adapter=local-file@1"));
+        assert!(summary_json.contains("scope=path@1"));
+        assert!(summary_json.contains(&format!(
+            "baseline_observation_id={baseline_observation_id}"
+        )));
+        assert!(summary_json.contains(&format!(
+            "verification cache-refresh --verification {} --resource-content-from-basis",
+            value(&verification, "verification_entity_id")
+        )));
+    }
+
+    #[test]
     fn cli_context_includes_current_active_knowledge_summary() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

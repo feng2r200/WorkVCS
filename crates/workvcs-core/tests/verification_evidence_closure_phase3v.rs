@@ -367,7 +367,7 @@ fn verification_creation_records_evidenced_by_closure_atomically() {
         why.deferred_relation_families,
         vec![WhyDeferredRelationFamily::Evolution]
     );
-    assert_eq!(why.evolution_change_operations.len(), 1);
+    assert_eq!(why.evolution_change_operations.len(), 3);
     let operation = &why.evolution_change_operations[0];
     assert_eq!(operation.changeset_operation_type, "verification.record");
     assert_eq!(
@@ -396,6 +396,34 @@ fn verification_creation_records_evidenced_by_closure_atomically() {
             WhyEntityKind::AcceptanceCriterion
         )
     );
+    for (index, relation) in verification.evidenced_by_relations.iter().enumerate() {
+        let operation = &why.evolution_change_operations[index + 1];
+        assert_eq!(operation.changeset_operation_type, "verification.record");
+        assert_eq!(operation.operation_id, relation.relation_operation_id);
+        assert_eq!(operation.ordinal, (index + 2) as i64);
+        assert_eq!(
+            operation.subject,
+            ChangeOperationSubject::Relation(relation.relation_id)
+        );
+        let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+            panic!("expected evidenced_by relation subject detail")
+        };
+        assert_eq!(detail.relation_kind, WhyRelationKind::EvidencedBy);
+        assert_eq!(detail.relation_version_id, relation.relation_version_id);
+        assert_eq!(detail.relation_label, None);
+        assert_eq!(
+            detail.source,
+            WhyRelationEndpoint::entity(
+                verification.verification_entity_id,
+                WhyEntityKind::Verification
+            )
+        );
+        assert_eq!(
+            detail.target,
+            WhyRelationEndpoint::evidence(relation.evidence_id)
+        );
+        assert_eq!(detail.state_digest, relation.relation_state_digest);
+    }
 }
 
 #[test]

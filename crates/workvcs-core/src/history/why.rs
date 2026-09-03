@@ -1078,6 +1078,31 @@ fn why_direct_relation_operation_subject_detail(
             }
         }
     }
+    for relation in verification_evidence_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.source_verification_entity_id,
+                WhyEntityKind::Verification,
+            );
+            let target = WhyRelationEndpoint::evidence(relation.evidence_id);
+            if endpoint_matches_subject(subject, source)
+                || endpoint_matches_subject(subject, target)
+            {
+                return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                    WhyEvolutionSubjectRelationDetail {
+                        relation_kind: WhyRelationKind::EvidencedBy,
+                        relation_version_id: relation.relation_version_id,
+                        relation_label: None,
+                        source,
+                        target,
+                        state_digest: relation.state_digest,
+                    },
+                )));
+            }
+        }
+    }
     for relation in task_scheduling_relations_at(connection, resolved.target.commit_id)? {
         if relation.relation_id == relation_id
             && relation.relation_version_id == relation_version_id

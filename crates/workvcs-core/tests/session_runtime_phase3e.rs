@@ -6,8 +6,9 @@ use workvcs_core::{
     ClaimLifecycleState, ClaimListOptions, ClaimTaskOptions, Engine, EntityId, ErrorCategory,
     ErrorCode, RelationId, SessionEndOptions, SessionFocusOptions, SessionFocusPathEntry,
     SessionId, SessionLifecycleState, SessionMarkStaleOptions, SessionStartOptions,
-    StoreInitOptions, TaskCreateOptions, VerificationCreateOptions, VerificationResult,
-    VerificationTarget, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    StoreInitOptions, TaskCreateOptions, VerificationCreateOptions,
+    VerificationRequirementCreateOptions, VerificationResult, VerificationTarget, WorkspaceInfo,
+    WorkspaceInitOptions, canonical_bytes,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -550,6 +551,80 @@ fn set_focus_rejects_absent_entities_and_relations_without_partial_rows() {
     assert_eq!(missing_relation.code(), ErrorCode::SessionInvalid);
 
     assert_eq!(runtime_counts(&connection), before);
+}
+
+#[test]
+fn set_focus_rejects_verification_requirement_without_partial_rows() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Unsupported focus task",
+            )
+            .expect("task options"),
+        )
+        .expect("create task");
+    let criterion = engine
+        .create_acceptance_criterion(
+            AcceptanceCriterionCreateOptions::new(
+                workspace.initial_branch_id,
+                task.commit_id,
+                task.task_entity_id,
+                task.task_entity_version_id,
+                "AC-unsupported-focus",
+                "The unsupported focus requirement is visible.",
+                AcceptanceCriterionClassification::Required,
+            )
+            .expect("ac options"),
+        )
+        .expect("create acceptance criterion");
+    let requirement = engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                workspace.initial_branch_id,
+                criterion.commit_id,
+                criterion.acceptance_criterion_entity_id,
+                criterion.acceptance_criterion_entity_version_id,
+                "VR-unsupported-focus",
+                "Do not allow this requirement as session focus.",
+            )
+            .expect("vr options"),
+        )
+        .expect("create verification requirement");
+    let started = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+    let connection = raw_connection(&path);
+    let before = runtime_counts(&connection);
+
+    let unsupported_focus = engine
+        .set_session_focus(SessionFocusOptions::new(
+            started.session_id,
+            requirement.verification_requirement_entity_id,
+        ))
+        .expect_err("verification requirement focus should fail");
+
+    assert_eq!(unsupported_focus.code(), ErrorCode::SessionInvalid);
+    assert_eq!(unsupported_focus.category(), ErrorCategory::Runtime);
+    assert!(
+        unsupported_focus
+            .to_string()
+            .contains("is not a current Goal, Plan, or Task at branch head")
+    );
+    assert_eq!(runtime_counts(&connection), before);
+    assert_eq!(
+        engine
+            .session_snapshot(started.session_id)
+            .expect("session snapshot")
+            .focus,
+        None
+    );
 }
 
 #[test]

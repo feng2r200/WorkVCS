@@ -492,7 +492,12 @@ pub(crate) fn set_session_focus(
         )));
     }
     let replayed = history::state_at(connection, branch_head.head_commit_id)?;
-    validate_focus_against_work_state(&replayed.state, options)?;
+    validate_focus_against_work_state(
+        connection,
+        branch_head.head_commit_id,
+        &replayed.state,
+        options,
+    )?;
 
     let now_us = current_epoch_micros()?;
     let transaction = connection
@@ -1850,10 +1855,18 @@ fn focus_path_payload_values(path: &[SessionFocusPathEntry]) -> Result<Vec<Canon
 }
 
 fn validate_focus_against_work_state(
+    connection: &StoreConnection,
+    branch_head_commit_id: CommitId,
     state: &WorkState,
     options: &SessionFocusOptions,
 ) -> Result<()> {
-    validate_focus_parts_against_work_state(state, options.focus_entity_id(), options.path())
+    validate_focus_entity_present_against_work_state(state, options.focus_entity_id())?;
+    validate_supported_session_focus_entity_kind(
+        connection,
+        branch_head_commit_id,
+        options.focus_entity_id(),
+    )?;
+    validate_focus_path_against_work_state(state, options.path())
 }
 
 fn validate_focus_selection_against_work_state(
@@ -1868,12 +1881,46 @@ fn validate_focus_parts_against_work_state(
     focus_entity_id: EntityId,
     path: &[SessionFocusPathEntry],
 ) -> Result<()> {
-    if !work_state_contains_entity(state, focus_entity_id) {
-        return Err(WorkVcsError::SessionInvalid(format!(
-            "focus entity {} is not present at the active branch head",
-            focus_entity_id
-        )));
+    validate_focus_entity_present_against_work_state(state, focus_entity_id)?;
+    validate_focus_path_against_work_state(state, path)
+}
+
+fn validate_focus_entity_present_against_work_state(
+    state: &WorkState,
+    focus_entity_id: EntityId,
+) -> Result<()> {
+    if work_state_contains_entity(state, focus_entity_id) {
+        return Ok(());
     }
+    Err(WorkVcsError::SessionInvalid(format!(
+        "focus entity {} is not present at the active branch head",
+        focus_entity_id
+    )))
+}
+
+fn validate_supported_session_focus_entity_kind(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    focus_entity_id: EntityId,
+) -> Result<()> {
+    match history::goal_at(connection, commit_id, focus_entity_id) {
+        Ok(_) => Ok(()),
+        Err(goal_error) => match history::plan_at(connection, commit_id, focus_entity_id) {
+            Ok(_) => Ok(()),
+            Err(plan_error) => match history::task_at(connection, commit_id, focus_entity_id) {
+                Ok(_) => Ok(()),
+                Err(task_error) => Err(WorkVcsError::SessionInvalid(format!(
+                    "focus entity {focus_entity_id} is not a current Goal, Plan, or Task at branch head {commit_id}: {goal_error}; {plan_error}; {task_error}"
+                ))),
+            },
+        },
+    }
+}
+
+fn validate_focus_path_against_work_state(
+    state: &WorkState,
+    path: &[SessionFocusPathEntry],
+) -> Result<()> {
     for entry in path {
         if !work_state_contains_entity(state, entry.path_entity_id) {
             return Err(WorkVcsError::SessionInvalid(format!(

@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-03 by ADR-0491 / Phase 4NZ
+Last refreshed: 2026-09-03 by ADR-0492 / Phase 4OC
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4NZ was main commit
-`0317d194e9c194cec31bcada51d21d2809c37966` and the V1 readiness ledger last
-refreshed by ADR-0490 / Phase 4NY. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4OC was main commit
+`00e17f310f8b9e1984f4d2096ce62c427a3471d7` and the V1 readiness ledger last
+refreshed by ADR-0491 / Phase 4NZ. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -41,8 +41,9 @@ Verification, Acceptance Criterion, and Verification Requirement endpoints,
 plus direct `evidenced_by` relation create endpoint evolution projection for
 queried Verification endpoints and queried Evidence endpoints, plus direct
 `knowledge_exposure_derived_from` relation create endpoint evolution projection
-for queried source Knowledge and target KnowledgeExposure endpoints. It does
-not close the remaining full
+for queried source Knowledge and target KnowledgeExposure endpoints, plus
+Session focus-set unsupported-kind fail-fast for current but unsupported
+Verification Requirement focus entities. It does not close the remaining full
 relation-subject traversal beyond direct endpoint
 slices, multi-hop/full evolution traversal, broader context/Resource resolver,
 broader causal traversal, or release-operation gaps named by the gates.
@@ -66,7 +67,7 @@ broader causal traversal, or release-operation gaps named by the gates.
 | Goal, Plan, Task, ordering, dependencies, and containment | Work graph planning and dependency semantics are repeatedly used in real project workflows through closeout. | Phase 4LV dogfoods Goal/Plan/Task for a bounded external-project review. Phase 4NB repeats the workflow against a temporary clone of pre-existing `agent_soul` with one Goal, one Plan, three contained Tasks, two `depends_on` relations, two `ordered_before` relations, blocked dependency context, dependency readiness recovery, and Plan/Goal closeout. | Pass | No | Keep as regression foundation; broaden only if a future real workflow exposes a concrete ordering or containment gap. |
 | AC, VR, Verification, Evidence, and verification wrapper | Acceptance and verification records can close obligations through the CLI and remain understandable in recovery and handoff scenarios. | Ledger marks AC/VR/Verification/Evidence and the top-level `verify` wrapper as dogfood-proven for current covered scenarios. Phase 4NB proves AC/VR closure in a recovery Handoff scenario: stale Resource-backed applicability blocks Task closeout, explicit refresh projects `resource_drift`, and recovery `verify` records new evidence before Task/Plan/Goal closeout. | Pass | No | Keep as regression foundation; broaden only if a future recovery or handoff loop exposes a concrete evidence-closure gap. |
 | Resource registration, observation, applicability, and drift | Resource-backed verification covers explicit basis refresh, unavailable/error states, drift projection, adapter boundaries, and re-observation policy. | Phases 4LV, 4LX through 4MG, and 4MN cover exact path, path-prefix, glob, Git worktree, persisted-basis, and batch basis refresh scenarios; Phase 4MV covers explicit no-renames/delete-add Git rename-policy scenarios; Phase 4MW covers explicit tracked-symlink Git index/diff and untracked-non-regular Resource error-policy scenarios; Phase 4MX covers explicit parent-Git submodule gitlink/status/diff and disabled-recursion policy scenarios; Phase 4MY covers explicit parent-Git sparse-checkout index/status/diff and disabled-expansion policy scenarios; Phase 4MZ covers explicit no-WorkVCS-case-folding scenarios for local-file exact path, path-prefix, glob, and Git worktree Resource observations; Phase 4NA covers explicit foreground operator-triggered re-observation scheduling through current-head Resource-backed batch refresh, with background re-observation disabled. | Pass | No | Keep as regression foundation; background daemons, watchers, automatic polling, implicit refresh, and Agent orchestration remain outside V1. |
-| Session, Claim, Runnable, `claim next`, and `next` | Continuation, focus, and Claim guard flows remain usable across stale recovery and multi-operator scenarios. | Ledger marks the current Session/Runnable/claim-next surface dogfood-proven. Phase 4LW and Phase 4MI cover Claim transfer, stale takeover, and shared read-only collaboration. Phase 4MR covers shared-Claim write/read-write coordination in this repository: non-unique shared Claims block protected writer mutation, then reader release restores unique-writer closeout. | Pass | No | Keep as regression foundation; automatic ownership arbitration, distributed collaboration, and remote multi-operator coordination remain outside V1 unless explicitly authorized. |
+| Session, Claim, Runnable, `claim next`, and `next` | Continuation, focus, and Claim guard flows remain usable across stale recovery and multi-operator scenarios. | Ledger marks the current Session/Runnable/claim-next surface dogfood-proven. Phase 4LW and Phase 4MI cover Claim transfer, stale takeover, and shared read-only collaboration. Phase 4MR covers shared-Claim write/read-write coordination in this repository: non-unique shared Claims block protected writer mutation, then reader release restores unique-writer closeout. Phase 4OC covers unsupported focus-kind fail-fast: `session focus-set` rejects a current Verification Requirement focus with stable `session_invalid`, leaves the Session unfocused, and preserves valid Task-focus context recovery hints. | Pass | No | Keep as regression foundation; automatic ownership arbitration, distributed collaboration, and remote multi-operator coordination remain outside V1 unless explicitly authorized. |
 | Context resolver, packets, and `why` explanations | Context packets and `why` output expose enough focused, causal, and explanatory state for continuation Agents without speculative LLM extraction. | Phases 4LR through 4LT and 4LX cover scoped packets and rationale projection; Phases 4MA, 4MH, and 4ML cover selected `why` relationships and causal anchors. Phase 4NC covers direct Record-to-Record and Record-to-Knowledge epistemic statement projections in `why`. Phase 4NG covers direct ChangeOperation Entity/Relation subject projection for causal-anchor ChangeSets in `why`. Phase 4NH covers current recognized subject detail for those direct operation subjects, including Record/Knowledge statements and Relation kind/source/target detail. Phase 4NJ covers direct first-parent Entity-subject evolution operations for queried changed Entities that are not causal anchors. Phase 4NK covers operation-local Entity detail for multiple direct queried-Entity evolution operations. Phase 4NL covers direct Record-to-Record relation remove/restore operations as endpoint evolution for queried Entity endpoints, including operation-local relation detail when a removed relation is absent from current `relation_edges`. Phase 4NM covers direct Record-to-Knowledge and Knowledge-to-Knowledge relation remove/restore operations as endpoint evolution for queried Knowledge endpoints. Phase 4NO covers direct Record-to-Record, Record-to-Knowledge, and Knowledge-to-Knowledge relation create operations as endpoint evolution for queried Entity endpoints. Phase 4NN covers brief ContextPacket Resource basis recovery hints for current-task Verification Requirements with current-head Resource-backed Verifications, without changing packet schema. Phase 4NP covers brief ContextPacket Resource basis recovery hints on focused `blocked_dependency` items when the blocking dependency Task has current-head Resource-backed Verifications, without changing packet schema. Phase 4NU covers normal/full ContextPacket Resource basis recovery hints for runnable same-Plan peer Tasks when focus is a Task, without changing packet schema or public CLI flags. Phase 4NZ covers normal/full ContextPacket Resource basis recovery hints for runnable same-Goal cross-Plan peer Tasks when focus is a Task, without changing packet schema or public CLI flags. Phase 4NQ covers current Task scheduling relation edges and direct `task.scheduling_relation.create` endpoint evolution for `depends_on` and `ordered_before` Task endpoints. Phase 4NR covers direct `primary_containment.create` endpoint evolution for queried Goal, Plan, and Task endpoints, reusing existing `primary_containment` relation edges and relation subject detail. Phase 4NV covers direct `verification.record` defining `verifies` relation creation as endpoint evolution for queried Verification, Acceptance Criterion, and Verification Requirement endpoints. Phase 4NW covers direct `verification.record` `evidenced_by` relation creation as endpoint evolution for queried Verification endpoints backed by Evidence. Phase 4NX covers direct `verification.record` `evidenced_by` relation creation as endpoint evolution for queried Evidence endpoints reused by Verifications. Phase 4NY covers direct `knowledge_exposure_derived_from` relation creation as endpoint evolution for queried source Knowledge and target KnowledgeExposure endpoints. | Partial | Yes | Prove broader context/Resource resolver behavior outside current-task, focused blocked-dependency, direct same-Plan peer, and direct same-Goal cross-Plan peer Resource-backed VR recovery hints, full relation-subject traversal beyond direct endpoint slices, multi-hop/full evolution traversal, and broader causal traversal only through concrete dogfood gaps; broaden epistemic traversal only if a future concrete dogfood gap requires it. |
 | Handoff consumption | Handoff creation, display, focus consumption, blocked recovery, and continuation work across varied project and write-mode workflows. | Current evidence covers focused Handoff smoke, Handoff consumption, blocked recovery, read-only external-project Handoff creation/show, external-project continuation-adjacent Claim work, and Phase 4MS write-mode Handoff consumption with continuation Claim, VR-backed verification, Task closeout, and SessionDiff closeout. | Pass | No | Keep as regression foundation; remote/cloud Handoff, cross-Store synchronization, automatic takeover, and Agent orchestration remain outside V1 unless explicitly authorized. |
 | Merge lifecycle and conflict recovery | Divergent Work Branch resolution, freeze/continue/abort/restart recovery, and final WorkState proof hold in realistic write-mode external-project work. | Phase 4LN and Phase 4MM prove merge behavior in durable local Stores, including larger conflict sets and two-parent merge commits. Phase 4MT adds generated external local Git project write-mode merge proof. Phase 4MU repeats merge against pre-existing real `agent_soul` project content cloned into a write-mode sandbox with an actual Git conflict on existing `README.md`, WorkVCS conflict and auto merge items, unresolved freeze guard, explicit source-side resolutions, freeze/continue, a two-parent WorkVCS merge commit, final WorkState proof, Branch diff, SessionDiff closeout, original-project unchanged proof, and required-valid integrity/doctor. | Pass | No | Keep as regression foundation; semantic/LLM merge, remote or distributed merge, cross-Store synchronization, Agent orchestration, and direct mutation of an original external repository remain outside the bounded V1-local release gate unless separately authorized. |
@@ -91,6 +92,45 @@ Priority candidates:
    from the exact candidate commit and obtain explicit release authorization.
 4. Refresh this matrix after each blocking gate changes status and before any
    release-ready or release-candidate claim.
+
+## Phase 4OC Update
+
+Phase 4OC refreshes this matrix after closing a Session focus contract
+mismatch. The change was driven by a current public CLI probe where a temporary
+Store had one Resource-backed Verification Requirement. Unfocused full context
+and valid Task-focused brief context both surfaced the VR Resource basis and
+basis-aware recovery hint, but `session focus-set --focus
+<verification_requirement>` accepted that unsupported focus. Later `context`
+and `runnable tasks` failed with `session_invalid` because focused runtime
+resolution only supports current Goal, Plan, and Task focus entities.
+
+The Phase 4OC binary keeps Store schema, CLI flags, ContextPacket JSON fields,
+snapshot schema, Resource observation/cache-refresh semantics, runnable
+selection, Claim behavior, `claim next`, `next`, and `why` behavior unchanged.
+It adds only a write-boundary `session focus-set` validation that rejects a
+present focus entity unless it resolves at the active Branch head as a Goal,
+Plan, or Task.
+
+The public CLI dogfood run at
+`/tmp/workvcs-4oc-focus-set-unsupported-kind-20260903T082308Z/dogfood`
+proves `phase4oc_dogfood=PASS`, `commands_exit_failures=0`,
+`failed_assertions=0`, `focus_set_vr_exit=expected_failure`,
+`focus_set_vr_error_code=session_invalid`,
+`focus_set_vr_error_category=runtime`,
+`focus_set_vr_message_contains_supported_kind=true`,
+`session_after_reject_focus=none`, `context_unfocused_succeeded=true`,
+`task_focus_succeeded=true`, `context_task_focus_has_requirement=true`,
+`context_task_focus_has_resource_basis=true`, and
+`context_task_focus_has_refresh_hint=true`.
+
+The Session, Claim, Runnable, `claim next`, and `next` gate remains `Pass`.
+Phase 4OC closes this concrete focus contract mismatch, but it does not add
+new supported focus entity kinds or broaden context/Resource resolver behavior.
+The Context resolver, packets, and `why` explanations gate remains `Partial`,
+and the Candidate release operation gate remains `Blocked`.
+
+The overall release decision remains false because other blocking gates remain
+`Partial` or `Blocked`.
 
 ## Phase 4NZ Update
 

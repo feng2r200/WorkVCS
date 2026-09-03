@@ -33334,6 +33334,137 @@ mod tests {
     }
 
     #[test]
+    fn cli_rejects_verification_requirement_session_focus() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Unsupported focus task",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &task_id,
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-unsupported-focus",
+            "--statement",
+            "The unsupported focus requirement is visible.",
+        ])
+        .expect("parse ac create"))
+        .expect("create ac");
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-unsupported-focus",
+            "--statement",
+            "Do not allow this requirement as session focus.",
+        ])
+        .expect("parse vr create"))
+        .expect("create vr");
+        let requirement_id = value(&requirement, "verification_requirement_entity_id");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+
+        let rejected = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &session_id,
+            "--focus",
+            &requirement_id,
+        ])
+        .expect("parse vr focus set"));
+        assert!(matches!(
+            rejected,
+            Err(WorkVcsError::SessionInvalid(message))
+                if message.contains("is not a current Goal, Plan, or Task at branch head")
+        ));
+
+        let unchanged = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &session_id,
+            "--expected-focus",
+            "none",
+        ])
+        .expect("parse unchanged session show"))
+        .expect("show unchanged session");
+        assert_eq!(value(&unchanged, "focus_entity_id"), "none");
+        assert_eq!(value(&unchanged, "focus_matches_expected"), "true");
+    }
+
+    #[test]
     fn cli_marks_session_potentially_stale_and_preserves_recovery_path() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

@@ -29343,7 +29343,11 @@ mod tests {
             &value(&adoption, "final_head_commit_id"),
             "--entity",
             &value(&adoption, "adopted_knowledge_entity_id"),
+            "--relation-kind",
+            "knowledge_exposure_derived_from",
             "--expected-relation-edges",
+            "1",
+            "--expected-evolution-change-operations",
             "1",
         ])
         .expect("parse why"))
@@ -29365,6 +29369,61 @@ mod tests {
         assert_eq!(value(&why, "relation.0.target_kind"), "knowledge_exposure");
         assert_eq!(
             value(&why, "relation.0.target_exposure_id"),
+            value(&exposure, "exposure_id")
+        );
+        assert_eq!(value(&why, "evolution_change_operations"), "1");
+        assert_eq!(
+            value(&why, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "knowledge.relation.create"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_detail_kind"),
+            "relation"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_relation_kind"),
+            "knowledge_exposure_derived_from"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_source_kind"
+            ),
+            "entity"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_source_entity_kind"
+            ),
+            "knowledge"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            value(&adoption, "adopted_knowledge_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_target_kind"
+            ),
+            "knowledge_exposure"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_target_exposure_id"
+            ),
             value(&exposure, "exposure_id")
         );
 
@@ -29392,10 +29451,57 @@ mod tests {
             &value(&exposure, "exposure_id"),
             "--relation-kind",
             "knowledge_exposure_derived_from",
+            "--expected-relation-edges",
+            "1",
+            "--expected-evolution-change-operations",
+            "1",
         ])
         .expect("parse why by relation kind"))
         .expect("why by relation kind");
         assert_eq!(value(&why_by_relation_kind, "relation_edges"), "1");
+        assert_eq!(
+            value(&why_by_relation_kind, "relation_edges_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(&why_by_relation_kind, "evolution_change_operations"),
+            "1"
+        );
+        assert_eq!(
+            value(
+                &why_by_relation_kind,
+                "evolution_change_operations_match_expected"
+            ),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &why_by_relation_kind,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "knowledge.relation.create"
+        );
+        assert_eq!(
+            value(
+                &why_by_relation_kind,
+                "evolution_change_operation.0.subject_relation_kind"
+            ),
+            "knowledge_exposure_derived_from"
+        );
+        assert_eq!(
+            value(
+                &why_by_relation_kind,
+                "evolution_change_operation.0.subject_relation_source_entity_id"
+            ),
+            value(&adoption, "adopted_knowledge_entity_id")
+        );
+        assert_eq!(
+            value(
+                &why_by_relation_kind,
+                "evolution_change_operation.0.subject_relation_target_exposure_id"
+            ),
+            value(&exposure, "exposure_id")
+        );
 
         let why_by_direction = run(Cli::try_parse_from([
             "workvcs",

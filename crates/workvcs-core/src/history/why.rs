@@ -668,8 +668,7 @@ fn why_evolution_change_operations(
 
     let direct_entity_subject = match subject {
         WhyQuerySubject::Entity(entity_id) => Some(entity_id),
-        WhyQuerySubject::Evidence(_) => None,
-        WhyQuerySubject::KnowledgeExposure(_) => return Ok(evolution_operations),
+        WhyQuerySubject::Evidence(_) | WhyQuerySubject::KnowledgeExposure(_) => None,
     };
     let history = query_history(
         connection,
@@ -1052,6 +1051,31 @@ fn why_direct_relation_operation_subject_detail(
                     state_digest: relation.state_digest,
                 },
             )));
+        }
+    }
+    for relation in knowledge_exposure_derived_from_relations_at(connection, resolved)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.source_knowledge_entity_id,
+                WhyEntityKind::Knowledge,
+            );
+            let target = WhyRelationEndpoint::knowledge_exposure(relation.exposure_id);
+            if endpoint_matches_subject(subject, source)
+                || endpoint_matches_subject(subject, target)
+            {
+                return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                    WhyEvolutionSubjectRelationDetail {
+                        relation_kind: WhyRelationKind::KnowledgeExposureDerivedFrom,
+                        relation_version_id: relation.relation_version_id,
+                        relation_label: None,
+                        source,
+                        target,
+                        state_digest: relation.state_digest,
+                    },
+                )));
+            }
         }
     }
     for relation in verification_relations_at(connection, resolved.target.commit_id)? {

@@ -105,10 +105,10 @@ use workvcs_core::{
     VerifyOptions, VerifyResourceObservationInput, VerifyResult, WhyDeferredRelationFamily,
     WhyEntityKind, WhyEpistemicExplanation, WhyEvolutionChangeOperation, WhyEvolutionSubjectDetail,
     WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEndpoint,
-    WhyRelationKind, WhyScopeLinkKind, WorkState, WorkStateDiff, WorkStateDiffChangeKind,
-    WorkStateDiffOptions, WorkStateDiffTarget, WorkStateRestoreCommit, WorkStateRestoreOptions,
-    WorkVcsError, WorkspaceId, WorkspaceInfo, WorkspaceInitOptions, WorkspaceListOptions,
-    WorkspaceListResult, WorkspaceResourceAssociationListOptions,
+    WhyRelationKind, WhyScopeLinkKind, WhyVerificationClosureChain, WorkState, WorkStateDiff,
+    WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget, WorkStateRestoreCommit,
+    WorkStateRestoreOptions, WorkVcsError, WorkspaceId, WorkspaceInfo, WorkspaceInitOptions,
+    WorkspaceListOptions, WorkspaceListResult, WorkspaceResourceAssociationListOptions,
     WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
     WorkspaceResourceAssociationResult, canonical_bytes, content_object_digest,
     entity_version_digest, parse_canonical_json, relation_version_digest,
@@ -22718,6 +22718,15 @@ fn render_why(result: &WhyQueryResult) -> String {
     }
     writeln!(
         output,
+        "verification_closure_chains={}",
+        result.verification_closure_chains.len()
+    )
+    .expect("write to String");
+    for (index, chain) in result.verification_closure_chains.iter().enumerate() {
+        render_why_verification_closure_chain(&mut output, index, chain);
+    }
+    writeln!(
+        output,
         "deferred_relation_families={}",
         result.deferred_relation_families.len()
     )
@@ -22801,6 +22810,86 @@ fn render_why_evolution_change_operation(
         operation.operation_payload_size_bytes
     )
     .expect("write to String");
+}
+
+fn render_why_verification_closure_chain(
+    output: &mut String,
+    index: usize,
+    chain: &WhyVerificationClosureChain,
+) {
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.acceptance_criterion_entity_id={}",
+        chain.acceptance_criterion_entity_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.acceptance_criterion_entity_version_id={}",
+        chain.acceptance_criterion_entity_version_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.acceptance_criterion_local_key={}",
+        chain.acceptance_criterion_local_key
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.verification_requirement_entity_id={}",
+        chain.verification_requirement_entity_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.verification_requirement_entity_version_id={}",
+        chain.verification_requirement_entity_version_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.verification_requirement_local_key={}",
+        chain.verification_requirement_local_key
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.verification_commit_id={}",
+        chain.verification_commit_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.verification_entity_id={}",
+        chain.verification_entity_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.verification_entity_version_id={}",
+        chain.verification_entity_version_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.verification_result={}",
+        chain.verification_result
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.evidence={}",
+        chain.evidence_ids.len()
+    )
+    .expect("write to String");
+    for (evidence_index, evidence_id) in chain.evidence_ids.iter().enumerate() {
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.evidence.{evidence_index}.evidence_id={evidence_id}"
+        )
+        .expect("write to String");
+    }
 }
 
 fn render_why_evolution_subject_detail(
@@ -37906,6 +37995,193 @@ mod tests {
             ),
             value(&evidence, "evidence_id")
         );
+    }
+
+    #[test]
+    fn cli_why_projects_vr_backed_verification_closure_from_task_and_criterion() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Close a task with VR-backed evidence",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "The task closeout why output exposes the closure chain.",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-1",
+            "--statement",
+            "The verification evidence is preserved.",
+        ])
+        .expect("parse vr"))
+        .expect("create vr");
+        let evidence = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "create",
+            store,
+            "--kind",
+            "manual-review",
+        ])
+        .expect("parse evidence"))
+        .expect("create evidence");
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&requirement, "commit_id"),
+            "--verification-requirement",
+            &value(&requirement, "verification_requirement_entity_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--evidence",
+            &value(&evidence, "evidence_id"),
+            "--expected-evidence-relations",
+            "1",
+        ])
+        .expect("parse verification"))
+        .expect("record verification");
+        let closeout = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "transition",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&verification, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&criterion, "task_entity_version_id"),
+            "--status",
+            "done",
+            "--outcome",
+            "closed",
+        ])
+        .expect("parse closeout"))
+        .expect("closeout task");
+
+        let task_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--entity",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse task why"))
+        .expect("task why");
+        let criterion_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--entity",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+        ])
+        .expect("parse criterion why"))
+        .expect("criterion why");
+
+        for why in [&task_why, &criterion_why] {
+            assert_eq!(value(why, "commit_id"), value(&closeout, "commit_id"));
+            assert_eq!(value(why, "verification_closure_chains"), "1");
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.acceptance_criterion_entity_id"
+                ),
+                value(&criterion, "acceptance_criterion_entity_id")
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.verification_requirement_entity_id"
+                ),
+                value(&requirement, "verification_requirement_entity_id")
+            );
+            assert_eq!(
+                value(why, "verification_closure_chain.0.verification_entity_id"),
+                value(&verification, "verification_entity_id")
+            );
+            assert_eq!(
+                value(why, "verification_closure_chain.0.verification_result"),
+                "passed"
+            );
+            assert_eq!(value(why, "verification_closure_chain.0.evidence"), "1");
+            assert_eq!(
+                value(why, "verification_closure_chain.0.evidence.0.evidence_id"),
+                value(&evidence, "evidence_id")
+            );
+        }
     }
 
     #[test]

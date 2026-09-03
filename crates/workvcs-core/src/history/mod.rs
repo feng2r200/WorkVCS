@@ -176,6 +176,7 @@ pub use why::{
     WhyEvolutionSubjectDetail, WhyEvolutionSubjectEntityDetail, WhyEvolutionSubjectRelationDetail,
     WhyQueryOptions, WhyQueryResult, WhyQuerySubject, WhyQueryTarget, WhyRelationDirection,
     WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WhyScopeLink, WhyScopeLinkKind,
+    WhyVerificationClosureChain,
 };
 
 pub(crate) use branch::{fork_branch, list_branches};

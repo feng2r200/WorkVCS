@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
-    AcceptanceCriterionCreateOptions, BranchId, ChangeOperationSubject, CommitId, Engine, EntityId,
-    ErrorCategory, ErrorCode, EventId, RelationId, StoreInitOptions, TaskCreateOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
-    VerificationRequirementCreateOptions, VerificationResult, VerificationTarget,
-    WhyDeferredRelationFamily, WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions,
-    WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint,
-    WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    AcceptanceCriterionCreateOptions, BranchId, CanonicalValue, ChangeOperationSubject, CommitId,
+    Engine, EntityId, ErrorCategory, ErrorCode, EventId, EvidenceCreateOptions, EvidenceId,
+    RelationId, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
+    TaskTransitionOptions, VerificationCreateCommit, VerificationCreateOptions,
+    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions, VerificationResult,
+    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyEvolutionSubjectDetail,
+    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge,
+    WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +27,7 @@ struct QueryCounts {
 }
 
 struct CriterionFixture {
+    task: TaskCreateCommit,
     criterion: AcceptanceCriterionCreateCommit,
 }
 
@@ -118,7 +120,20 @@ fn create_required_criterion(engine: &mut Engine, workspace: &WorkspaceInfo) -> 
             .expect("criterion options"),
         )
         .expect("create acceptance criterion");
-    CriterionFixture { criterion }
+    CriterionFixture { task, criterion }
+}
+
+fn create_evidence(engine: &mut Engine) -> EvidenceId {
+    engine
+        .create_evidence(
+            EvidenceCreateOptions::new(
+                "command_output",
+                CanonicalValue::object(Vec::new()).expect("metadata"),
+            )
+            .expect("evidence options"),
+        )
+        .expect("create evidence")
+        .evidence_id
 }
 
 fn create_requirement(
@@ -159,6 +174,29 @@ fn create_verification(
                 result,
             )
             .expect("verification options"),
+        )
+        .expect("create verification")
+}
+
+fn create_verification_with_evidence(
+    engine: &mut Engine,
+    workspace: &WorkspaceInfo,
+    expected_head_commit_id: CommitId,
+    target: VerificationTarget,
+    result: VerificationResult,
+    evidence: EvidenceId,
+) -> VerificationCreateCommit {
+    engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                workspace.initial_branch_id,
+                expected_head_commit_id,
+                target,
+                result,
+            )
+            .expect("verification options")
+            .with_evidence([evidence])
+            .expect("verification evidence"),
         )
         .expect("create verification")
 }
@@ -289,6 +327,45 @@ fn assert_single_verifies_evolution(
         detail.state_digest,
         verification.verifies_relation_state_digest
     );
+}
+
+fn assert_single_vr_backed_verification_closure(
+    why: &WhyQueryResult,
+    fixture: &CriterionFixture,
+    requirement: &VerificationRequirementCreateCommit,
+    verification: &VerificationCreateCommit,
+    evidence: EvidenceId,
+) {
+    assert_eq!(why.verification_closure_chains.len(), 1);
+    let chain = &why.verification_closure_chains[0];
+    assert_eq!(
+        chain.acceptance_criterion_entity_id,
+        fixture.criterion.acceptance_criterion_entity_id
+    );
+    assert_eq!(
+        chain.acceptance_criterion_entity_version_id,
+        requirement.acceptance_criterion_entity_version_id
+    );
+    assert_eq!(chain.acceptance_criterion_local_key, "AC-1");
+    assert_eq!(
+        chain.verification_requirement_entity_id,
+        requirement.verification_requirement_entity_id
+    );
+    assert_eq!(
+        chain.verification_requirement_entity_version_id,
+        requirement.verification_requirement_entity_version_id
+    );
+    assert_eq!(chain.verification_requirement_local_key, "VR-1");
+    assert_eq!(
+        chain.verification_entity_id,
+        verification.verification_entity_id
+    );
+    assert_eq!(
+        chain.verification_entity_version_id,
+        verification.verification_entity_version_id
+    );
+    assert_eq!(chain.verification_result, VerificationResult::Passed);
+    assert_eq!(chain.evidence_ids, vec![evidence]);
 }
 
 #[test]
@@ -435,6 +512,71 @@ fn why_reports_verification_requirement_target_relation() {
             requirement.verification_requirement_entity_id,
             WhyEntityKind::VerificationRequirement,
         ),
+    );
+}
+
+#[test]
+fn why_reports_vr_backed_verification_closure_from_task_and_criterion_after_task_closeout() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let fixture = create_required_criterion(&mut engine, &workspace);
+    let requirement = create_requirement(
+        &mut engine,
+        &workspace,
+        fixture.criterion.commit_id,
+        &fixture.criterion,
+        "VR-1",
+    );
+    let evidence = create_evidence(&mut engine);
+    let verification = create_verification_with_evidence(
+        &mut engine,
+        &workspace,
+        requirement.commit_id,
+        VerificationTarget::VerificationRequirement(requirement.verification_requirement_entity_id),
+        VerificationResult::Passed,
+        evidence,
+    );
+    let closeout = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                verification.commit_id,
+                fixture.task.task_entity_id,
+                fixture.criterion.task_entity_version_id,
+                TaskStatus::Done,
+            )
+            .expect("task closeout options")
+            .with_outcome("closed")
+            .expect("task outcome"),
+        )
+        .expect("close task");
+
+    let task_why = why_branch_head(
+        &engine,
+        workspace.initial_branch_id,
+        fixture.task.task_entity_id,
+    );
+    let criterion_why = why_branch_head(
+        &engine,
+        workspace.initial_branch_id,
+        fixture.criterion.acceptance_criterion_entity_id,
+    );
+
+    assert_eq!(task_why.target.commit_id, closeout.commit_id);
+    assert_eq!(criterion_why.target.commit_id, closeout.commit_id);
+    assert_single_vr_backed_verification_closure(
+        &task_why,
+        &fixture,
+        &requirement,
+        &verification,
+        evidence,
+    );
+    assert_single_vr_backed_verification_closure(
+        &criterion_why,
+        &fixture,
+        &requirement,
+        &verification,
+        evidence,
     );
 }
 

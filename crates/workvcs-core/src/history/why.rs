@@ -15,17 +15,18 @@ use super::task::{
     ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND,
     TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE, TaskSchedulingRelationType,
     VERIFICATION_ENTITY_KIND, VERIFICATION_RECORD_OPERATION_TYPE,
-    VERIFICATION_REQUIREMENT_ENTITY_KIND,
+    VERIFICATION_REQUIREMENT_ENTITY_KIND, VerificationResult,
 };
 use super::{
     ChangeOperationSnapshot, ChangeOperationSubject, HistoryQueryOptions,
     KnowledgeRelationListOptions, PrimaryContainmentEndpointKind,
     RecordKnowledgeRelationListOptions, RecordRelationListOptions, RecordRelationType,
-    StructuralReferenceEndpointKind, VerificationTarget, branch_head, changeset_operations,
-    evidence, knowledge_exposure, knowledge_relations_at, primary_containment_relations_at,
-    query_history, record_knowledge_relations_at, record_relations_at, state_at,
-    structural_references_at, task_scheduling_relations_at, verification_evidence_relations_at,
-    verification_relations_at,
+    StructuralReferenceEndpointKind, VerificationTarget, acceptance_criterion_at, branch_head,
+    changeset_operations, evidence, knowledge_exposure, knowledge_relations_at,
+    primary_containment_relations_at, query_history, record_knowledge_relations_at,
+    record_relations_at, state_at, structural_references_at, task_at, task_scheduling_relations_at,
+    verification_evidence_relations_at, verification_relations_at, verification_requirement_at,
+    verifications_at,
 };
 use crate::canonical::CanonicalValue;
 use crate::error::{Result, WorkVcsError};
@@ -149,6 +150,7 @@ pub struct WhyQueryResult {
     pub scope_links: Vec<WhyScopeLink>,
     pub causal_anchor_changesets: Vec<WhyCausalAnchorChangeSet>,
     pub evolution_change_operations: Vec<WhyEvolutionChangeOperation>,
+    pub verification_closure_chains: Vec<WhyVerificationClosureChain>,
     pub deferred_relation_families: Vec<WhyDeferredRelationFamily>,
 }
 
@@ -377,6 +379,21 @@ pub struct WhyEvolutionSubjectRelationDetail {
     pub source: WhyRelationEndpoint,
     pub target: WhyRelationEndpoint,
     pub state_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhyVerificationClosureChain {
+    pub acceptance_criterion_entity_id: EntityId,
+    pub acceptance_criterion_entity_version_id: EntityVersionId,
+    pub acceptance_criterion_local_key: String,
+    pub verification_requirement_entity_id: EntityId,
+    pub verification_requirement_entity_version_id: EntityVersionId,
+    pub verification_requirement_local_key: String,
+    pub verification_commit_id: CommitId,
+    pub verification_entity_id: EntityId,
+    pub verification_entity_version_id: EntityVersionId,
+    pub verification_result: VerificationResult,
+    pub evidence_ids: Vec<EvidenceId>,
 }
 
 pub(crate) fn explain_why(
@@ -624,6 +641,8 @@ pub(crate) fn explain_why(
         options.subject(),
         &causal_anchor_changesets,
     )?;
+    let verification_closure_chains =
+        why_verification_closure_chains(connection, &resolved, subject)?;
     let deferred_relation_families =
         why_deferred_relation_families(&causal_anchor_changesets, &evolution_change_operations);
 
@@ -635,8 +654,128 @@ pub(crate) fn explain_why(
         scope_links,
         causal_anchor_changesets,
         evolution_change_operations,
+        verification_closure_chains,
         deferred_relation_families,
     })
+}
+
+fn why_verification_closure_chains(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    subject: ResolvedWhyQuerySubject,
+) -> Result<Vec<WhyVerificationClosureChain>> {
+    let ResolvedWhyQuerySubject::Entity {
+        entity_id,
+        entity_kind,
+        ..
+    } = subject
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut chains = Vec::new();
+    match entity_kind {
+        WhyEntityKind::Task => {
+            let task = task_at(connection, resolved.target.commit_id, entity_id)?;
+            for criterion_ref in task.state.acceptance_criteria {
+                let criterion = acceptance_criterion_at(
+                    connection,
+                    resolved.target.commit_id,
+                    criterion_ref.acceptance_criterion_entity_id,
+                )?;
+                push_verification_closure_chains_for_criterion(
+                    connection,
+                    resolved,
+                    &criterion,
+                    &mut chains,
+                )?;
+            }
+        }
+        WhyEntityKind::AcceptanceCriterion => {
+            let criterion =
+                acceptance_criterion_at(connection, resolved.target.commit_id, entity_id)?;
+            push_verification_closure_chains_for_criterion(
+                connection,
+                resolved,
+                &criterion,
+                &mut chains,
+            )?;
+        }
+        WhyEntityKind::Goal
+        | WhyEntityKind::Plan
+        | WhyEntityKind::VerificationRequirement
+        | WhyEntityKind::Verification
+        | WhyEntityKind::Record
+        | WhyEntityKind::Knowledge => {}
+    }
+
+    chains.sort_by(|left, right| {
+        left.acceptance_criterion_local_key
+            .cmp(&right.acceptance_criterion_local_key)
+            .then_with(|| {
+                left.acceptance_criterion_entity_id
+                    .cmp(&right.acceptance_criterion_entity_id)
+            })
+            .then_with(|| {
+                left.verification_requirement_local_key
+                    .cmp(&right.verification_requirement_local_key)
+            })
+            .then_with(|| {
+                left.verification_requirement_entity_id
+                    .cmp(&right.verification_requirement_entity_id)
+            })
+            .then_with(|| {
+                left.verification_entity_id
+                    .cmp(&right.verification_entity_id)
+            })
+    });
+    Ok(chains)
+}
+
+fn push_verification_closure_chains_for_criterion(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    criterion: &super::AcceptanceCriterionSnapshot,
+    chains: &mut Vec<WhyVerificationClosureChain>,
+) -> Result<()> {
+    let verifications = verifications_at(connection, resolved.target.commit_id)?;
+    for requirement_ref in &criterion.state.verification_requirements {
+        let requirement = verification_requirement_at(
+            connection,
+            resolved.target.commit_id,
+            requirement_ref.verification_requirement_entity_id,
+        )?;
+        for verification in &verifications {
+            if verification.target
+                != VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                )
+            {
+                continue;
+            }
+            let evidence_ids = verification
+                .evidenced_by_relations
+                .iter()
+                .map(|relation| relation.evidence_id)
+                .collect();
+            chains.push(WhyVerificationClosureChain {
+                acceptance_criterion_entity_id: criterion.acceptance_criterion_entity_id,
+                acceptance_criterion_entity_version_id: criterion
+                    .acceptance_criterion_entity_version_id,
+                acceptance_criterion_local_key: criterion.local_key.clone(),
+                verification_requirement_entity_id: requirement.verification_requirement_entity_id,
+                verification_requirement_entity_version_id: requirement
+                    .verification_requirement_entity_version_id,
+                verification_requirement_local_key: requirement.local_key.clone(),
+                verification_commit_id: verification.commit_id,
+                verification_entity_id: verification.verification_entity_id,
+                verification_entity_version_id: verification.verification_entity_version_id,
+                verification_result: verification.state.result,
+                evidence_ids,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn why_evolution_change_operations(

@@ -253,10 +253,6 @@ fn assert_edges_are_sorted(edges: &[WhyRelationEdge]) {
     }
 }
 
-fn assert_deferred_families(why: &WhyQueryResult) {
-    assert!(why.deferred_relation_families.is_empty());
-}
-
 fn assert_verification_relation_evolution(
     why: &WhyQueryResult,
     verification: &VerificationCreateCommit,
@@ -424,8 +420,58 @@ fn why_evidence_subject_reports_current_verifications_using_that_evidence() {
             evidence_id: evidence
         }
     );
-    assert_deferred_families(&why);
-    assert!(why.evolution_change_operations.is_empty());
+    assert_eq!(
+        why.deferred_relation_families,
+        vec![WhyDeferredRelationFamily::Evolution]
+    );
+    assert_eq!(why.evolution_change_operations.len(), 2);
+    let expected_relations = [
+        (
+            first.verification_entity_id,
+            &first.evidenced_by_relations[0],
+        ),
+        (
+            second.verification_entity_id,
+            &second.evidenced_by_relations[0],
+        ),
+    ];
+    for operation in &why.evolution_change_operations {
+        let (verification_entity_id, relation) = expected_relations
+            .iter()
+            .find(|(_, relation)| {
+                operation.subject == ChangeOperationSubject::Relation(relation.relation_id)
+            })
+            .expect("expected evidenced_by relation operation");
+        assert_eq!(operation.changeset_operation_type, "verification.record");
+        assert_eq!(operation.operation_id, relation.relation_operation_id);
+        let Some(WhyEvolutionSubjectDetail::Relation(detail)) = &operation.subject_detail else {
+            panic!("expected evidenced_by relation subject detail")
+        };
+        assert_eq!(detail.relation_kind, WhyRelationKind::EvidencedBy);
+        assert_eq!(detail.relation_version_id, relation.relation_version_id);
+        assert_eq!(detail.relation_label, None);
+        assert_eq!(
+            detail.source,
+            entity_endpoint(*verification_entity_id, WhyEntityKind::Verification)
+        );
+        assert_eq!(detail.target, evidence_endpoint(evidence));
+        assert_eq!(detail.state_digest, relation.relation_state_digest);
+    }
+    assert_eq!(
+        why.evolution_change_operations
+            .iter()
+            .map(|operation| match operation.subject {
+                ChangeOperationSubject::Relation(relation_id) => relation_id.to_string(),
+                _ => panic!("expected relation evolution subject"),
+            })
+            .collect::<BTreeSet<_>>(),
+        [
+            first.evidenced_by_relations[0].relation_id.to_string(),
+            second.evidenced_by_relations[0].relation_id.to_string(),
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    );
     assert_eq!(
         edge_facts(&why),
         BTreeSet::from([

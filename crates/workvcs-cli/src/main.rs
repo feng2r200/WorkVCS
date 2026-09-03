@@ -37672,6 +37672,208 @@ mod tests {
     }
 
     #[test]
+    fn cli_why_evidence_subject_evidenced_by_create_as_endpoint_evolution() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let genesis = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &genesis,
+            "--description",
+            "Probe Evidence endpoint evidenced_by evolution",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-1",
+            "--statement",
+            "Evidence endpoint evidenced_by creation is explainable.",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let evidence = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "create",
+            store,
+            "--kind",
+            "manual-review",
+        ])
+        .expect("parse evidence"))
+        .expect("create evidence");
+        let first = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--acceptance-criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--evidence",
+            &value(&evidence, "evidence_id"),
+            "--expected-evidence-relations",
+            "1",
+        ])
+        .expect("parse first verification"))
+        .expect("record first verification");
+        let second = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&first, "commit_id"),
+            "--acceptance-criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--evidence",
+            &value(&evidence, "evidence_id"),
+            "--expected-evidence-relations",
+            "1",
+        ])
+        .expect("parse second verification"))
+        .expect("record second verification");
+
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--evidence",
+            &value(&evidence, "evidence_id"),
+            "--relation-kind",
+            "evidenced_by",
+            "--expected-relation-edges",
+            "2",
+            "--expected-evolution-change-operations",
+            "2",
+        ])
+        .expect("parse evidence why"))
+        .expect("evidence why");
+
+        assert_eq!(value(&why, "subject_kind"), "evidence");
+        assert_eq!(
+            value(&why, "subject_evidence_id"),
+            value(&evidence, "evidence_id")
+        );
+        assert_eq!(value(&why, "relation_edges"), "2");
+        assert_eq!(value(&why, "relation_edges_match_expected"), "true");
+        assert_eq!(value(&why, "relation.0.relation_kind"), "evidenced_by");
+        assert_eq!(value(&why, "relation.0.direction"), "incoming");
+        assert_eq!(value(&why, "relation.1.relation_kind"), "evidenced_by");
+        assert_eq!(value(&why, "relation.1.direction"), "incoming");
+        assert_eq!(value(&why, "evolution_change_operations"), "2");
+        assert_eq!(
+            value(&why, "evolution_change_operations_match_expected"),
+            "true"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.changeset_operation_type"
+            ),
+            "verification.record"
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.changeset_operation_type"
+            ),
+            "verification.record"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.0.subject_relation_kind"),
+            "evidenced_by"
+        );
+        assert_eq!(
+            value(&why, "evolution_change_operation.1.subject_relation_kind"),
+            "evidenced_by"
+        );
+        let mut actual_sources = vec![
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_source_entity_id",
+            ),
+            value(
+                &why,
+                "evolution_change_operation.1.subject_relation_source_entity_id",
+            ),
+        ];
+        actual_sources.sort();
+        let mut expected_sources = vec![
+            value(&first, "verification_entity_id"),
+            value(&second, "verification_entity_id"),
+        ];
+        expected_sources.sort();
+        assert_eq!(actual_sources, expected_sources);
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.0.subject_relation_target_evidence_id"
+            ),
+            value(&evidence, "evidence_id")
+        );
+        assert_eq!(
+            value(
+                &why,
+                "evolution_change_operation.1.subject_relation_target_evidence_id"
+            ),
+            value(&evidence, "evidence_id")
+        );
+    }
+
+    #[test]
     fn cli_creates_structural_task_relations_with_actor_session() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");

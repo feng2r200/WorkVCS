@@ -666,8 +666,10 @@ fn why_evolution_change_operations(
         }
     }
 
-    let WhyQuerySubject::Entity(entity_id) = subject else {
-        return Ok(evolution_operations);
+    let direct_entity_subject = match subject {
+        WhyQuerySubject::Entity(entity_id) => Some(entity_id),
+        WhyQuerySubject::Evidence(_) => None,
+        WhyQuerySubject::KnowledgeExposure(_) => return Ok(evolution_operations),
     };
     let history = query_history(
         connection,
@@ -680,7 +682,7 @@ fn why_evolution_change_operations(
         for operation in changeset_operations(connection, entry.changeset_id)?.operations {
             match &operation.subject {
                 ChangeOperationSubject::Entity(subject_entity_id)
-                    if *subject_entity_id == entity_id =>
+                    if direct_entity_subject == Some(*subject_entity_id) =>
                 {
                     let Some(membership_change) = load_direct_entity_evolution_membership_change(
                         connection,
@@ -695,7 +697,7 @@ fn why_evolution_change_operations(
                             why_direct_entity_operation_subject_detail(
                                 connection,
                                 resolved,
-                                entity_id,
+                                *subject_entity_id,
                                 entry.commit_id,
                                 entity_version_id,
                             )

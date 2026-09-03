@@ -15,7 +15,7 @@ use super::task::{
     ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND,
     TASK_SCHEDULING_RELATION_CREATE_OPERATION_TYPE, TaskSchedulingRelationType,
     VERIFICATION_ENTITY_KIND, VERIFICATION_RECORD_OPERATION_TYPE,
-    VERIFICATION_REQUIREMENT_ENTITY_KIND, VerificationResult,
+    VERIFICATION_REQUIREMENT_ENTITY_KIND, VerificationResourceBasis, VerificationResult,
 };
 use super::{
     ChangeOperationSnapshot, ChangeOperationSubject, HistoryQueryOptions,
@@ -394,6 +394,7 @@ pub struct WhyVerificationClosureChain {
     pub verification_entity_version_id: EntityVersionId,
     pub verification_result: VerificationResult,
     pub evidence_ids: Vec<EvidenceId>,
+    pub resource_basis: Vec<VerificationResourceBasis>,
 }
 
 pub(crate) fn explain_why(
@@ -758,6 +759,7 @@ fn push_verification_closure_chains_for_criterion(
                 .iter()
                 .map(|relation| relation.evidence_id)
                 .collect();
+            let resource_basis = verification.state.resource_basis.clone();
             chains.push(WhyVerificationClosureChain {
                 acceptance_criterion_entity_id: criterion.acceptance_criterion_entity_id,
                 acceptance_criterion_entity_version_id: criterion
@@ -772,6 +774,7 @@ fn push_verification_closure_chains_for_criterion(
                 verification_entity_version_id: verification.verification_entity_version_id,
                 verification_result: verification.state.result,
                 evidence_ids,
+                resource_basis,
             });
         }
     }

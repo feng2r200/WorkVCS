@@ -6,12 +6,14 @@ use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, BranchId, CanonicalValue, ChangeOperationSubject, CommitId,
     Engine, EntityId, ErrorCategory, ErrorCode, EventId, EvidenceCreateOptions, EvidenceId,
-    RelationId, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, TaskStatus,
-    TaskTransitionOptions, VerificationCreateCommit, VerificationCreateOptions,
-    VerificationRequirementCreateCommit, VerificationRequirementCreateOptions, VerificationResult,
-    VerificationTarget, WhyDeferredRelationFamily, WhyEntityKind, WhyEvolutionSubjectDetail,
-    WhyQueryOptions, WhyQueryResult, WhyQueryTarget, WhyRelationDirection, WhyRelationEdge,
-    WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo, WorkspaceInitOptions,
+    RelationId, ResourceCreateOptions, ResourceObservationCreateOptions, StoreInitOptions,
+    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionOptions,
+    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, VerifyOptions, VerifyResourceObservationInput, WhyDeferredRelationFamily,
+    WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
+    WhyRelationDirection, WhyRelationEdge, WhyRelationEndpoint, WhyRelationKind, WorkspaceInfo,
+    WorkspaceInitOptions, content_object_digest,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,6 +136,38 @@ fn create_evidence(engine: &mut Engine) -> EvidenceId {
         )
         .expect("create evidence")
         .evidence_id
+}
+
+fn path_scope_payload(path: &str) -> CanonicalValue {
+    CanonicalValue::object(vec![(
+        "path".to_owned(),
+        CanonicalValue::String(path.to_owned()),
+    )])
+    .expect("path scope payload")
+}
+
+fn create_resource_observation_input(
+    engine: &mut Engine,
+    path: &str,
+) -> VerifyResourceObservationInput {
+    let resource = engine
+        .create_resource(ResourceCreateOptions::new("local-file").expect("resource options"))
+        .expect("create resource");
+    let fingerprint = content_object_digest(b"phase4og resource baseline");
+    VerifyResourceObservationInput::new(
+        ResourceObservationCreateOptions::new(
+            resource.resource_id,
+            "local-file",
+            1,
+            fingerprint,
+            path_scope_payload(path),
+        )
+        .expect("resource observation options"),
+        "path",
+        1,
+        path_scope_payload(path),
+    )
+    .expect("resource observation input")
 }
 
 fn create_requirement(
@@ -335,6 +369,7 @@ fn assert_single_vr_backed_verification_closure(
     requirement: &VerificationRequirementCreateCommit,
     verification: &VerificationCreateCommit,
     evidence: EvidenceId,
+    expected_resource_basis: &[VerificationResourceBasis],
 ) {
     assert_eq!(why.verification_closure_chains.len(), 1);
     let chain = &why.verification_closure_chains[0];
@@ -366,6 +401,7 @@ fn assert_single_vr_backed_verification_closure(
     );
     assert_eq!(chain.verification_result, VerificationResult::Passed);
     assert_eq!(chain.evidence_ids, vec![evidence]);
+    assert_eq!(chain.resource_basis.as_slice(), expected_resource_basis);
 }
 
 #[test]
@@ -570,6 +606,7 @@ fn why_reports_vr_backed_verification_closure_from_task_and_criterion_after_task
         &requirement,
         &verification,
         evidence,
+        &[],
     );
     assert_single_vr_backed_verification_closure(
         &criterion_why,
@@ -577,6 +614,89 @@ fn why_reports_vr_backed_verification_closure_from_task_and_criterion_after_task
         &requirement,
         &verification,
         evidence,
+        &[],
+    );
+}
+
+#[test]
+fn why_reports_resource_basis_in_vr_backed_verification_closure_from_task_and_criterion() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let fixture = create_required_criterion(&mut engine, &workspace);
+    let requirement = create_requirement(
+        &mut engine,
+        &workspace,
+        fixture.criterion.commit_id,
+        &fixture.criterion,
+        "VR-1",
+    );
+    let resource_observation =
+        create_resource_observation_input(&mut engine, "/tmp/workvcs-phase4og-resource.txt");
+    let verification_result = engine
+        .verify(
+            VerifyOptions::new(
+                workspace.initial_branch_id,
+                requirement.commit_id,
+                VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+                EvidenceCreateOptions::new(
+                    "command_output",
+                    CanonicalValue::object(Vec::new()).expect("metadata"),
+                )
+                .expect("evidence options"),
+            )
+            .expect("verify options")
+            .with_resource_observation(resource_observation),
+        )
+        .expect("verify resource-backed requirement");
+    let verification = &verification_result.verification;
+    let evidence = verification_result.evidence.evidence_id;
+    let expected_resource_basis = verification.state.resource_basis.clone();
+    let closeout = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                verification.commit_id,
+                fixture.task.task_entity_id,
+                fixture.criterion.task_entity_version_id,
+                TaskStatus::Done,
+            )
+            .expect("task closeout options")
+            .with_outcome("closed")
+            .expect("task outcome"),
+        )
+        .expect("close task");
+
+    let task_why = why_branch_head(
+        &engine,
+        workspace.initial_branch_id,
+        fixture.task.task_entity_id,
+    );
+    let criterion_why = why_branch_head(
+        &engine,
+        workspace.initial_branch_id,
+        fixture.criterion.acceptance_criterion_entity_id,
+    );
+
+    assert_eq!(task_why.target.commit_id, closeout.commit_id);
+    assert_eq!(criterion_why.target.commit_id, closeout.commit_id);
+    assert_single_vr_backed_verification_closure(
+        &task_why,
+        &fixture,
+        &requirement,
+        verification,
+        evidence,
+        &expected_resource_basis,
+    );
+    assert_single_vr_backed_verification_closure(
+        &criterion_why,
+        &fixture,
+        &requirement,
+        verification,
+        evidence,
+        &expected_resource_basis,
     );
 }
 

@@ -7683,7 +7683,7 @@ fn run(cli: Cli) -> Result<String> {
                 result.relation_edges.truncate(relation_limit);
             }
             retain_why_epistemic_explanations_for_relation_edges(&mut result);
-            let mut output = render_why(&result);
+            let mut output = render_why(&result)?;
             if let Some(expected_relation_edges) = expected_relation_edges {
                 let actual_relation_edges = result.relation_edges.len();
                 if actual_relation_edges != expected_relation_edges {
@@ -22529,7 +22529,7 @@ fn render_checkpoint_latest(result: &CheckpointLatestResult) -> String {
     output
 }
 
-fn render_why(result: &WhyQueryResult) -> String {
+fn render_why(result: &WhyQueryResult) -> Result<String> {
     let mut output = String::new();
     match result.target.target {
         WhyQueryTarget::BranchHead(branch_id) => {
@@ -22723,7 +22723,7 @@ fn render_why(result: &WhyQueryResult) -> String {
     )
     .expect("write to String");
     for (index, chain) in result.verification_closure_chains.iter().enumerate() {
-        render_why_verification_closure_chain(&mut output, index, chain);
+        render_why_verification_closure_chain(&mut output, index, chain)?;
     }
     writeln!(
         output,
@@ -22739,7 +22739,7 @@ fn render_why(result: &WhyQueryResult) -> String {
         )
         .expect("write to String");
     }
-    output
+    Ok(output)
 }
 
 fn render_why_evolution_change_operation(
@@ -22816,7 +22816,7 @@ fn render_why_verification_closure_chain(
     output: &mut String,
     index: usize,
     chain: &WhyVerificationClosureChain,
-) {
+) -> Result<()> {
     writeln!(
         output,
         "verification_closure_chain.{index}.acceptance_criterion_entity_id={}",
@@ -22890,6 +22890,66 @@ fn render_why_verification_closure_chain(
         )
         .expect("write to String");
     }
+    writeln!(
+        output,
+        "verification_closure_chain.{index}.resource_basis={}",
+        chain.resource_basis.len()
+    )
+    .expect("write to String");
+    for (basis_index, basis) in chain.resource_basis.iter().enumerate() {
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.resource_basis.{basis_index}.resource_id={}",
+            basis.resource_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.resource_basis.{basis_index}.adapter_kind={}",
+            basis.adapter_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.resource_basis.{basis_index}.adapter_schema_version={}",
+            basis.adapter_schema_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.resource_basis.{basis_index}.scope_kind={}",
+            basis.scope_kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.resource_basis.{basis_index}.scope_schema_version={}",
+            basis.scope_schema_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.resource_basis.{basis_index}.scope_payload_json={}",
+            canonical_cli_json(
+                "why verification closure resource basis scope payload",
+                &basis.scope_payload,
+            )?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.resource_basis.{basis_index}.baseline_observation_id={}",
+            render_optional_display_or_none(basis.baseline_observation_id.as_ref())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "verification_closure_chain.{index}.resource_basis.{basis_index}.baseline_fingerprint={}",
+            basis.baseline_fingerprint
+        )
+        .expect("write to String");
+    }
+    Ok(())
 }
 
 fn render_why_evolution_subject_detail(
@@ -38180,6 +38240,297 @@ mod tests {
             assert_eq!(
                 value(why, "verification_closure_chain.0.evidence.0.evidence_id"),
                 value(&evidence, "evidence_id")
+            );
+        }
+    }
+
+    #[test]
+    fn cli_why_projects_resource_basis_in_vr_backed_verification_closure() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        let scoped_file = tempdir.path().join("resource-input.txt");
+        fs::write(&scoped_file, b"phase4og resource baseline").expect("write scoped file");
+        let scope_path = scoped_file.to_str().expect("scope path text");
+        let expected_scope_payload_json = canonical_cli_json(
+            "expected path scope",
+            &path_scope_value("path", scoped_file.clone()).expect("path scope"),
+        )
+        .expect("scope payload json");
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Close a task with Resource-backed VR evidence",
+        ])
+        .expect("parse task"))
+        .expect("create task");
+        let task_id = value(&task, "task_entity_id");
+        let task_version = value(&task, "task_entity_version_id");
+        head = value(&task, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &task_version,
+            "--local-key",
+            "AC-RESOURCE-WHY",
+            "--statement",
+            "The task closeout why output exposes Resource basis.",
+        ])
+        .expect("parse ac"))
+        .expect("create ac");
+        let criterion_id = value(&criterion, "acceptance_criterion_entity_id");
+        let task_version = value(&criterion, "task_entity_version_id");
+        head = value(&criterion, "commit_id");
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--criterion",
+            &criterion_id,
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-RESOURCE-WHY",
+            "--statement",
+            "The Resource basis is visible from the closeout why query.",
+        ])
+        .expect("parse vr"))
+        .expect("create vr");
+        let requirement_id = value(&requirement, "verification_requirement_entity_id");
+        head = value(&requirement, "commit_id");
+
+        let resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse resource"))
+        .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verify",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification-requirement",
+            &requirement_id,
+            "--result",
+            "passed",
+            "--method",
+            "phase4og",
+            "--evidence-kind",
+            "phase4og-evidence",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--scope-path",
+            scope_path,
+            "--resource-content-from-scope-path",
+            "--expected-branch",
+            &branch,
+            "--expected-head",
+            &head,
+            "--expected-target-kind",
+            "verification_requirement",
+            "--expected-target",
+            &requirement_id,
+            "--expected-result",
+            "passed",
+            "--expected-evidence-kind",
+            "phase4og-evidence",
+            "--expected-evidence-relations",
+            "1",
+            "--expected-resource-basis",
+            "1",
+            "--expected-cache-applicability",
+            "applicable",
+            "--expected-cache-reason-code",
+            "all_basis_applicable",
+        ])
+        .expect("parse verify"))
+        .expect("verify resource-backed requirement");
+        head = value(&verification, "commit_id");
+        assert_eq!(
+            value(&verification, "resource_observation_recorded"),
+            "true"
+        );
+        assert_eq!(value(&verification, "resource_id"), resource_id);
+        assert_eq!(value(&verification, "resource_basis"), "1");
+
+        let closeout = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "transition",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &task_id,
+            "--task-version",
+            &task_version,
+            "--status",
+            "done",
+            "--outcome",
+            "closed",
+        ])
+        .expect("parse closeout"))
+        .expect("closeout task");
+
+        let task_why = run(Cli::try_parse_from([
+            "workvcs", "why", store, "--branch", &branch, "--entity", &task_id,
+        ])
+        .expect("parse task why"))
+        .expect("task why");
+        let criterion_why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            store,
+            "--branch",
+            &branch,
+            "--entity",
+            &criterion_id,
+        ])
+        .expect("parse criterion why"))
+        .expect("criterion why");
+
+        for why in [&task_why, &criterion_why] {
+            assert_eq!(value(why, "commit_id"), value(&closeout, "commit_id"));
+            assert_eq!(value(why, "verification_closure_chains"), "1");
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.acceptance_criterion_entity_id"
+                ),
+                criterion_id
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.verification_requirement_entity_id"
+                ),
+                requirement_id
+            );
+            assert_eq!(
+                value(why, "verification_closure_chain.0.verification_entity_id"),
+                value(&verification, "verification_entity_id")
+            );
+            assert_eq!(
+                value(why, "verification_closure_chain.0.evidence.0.evidence_id"),
+                value(&verification, "evidence_id")
+            );
+            assert_eq!(
+                value(why, "verification_closure_chain.0.resource_basis"),
+                "1"
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.resource_basis.0.resource_id"
+                ),
+                resource_id
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.resource_basis.0.adapter_kind"
+                ),
+                "local-file"
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.resource_basis.0.adapter_schema_version"
+                ),
+                "1"
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.resource_basis.0.scope_kind"
+                ),
+                "path"
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.resource_basis.0.scope_schema_version"
+                ),
+                "1"
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.resource_basis.0.scope_payload_json"
+                ),
+                expected_scope_payload_json
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.resource_basis.0.baseline_observation_id"
+                ),
+                value(&verification, "observation_id")
+            );
+            assert_eq!(
+                value(
+                    why,
+                    "verification_closure_chain.0.resource_basis.0.baseline_fingerprint"
+                ),
+                value(&verification, "resource_fingerprint")
             );
         }
     }

@@ -677,20 +677,12 @@ fn why_verification_closure_chains(
     let mut chains = Vec::new();
     match entity_kind {
         WhyEntityKind::Task => {
-            let task = task_at(connection, resolved.target.commit_id, entity_id)?;
-            for criterion_ref in task.state.acceptance_criteria {
-                let criterion = acceptance_criterion_at(
-                    connection,
-                    resolved.target.commit_id,
-                    criterion_ref.acceptance_criterion_entity_id,
-                )?;
-                push_verification_closure_chains_for_criterion(
-                    connection,
-                    resolved,
-                    &criterion,
-                    &mut chains,
-                )?;
-            }
+            push_verification_closure_chains_for_task(
+                connection,
+                resolved,
+                entity_id,
+                &mut chains,
+            )?;
         }
         WhyEntityKind::AcceptanceCriterion => {
             let criterion =
@@ -702,8 +694,23 @@ fn why_verification_closure_chains(
                 &mut chains,
             )?;
         }
+        WhyEntityKind::Plan => {
+            for relation in primary_containment_relations_at(connection, resolved.target.commit_id)?
+            {
+                if relation.parent_entity_id != entity_id
+                    || relation.child_kind != PrimaryContainmentEndpointKind::Task
+                {
+                    continue;
+                }
+                push_verification_closure_chains_for_task(
+                    connection,
+                    resolved,
+                    relation.child_entity_id,
+                    &mut chains,
+                )?;
+            }
+        }
         WhyEntityKind::Goal
-        | WhyEntityKind::Plan
         | WhyEntityKind::VerificationRequirement
         | WhyEntityKind::Verification
         | WhyEntityKind::Record
@@ -731,6 +738,24 @@ fn why_verification_closure_chains(
             })
     });
     Ok(chains)
+}
+
+fn push_verification_closure_chains_for_task(
+    connection: &StoreConnection,
+    resolved: &ResolvedWhyTargetWithState,
+    task_entity_id: EntityId,
+    chains: &mut Vec<WhyVerificationClosureChain>,
+) -> Result<()> {
+    let task = task_at(connection, resolved.target.commit_id, task_entity_id)?;
+    for criterion_ref in task.state.acceptance_criteria {
+        let criterion = acceptance_criterion_at(
+            connection,
+            resolved.target.commit_id,
+            criterion_ref.acceptance_criterion_entity_id,
+        )?;
+        push_verification_closure_chains_for_criterion(connection, resolved, &criterion, chains)?;
+    }
+    Ok(())
 }
 
 fn push_verification_closure_chains_for_criterion(

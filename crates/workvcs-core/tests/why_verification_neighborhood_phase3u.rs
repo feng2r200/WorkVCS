@@ -6,9 +6,10 @@ use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, BranchId, CanonicalValue, ChangeOperationSubject, CommitId,
     Engine, EntityId, ErrorCategory, ErrorCode, EventId, EvidenceCreateOptions, EvidenceId,
-    RelationId, ResourceCreateOptions, ResourceObservationCreateOptions, StoreInitOptions,
-    TaskCreateCommit, TaskCreateOptions, TaskStatus, TaskTransitionOptions,
-    VerificationCreateCommit, VerificationCreateOptions, VerificationRequirementCreateCommit,
+    PlanCreateCommit, PlanCreateOptions, PrimaryContainmentCreateOptions, RelationId,
+    ResourceCreateOptions, ResourceObservationCreateOptions, StoreInitOptions, TaskCreateCommit,
+    TaskCreateOptions, TaskStatus, TaskTransitionOptions, VerificationCreateCommit,
+    VerificationCreateOptions, VerificationRequirementCreateCommit,
     VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
     VerificationTarget, VerifyOptions, VerifyResourceObservationInput, WhyDeferredRelationFamily,
     WhyEntityKind, WhyEvolutionSubjectDetail, WhyQueryOptions, WhyQueryResult, WhyQueryTarget,
@@ -31,6 +32,11 @@ struct QueryCounts {
 struct CriterionFixture {
     task: TaskCreateCommit,
     criterion: AcceptanceCriterionCreateCommit,
+}
+
+struct PlanCriterionFixture {
+    plan: PlanCreateCommit,
+    criterion: CriterionFixture,
 }
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -123,6 +129,63 @@ fn create_required_criterion(engine: &mut Engine, workspace: &WorkspaceInfo) -> 
         )
         .expect("create acceptance criterion");
     CriterionFixture { task, criterion }
+}
+
+fn create_plan_contained_required_criterion(
+    engine: &mut Engine,
+    workspace: &WorkspaceInfo,
+) -> PlanCriterionFixture {
+    let plan = engine
+        .create_plan(
+            PlanCreateOptions::new(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Coordinate verified why behavior",
+                "Keep direct Task closeout evidence visible from the Plan.",
+            )
+            .expect("plan options"),
+        )
+        .expect("create plan");
+    let task = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                plan.commit_id,
+                "Implement verified why behavior",
+            )
+            .expect("task options"),
+        )
+        .expect("create task");
+    let containment = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                workspace.initial_branch_id,
+                task.commit_id,
+                plan.plan_entity_id,
+                task.task_entity_id,
+            )
+            .expect("containment options"),
+        )
+        .expect("contain plan task");
+    let criterion = engine
+        .create_acceptance_criterion(
+            AcceptanceCriterionCreateOptions::new(
+                workspace.initial_branch_id,
+                containment.commit_id,
+                task.task_entity_id,
+                task.task_entity_version_id,
+                "AC-1",
+                "The why query explains verification judgments.",
+                AcceptanceCriterionClassification::Required,
+            )
+            .expect("criterion options"),
+        )
+        .expect("create acceptance criterion");
+
+    PlanCriterionFixture {
+        plan,
+        criterion: CriterionFixture { task, criterion },
+    }
 }
 
 fn create_evidence(engine: &mut Engine) -> EvidenceId {
@@ -698,6 +761,92 @@ fn why_reports_resource_basis_in_vr_backed_verification_closure_from_task_and_cr
         evidence,
         &expected_resource_basis,
     );
+}
+
+#[test]
+fn why_reports_resource_basis_in_vr_backed_verification_closure_from_direct_plan_task() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let fixture = create_plan_contained_required_criterion(&mut engine, &workspace);
+    let requirement = create_requirement(
+        &mut engine,
+        &workspace,
+        fixture.criterion.criterion.commit_id,
+        &fixture.criterion.criterion,
+        "VR-1",
+    );
+    let resource_observation =
+        create_resource_observation_input(&mut engine, "/tmp/workvcs-phase4ok-plan-resource.txt");
+    let verification_result = engine
+        .verify(
+            VerifyOptions::new(
+                workspace.initial_branch_id,
+                requirement.commit_id,
+                VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+                EvidenceCreateOptions::new(
+                    "command_output",
+                    CanonicalValue::object(Vec::new()).expect("metadata"),
+                )
+                .expect("evidence options"),
+            )
+            .expect("verify options")
+            .with_resource_observation(resource_observation),
+        )
+        .expect("verify resource-backed requirement");
+    let verification = &verification_result.verification;
+    let evidence = verification_result.evidence.evidence_id;
+    let expected_resource_basis = verification.state.resource_basis.clone();
+    let closeout = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                verification.commit_id,
+                fixture.criterion.task.task_entity_id,
+                fixture.criterion.criterion.task_entity_version_id,
+                TaskStatus::Done,
+            )
+            .expect("task closeout options")
+            .with_outcome("closed")
+            .expect("task outcome"),
+        )
+        .expect("close task");
+
+    let plan_why = why_branch_head(
+        &engine,
+        workspace.initial_branch_id,
+        fixture.plan.plan_entity_id,
+    );
+    let task_why = why_branch_head(
+        &engine,
+        workspace.initial_branch_id,
+        fixture.criterion.task.task_entity_id,
+    );
+    let criterion_why = why_branch_head(
+        &engine,
+        workspace.initial_branch_id,
+        fixture.criterion.criterion.acceptance_criterion_entity_id,
+    );
+
+    assert_eq!(plan_why.target.commit_id, closeout.commit_id);
+    assert_entity_subject(
+        &plan_why,
+        fixture.plan.plan_entity_id,
+        fixture.plan.plan_entity_version_id,
+        WhyEntityKind::Plan,
+    );
+    for why in [&plan_why, &task_why, &criterion_why] {
+        assert_single_vr_backed_verification_closure(
+            why,
+            &fixture.criterion,
+            &requirement,
+            verification,
+            evidence,
+            &expected_resource_basis,
+        );
+    }
 }
 
 #[test]

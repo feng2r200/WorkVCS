@@ -38245,7 +38245,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_why_projects_resource_basis_in_vr_backed_verification_closure() {
+    fn cli_why_projects_phase4ok_plan_direct_task_resource_closure() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -38276,6 +38276,25 @@ mod tests {
         let branch = value(&workspace, "branch_id");
         let mut head = value(&workspace, "genesis_commit_id");
 
+        let plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Coordinate Resource-backed VR evidence",
+            "--strategy",
+            "Keep direct Task closeout evidence visible from the Plan.",
+        ])
+        .expect("parse plan"))
+        .expect("create plan");
+        let plan_id = value(&plan, "plan_entity_id");
+        head = value(&plan, "commit_id");
+
         let task = run(Cli::try_parse_from([
             "workvcs",
             "task",
@@ -38293,6 +38312,14 @@ mod tests {
         let task_id = value(&task, "task_entity_id");
         let task_version = value(&task, "task_entity_version_id");
         head = value(&task, "commit_id");
+
+        let plan_to_task = run(Cli::try_parse_from([
+            "workvcs", "task", "contain", store, "--branch", &branch, "--head", &head, "--parent",
+            &plan_id, "--child", &task_id,
+        ])
+        .expect("parse plan to task containment"))
+        .expect("contain plan task");
+        head = value(&plan_to_task, "commit_id");
 
         let criterion = run(Cli::try_parse_from([
             "workvcs",
@@ -38446,8 +38473,13 @@ mod tests {
         ])
         .expect("parse criterion why"))
         .expect("criterion why");
+        let plan_why = run(Cli::try_parse_from([
+            "workvcs", "why", store, "--branch", &branch, "--entity", &plan_id,
+        ])
+        .expect("parse plan why"))
+        .expect("plan why");
 
-        for why in [&task_why, &criterion_why] {
+        for why in [&task_why, &criterion_why, &plan_why] {
             assert_eq!(value(why, "commit_id"), value(&closeout, "commit_id"));
             assert_eq!(value(why, "verification_closure_chains"), "1");
             assert_eq!(

@@ -1,16 +1,16 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-03 by ADR-0494 / Phase 4OG
+Last refreshed: 2026-09-04 by Phase 4OI / Phase 4OH evidence refresh
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
 specification and does not replace the confirmed product, architecture, schema,
 or accepted ADR authorities.
 
-The source-state basis at the start of Phase 4OG was main commit
-`f583254434dcc68c303261820d2f803d4b721f04` and the V1 readiness ledger last
-refreshed by ADR-0493 / Phase 4OE. Historical governance Plans and logs are
+The source-state basis at the start of Phase 4OI was main commit
+`7845b16dbef5abcbe6914cb8c5f7d82552b0ed56` and the V1 readiness ledger last
+refreshed by ADR-0494 / Phase 4OG. Historical governance Plans and logs are
 treated only as provenance unless their conclusions are reflected in current
 project documents or current validation evidence.
 
@@ -46,7 +46,10 @@ Session focus-set unsupported-kind fail-fast for current but unsupported
 Verification Requirement focus entities, plus current Task and Acceptance
 Criterion `why` closure chains that list the AC, VR, Verification, result, and
 Evidence ids for VR-backed Task closeout explanation, plus Resource basis
-fields inside those same closure chains for Resource-backed closeout recovery.
+fields inside those same closure chains for Resource-backed closeout recovery,
+plus Phase 4OH read-only proof that those `why`-visible Resource basis fields
+support basis-aware closeout recovery without a separate `verification show`
+lookup.
 It does not close the
 remaining full relation-subject traversal beyond direct endpoint slices,
 multi-hop/full evolution traversal, broader context/Resource resolver, broader
@@ -96,6 +99,44 @@ Priority candidates:
    from the exact candidate commit and obtain explicit release authorization.
 4. Refresh this matrix after each blocking gate changes status and before any
    release-ready or release-candidate claim.
+
+## Phase 4OI / Phase 4OH Evidence Refresh
+
+Phase 4OI refreshes this matrix after the read-only Phase 4OH public CLI probe.
+The probe tested the existing Phase 4OG Resource-backed Task and Acceptance
+Criterion `why` closure path without changing code, schema, CLI flags,
+ContextPacket behavior, Verification semantics, Resource observation,
+applicability, cache-refresh behavior, Task closeout semantics, tests, or ADR
+authority.
+
+The probe at
+`/tmp/workvcs-4oh-recovery-from-why-probe-20260904T011704Z` proves
+`probe_execution_status=PASS`, `probe_result=RECOVERY_SUPPORTED`,
+`commands_exit_failures=0`, `failed_assertions=0`,
+`critical_failure=none`, `task_show_done=true`,
+`ac_status_before_closeout=verified`, `ac_status_after_closeout=stale`,
+`task_why_verification_id_present=true`,
+`ac_why_verification_id_present=true`,
+`task_ac_why_same_verification_id=true`, `task_why_resource_basis=true`,
+`ac_why_resource_basis=true`, `task_why_basis_matches_verification=true`,
+`ac_why_basis_matches_verification=true`,
+`cache_refresh_from_why_id=true`, `post_refresh_ac_status=verified`, and
+`post_refresh_ac_status_verified=true`.
+
+This evidence strengthens the operator-recovery reading of Phase 4OG: after
+Resource-backed Task closeout makes the Acceptance Criterion stale, the
+operator can recover using the Verification id and Resource basis surfaced by
+Task/Acceptance Criterion `why`, without a separate `verification show` lookup.
+No implementation gap was found for this narrow path.
+
+The Context resolver, packets, and `why` explanations gate remains `Partial`.
+The Operator discoverability and actionable recovery gate remains `Pass`.
+Phase 4OH does not close broader context/Resource resolver maturity, full
+relation-subject traversal beyond direct endpoint slices and the current
+Task/Acceptance Criterion closure projection, multi-hop/full evolution
+traversal, broader causal traversal, or release-candidate validation. The
+overall release decision remains false because other blocking gates remain
+`Partial` or `Blocked`.
 
 ## Phase 4OG Update
 

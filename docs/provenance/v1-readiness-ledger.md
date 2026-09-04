@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-03 by ADR-0494 / Phase 4OG
+Last refreshed: 2026-09-04 by Phase 4OI / Phase 4OH evidence refresh
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -15,6 +15,9 @@ Release-maturity judgment is tracked in
 [`v1-release-gate-matrix.md`](v1-release-gate-matrix.md). The current matrix
 records `V1_RELEASE_READY=false` and `V0_1_DOGFOOD_COMPLETE=false`.
 `RELEASE_CANDIDATE_ALLOWED=false` remains recorded in the release gate matrix.
+Phase 4OI adds no new release-state claim; it records the read-only Phase 4OH
+recovery probe as current provenance for the already implemented Phase 4OG
+Resource-backed `why` closure path.
 
 ## Classification
 
@@ -607,6 +610,18 @@ The following remain beyond V1 even if they would make dogfood easier:
   endpoint slices, multi-hop/full evolution traversal, broader causal
   traversal, and broader context/Resource resolver maturity remain open, so
   the release state remains false.
+  Phase 4OH is a read-only follow-up probe for that same Resource-backed
+  closeout path. The probe at
+  `/tmp/workvcs-4oh-recovery-from-why-probe-20260904T011704Z` proves
+  `probe_execution_status=PASS`, `probe_result=RECOVERY_SUPPORTED`,
+  `commands_exit_failures=0`, `failed_assertions=0`,
+  `task_why_verification_id_present=true`,
+  `ac_why_verification_id_present=true`, `task_why_resource_basis=true`,
+  `ac_why_resource_basis=true`, `task_why_basis_matches_verification=true`,
+  `ac_why_basis_matches_verification=true`,
+  `cache_refresh_from_why_id=true`, and `post_refresh_ac_status=verified`.
+  The probe found no new implementation gap and did not change code, schema,
+  CLI flags, tests, ADR authority, or release state.
   Phase 4NN narrows a concrete brief ContextPacket Resource recovery gap.
   Pre-change public CLI context output showed the current
   `verification_requirement` item for a Resource-backed VR but omitted the

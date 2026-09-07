@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-07 by Phase 4PC candidate validation governance refresh
+Last refreshed: 2026-09-07 by Phase 4PD local release-ready judgment
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -13,15 +13,17 @@ expectation-only work.
 
 Release-maturity judgment is tracked in
 [`v1-release-gate-matrix.md`](v1-release-gate-matrix.md). The current matrix
-records `V1_RELEASE_READY=false`, `V0_1_DOGFOOD_COMPLETE=true`, and
+records `V1_RELEASE_READY=true`, `V0_1_DOGFOOD_COMPLETE=true`, and
 `RELEASE_CANDIDATE_ALLOWED=true`. Phase 4PA records the current
 user-authorized scope decision that deeper nested, multi-hop, and broader
-Context/Resource/why traversal are deferred post-V1. Phase 4PB then validates
+Context/Resource/why traversal are deferred post-V1. Phase 4PB validates
 candidate commit `5f12ebd4386377bfeba5998c146b36fe5d3c4b67` with a complete
-local matrix, and Phase 4PC records that result after independent review.
-`V1_RELEASE_READY` remains false until an explicit release-ready judgment is
-authorized; release, tag, push, deploy, remote, production, and credential
-operations remain outside the current authority.
+local matrix, Phase 4PC records that result after independent review, and Phase
+4PD records the explicitly authorized local release-ready judgment. Release,
+tag, push, deploy, remote, production, and credential operations remain outside
+the current authority.
+Release/tag/push/deploy/remote/production/credential operations remain
+separate external-authority actions.
 
 ## Classification
 
@@ -64,11 +66,10 @@ not complete.
 Use this queue when selecting the next local implementation slice unless a
 current user request supplies a narrower priority.
 
-1. If explicitly authorized, run a release-ready judgment slice from the
-   validated candidate commit; do not perform release, tag, push, deploy,
-   remote, production, or credential operations without separate authorization.
-2. Keep the validated local candidate evidence as the bounded V1 regression
-   foundation.
+1. Keep the validated local candidate evidence and Phase 4PD local
+   release-ready judgment as the bounded V1 regression foundation.
+2. Release, tag, push, deploy, remote, production, and credential operations
+   still require separate explicit authorization.
 3. Expand `context`, Resource recovery, or `why` traversal only when a future
    post-V1 route or concrete dogfood continuation reopens that scope; do not
    add deeper nested, multi-hop, broader traversal, or more explanation fields
@@ -102,6 +103,19 @@ The following remain beyond V1 even if they would make dogfood easier:
 
 ## Evidence Snapshot
 
+- Phase 4PD records the explicitly authorized local release-ready judgment for
+  current main commit `5b91a9d2f3858ba973f82659475e80fafb1359de`. The judgment
+  basis at `/tmp/workvcs-4pd-release-ready-judgment-20260907T072517Z/evidence`
+  proves the current HEAD is the Phase 4PC governance commit whose parent is
+  the fully validated candidate commit
+  `5f12ebd4386377bfeba5998c146b36fe5d3c4b67`; the only diff from that
+  candidate is `docs/provenance/v1-readiness-ledger.md` and
+  `docs/provenance/v1-release-gate-matrix.md`; the current gate matrix has 13
+  rows, `gate_non_pass_no_rows=0`, and Phase 4PD independent review records
+  `blocking_findings=0`. This supports `V1_RELEASE_READY=true`,
+  `V0_1_DOGFOOD_COMPLETE=true`, and `RELEASE_CANDIDATE_ALLOWED=true` for local
+  V1 release maturity, but it does not authorize release, tag, push, deploy,
+  remote, production, or credential operations.
 - Phase 4PB validates candidate commit
   `5f12ebd4386377bfeba5998c146b36fe5d3c4b67` with the complete local candidate
   matrix at

@@ -1,7 +1,7 @@
 # V1 Release Gate Matrix
 
 Status: current release-maturity gate matrix
-Last refreshed: 2026-09-07 by Phase 4PC candidate validation governance refresh
+Last refreshed: 2026-09-07 by Phase 4PD local release-ready judgment
 
 This matrix is an evidence map for deciding whether the local Rust V0.1
 implementation can support a V1 release-maturity claim. It is not a product
@@ -18,18 +18,18 @@ evidence.
 
 ## Current Decision
 
-- `V1_RELEASE_READY=false` until an explicit release-ready judgment is
-  authorized.
+- `V1_RELEASE_READY=true`
 - `V0_1_DOGFOOD_COMPLETE=true`
 - `RELEASE_CANDIDATE_ALLOWED=true` for local candidate commit
-  `5f12ebd4386377bfeba5998c146b36fe5d3c4b67`; this is not authorization for
-  release, tag, push, deploy, remote, production, or credential operations.
+  `5f12ebd4386377bfeba5998c146b36fe5d3c4b67` plus the Phase 4PC/4PD governance
+  refresh commits; this is not authorization for release, tag, push, deploy,
+  remote, production, or credential operations.
 
 Phase 4PA records a current user-authorized release-scope decision: V1 local release maturity is bounded to deterministic local workflows already evidenced in current docs through Phase 4OY. Deeper nested Plan traversal beyond the currently evidenced two-level Plan target boundary, multi-hop structural references, broader Context/Resource/why traversal, full relation-subject traversal, multi-hop/full evolution traversal, and broader causal traversal are deferred post-V1 unless a later explicit scope decision reopens them.
 
-This changes the Context resolver, packets, and `why` explanations gate from `Partial` / `Blocks V1 release=Yes` to `Pass` / `Blocks V1 release=No` for the bounded V1-local release scope. It does not change code, schema, packet schema, public CLI flags, ADR semantics, release state, or candidate validation status.
+Phase 4PA changed the Context resolver, packets, and `why` explanations gate from `Partial` / `Blocks V1 release=Yes` to `Pass` / `Blocks V1 release=No` for the bounded V1-local release scope without changing code, schema, packet schema, public CLI flags, or ADR semantics.
 
-Phase 4PB completed candidate validation from exact commit `5f12ebd4386377bfeba5998c146b36fe5d3c4b67`, and Phase 4PC records the independently reviewed result. Candidate release operation no longer blocks the bounded V1-local release-maturity gate, but any release-ready judgment and any release, tag, push, deploy, remote, production, or credential operation still require explicit authorization.
+Phase 4PB completed candidate validation from exact commit `5f12ebd4386377bfeba5998c146b36fe5d3c4b67`, Phase 4PC records the independently reviewed result, and Phase 4PD records the explicitly authorized local release-ready judgment. Candidate release operation no longer blocks the bounded V1-local release-maturity gate, but any release, tag, push, deploy, remote, production, or credential operation still requires separate explicit authorization.
 
 ## Gate States
 
@@ -56,7 +56,7 @@ Phase 4PB completed candidate validation from exact commit `5f12ebd4386377bfeba5
 | Merge lifecycle and conflict recovery | Divergent Work Branch resolution, freeze/continue/abort/restart recovery, and final WorkState proof hold in realistic write-mode external-project work. | Phase 4LN and Phase 4MM prove merge behavior in durable local Stores, including larger conflict sets and two-parent merge commits. Phase 4MT adds generated external local Git project write-mode merge proof. Phase 4MU repeats merge against pre-existing real `agent_soul` project content cloned into a write-mode sandbox with an actual Git conflict on existing `README.md`, WorkVCS conflict and auto merge items, unresolved freeze guard, explicit source-side resolutions, freeze/continue, a two-parent WorkVCS merge commit, final WorkState proof, Branch diff, SessionDiff closeout, original-project unchanged proof, and required-valid integrity/doctor. | Pass | No | Keep as regression foundation; semantic/LLM merge, remote or distributed merge, cross-Store synchronization, Agent orchestration, and direct mutation of an original external repository remain outside the bounded V1-local release gate unless separately authorized. |
 | Operator discoverability and actionable recovery | Operators and scripts can identify failures, choose recovery, and parse error output without source inspection. | Phase 4LZ, Phase 4MJ, Phase 4MK, and Phase 4MO cover stable key-value and JSON error output plus per-code recovery guidance for current error codes. Phase 4NF makes the maintained Store portability validator's successful preserved `run.log` self-contained by appending the final stdout summary to the log tail, proving stdout/log-tail equality in a real opt-in run. Phase 4NI adds a local recovery maturity matrix proving guide coverage for all 41 core business error codes plus `cli_parse_error`, the retryability rule, parse-error JSON recovery, branch-head retry, Resource drift/unavailable/error recovery to applicable, stale-gated Claim takeover, merge unresolved recovery, and final Store integrity. Phase 4NN exposes Resource-backed VR basis-aware cache-refresh hints directly in brief current-task context. Phase 4NP exposes the same recovery path in focused `blocked_dependency` context for blocking prerequisite Tasks. Phase 4NU exposes the same recovery command in normal/full context for runnable same-Plan peer Tasks while keeping brief context focused. Phase 4NZ exposes the same recovery command in normal/full context for runnable same-Goal cross-Plan peer Tasks while keeping brief context focused. Phase 4OP proves Plan-focused context and focused `claim next --context-profile full` already expose the same basis-aware recovery command for a directly contained runnable Task. Phase 4OQ proves Goal-focused context and focused `claim next --context-profile full` already expose the same command for a direct Goal-to-Plan-to-Task Resource-backed VR path. Phase 4OR proves the same command remains visible for two direct Goal child Plans with two runnable Resource-backed Tasks and for the selected target after focused `claim next --context-profile full`. Phase 4OS proves the same command remains visible through one nested SubPlan from parent Plan-focused and Goal-focused context and for the selected nested Task after focused `claim next --context-profile full`. Phase 4OT proves the same command remains visible for a different-Goal prerequisite Task through the focused dependent Task's `blocked_dependency` item and through an unfocused `claim next` on the runnable prerequisite. Phase 4OU exposes the same basis-aware recovery command in normal/full context for direct Plan/Goal structural references to Resource-backed Tasks. Phase 4OV exposes the same basis-aware recovery command in normal/full context for direct Plan/Goal structural references to Plans with direct child Resource-backed Tasks. Phase 4OW exposes the same basis-aware recovery command in normal/full context for direct Plan/Goal structural references to Plans whose one-level child Plans directly contain Resource-backed Tasks. Phase 4NQ exposes Task scheduling relation endpoint IDs and direct create operation detail through existing `why` key-value fields and expected-count flags. Phase 4NR exposes primary containment direct create operation detail through existing `why` relation and evolution key-value fields for Goal, Plan, and Task endpoints. Phase 4NV exposes defining `verifies` relation endpoint IDs and direct `verification.record` operation detail through existing `why` key-value fields and expected-count flags for Verification, Acceptance Criterion, and Verification Requirement endpoints. Phase 4NW exposes Evidence-backed `evidenced_by` relation endpoint IDs and direct `verification.record` operation detail through existing `why` key-value fields and expected-count flags for queried Verification endpoints. Phase 4NX exposes incoming Evidence-backed `evidenced_by` relation endpoint IDs and direct `verification.record` operation detail through existing `why` key-value fields and expected-count flags for queried Evidence endpoints. Phase 4NY exposes `knowledge_exposure_derived_from` relation endpoint IDs and direct `knowledge.relation.create` operation detail through existing `why` key-value fields and expected-count flags for queried Knowledge and KnowledgeExposure endpoints. Phase 4OE exposes Task closeout AC -> VR -> Verification -> Evidence closure ids directly in Task and Acceptance Criterion `why`, reducing repeated manual endpoint queries for that closeout path. Phase 4OG exposes Resource basis fields inside those same closure chains, reducing the Resource-backed closeout recovery hop to `verification show`. Phase 4OK exposes the same Resource-backed closure fields from Plan `why` for directly contained Tasks, reducing a Plan-level closeout recovery hop to Task, Acceptance Criterion, or Verification detail; dogfood proves cache refresh works from the Plan-discovered Verification id. | Pass | No | Keep as regression foundation; reduce command friction only where future dogfood exposes repeated workflow blockage. |
 | Larger Store and performance evidence | Candidate release behavior is bounded by workload evidence that is larger and more varied than smoke, with integrity/doctor proof. | Phase 4LQ validates portability on a bounded larger Store; Phase 4MM validates a larger merge-path Store; Phase 4NE validates a larger maintained Store with five cycles, 112 final Tasks, 20 Verifications, 80 script-counted scheduling relation versions, five same-target applies, 647 final payload files, 1,817 final payload references, and source/target required-valid integrity/doctor in 331 seconds. | Pass | No | Keep as bounded regression evidence; do not design indexes or claim general performance maturity without future workload-specific profiling. |
-| Candidate release operation | A named candidate commit has a fresh full validation matrix, clean git state, current governance status, and a refreshed release gate matrix; any release/tag/push/deploy action remains separately authorized before execution. | Phase 4PB validates candidate commit `5f12ebd4386377bfeba5998c146b36fe5d3c4b67` with the complete local candidate matrix: schema, docs gate consistency, clean Git, workctl status, `cargo fmt`, `cargo clippy`, workspace tests, smoke, larger Store, maintained Store, operator recovery, Phase 4OM recovery probe, and Phase 4OX two-level nested Plan target probe all pass. Phase 4PC independent review records `blocking_findings=0`. Release, tag, push, deploy, remote, production, and credential actions remain outside current authority. | Pass | No | Keep `V1_RELEASE_READY=false` until an explicit release-ready judgment is authorized. Do not perform release, tag, push, deploy, remote, production, or credential operations without separate authorization. |
+| Candidate release operation | A named candidate commit has a fresh full validation matrix, clean git state, current governance status, and a refreshed release gate matrix; any release/tag/push/deploy action remains separately authorized before execution. | Phase 4PB validates candidate commit `5f12ebd4386377bfeba5998c146b36fe5d3c4b67` with the complete local candidate matrix: schema, docs gate consistency, clean Git, workctl status, `cargo fmt`, `cargo clippy`, workspace tests, smoke, larger Store, maintained Store, operator recovery, Phase 4OM recovery probe, and Phase 4OX two-level nested Plan target probe all pass. Phase 4PC independent review records `blocking_findings=0`; Phase 4PD confirms current HEAD only adds validated governance docs and records the local release-ready judgment. Release, tag, push, deploy, remote, production, and credential actions remain outside current authority. | Pass | No | No local V1 release-maturity blocker remains. Do not perform release, tag, push, deploy, remote, production, or credential operations without separate authorization. |
 
 ## Next Highest-Value Work
 
@@ -66,15 +66,40 @@ over speculative broadening.
 
 Priority candidates:
 
-1. If explicitly authorized, run a release-ready judgment slice from candidate
-   commit `5f12ebd4386377bfeba5998c146b36fe5d3c4b67`; do not perform release,
-   tag, push, deploy, remote, production, or credential operations without
-   separate authorization.
+1. Perform release, tag, push, deploy, remote, production, or credential
+   operations only with separate explicit authorization.
 2. Expand context/Resource resolver or `why` behavior only when a future
    post-V1 route or concrete dogfood continuation exposes a causal, evolution,
    broader explanation, or traversal gap.
 3. Reduce command friction only where future dogfood exposes repeated workflow
    blockage.
+
+## Phase 4PD Update
+
+Phase 4PD records the explicitly authorized local release-ready judgment for
+current main commit `5b91a9d2f3858ba973f82659475e80fafb1359de`.
+
+The judgment basis at
+`/tmp/workvcs-4pd-release-ready-judgment-20260907T072517Z/evidence` records
+`release_ready_judgment_allowed=true`, `gate_rows=13`,
+`gate_non_pass_no_rows=0`, `candidate_validation_13_13=true`,
+`four_pc_validated_governance_delta=true`,
+`diff_from_candidate_only_governance_docs=true`, and
+`head_parent_is_validated_candidate=true`. The Phase 4PD independent review
+records `blocking_findings=0` and allows the governance-only update to
+`V1_RELEASE_READY=true`.
+
+The release decision after Phase 4PD is:
+
+```text
+V1_RELEASE_READY=true
+V0_1_DOGFOOD_COMPLETE=true
+RELEASE_CANDIDATE_ALLOWED=true
+```
+
+`V1_RELEASE_READY=true` means the bounded local V1 release-maturity gate is
+satisfied by current evidence. It does not authorize release, tag, push, deploy,
+remote, production, or credential operations.
 
 ## Phase 4PC Update
 

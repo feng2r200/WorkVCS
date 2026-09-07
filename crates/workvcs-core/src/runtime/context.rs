@@ -9,9 +9,10 @@ use crate::history::{
     KnowledgeStatus, PlanSnapshot, PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
     RecordKind, RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordListOptions, RecordListResult, RecordRelationListOptions, RecordRelationListResult,
-    RecordRelationSnapshot, RecordSnapshot, RecordStatus, TaskSnapshot,
-    VerificationRequirementSnapshot, VerificationSnapshot, VerificationTarget, WhyQueryOptions,
-    WhyQueryTarget, WhyRelationEdge, WhyRelationKind,
+    RecordRelationSnapshot, RecordSnapshot, RecordStatus, StructuralReferenceEndpointKind,
+    StructuralReferenceSnapshot, TaskSnapshot, VerificationRequirementSnapshot,
+    VerificationSnapshot, VerificationTarget, WhyQueryOptions, WhyQueryTarget, WhyRelationEdge,
+    WhyRelationKind,
 };
 use crate::identity::{
     BranchId, ChangeSetId, CommitId, ContextPacketId, Digest, EntityId, RelationId, SessionId,
@@ -464,6 +465,7 @@ pub struct ContextOverview {
     pub plans: Vec<PlanSnapshot>,
     pub goals: Vec<GoalSnapshot>,
     pub primary_containment_relations: Vec<PrimaryContainmentSnapshot>,
+    pub structural_references: Vec<StructuralReferenceSnapshot>,
     pub acceptance_criteria: Vec<ContextAcceptanceCriterionSnapshot>,
     pub verification_requirements: Vec<VerificationRequirementSnapshot>,
     pub knowledge: KnowledgeListResult,
@@ -571,6 +573,17 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let structural_references =
+        history::structural_references_at(connection, branch.head_commit_id)?;
+    if structural_references.iter().any(|reference| {
+        reference.workspace_id != active_workspace_id
+            || reference.commit_id != branch.head_commit_id
+    }) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} structural reference context anchor changed while resolving overview",
+            options.session_id()
+        )));
+    }
     let acceptance_criteria = context_acceptance_criteria(
         connection,
         branch.head_commit_id,
@@ -652,6 +665,7 @@ pub(crate) fn context_overview(
         plans,
         goals,
         primary_containment_relations,
+        structural_references,
         acceptance_criteria,
         verification_requirements,
         knowledge,
@@ -1625,6 +1639,13 @@ fn collect_context_items(
         &primary_parent_by_child,
         &resource_requirement_indexes,
     )?;
+    push_focused_structural_reference_resource_requirement_context_items(
+        &mut items,
+        context,
+        profile,
+        &tasks_by_id,
+        &resource_requirement_indexes,
+    )?;
     for relation in &context.knowledge_relations.relations {
         push_context_item(
             &mut items,
@@ -1835,7 +1856,7 @@ fn push_focused_peer_resource_requirement_context_items(
         }
         let peer_plan_id = peer_parent.parent_entity_id;
         let peer_context = if peer_plan_id == focused_plan_id {
-            FocusedPeerResourceContext::SamePlan {
+            TaskResourceRequirementContext::SamePlan {
                 parent_plan_id: focused_plan_id,
             }
         } else if let Some(parent_goal_id) = focused_goal_id {
@@ -1844,7 +1865,7 @@ fn push_focused_peer_resource_requirement_context_items(
             {
                 continue;
             }
-            FocusedPeerResourceContext::SameGoal {
+            TaskResourceRequirementContext::SameGoal {
                 parent_goal_id,
                 focused_plan_id,
                 peer_plan_id,
@@ -1863,8 +1884,73 @@ fn push_focused_peer_resource_requirement_context_items(
     Ok(())
 }
 
+fn push_focused_structural_reference_resource_requirement_context_items(
+    items: &mut Vec<ContextItem>,
+    context: &ContextOverview,
+    profile: ContextProfile,
+    tasks_by_id: &BTreeMap<EntityId, &TaskSnapshot>,
+    resource_requirement_indexes: &ResourceRequirementContextIndexes<'_>,
+) -> Result<()> {
+    if profile == ContextProfile::Brief {
+        return Ok(());
+    }
+    let Some(focus) = &context.session.focus else {
+        return Ok(());
+    };
+    let focused_entity_id = focus.focus_entity_id;
+    let referrer_kind = if context
+        .plans
+        .iter()
+        .any(|plan| plan.plan_entity_id == focused_entity_id)
+    {
+        StructuralReferenceEndpointKind::Plan
+    } else if context
+        .goals
+        .iter()
+        .any(|goal| goal.goal_entity_id == focused_entity_id)
+    {
+        StructuralReferenceEndpointKind::Goal
+    } else {
+        return Ok(());
+    };
+
+    let mut references = context
+        .structural_references
+        .iter()
+        .filter(|reference| {
+            reference.referrer_entity_id == focused_entity_id
+                && reference.referrer_kind == referrer_kind
+                && reference.target_kind == StructuralReferenceEndpointKind::Task
+        })
+        .collect::<Vec<_>>();
+    references.sort_by_key(|reference| reference.relation_id);
+
+    for reference in references {
+        let referenced_task = tasks_by_id
+            .get(&reference.target_entity_id)
+            .ok_or_else(|| {
+                WorkVcsError::TaskInvalid(format!(
+                    "structural reference {} targets missing task {}",
+                    reference.relation_id, reference.target_entity_id
+                ))
+            })?;
+        push_task_resource_requirement_context_items(
+            items,
+            referenced_task,
+            TaskResourceRequirementContext::StructuralReference {
+                relation_id: reference.relation_id,
+                referrer_entity_id: focused_entity_id,
+                referrer_kind,
+            },
+            profile,
+            resource_requirement_indexes,
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
-enum FocusedPeerResourceContext {
+enum TaskResourceRequirementContext {
     SamePlan {
         parent_plan_id: EntityId,
     },
@@ -1873,9 +1959,14 @@ enum FocusedPeerResourceContext {
         focused_plan_id: EntityId,
         peer_plan_id: EntityId,
     },
+    StructuralReference {
+        relation_id: RelationId,
+        referrer_entity_id: EntityId,
+        referrer_kind: StructuralReferenceEndpointKind,
+    },
 }
 
-impl FocusedPeerResourceContext {
+impl TaskResourceRequirementContext {
     fn summary_prefix(self, peer_task_id: EntityId) -> String {
         match self {
             Self::SamePlan { parent_plan_id } => {
@@ -1888,6 +1979,20 @@ impl FocusedPeerResourceContext {
             } => format!(
                 "same_goal_peer_task={peer_task_id} parent_goal={parent_goal_id} focused_plan={focused_plan_id} peer_plan={peer_plan_id}"
             ),
+            Self::StructuralReference {
+                relation_id,
+                referrer_entity_id,
+                referrer_kind,
+            } => format!(
+                "structural_reference_task={peer_task_id} referrer={referrer_entity_id} referrer_kind={referrer_kind} relation_id={relation_id}"
+            ),
+        }
+    }
+
+    fn relevance_marker(self) -> &'static str {
+        match self {
+            Self::SamePlan { .. } | Self::SameGoal { .. } => "peer_runnable=true",
+            Self::StructuralReference { .. } => "reference_direct=true",
         }
     }
 }
@@ -1901,7 +2006,7 @@ struct ResourceRequirementContextIndexes<'a> {
 fn push_task_resource_requirement_context_items(
     items: &mut Vec<ContextItem>,
     peer_task: &TaskSnapshot,
-    peer_context: FocusedPeerResourceContext,
+    task_context: TaskResourceRequirementContext,
     profile: ContextProfile,
     resource_requirement_indexes: &ResourceRequirementContextIndexes<'_>,
 ) -> Result<()> {
@@ -1961,8 +2066,9 @@ fn push_task_resource_requirement_context_items(
                         .verification_requirement_entity_id,
                 },
                 format!(
-                    "{} peer_runnable=true criterion={} local_key={}: {} {}",
-                    peer_context.summary_prefix(peer_task.task_entity_id),
+                    "{} {} criterion={} local_key={}: {} {}",
+                    task_context.summary_prefix(peer_task.task_entity_id),
+                    task_context.relevance_marker(),
                     requirement.acceptance_criterion_entity_id,
                     requirement.local_key,
                     requirement.state.statement,

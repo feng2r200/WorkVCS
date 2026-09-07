@@ -8,11 +8,11 @@ use workvcs_core::{
     KnowledgeCreateOptions, PlanCreateOptions, PrimaryContainmentCreateOptions,
     RecordCreateOptions, RecordRelationCreateOptions, RecordTransitionOptions,
     ResourceCreateOptions, ResourceObservationCreateOptions, RunnableTasksOptions,
-    SessionFocusOptions, SessionId, SessionStartOptions, StoreInitOptions, TaskCreateOptions,
-    TaskSchedulingRelationCreateOptions, VerificationCreateOptions,
-    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
-    VerificationTarget, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
-    content_object_digest,
+    SessionFocusOptions, SessionId, SessionStartOptions, StoreInitOptions,
+    StructuralReferenceCreateOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
+    VerificationCreateOptions, VerificationRequirementCreateOptions, VerificationResourceBasis,
+    VerificationResult, VerificationTarget, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
+    canonical_bytes, content_object_digest,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -2350,6 +2350,279 @@ fn context_packet_summarizes_same_goal_cross_plan_peer_resource_recovery_when_fo
             "refresh_hint=\"verification cache-refresh --verification {} --resource-content-from-basis\"",
             verification.verification_entity_id
         )));
+    }
+}
+
+#[test]
+fn context_packet_summarizes_structural_reference_task_resource_recovery_when_focused_on_goal_or_plan()
+ {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let branch_id = workspace.initial_branch_id;
+    let mut head = workspace.genesis_commit_id;
+
+    let referrer_goal = engine
+        .create_goal(
+            GoalCreateOptions::new(branch_id, head, "Goal references reusable work")
+                .expect("referrer goal options"),
+        )
+        .expect("create referrer goal");
+    head = referrer_goal.commit_id;
+    let referrer_plan = engine
+        .create_plan(
+            PlanCreateOptions::new(
+                branch_id,
+                head,
+                "Plan references reusable work",
+                "Recover Resource-backed proof through structural references",
+            )
+            .expect("referrer plan options"),
+        )
+        .expect("create referrer plan");
+    head = referrer_plan.commit_id;
+    let relation = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                branch_id,
+                head,
+                referrer_goal.goal_entity_id,
+                referrer_plan.plan_entity_id,
+            )
+            .expect("referrer containment options"),
+        )
+        .expect("contain referrer plan");
+    head = relation.commit_id;
+
+    let owner_goal = engine
+        .create_goal(
+            GoalCreateOptions::new(branch_id, head, "Goal owns reusable work")
+                .expect("owner goal options"),
+        )
+        .expect("create owner goal");
+    head = owner_goal.commit_id;
+    let owner_plan = engine
+        .create_plan(
+            PlanCreateOptions::new(
+                branch_id,
+                head,
+                "Plan owns reusable task",
+                "Keep the target outside the referrer containment path",
+            )
+            .expect("owner plan options"),
+        )
+        .expect("create owner plan");
+    head = owner_plan.commit_id;
+    let relation = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                branch_id,
+                head,
+                owner_goal.goal_entity_id,
+                owner_plan.plan_entity_id,
+            )
+            .expect("owner goal-plan containment options"),
+        )
+        .expect("contain owner plan");
+    head = relation.commit_id;
+    let referenced_task = engine
+        .create_task(
+            TaskCreateOptions::new(branch_id, head, "Referenced Resource-backed task")
+                .expect("referenced task options"),
+        )
+        .expect("create referenced task");
+    head = referenced_task.commit_id;
+    let relation = engine
+        .create_primary_containment(
+            PrimaryContainmentCreateOptions::new(
+                branch_id,
+                head,
+                owner_plan.plan_entity_id,
+                referenced_task.task_entity_id,
+            )
+            .expect("owner plan-task containment options"),
+        )
+        .expect("contain referenced task");
+    head = relation.commit_id;
+
+    let criterion = engine
+        .create_acceptance_criterion(
+            AcceptanceCriterionCreateOptions::new(
+                branch_id,
+                head,
+                referenced_task.task_entity_id,
+                referenced_task.task_entity_version_id,
+                "AC-structural-reference-resource",
+                "Referenced task proof remains recoverable from focused context.",
+                AcceptanceCriterionClassification::Required,
+            )
+            .expect("acceptance criterion options"),
+        )
+        .expect("create referenced task acceptance criterion");
+    head = criterion.commit_id;
+    let requirement = engine
+        .create_verification_requirement(
+            VerificationRequirementCreateOptions::new(
+                branch_id,
+                head,
+                criterion.acceptance_criterion_entity_id,
+                criterion.acceptance_criterion_entity_version_id,
+                "VR-structural-reference-resource",
+                "Refresh the structurally referenced Resource basis.",
+            )
+            .expect("verification requirement options"),
+        )
+        .expect("create referenced task verification requirement");
+    head = requirement.commit_id;
+
+    let (basis, baseline_observation_id) =
+        resource_basis(&mut engine, "docs/structural-reference.md");
+    let verification = engine
+        .create_verification(
+            VerificationCreateOptions::new(
+                branch_id,
+                head,
+                VerificationTarget::VerificationRequirement(
+                    requirement.verification_requirement_entity_id,
+                ),
+                VerificationResult::Passed,
+            )
+            .expect("verification options")
+            .with_resource_basis(vec![basis.clone()])
+            .expect("verification resource basis"),
+        )
+        .expect("create structural reference resource-backed verification");
+    head = verification.commit_id;
+
+    let plan_reference = engine
+        .create_structural_reference(
+            StructuralReferenceCreateOptions::new(
+                branch_id,
+                head,
+                referrer_plan.plan_entity_id,
+                referenced_task.task_entity_id,
+            )
+            .expect("plan reference options"),
+        )
+        .expect("create plan-task structural reference");
+    head = plan_reference.commit_id;
+    let goal_reference = engine
+        .create_structural_reference(
+            StructuralReferenceCreateOptions::new(
+                branch_id,
+                head,
+                referrer_goal.goal_entity_id,
+                referenced_task.task_entity_id,
+            )
+            .expect("goal reference options"),
+        )
+        .expect("create goal-task structural reference");
+
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    for (focus_entity_id, referrer_kind, relation_id) in [
+        (
+            referrer_plan.plan_entity_id,
+            "plan",
+            plan_reference.relation_id,
+        ),
+        (
+            referrer_goal.goal_entity_id,
+            "goal",
+            goal_reference.relation_id,
+        ),
+    ] {
+        engine
+            .set_session_focus(SessionFocusOptions::new(
+                session.session_id,
+                focus_entity_id,
+            ))
+            .expect("focus session on structural reference referrer");
+
+        let brief = engine
+            .context_packet(
+                ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+            )
+            .expect("brief context packet");
+        assert!(
+            !brief
+                .items
+                .iter()
+                .any(|item| item.summary.contains("structural_reference_task="))
+        );
+
+        for profile in [ContextProfile::Normal, ContextProfile::Full] {
+            let packet = engine
+                .context_packet(ContextPacketOptions::new(session.session_id).with_profile(profile))
+                .expect("context packet");
+            let referenced_item = packet
+                .items
+                .iter()
+                .find(|item| {
+                    item.category == ContextItemCategory::VerificationRequirement
+                        && item
+                            .summary
+                            .contains("local_key=VR-structural-reference-resource")
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing structural reference VR item in {profile:?}: {packet:#?}")
+                });
+            assert_eq!(referenced_item.priority, ContextPriority::P2);
+            assert_eq!(
+                referenced_item.subject.as_ref_string(),
+                format!(
+                    "verification_requirement:{}",
+                    requirement.verification_requirement_entity_id
+                )
+            );
+            assert!(referenced_item.summary.contains(&format!(
+                "structural_reference_task={}",
+                referenced_task.task_entity_id
+            )));
+            assert!(
+                referenced_item
+                    .summary
+                    .contains(&format!("referrer={focus_entity_id}"))
+            );
+            assert!(
+                referenced_item
+                    .summary
+                    .contains(&format!("referrer_kind={referrer_kind}"))
+            );
+            assert!(
+                referenced_item
+                    .summary
+                    .contains(&format!("relation_id={relation_id}"))
+            );
+            assert!(referenced_item.summary.contains("reference_direct=true"));
+            assert!(referenced_item.summary.contains(&format!(
+                "criterion={}",
+                criterion.acceptance_criterion_entity_id
+            )));
+            assert!(referenced_item.summary.contains("resource_basis=1"));
+            assert!(referenced_item.summary.contains(&format!(
+                "verification_id={}",
+                verification.verification_entity_id
+            )));
+            assert!(
+                referenced_item
+                    .summary
+                    .contains(&format!("resource_id={}", basis.resource_id))
+            );
+            assert!(referenced_item.summary.contains("adapter=local-file@1"));
+            assert!(referenced_item.summary.contains("scope=path@1"));
+            assert!(referenced_item.summary.contains(&format!(
+                "baseline_observation_id={baseline_observation_id}"
+            )));
+            assert!(referenced_item.summary.contains(&format!(
+                "refresh_hint=\"verification cache-refresh --verification {} --resource-content-from-basis\"",
+                verification.verification_entity_id
+            )));
+        }
     }
 }
 

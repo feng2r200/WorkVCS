@@ -1996,6 +1996,66 @@ fn push_focused_structural_reference_resource_requirement_context_items(
                         resource_requirement_indexes,
                     )?;
                 }
+                let mut child_plan_relations = context
+                    .primary_containment_relations
+                    .iter()
+                    .filter(|relation| {
+                        relation.parent_entity_id == reference.target_entity_id
+                            && relation.parent_kind == PrimaryContainmentEndpointKind::Plan
+                            && relation.child_kind == PrimaryContainmentEndpointKind::Plan
+                    })
+                    .collect::<Vec<_>>();
+                child_plan_relations.sort_by_key(|relation| relation.relation_id);
+                for child_plan_containment in child_plan_relations {
+                    if !plans_by_id.contains_key(&child_plan_containment.child_entity_id) {
+                        return Err(WorkVcsError::PlanInvalid(format!(
+                            "structural reference {} target plan {} contains missing child plan {}",
+                            reference.relation_id,
+                            reference.target_entity_id,
+                            child_plan_containment.child_entity_id
+                        )));
+                    }
+                    let mut nested_child_task_relations = context
+                        .primary_containment_relations
+                        .iter()
+                        .filter(|relation| {
+                            relation.parent_entity_id == child_plan_containment.child_entity_id
+                                && relation.parent_kind == PrimaryContainmentEndpointKind::Plan
+                                && relation.child_kind == PrimaryContainmentEndpointKind::Task
+                        })
+                        .collect::<Vec<_>>();
+                    nested_child_task_relations.sort_by_key(|relation| relation.relation_id);
+                    for task_containment in nested_child_task_relations {
+                        let referenced_task =
+                            tasks_by_id
+                                .get(&task_containment.child_entity_id)
+                                .ok_or_else(|| {
+                                    WorkVcsError::TaskInvalid(format!(
+                                        "structural reference {} target plan {} child plan {} contains missing task {}",
+                                        reference.relation_id,
+                                        reference.target_entity_id,
+                                        child_plan_containment.child_entity_id,
+                                        task_containment.child_entity_id
+                                    ))
+                                })?;
+                        push_task_resource_requirement_context_items(
+                            items,
+                            referenced_task,
+                            TaskResourceRequirementContext::StructuralReferenceNestedPlanTarget {
+                                relation_id: reference.relation_id,
+                                referrer_entity_id: focused_entity_id,
+                                referrer_kind,
+                                referenced_plan_entity_id: reference.target_entity_id,
+                                nested_plan_entity_id: child_plan_containment.child_entity_id,
+                                plan_plan_containment_relation_id: child_plan_containment
+                                    .relation_id,
+                                plan_task_containment_relation_id: task_containment.relation_id,
+                            },
+                            profile,
+                            resource_requirement_indexes,
+                        )?;
+                    }
+                }
             }
             StructuralReferenceEndpointKind::Goal => {}
         }
@@ -2024,6 +2084,15 @@ enum TaskResourceRequirementContext {
         referrer_kind: StructuralReferenceEndpointKind,
         referenced_plan_entity_id: EntityId,
         containment_relation_id: RelationId,
+    },
+    StructuralReferenceNestedPlanTarget {
+        relation_id: RelationId,
+        referrer_entity_id: EntityId,
+        referrer_kind: StructuralReferenceEndpointKind,
+        referenced_plan_entity_id: EntityId,
+        nested_plan_entity_id: EntityId,
+        plan_plan_containment_relation_id: RelationId,
+        plan_task_containment_relation_id: RelationId,
     },
 }
 
@@ -2056,6 +2125,17 @@ impl TaskResourceRequirementContext {
             } => format!(
                 "structural_reference_plan_task={peer_task_id} referrer={referrer_entity_id} referrer_kind={referrer_kind} referenced_plan={referenced_plan_entity_id} relation_id={relation_id} containment_relation_id={containment_relation_id}"
             ),
+            Self::StructuralReferenceNestedPlanTarget {
+                relation_id,
+                referrer_entity_id,
+                referrer_kind,
+                referenced_plan_entity_id,
+                nested_plan_entity_id,
+                plan_plan_containment_relation_id,
+                plan_task_containment_relation_id,
+            } => format!(
+                "structural_reference_nested_plan_task={peer_task_id} referrer={referrer_entity_id} referrer_kind={referrer_kind} referenced_plan={referenced_plan_entity_id} nested_plan={nested_plan_entity_id} relation_id={relation_id} plan_plan_containment_relation_id={plan_plan_containment_relation_id} plan_task_containment_relation_id={plan_task_containment_relation_id}"
+            ),
         }
     }
 
@@ -2065,6 +2145,9 @@ impl TaskResourceRequirementContext {
             Self::StructuralReference { .. } => "reference_direct=true",
             Self::StructuralReferencePlanTarget { .. } => {
                 "reference_direct=true referenced_plan_direct_child=true"
+            }
+            Self::StructuralReferenceNestedPlanTarget { .. } => {
+                "reference_direct=true referenced_plan_one_level_child=true"
             }
         }
     }

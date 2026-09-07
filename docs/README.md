@@ -13,6 +13,7 @@ index is:
 - [Context Profile Budget Dogfood Evidence](provenance/context-profile-budget-dogfood.md)
 - [Verify Wrapper Dogfood Evidence](provenance/verify-wrapper-dogfood.md)
 - [Verification Cache Refresh Dogfood Evidence](provenance/verification-cache-refresh-dogfood.md)
+- [WorkVCS Tool Reference For Governance Plan Carriers](operator/workvcs-tool-reference.md)
 - [Focused Handoff Smoke Evidence](provenance/focused-handoff-smoke-evidence.md)
 - [Claim Transfer and Force Takeover Smoke Evidence](provenance/claim-transfer-force-takeover-smoke-evidence.md)
 - [Local Operator Quickstart and Recovery](operator/quickstart-and-recovery.md)

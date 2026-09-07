@@ -2055,6 +2055,72 @@ fn push_focused_structural_reference_resource_requirement_context_items(
                             resource_requirement_indexes,
                         )?;
                     }
+                    let mut second_level_child_plan_relations = context
+                        .primary_containment_relations
+                        .iter()
+                        .filter(|relation| {
+                            relation.parent_entity_id == child_plan_containment.child_entity_id
+                                && relation.parent_kind == PrimaryContainmentEndpointKind::Plan
+                                && relation.child_kind == PrimaryContainmentEndpointKind::Plan
+                        })
+                        .collect::<Vec<_>>();
+                    second_level_child_plan_relations.sort_by_key(|relation| relation.relation_id);
+                    for second_level_child_plan_containment in second_level_child_plan_relations {
+                        if !plans_by_id
+                            .contains_key(&second_level_child_plan_containment.child_entity_id)
+                        {
+                            return Err(WorkVcsError::PlanInvalid(format!(
+                                "structural reference {} target plan {} child plan {} contains missing child plan {}",
+                                reference.relation_id,
+                                reference.target_entity_id,
+                                child_plan_containment.child_entity_id,
+                                second_level_child_plan_containment.child_entity_id
+                            )));
+                        }
+                        let mut second_level_task_relations = context
+                            .primary_containment_relations
+                            .iter()
+                            .filter(|relation| {
+                                relation.parent_entity_id
+                                    == second_level_child_plan_containment.child_entity_id
+                                    && relation.parent_kind == PrimaryContainmentEndpointKind::Plan
+                                    && relation.child_kind == PrimaryContainmentEndpointKind::Task
+                            })
+                            .collect::<Vec<_>>();
+                        second_level_task_relations.sort_by_key(|relation| relation.relation_id);
+                        for task_containment in second_level_task_relations {
+                            let referenced_task =
+                                tasks_by_id
+                                    .get(&task_containment.child_entity_id)
+                                    .ok_or_else(|| {
+                                        WorkVcsError::TaskInvalid(format!(
+                                            "structural reference {} target plan {} child plan {} second-level child plan {} contains missing task {}",
+                                            reference.relation_id,
+                                            reference.target_entity_id,
+                                            child_plan_containment.child_entity_id,
+                                            second_level_child_plan_containment.child_entity_id,
+                                            task_containment.child_entity_id
+                                        ))
+                                    })?;
+                            push_task_resource_requirement_context_items(
+                                items,
+                                referenced_task,
+                                TaskResourceRequirementContext::StructuralReferenceTwoLevelNestedPlanTarget {
+                                    relation_id: reference.relation_id,
+                                    referrer_entity_id: focused_entity_id,
+                                    referrer_kind,
+                                    referenced_plan_entity_id: reference.target_entity_id,
+                                    first_nested_plan_entity_id: child_plan_containment.child_entity_id,
+                                    second_nested_plan_entity_id: second_level_child_plan_containment.child_entity_id,
+                                    referenced_plan_containment_relation_id: child_plan_containment.relation_id,
+                                    nested_plan_containment_relation_id: second_level_child_plan_containment.relation_id,
+                                    plan_task_containment_relation_id: task_containment.relation_id,
+                                },
+                                profile,
+                                resource_requirement_indexes,
+                            )?;
+                        }
+                    }
                 }
             }
             StructuralReferenceEndpointKind::Goal => {}
@@ -2092,6 +2158,17 @@ enum TaskResourceRequirementContext {
         referenced_plan_entity_id: EntityId,
         nested_plan_entity_id: EntityId,
         plan_plan_containment_relation_id: RelationId,
+        plan_task_containment_relation_id: RelationId,
+    },
+    StructuralReferenceTwoLevelNestedPlanTarget {
+        relation_id: RelationId,
+        referrer_entity_id: EntityId,
+        referrer_kind: StructuralReferenceEndpointKind,
+        referenced_plan_entity_id: EntityId,
+        first_nested_plan_entity_id: EntityId,
+        second_nested_plan_entity_id: EntityId,
+        referenced_plan_containment_relation_id: RelationId,
+        nested_plan_containment_relation_id: RelationId,
         plan_task_containment_relation_id: RelationId,
     },
 }
@@ -2136,6 +2213,19 @@ impl TaskResourceRequirementContext {
             } => format!(
                 "structural_reference_nested_plan_task={peer_task_id} referrer={referrer_entity_id} referrer_kind={referrer_kind} referenced_plan={referenced_plan_entity_id} nested_plan={nested_plan_entity_id} relation_id={relation_id} plan_plan_containment_relation_id={plan_plan_containment_relation_id} plan_task_containment_relation_id={plan_task_containment_relation_id}"
             ),
+            Self::StructuralReferenceTwoLevelNestedPlanTarget {
+                relation_id,
+                referrer_entity_id,
+                referrer_kind,
+                referenced_plan_entity_id,
+                first_nested_plan_entity_id,
+                second_nested_plan_entity_id,
+                referenced_plan_containment_relation_id,
+                nested_plan_containment_relation_id,
+                plan_task_containment_relation_id,
+            } => format!(
+                "structural_reference_two_level_nested_plan_task={peer_task_id} referrer={referrer_entity_id} referrer_kind={referrer_kind} referenced_plan={referenced_plan_entity_id} first_nested_plan={first_nested_plan_entity_id} second_nested_plan={second_nested_plan_entity_id} relation_id={relation_id} referenced_plan_containment_relation_id={referenced_plan_containment_relation_id} nested_plan_containment_relation_id={nested_plan_containment_relation_id} plan_task_containment_relation_id={plan_task_containment_relation_id}"
+            ),
         }
     }
 
@@ -2148,6 +2238,9 @@ impl TaskResourceRequirementContext {
             }
             Self::StructuralReferenceNestedPlanTarget { .. } => {
                 "reference_direct=true referenced_plan_one_level_child=true"
+            }
+            Self::StructuralReferenceTwoLevelNestedPlanTarget { .. } => {
+                "reference_direct=true referenced_plan_two_level_child=true"
             }
         }
     }

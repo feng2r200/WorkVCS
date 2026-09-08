@@ -1,10 +1,11 @@
 # Local Operator Quickstart and Recovery
 
 Status: Phase 4LC local V0.1 operator guide
-Last updated: 2026-09-01
+Last updated: 2026-09-08
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
-this repository. It describes runnable local commands, not a packaged release.
+this repository. It describes runnable local commands and the local
+package/install helper, not a public release.
 
 ## Current Boundary
 
@@ -18,7 +19,7 @@ orchestration. A Session can be explicitly marked `potentially_stale`; Claim
 takeover is stale-gated, explicit, and still requires `--force` plus a
 rationale. Automatic stale detection remains Open.
 
-## Build Or Install
+## Build, Package, Or Install
 
 From the repository root:
 
@@ -27,6 +28,43 @@ cargo test --workspace --quiet
 cargo install --path crates/workvcs-cli --locked
 workvcs --help
 ```
+
+For local packaging without installing:
+
+```bash
+scripts/package-workvcs.sh
+```
+
+The script builds `workvcs`, copies it into a version-agnostic package directory
+under `target/package/`, writes a `manifest.txt`, creates a `.tar.gz` archive,
+and validates the packaged binary with `workvcs --help`. Package mode is the
+default and does not write to `/usr/local/bin`.
+
+To preview the system-level install/overwrite action without writing:
+
+```bash
+scripts/package-workvcs.sh --dry-run --install --bin-dir /usr/local/bin
+```
+
+To validate install/overwrite behavior without touching a system path:
+
+```bash
+tmp_bin="$(mktemp -d "${TMPDIR:-/tmp}/workvcs-bin.XXXXXX")"
+scripts/package-workvcs.sh --install --bin-dir "$tmp_bin" --profile debug
+"$tmp_bin/workvcs" --help
+```
+
+Only after a separate explicit authorization to install or overwrite the system
+binary:
+
+```bash
+scripts/package-workvcs.sh --install --bin-dir /usr/local/bin
+workvcs --help
+```
+
+If `/usr/local/bin` is not writable, the script uses `sudo` for the directory
+creation or final overwrite step. The destination basename must be `workvcs`,
+and the installed binary digest must match the packaged binary.
 
 For one-off local use without installing:
 

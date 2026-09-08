@@ -45,6 +45,8 @@ When sources disagree, use this order:
 Useful current entrypoints:
 
 - `workvcs --help`: live command-family surface.
+- `scripts/package-workvcs.sh`: local package helper and explicit
+  install/overwrite entrypoint for the `workvcs` binary.
 - `docs/operator/quickstart-and-recovery.md`: runnable local workflow and
   recovery examples.
 - `docs/operator/error-recovery-guide.md`: stable error fields and per-code
@@ -58,6 +60,52 @@ Useful current entrypoints:
 As of this reference, current project evidence records local V1 release
 maturity as ready. That is not release, tag, push, deploy, remote, production,
 credential, or global-install authorization.
+
+## Binary Packaging And Installation
+
+Use `scripts/package-workvcs.sh` when another session needs a reproducible local
+binary artifact or a governed path to make `workvcs` available as a system
+command.
+
+Default package-only mode:
+
+```bash
+scripts/package-workvcs.sh
+```
+
+This builds the current checkout's `workvcs` binary, copies it to
+`target/package/workvcs-<target>-<git-head>-<timestamp>/bin/workvcs`, writes a
+`manifest.txt`, creates a `.tar.gz` archive, and validates the packaged binary
+with `workvcs --help`.
+
+System-level install or overwrite is explicit:
+
+```bash
+scripts/package-workvcs.sh --dry-run --install --bin-dir /usr/local/bin
+scripts/package-workvcs.sh --install --bin-dir /usr/local/bin
+workvcs --help
+```
+
+The dry-run command is the safe first check: it does not build or write, and it
+reports the planned `/usr/local/bin/workvcs` overwrite. The install command
+creates the target directory if needed, overwrites through a temporary file,
+verifies the installed command with `workvcs --help`, and checks that the
+installed digest matches the packaged binary. If the destination directory is
+not writable, the script uses `sudo` for the directory creation or overwrite
+step.
+
+For validation without touching a system path:
+
+```bash
+tmp_bin="$(mktemp -d "${TMPDIR:-/tmp}/workvcs-bin.XXXXXX")"
+scripts/package-workvcs.sh --install --bin-dir "$tmp_bin" --profile debug
+"$tmp_bin/workvcs" --help
+```
+
+The script is an availability helper, not an authority grant. A Codex session
+still needs current user authorization before running a real global
+installation, overwrite, release, tag, push, deploy, remote, production, or
+credential operation.
 
 ## Responsibility Split With work-governance
 
@@ -342,10 +390,11 @@ Do not use WorkVCS as if it currently provided:
 - automatic replacement of work-governance's confirmation, risk, validation,
   Git, or closeout responsibilities.
 
-Installing or overwriting `/usr/local/bin/workvcs` is a separate later
-operation. Until that operation is explicitly performed and verified, a session
-should discover the available binary through the current environment and
-confirm it with `workvcs --help`.
+The repository includes `scripts/package-workvcs.sh` to package and, when
+separately authorized, overwrite a system `workvcs` binary. Until that
+operation is explicitly performed and verified, a session should discover the
+available binary through the current environment and confirm it with
+`workvcs --help`.
 
 ## Practical Rule For Other Sessions
 

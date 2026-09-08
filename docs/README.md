@@ -282,7 +282,9 @@ tracked in the V1 release gate matrix. The local Rust V0.1 implementation
 remains local and in progress, while current evidence records bounded V1 local
 release maturity as ready and dogfood-complete. Release, tag, push, deploy,
 remote, production, credential, and global installation actions remain separate
-authority decisions.
+authority decisions. `scripts/package-workvcs.sh` provides local binary
+packaging and an explicit install/overwrite path for `workvcs`, but running a
+real system install remains a separate authority decision.
 
 Detailed promotion evidence and the confirmation ledger are retained in
 [Confirmed State v0.1 Provenance](provenance/confirmed-state-v0.1.md) and

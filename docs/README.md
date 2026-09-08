@@ -84,6 +84,28 @@ index is:
 - [Phase 4NP Blocked Dependency Resource Context Evidence](provenance/phase-4np-blocked-dependency-resource-context.md)
 - [Phase 4NQ Why Task Scheduling Relation Evolution Evidence](provenance/phase-4nq-why-task-scheduling-relation-evolution.md)
 - [Phase 4NR Why Primary Containment Relation Evolution Evidence](provenance/phase-4nr-why-primary-containment-relation-evolution.md)
+- [Phase 4NU Focused Plan Peer Resource Context Evidence](provenance/phase-4nu-focused-plan-peer-resource-context.md)
+- [Phase 4NV Why Verifies Relation Evolution Evidence](provenance/phase-4nv-why-verifies-relation-evolution.md)
+- [Phase 4NW Why Evidenced-By Relation Evolution Evidence](provenance/phase-4nw-why-evidenced-by-relation-evolution.md)
+- [Phase 4NX Why Evidence Subject Evidenced-By Evolution Evidence](provenance/phase-4nx-why-evidence-subject-evidenced-by-evolution.md)
+- [Phase 4NY Why Knowledge Exposure Derived-From Evolution Evidence](provenance/phase-4ny-why-knowledge-exposure-derived-from-evolution.md)
+- [Phase 4NZ Focused Same-Goal Cross-Plan Resource Context Evidence](provenance/phase-4nz-focused-same-goal-cross-plan-resource-context.md)
+- [Phase 4OC Focus-Set Unsupported Kind Fail-Fast Evidence](provenance/phase-4oc-focus-set-unsupported-kind-fail-fast.md)
+- [Phase 4OE Task Closeout Why Closure Chain Evidence](provenance/phase-4oe-task-closeout-why-closure-chain.md)
+- [Phase 4OG Task Why Resource Basis Closure Evidence](provenance/phase-4og-task-why-resource-basis-closure.md)
+- [Phase 4OH Recovery From Why Probe Evidence](provenance/phase-4oh-recovery-from-why-probe.md)
+- [Phase 4OK Plan Why Direct Task Closure Evidence](provenance/phase-4ok-plan-why-direct-task-closure.md)
+- [Phase 4OM Goal Plan Recovery Probe Evidence](provenance/phase-4om-goal-plan-recovery-probe.md)
+- [Phase 4OP Plan-Start Context Resource Probe Evidence](provenance/phase-4op-plan-start-context-resource-probe.md)
+- [Phase 4OQ Goal-Start Context Resource Probe Evidence](provenance/phase-4oq-goal-start-context-resource-probe.md)
+- [Phase 4OR Goal-Start Context Multiplan Resource Probe Evidence](provenance/phase-4or-goal-start-context-multiplan-resource-probe.md)
+- [Phase 4OS Nested Plan Context Resource Probe Evidence](provenance/phase-4os-nested-plan-context-resource-probe.md)
+- [Phase 4OT Cross-Goal Dependency Context Resource Probe Evidence](provenance/phase-4ot-cross-goal-dependency-context-resource-probe.md)
+- [Phase 4OU Structural Reference Context Resource Probe Evidence](provenance/phase-4ou-structural-reference-context-resource-probe.md)
+- [Phase 4OV Structural Reference Plan Target Context Resource Probe Evidence](provenance/phase-4ov-structural-reference-plan-target-context-resource-probe.md)
+- [Phase 4OW Structural Reference Nested Plan Target Context Resource Probe Evidence](provenance/phase-4ow-structural-reference-nested-plan-target-context-resource-probe.md)
+- [Phase 4OY Structural Reference Two-Level Nested Plan Target Context Resource Recovery Evidence](provenance/phase-4oy-structural-reference-two-level-nested-plan-target-context-resource-recovery.md)
+- [Phase 4PE Compact Read-Only Resume Query Evidence](provenance/phase-4pe-compact-read-only-resume-query.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -242,12 +264,25 @@ Recent repository-level CLI smoke gates:
 - [ADR-0483: Phase 4NP Blocked Dependency Resource Context](decisions/adr/0483-phase-4np-blocked-dependency-resource-context.md)
 - [ADR-0484: Phase 4NQ Why Task Scheduling Relation Evolution](decisions/adr/0484-phase-4nq-why-task-scheduling-relation-evolution.md)
 - [ADR-0485: Phase 4NR Why Primary Containment Relation Evolution](decisions/adr/0485-phase-4nr-why-primary-containment-relation-evolution.md)
+- [ADR-0486: Phase 4NU Focused Plan Peer Resource Context](decisions/adr/0486-phase-4nu-focused-plan-peer-resource-context.md)
+- [ADR-0487: Phase 4NV Why Verifies Relation Evolution](decisions/adr/0487-phase-4nv-why-verifies-relation-evolution.md)
+- [ADR-0488: Phase 4NW Why Evidenced-By Relation Evolution](decisions/adr/0488-phase-4nw-why-evidenced-by-relation-evolution.md)
+- [ADR-0489: Phase 4NX Why Evidence Subject Evidenced-By Evolution](decisions/adr/0489-phase-4nx-why-evidence-subject-evidenced-by-evolution.md)
+- [ADR-0490: Phase 4NY Why Knowledge Exposure Derived-From Evolution](decisions/adr/0490-phase-4ny-why-knowledge-exposure-derived-from-evolution.md)
+- [ADR-0491: Phase 4NZ Focused Same-Goal Cross-Plan Resource Context](decisions/adr/0491-phase-4nz-focused-same-goal-cross-plan-resource-context.md)
+- [ADR-0492: Phase 4OC Focus-Set Unsupported Kind Fail-Fast](decisions/adr/0492-phase-4oc-focus-set-unsupported-kind-fail-fast.md)
+- [ADR-0493: Phase 4OE Task Closeout Why Closure Chain](decisions/adr/0493-phase-4oe-task-closeout-why-closure-chain.md)
+- [ADR-0494: Phase 4OG Task Why Resource Basis Closure](decisions/adr/0494-phase-4og-task-why-resource-basis-closure.md)
+- [ADR-0495: Phase 4OK Plan Why Direct Task Closure](decisions/adr/0495-phase-4ok-plan-why-direct-task-closure.md)
+- [ADR-0496: Phase 4PE Compact Read-Only Resume Query](decisions/adr/0496-phase-4pe-compact-read-only-resume-query.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is
-tracked in the V1 release gate matrix. The local Rust V0.1 implementation is
-in progress and has smoke-proven coverage for several V1 areas, but it is not
-release-ready and is not dogfood-complete.
+tracked in the V1 release gate matrix. The local Rust V0.1 implementation
+remains local and in progress, while current evidence records bounded V1 local
+release maturity as ready and dogfood-complete. Release, tag, push, deploy,
+remote, production, credential, and global installation actions remain separate
+authority decisions.
 
 Detailed promotion evidence and the confirmation ledger are retained in
 [Confirmed State v0.1 Provenance](provenance/confirmed-state-v0.1.md) and

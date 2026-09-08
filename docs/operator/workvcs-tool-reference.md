@@ -1,7 +1,7 @@
 # WorkVCS Tool Reference For Governance Plan Carriers
 
 Status: current-main operator reference for Codex sessions
-Last updated: 2026-09-07
+Last updated: 2026-09-08
 
 This reference explains what the current `workvcs` tool can carry for an
 Agent-facing governance workflow. It is meant for other Codex sessions that
@@ -98,7 +98,7 @@ The current top-level CLI exposes these command families:
 | Acceptance and evidence | `ac`, `vr`, `verify`, `verification`, `evidence` | Acceptance Criteria, Verification Requirements, single-target verification wrapper output, Verification judgments, Evidence records, and closeout support. |
 | Resources and drift | `resource`, `projection`, `verification cache-refresh` | Resource registration, observations, applicability, stale/drift/unavailable/error projections, and explicit foreground refresh. |
 | Runtime coordination | `session`, `claim`, `handoff`, `next`, `runnable` | Agent Sessions, focus, exclusive/shared Claims, Claim transfer/takeover, focused Handoffs, runnable Task projection, and next-work selection. |
-| Query and explanation | `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Low-token recovery packets, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
+| Query and explanation | `resume`, `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Compact continuation summaries, low-token recovery packets, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
 | Portability and branching | `checkpoint`, `bundle`, `restore`, `merge` | Checkpoints, local Bundle export/validate/apply flows, restore-as-new-commit semantics, and three-way Work Branch merge lifecycle. |
 | Error handling | `--error-format key-value|json` plus command stderr | Script-readable error code, category, retryability, optional JSON output, and actionable recovery boundaries. |
 
@@ -210,6 +210,10 @@ Start with the smallest deterministic query that can answer the continuation
 question:
 
 ```bash
+workvcs resume "$STORE" \
+  --session "$SESSION_ID" \
+  --budget-items 12
+
 workvcs context "$STORE" \
   --session "$SESSION_ID" \
   --profile brief \
@@ -222,10 +226,17 @@ workvcs why "$STORE" \
   --entity "$TASK_OR_PLAN_ID"
 ```
 
-Use `--scope-path`, `--scope-path-prefix`, or `--scope-json` when the current
-task is tied to a file, directory, or resource scope. Prefer `brief` first,
-then `normal`, and only use `full` when the smaller packet omits a fact that
-changes the next action.
+Use `resume` first when the continuation question is "what is the goal, current
+work, blocker, evidence or Resource-basis recovery hint, and next action?" It
+is read-only and reuses brief context data without claiming work or saving a
+packet.
+
+Use `context` when you need the generic packet shape, `next` when you only need
+the scheduler's next-work selection, and `why` when the question is causal or
+structural. Use `--scope-path`, `--scope-path-prefix`, or `--scope-json` when
+the current task is tied to a file, directory, or resource scope. Prefer
+`resume` or `brief` first, then `normal`, and only use `full` when the smaller
+packet omits a fact that changes the next action.
 
 Save the packet when another session, reviewer, or future continuation must be
 able to verify exactly what context was used:

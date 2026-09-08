@@ -26,9 +26,9 @@ use workvcs_core::{
     ClaimGuardReason, ClaimGuardResult, ClaimId, ClaimLifecycleState, ClaimListOptions,
     ClaimListResult, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
-    ClaimTransferResult, CommitId, CommitSnapshot, ContextOverview, ContextOverviewOptions,
-    ContextPacket, ContextPacketId, ContextPacketListOptions, ContextPacketListResult,
-    ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot,
+    ClaimTransferResult, CommitId, CommitSnapshot, ContextItemCategory, ContextOverview,
+    ContextOverviewOptions, ContextPacket, ContextPacketId, ContextPacketListOptions,
+    ContextPacketListResult, ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot,
     ContextPacketSnapshotSchemaMigrationResult, ContextProfile, DecisionRecordSupersedeCommit,
     DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityTransitionCommit,
     EntityTransitionOptions, EntityVersionId, EventId, EventListOptions, EventListResult,
@@ -151,6 +151,7 @@ Commands:
   handoff       Author and inspect focused handoffs
   claim         Claim and release runtime work
   context       Show the current session context
+  resume        Show compact read-only recovery context
   context-packet  Save and inspect context packet snapshots
   next          Select next runnable work for a session
   runnable      Inspect runnable task projections
@@ -166,6 +167,29 @@ Options:
       --error-format <ERROR_FORMAT>  [default: key-value] [possible values: key-value, json]
   -h, --help                         Print help
 ";
+
+const RESUME_DEFAULT_BUDGET_ITEMS: usize = 12;
+const RESUME_CATEGORY_ORDER: [ContextItemCategory; 19] = [
+    ContextItemCategory::SessionAnchor,
+    ContextItemCategory::BranchOverview,
+    ContextItemCategory::GoalPlanPath,
+    ContextItemCategory::CurrentTask,
+    ContextItemCategory::BlockedDependency,
+    ContextItemCategory::TaskReadiness,
+    ContextItemCategory::AcceptanceCriterion,
+    ContextItemCategory::VerificationRequirement,
+    ContextItemCategory::FailedAttempt,
+    ContextItemCategory::ActiveDecision,
+    ContextItemCategory::ActiveAssumption,
+    ContextItemCategory::TransitionRationale,
+    ContextItemCategory::ScopedKnowledge,
+    ContextItemCategory::SessionContinuity,
+    ContextItemCategory::RelevantHandoff,
+    ContextItemCategory::DirectCausalChain,
+    ContextItemCategory::Finding,
+    ContextItemCategory::Attempt,
+    ContextItemCategory::OlderProvenance,
+];
 
 #[derive(Debug, Parser)]
 #[command(name = "workvcs")]
@@ -537,6 +561,28 @@ enum Command {
 
         #[arg(long)]
         profile: Option<String>,
+
+        #[arg(long)]
+        budget_items: Option<usize>,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        scope_path: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        scope_path_prefix: Option<PathBuf>,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
+    },
+    Resume {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        session: String,
 
         #[arg(long)]
         budget_items: Option<usize>,
@@ -10893,6 +10939,46 @@ fn run(cli: Cli) -> Result<String> {
             }
             Ok(output)
         }
+        Command::Resume {
+            store,
+            session,
+            budget_items,
+            scope_json,
+            scope_path,
+            scope_path_prefix,
+            expected_state_digest,
+        } => {
+            let engine = Engine::open(store)?;
+            let session_id = SessionId::parse_canonical(&session)?;
+            let scope = scope_from_cli(
+                "resume scope",
+                "--scope-json",
+                "--scope-path",
+                "--scope-path-prefix",
+                scope_json,
+                scope_path,
+                scope_path_prefix,
+            )?;
+            let budget_items = resume_budget_items_from_cli(budget_items)?;
+            let mut options =
+                ContextPacketOptions::new(session_id).with_profile(ContextProfile::Brief);
+            if let Some(scope) = scope {
+                options = options.with_scope(scope.into_value())?;
+            }
+            let packet = engine.context_packet(options)?;
+            let mut output = render_resume_packet(&packet, budget_items);
+            if let Some(expected_state_digest) = expected_state_digest {
+                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+                if packet.envelope.state_digest != expected_state_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "resume state digest {} does not match expected {expected_state_digest}",
+                        packet.envelope.state_digest
+                    )));
+                }
+                output.push_str("matches_expected=true\n");
+            }
+            Ok(output)
+        }
         Command::ContextPacket { command } => match command {
             ContextPacketCommand::Save {
                 store,
@@ -12521,6 +12607,16 @@ fn context_packet_options_from_cli(
         options = options.with_scope(scope)?;
     }
     Ok(options)
+}
+
+fn resume_budget_items_from_cli(budget_items: Option<usize>) -> Result<usize> {
+    let budget_items = budget_items.unwrap_or(RESUME_DEFAULT_BUDGET_ITEMS);
+    if budget_items == 0 {
+        return Err(WorkVcsError::QueryInvalid(
+            "resume budget items must be greater than zero".to_owned(),
+        ));
+    }
+    Ok(budget_items)
 }
 
 fn parse_task_list_status(value: &str) -> Result<TaskStatus> {
@@ -20422,6 +20518,153 @@ fn render_context_packet(packet: &ContextPacket) -> String {
     output
 }
 
+fn render_resume_packet(packet: &ContextPacket, budget_items: usize) -> String {
+    let envelope = &packet.envelope;
+    let focus_entity_id = envelope
+        .focus_entity_id
+        .map(|focus_entity_id| focus_entity_id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let last_activity_at_us = envelope
+        .last_activity_at_us
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let scope_json = packet
+        .scope
+        .as_ref()
+        .map(context_canonical_json)
+        .unwrap_or_else(|| "none".to_owned());
+    let selected_indices = resume_selected_item_indices(packet, budget_items);
+    let omitted_items = packet.items.len().saturating_sub(selected_indices.len());
+    let omitted_categories = resume_omission_categories(packet, &selected_indices);
+    let mut output = format!(
+        "session_id={}\nlifecycle_state={}\nworkspace_id={}\nbranch_id={}\nbranch_name={}\nhead_commit_id={}\nstate_digest={}\nstarted_at_us={}\nlast_activity_at_us={}\nfocus_entity_id={}\nresume_profile={}\nresume_budget_items={}\nresume_scope_json={}\nresume_available_items={}\nresume_items={}\nresume_omitted_items={}\nresume_omission_categories={}\nresume_goal_plan_paths={}\nresume_current_tasks={}\nresume_readiness_items={}\nresume_blockers={}\nresume_acceptance_criteria={}\nresume_verification_requirements={}\nresume_failed_attempts={}\nresume_resource_basis_items={}\nresume_has_resource_basis={}\nresume_next_action={}\n",
+        envelope.session_id,
+        session_lifecycle_state(envelope.lifecycle_state),
+        envelope.workspace_id,
+        envelope.branch_id,
+        envelope.branch_name,
+        envelope.head_commit_id,
+        envelope.state_digest,
+        envelope.started_at_us,
+        last_activity_at_us,
+        focus_entity_id,
+        packet.profile.as_str(),
+        budget_items,
+        scope_json,
+        packet.available_items,
+        selected_indices.len(),
+        omitted_items,
+        omitted_categories.len(),
+        resume_category_count(packet, ContextItemCategory::GoalPlanPath),
+        resume_category_count(packet, ContextItemCategory::CurrentTask),
+        resume_category_count(packet, ContextItemCategory::TaskReadiness),
+        resume_category_count(packet, ContextItemCategory::BlockedDependency),
+        resume_category_count(packet, ContextItemCategory::AcceptanceCriterion),
+        resume_category_count(packet, ContextItemCategory::VerificationRequirement),
+        resume_category_count(packet, ContextItemCategory::FailedAttempt),
+        resume_resource_basis_items(packet),
+        resume_resource_basis_items(packet) > 0,
+        resume_next_action(packet),
+    );
+    for (index, item_index) in selected_indices.iter().copied().enumerate() {
+        let item = &packet.items[item_index];
+        let summary_json = serde_json::to_string(&item.summary).expect("resume item summary JSON");
+        let _ = writeln!(output, "resume_item.{index}.key={}", item.item_key);
+        let _ = writeln!(
+            output,
+            "resume_item.{index}.priority={}",
+            item.priority.as_str()
+        );
+        let _ = writeln!(
+            output,
+            "resume_item.{index}.category={}",
+            item.category.as_str()
+        );
+        let _ = writeln!(
+            output,
+            "resume_item.{index}.subject={}",
+            item.subject.as_ref_string()
+        );
+        let _ = writeln!(output, "resume_item.{index}.summary_json={summary_json}");
+    }
+    for (index, (category, omitted)) in omitted_categories.iter().copied().enumerate() {
+        let _ = writeln!(
+            output,
+            "resume_omission_category.{index}.category={}",
+            category.as_str()
+        );
+        let _ = writeln!(output, "resume_omission_category.{index}.omitted={omitted}");
+    }
+    output
+}
+
+fn resume_selected_item_indices(packet: &ContextPacket, budget_items: usize) -> Vec<usize> {
+    let mut indices = (0..packet.items.len()).collect::<Vec<_>>();
+    indices.sort_by_key(|index| (resume_category_rank(packet.items[*index].category), *index));
+    indices.truncate(budget_items.min(indices.len()));
+    indices
+}
+
+fn resume_category_rank(category: ContextItemCategory) -> usize {
+    RESUME_CATEGORY_ORDER
+        .iter()
+        .position(|candidate| *candidate == category)
+        .unwrap_or(RESUME_CATEGORY_ORDER.len())
+}
+
+fn resume_category_count(packet: &ContextPacket, category: ContextItemCategory) -> usize {
+    packet
+        .items
+        .iter()
+        .filter(|item| item.category == category)
+        .count()
+}
+
+fn resume_selected_category_count(
+    packet: &ContextPacket,
+    selected_indices: &[usize],
+    category: ContextItemCategory,
+) -> usize {
+    selected_indices
+        .iter()
+        .filter(|index| packet.items[**index].category == category)
+        .count()
+}
+
+fn resume_omission_categories(
+    packet: &ContextPacket,
+    selected_indices: &[usize],
+) -> Vec<(ContextItemCategory, usize)> {
+    RESUME_CATEGORY_ORDER
+        .iter()
+        .filter_map(|category| {
+            let available = resume_category_count(packet, *category);
+            let selected = resume_selected_category_count(packet, selected_indices, *category);
+            (available > selected).then_some((*category, available - selected))
+        })
+        .collect()
+}
+
+fn resume_resource_basis_items(packet: &ContextPacket) -> usize {
+    packet
+        .items
+        .iter()
+        .filter(|item| item.summary.contains("resource_basis="))
+        .count()
+}
+
+fn resume_next_action(packet: &ContextPacket) -> &'static str {
+    if resume_category_count(packet, ContextItemCategory::BlockedDependency) > 0 {
+        "resolve_blocked_dependency"
+    } else if resume_category_count(packet, ContextItemCategory::CurrentTask) > 0 {
+        "continue_current_task"
+    } else if resume_category_count(packet, ContextItemCategory::TaskReadiness) > 0 {
+        "inspect_task_readiness"
+    } else {
+        "inspect_context"
+    }
+}
+
 fn render_context_packet_save(result: &ContextPacketSaveResult) -> String {
     let mut output = render_context_packet_snapshot(&result.snapshot, "", false);
     let _ = writeln!(output, "saved_context_items={}", result.packet.items.len());
@@ -23799,6 +24042,7 @@ mod tests {
                 "handoff",
                 "claim",
                 "context",
+                "resume",
                 "context-packet",
                 "next",
                 "runnable",
@@ -23867,6 +24111,7 @@ mod tests {
             ("handoff", "Author and inspect focused handoffs"),
             ("claim", "Claim and release runtime work"),
             ("context", "Show the current session context"),
+            ("resume", "Show compact read-only recovery context"),
             (
                 "context-packet",
                 "Save and inspect context packet snapshots",
@@ -23990,6 +24235,117 @@ mod tests {
         assert!(summary_json.contains(&format!(
             "verification cache-refresh --verification {verification_entity_id} --resource-content-from-basis"
         )));
+    }
+
+    #[test]
+    fn cli_resume_packet_renders_compact_budgeted_recovery_summary() {
+        let session_id = SessionId::new_v7();
+        let branch_id = BranchId::new_v7();
+        let commit_id = CommitId::new_v7();
+        let task_id = EntityId::new_v7();
+        let dependency_task_id = EntityId::new_v7();
+        let verification_requirement_id = EntityId::new_v7();
+        let packet = ContextPacket {
+            envelope: workvcs_core::ContextPacketEnvelope {
+                session_id,
+                lifecycle_state: SessionLifecycleState::Active,
+                workspace_id: WorkspaceId::new_v7(),
+                branch_id,
+                branch_name: "main".to_owned(),
+                head_commit_id: commit_id,
+                state_digest: content_object_digest(b"resume compact recovery summary"),
+                started_at_us: 1,
+                last_activity_at_us: Some(2),
+                focus_entity_id: Some(task_id),
+            },
+            profile: ContextProfile::Brief,
+            budget_items: None,
+            scope: None,
+            available_items: 5,
+            items: vec![
+                workvcs_core::ContextItem {
+                    priority: workvcs_core::ContextPriority::P1,
+                    category: ContextItemCategory::VerificationRequirement,
+                    subject: workvcs_core::ContextItemSubject::VerificationRequirement {
+                        verification_requirement_entity_id: verification_requirement_id,
+                    },
+                    item_key: "p1.verification_requirement.example".to_owned(),
+                    summary: "verify with resource_basis=1".to_owned(),
+                },
+                workvcs_core::ContextItem {
+                    priority: workvcs_core::ContextPriority::P0,
+                    category: ContextItemCategory::CurrentTask,
+                    subject: workvcs_core::ContextItemSubject::Task {
+                        task_entity_id: task_id,
+                    },
+                    item_key: "p0.current_task.example".to_owned(),
+                    summary: "current task: Continue compact recovery".to_owned(),
+                },
+                workvcs_core::ContextItem {
+                    priority: workvcs_core::ContextPriority::P1,
+                    category: ContextItemCategory::BlockedDependency,
+                    subject: workvcs_core::ContextItemSubject::BlockedDependency {
+                        task_entity_id: task_id,
+                        dependency_task_entity_id: dependency_task_id,
+                    },
+                    item_key: "p1.blocked_dependency.example".to_owned(),
+                    summary: "blocked dependency resource_basis=1 refresh_hint=verification cache-refresh"
+                        .to_owned(),
+                },
+                workvcs_core::ContextItem {
+                    priority: workvcs_core::ContextPriority::P1,
+                    category: ContextItemCategory::GoalPlanPath,
+                    subject: workvcs_core::ContextItemSubject::GoalPlanPath {
+                        task_entity_id: task_id,
+                    },
+                    item_key: "p1.goal_plan_path.example".to_owned(),
+                    summary: "goal:protect long task plan:compact recovery".to_owned(),
+                },
+                workvcs_core::ContextItem {
+                    priority: workvcs_core::ContextPriority::P0,
+                    category: ContextItemCategory::SessionAnchor,
+                    subject: workvcs_core::ContextItemSubject::Session { session_id },
+                    item_key: "p0.session_anchor.example".to_owned(),
+                    summary: "session anchor".to_owned(),
+                },
+            ],
+            omission_summary: workvcs_core::ContextOmissionSummary {
+                total: 0,
+                by_priority: Vec::new(),
+                by_category: Vec::new(),
+            },
+        };
+
+        let output = render_resume_packet(&packet, 4);
+
+        assert_eq!(value(&output, "resume_profile"), "brief");
+        assert_eq!(value(&output, "resume_budget_items"), "4");
+        assert_eq!(value(&output, "resume_available_items"), "5");
+        assert_eq!(value(&output, "resume_items"), "4");
+        assert_eq!(value(&output, "resume_omitted_items"), "1");
+        assert_eq!(value(&output, "resume_goal_plan_paths"), "1");
+        assert_eq!(value(&output, "resume_current_tasks"), "1");
+        assert_eq!(value(&output, "resume_blockers"), "1");
+        assert_eq!(value(&output, "resume_verification_requirements"), "1");
+        assert_eq!(value(&output, "resume_resource_basis_items"), "2");
+        assert_eq!(value(&output, "resume_has_resource_basis"), "true");
+        assert_eq!(
+            value(&output, "resume_next_action"),
+            "resolve_blocked_dependency"
+        );
+        assert_eq!(value(&output, "resume_item.0.category"), "session_anchor");
+        assert_eq!(value(&output, "resume_item.1.category"), "goal_plan_path");
+        assert_eq!(value(&output, "resume_item.2.category"), "current_task");
+        assert_eq!(
+            value(&output, "resume_item.3.category"),
+            "blocked_dependency"
+        );
+        assert!(value(&output, "resume_item.3.summary_json").contains("refresh_hint="));
+        assert_eq!(
+            value(&output, "resume_omission_category.0.category"),
+            "verification_requirement"
+        );
+        assert_eq!(value(&output, "resume_omission_category.0.omitted"), "1");
     }
 
     #[test]
@@ -46475,6 +46831,531 @@ mod tests {
         assert!(ended.contains("lifecycle_state=ended"));
         assert_eq!(value(&ended, "session_match_expected"), "true");
         assert_eq!(value(&ended, "lifecycle_state_match_expected"), "true");
+    }
+
+    #[test]
+    fn cli_resume_shows_compact_read_only_recovery_context() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let store = path.to_str().expect("path text");
+        let project = tempdir.path().join("project");
+        fs::create_dir_all(&project).expect("create project dir");
+        let scoped_file = project.join("prerequisite.md");
+        fs::write(&scoped_file, b"baseline resume resource").expect("write scoped file");
+        let scope_path = scoped_file.to_str().expect("scope path text");
+        let scope_payload = format!(r#"{{"path":"{scope_path}"}}"#);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let mut head = value(&workspace, "genesis_commit_id");
+
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Protect long-task goal drift",
+        ])
+        .expect("parse goal"))
+        .expect("create goal");
+        head = value(&goal, "commit_id");
+
+        let plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Recover current step with low tokens",
+            "--strategy",
+            "Use the existing context packet",
+            "--constraint",
+            "stay read-only",
+        ])
+        .expect("parse plan"))
+        .expect("create plan");
+        head = value(&plan, "commit_id");
+
+        let dependent = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Blocked dependent needs prerequisite",
+        ])
+        .expect("parse dependent task"))
+        .expect("create dependent task");
+        head = value(&dependent, "commit_id");
+
+        let prerequisite = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--description",
+            "Prerequisite has resource-backed verification",
+        ])
+        .expect("parse prerequisite task"))
+        .expect("create prerequisite task");
+        head = value(&prerequisite, "commit_id");
+
+        let goal_contains_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--parent",
+            &value(&goal, "goal_entity_id"),
+            "--child",
+            &value(&plan, "plan_entity_id"),
+        ])
+        .expect("parse goal-plan containment"))
+        .expect("create goal-plan containment");
+        head = value(&goal_contains_plan, "commit_id");
+
+        let plan_contains_dependent = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--parent",
+            &value(&plan, "plan_entity_id"),
+            "--child",
+            &value(&dependent, "task_entity_id"),
+        ])
+        .expect("parse plan-dependent containment"))
+        .expect("create plan-dependent containment");
+        head = value(&plan_contains_dependent, "commit_id");
+
+        let plan_contains_prerequisite = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--parent",
+            &value(&plan, "plan_entity_id"),
+            "--child",
+            &value(&prerequisite, "task_entity_id"),
+        ])
+        .expect("parse plan-prerequisite containment"))
+        .expect("create plan-prerequisite containment");
+        head = value(&plan_contains_prerequisite, "commit_id");
+
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &value(&prerequisite, "task_entity_id"),
+            "--task-version",
+            &value(&prerequisite, "task_entity_version_id"),
+            "--local-key",
+            "AC-resume-resource",
+            "--statement",
+            "Resource-backed verification remains recoverable.",
+        ])
+        .expect("parse ac"))
+        .expect("create prerequisite ac");
+        head = value(&criterion, "commit_id");
+
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-resume-resource",
+            "--statement",
+            "Refresh the resume Resource basis.",
+        ])
+        .expect("parse vr"))
+        .expect("create prerequisite vr");
+        head = value(&requirement, "commit_id");
+
+        let resource = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "create",
+            store,
+            "--kind",
+            "local-file",
+        ])
+        .expect("parse resource"))
+        .expect("create resource");
+        let resource_id = value(&resource, "resource_id");
+
+        let baseline = run(Cli::try_parse_from([
+            "workvcs",
+            "resource",
+            "observe",
+            store,
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--content-file",
+            scope_path,
+        ])
+        .expect("parse resource observation"))
+        .expect("record resource observation");
+        let baseline_fingerprint = value(&baseline, "fingerprint");
+        let baseline_observation_id = value(&baseline, "observation_id");
+
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--verification-requirement",
+            &value(&requirement, "verification_requirement_entity_id"),
+            "--result",
+            "passed",
+            "--method",
+            "manual-review",
+            "--resource",
+            &resource_id,
+            "--adapter-kind",
+            "local-file",
+            "--adapter-schema-version",
+            "1",
+            "--scope-kind",
+            "path",
+            "--scope-schema-version",
+            "1",
+            "--scope-payload-json",
+            &scope_payload,
+            "--baseline-fingerprint",
+            &baseline_fingerprint,
+            "--baseline-observation",
+            &baseline_observation_id,
+        ])
+        .expect("parse verification"))
+        .expect("record verification");
+        head = value(&verification, "commit_id");
+
+        let dependency = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "depends-on",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &head,
+            "--task",
+            &value(&dependent, "task_entity_id"),
+            "--depends-on",
+            &value(&prerequisite, "task_entity_id"),
+        ])
+        .expect("parse dependency"))
+        .expect("create dependency");
+        assert_eq!(value(&dependency, "relation_type"), "depends_on");
+
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse session start"))
+        .expect("start session");
+        let session_id = value(&session, "session_id");
+        let dependent_id = value(&dependent, "task_entity_id");
+        let focused = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "focus-set",
+            store,
+            "--session",
+            &session_id,
+            "--focus",
+            &dependent_id,
+        ])
+        .expect("parse focus set"))
+        .expect("focus dependent task");
+        assert_eq!(value(&focused, "focus_entity_id"), dependent_id);
+
+        let branch_before =
+            run(
+                Cli::try_parse_from(["workvcs", "branch", "head", store, "--branch", &branch])
+                    .expect("parse branch head before"),
+            )
+            .expect("branch head before");
+        let state_digest = value(&branch_before, "state_digest");
+        let history_before = run(Cli::try_parse_from([
+            "workvcs", "history", store, "--branch", &branch, "--limit", "100",
+        ])
+        .expect("parse history before"))
+        .expect("history before");
+        let events_before = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--limit",
+            "100",
+        ])
+        .expect("parse events before"))
+        .expect("events before");
+        let packets_before = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "list",
+            store,
+            "--session",
+            &session_id,
+        ])
+        .expect("parse packets before"))
+        .expect("context packets before");
+        let claims_before =
+            run(
+                Cli::try_parse_from(["workvcs", "claim", "list", store, "--session", &session_id])
+                    .expect("parse claims before"),
+            )
+            .expect("claims before");
+
+        let resume = run(Cli::try_parse_from([
+            "workvcs",
+            "resume",
+            store,
+            "--session",
+            &session_id,
+            "--budget-items",
+            "12",
+            "--expected-state-digest",
+            &state_digest,
+        ])
+        .expect("parse resume"))
+        .expect("resume");
+
+        assert_eq!(value(&resume, "resume_profile"), "brief");
+        assert_eq!(value(&resume, "resume_budget_items"), "12");
+        assert_eq!(value(&resume, "matches_expected"), "true");
+        assert_eq!(value(&resume, "focus_entity_id"), dependent_id);
+        assert_eq!(
+            value(&resume, "resume_next_action"),
+            "resolve_blocked_dependency"
+        );
+        assert!(
+            value(&resume, "resume_goal_plan_paths")
+                .parse::<usize>()
+                .expect("goal plan path count")
+                >= 1
+        );
+        assert!(
+            value(&resume, "resume_current_tasks")
+                .parse::<usize>()
+                .expect("current task count")
+                >= 1
+        );
+        assert!(
+            value(&resume, "resume_blockers")
+                .parse::<usize>()
+                .expect("blocker count")
+                >= 1
+        );
+        assert!(
+            value(&resume, "resume_resource_basis_items")
+                .parse::<usize>()
+                .expect("resource basis count")
+                >= 1
+        );
+        assert_eq!(value(&resume, "resume_has_resource_basis"), "true");
+        assert!(
+            value(&resume, "resume_items")
+                .parse::<usize>()
+                .expect("resume item count")
+                <= 12
+        );
+        assert!(resume.contains("Protect long-task goal drift"));
+        assert!(resume.contains("Recover current step with low tokens"));
+        assert!(resume.contains("blocked dependency"));
+        assert!(resume.contains("resource_basis=1"));
+        assert!(resume.contains("refresh_hint="));
+        assert!(!resume.contains("context_item."));
+
+        let zero_budget_resume = run(Cli::try_parse_from([
+            "workvcs",
+            "resume",
+            store,
+            "--session",
+            &session_id,
+            "--budget-items",
+            "0",
+        ])
+        .expect("parse zero budget resume"));
+        assert!(matches!(
+            zero_budget_resume,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message == "resume budget items must be greater than zero"
+        ));
+
+        let branch_after = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            store,
+            "--branch",
+            &branch,
+            "--expected-state-digest",
+            &state_digest,
+        ])
+        .expect("parse branch head after"))
+        .expect("branch head after");
+        assert_eq!(
+            value(&branch_after, "head_commit_id"),
+            value(&branch_before, "head_commit_id")
+        );
+        assert_eq!(value(&branch_after, "state_digest"), state_digest);
+        assert_eq!(value(&branch_after, "matches_expected"), "true");
+
+        let history_after = run(Cli::try_parse_from([
+            "workvcs",
+            "history",
+            store,
+            "--branch",
+            &branch,
+            "--limit",
+            "100",
+            "--expected-entries",
+            &value(&history_before, "entries"),
+        ])
+        .expect("parse history after"))
+        .expect("history after");
+        assert_eq!(
+            value(&history_after, "entries"),
+            value(&history_before, "entries")
+        );
+        assert_eq!(value(&history_after, "entries_match_expected"), "true");
+
+        let events_after = run(Cli::try_parse_from([
+            "workvcs",
+            "event",
+            "list",
+            store,
+            "--workspace",
+            &workspace_id,
+            "--limit",
+            "100",
+            "--expected-events",
+            &value(&events_before, "events"),
+        ])
+        .expect("parse events after"))
+        .expect("events after");
+        assert_eq!(
+            value(&events_after, "events"),
+            value(&events_before, "events")
+        );
+        assert_eq!(value(&events_after, "events_match_expected"), "true");
+
+        let packets_after = run(Cli::try_parse_from([
+            "workvcs",
+            "context-packet",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--expected-packets",
+            &value(&packets_before, "context_packets"),
+        ])
+        .expect("parse packets after"))
+        .expect("context packets after");
+        assert_eq!(
+            value(&packets_after, "context_packets"),
+            value(&packets_before, "context_packets")
+        );
+        assert_eq!(
+            value(&packets_after, "context_packets_match_expected"),
+            "true"
+        );
+
+        let claims_after = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "list",
+            store,
+            "--session",
+            &session_id,
+            "--expected-claims",
+            &value(&claims_before, "claims"),
+        ])
+        .expect("parse claims after"))
+        .expect("claims after");
+        assert_eq!(
+            value(&claims_after, "claims"),
+            value(&claims_before, "claims")
+        );
+        assert_eq!(value(&claims_after, "claims_match_expected"), "true");
     }
 
     #[test]

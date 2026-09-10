@@ -2,6 +2,10 @@ use crate::BranchId;
 use crate::ChangeSetId;
 use crate::CheckpointId;
 use crate::ClaimId;
+use crate::CloseoutInspectGoalProjection;
+use crate::CloseoutInspectOptions;
+use crate::CloseoutInspectPlanProjection;
+use crate::CloseoutInspectTaskProjection;
 use crate::CommitId;
 use crate::EntityId;
 use crate::EventId;
@@ -22,26 +26,30 @@ use crate::error::Result;
 use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
-    AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
-    BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
-    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions, BundleImportApplyOptions,
-    BundleImportApplyResult, BundleImportAttemptListOptions, BundleImportAttemptListResult,
-    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
-    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
-    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeOperationListResult,
-    ChangeSetCausalAnchorListResult, ChangeSetSnapshot, CheckpointCreateOptions,
-    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, CommitSnapshot,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
-    EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
-    EvidenceCreateOptions, EvidenceCreateResult, EvidenceListOptions, EvidenceListResult,
-    EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit,
-    GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult, IntegrityReport,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
-    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
-    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot,
+    AuthorizationReceiptConsumeOptions, AuthorizationReceiptConsumeResult,
+    AuthorizationReceiptIssueOptions, AuthorizationReceiptIssueResult,
+    AuthorizationReceiptListOptions, AuthorizationReceiptListResult, AuthorizationReceiptSnapshot,
+    BranchForkOptions, BranchForkResult, BranchHead, BranchProjectionRefreshOptions,
+    BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
+    BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
+    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
+    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
+    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
+    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadValidationOptions,
+    BundlePayloadValidationResult, ChangeOperationListResult, ChangeSetCausalAnchorListResult,
+    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
+    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
+    CheckpointValidationResult, CommitSnapshot, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, EntityTransitionCommit, EntityTransitionOptions,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions,
+    GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
+    HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureListOptions,
     KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
     KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
@@ -54,24 +62,26 @@ use crate::history::{
     KnowledgeSpaceHistoricalExposuresOptions, KnowledgeSpaceHistoricalExposuresResult,
     KnowledgeSpaceRefreshSourceStatusesOptions, KnowledgeSpaceRefreshSourceStatusesResult,
     KnowledgeSpaceSourceStaleExposuresOptions, KnowledgeSpaceSourceStaleExposuresResult,
-    KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
-    PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
-    RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
-    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
-    ResourceListOptions, ResourceListResult, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationListOptions, ResourceObservationListResult,
-    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanAdmissionOptions,
+    PlanAdmissionResult, PlanCreateCommit, PlanCreateOptions, PlanEvolutionOptions,
+    PlanEvolutionResult, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    RecordCreateCommit, RecordCreateOptions, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceListOptions, ResourceListResult,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
+    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheListOptions, VerificationApplicabilityCacheListResult,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
@@ -138,6 +148,12 @@ impl Engine {
         })
     }
 
+    pub fn open_readonly(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self {
+            store: Store::open_readonly(path.as_ref())?,
+        })
+    }
+
     pub fn migrate_context_packet_snapshot_schema(
         path: impl AsRef<Path>,
     ) -> Result<ContextPacketSnapshotSchemaMigrationResult> {
@@ -148,8 +164,50 @@ impl Engine {
         self.store.info()
     }
 
+    pub(crate) fn store_path(&self) -> &Path {
+        self.store.path()
+    }
+
     pub fn create_workspace(&mut self, options: WorkspaceInitOptions) -> Result<WorkspaceInfo> {
         self.store.create_workspace(&options)
+    }
+
+    pub fn admit_plan(&mut self, options: PlanAdmissionOptions) -> Result<PlanAdmissionResult> {
+        self.store.admit_plan(&options)
+    }
+
+    pub fn evolve_plan(&mut self, options: PlanEvolutionOptions) -> Result<PlanEvolutionResult> {
+        self.store.evolve_plan(&options)
+    }
+
+    pub fn issue_authorization_receipt(
+        &mut self,
+        options: AuthorizationReceiptIssueOptions,
+    ) -> Result<AuthorizationReceiptIssueResult> {
+        self.store.issue_authorization_receipt(&options)
+    }
+
+    pub fn consume_authorization_receipt(
+        &mut self,
+        options: AuthorizationReceiptConsumeOptions,
+    ) -> Result<AuthorizationReceiptConsumeResult> {
+        self.store.consume_authorization_receipt(&options)
+    }
+
+    pub fn authorization_receipt_at(
+        &self,
+        commit_id: CommitId,
+        receipt_entity_id: EntityId,
+    ) -> Result<AuthorizationReceiptSnapshot> {
+        self.store
+            .authorization_receipt_at(commit_id, receipt_entity_id)
+    }
+
+    pub fn authorization_receipts_at(
+        &self,
+        options: AuthorizationReceiptListOptions,
+    ) -> Result<AuthorizationReceiptListResult> {
+        self.store.authorization_receipts_at(&options)
     }
 
     pub fn workspace_info(&self, workspace_id: WorkspaceId) -> Result<WorkspaceInfo> {
@@ -497,6 +555,27 @@ impl Engine {
 
     pub fn validate_integrity(&self) -> Result<IntegrityReport> {
         self.store.validate_integrity()
+    }
+
+    pub fn closeout_inspect_task(
+        &self,
+        options: CloseoutInspectOptions,
+    ) -> Result<CloseoutInspectTaskProjection> {
+        crate::closeout::inspect_task(self, options)
+    }
+
+    pub fn closeout_inspect_plan(
+        &self,
+        options: CloseoutInspectOptions,
+    ) -> Result<CloseoutInspectPlanProjection> {
+        crate::closeout::inspect_plan(self, options)
+    }
+
+    pub fn closeout_inspect_goal(
+        &self,
+        options: CloseoutInspectOptions,
+    ) -> Result<CloseoutInspectGoalProjection> {
+        crate::closeout::inspect_goal(self, options)
     }
 
     pub fn create_evidence(

@@ -3218,6 +3218,7 @@ fn why_relation_kind_summary(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::TaskOrderedBefore => "task_ordered_before",
         WhyRelationKind::KnowledgeExposureDerivedFrom => "knowledge_exposure_derived_from",
         WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
+        WhyRelationKind::PlanSupersedes => "plan_supersedes",
     }
 }
 

@@ -8,6 +8,81 @@ Agent-facing governance workflow. It is meant for other Codex sessions that
 need a compact answer to: "Can WorkVCS hold the durable Plan state for this
 task, and what should remain in work-governance?"
 
+## P0 Cutover Entrypoint
+
+The implemented P0 surface is project bind/discover, read-only `resume --cwd`,
+atomic/idempotent `plan admit`, and `plan evolve` with manifest mode
+`in_place|supersede`. Binding uses the Git common-directory
+identity and discovers an external Store registry through explicit
+`--registry PATH`, or the default locator under `WORKVCS_HOME`. The registry
+and Store are forced outside the project/repository; complete Store integrity
+validation is required before use, and ambiguous active Session state fails
+closed.
+
+The live admit syntax is:
+
+```text
+workvcs plan admit [OPTIONS] --manifest <PATH> <STORE|--cwd <PATH>>
+```
+
+Options are `--cwd PATH`, `--registry PATH`, `--branch BRANCH`, and
+`--manifest PATH`. Explicit `STORE` requires `--branch`; `--cwd` uses the
+bound branch and cannot combine with `--branch`. Expected head/state and
+idempotency are manifest fields; there is no `--expected-head` option. The
+manifest can carry prior findings, decisions, questions, constraints, and
+evidence. Admission is one atomic transition and replaying the same
+idempotency key reuses the prior result.
+
+The live evolve syntax is:
+
+```text
+workvcs plan evolve [OPTIONS] --manifest <PATH> <STORE|--cwd <PATH>>
+```
+
+Its manifest `mode` is `in_place` or `supersede`. In-place evolution updates
+only explicitly supplied Plan fields, preserves omitted fields, atomically appends
+Tasks with AC/VR, Records, and Evidence, and does not implicitly delete or
+replace omitted state. Expected guards, target Plan identity/version/digest,
+and idempotency are manifest fields.
+
+`mode=supersede` is current and performs the guarded old→superseded/new→active
+transition with same-Goal dual `contains` relations and a machine
+`new_plan→old_plan` `supersedes` relation. Constraints require explicit
+`carry_all` or `replace`; old Tasks, Records, and Evidence are not migrated.
+`receipt issue`, `receipt show`, `receipt list`, and `receipt consume` are
+current P0-3a/P0-3b commands.
+They expose only mechanical binding plus authority-ref type/digest and a
+redacted marker. The structured `authority_ref.ref` input is automatically
+redacted and is not persisted or emitted in scope, payload, CLI/show/list, or
+debug output; this is not a full-manifest secret scan. Receipt `rationale` is
+persisted, so callers must not put credentials, tokens, or other secrets in it.
+Consume is branch-scoped single-use; idempotent
+replay may reuse only a committed `workstate_commit` result, never an orphan
+ChangeSet, and no Store-global lock across restore histories is promised. It is
+not atomic with an external action. `revoke`, plus receipt projection into
+`context`/`why`, remain deferred and are not current capabilities; they do not
+block the current P0 surface.
+No-Plan usage is zero-write:
+discovery and resume do not create a Plan, Session, Claim, receipt, or other
+WorkVCS state.
+
+`workvcs closeout inspect` is current. It requires explicit
+`--target-kind goal|plan|task` and `--target`, using either `--cwd PATH` or
+`STORE` with `--branch BRANCH`/`--commit COMMIT`; it never implicitly selects a
+Session. The read is OS/query-only and bounded: default budget 50, maximum 200,
+stable ordering, `truncated`/omitted counts, direct target expansion,
+exact-target runtime aggregates, and before/after branch/source/target/Store
+main-WAL-SHM proof. It emits mechanical state only, not policy,
+authorization, quality, ready, complete, push, or deploy conclusions.
+
+Registry updates use cross-process mutual exclusion and atomic replacement;
+Store use requires complete integrity validation. WorkVCS does not
+decide authorization policy.
+
+This cutover has no `workctl`, schema-v3/v4/v5, or `.work-governance`
+compatibility surface. WorkVCS does not decide authorization policy; policy,
+confirmation gates, and completion judgment remain with work-governance.
+
 Use the live command help and current repository documents as authority before
 running a real workflow. Do not assume commands or flags that are absent from
 `workvcs --help` in the current checkout or installed binary.
@@ -143,10 +218,11 @@ The current top-level CLI exposes these command families:
 | --- | --- | --- |
 | Store and integrity | `init`, `doctor`, `store`, `canonical`, `id` | Store bootstrap, metadata, schema/integrity checks, lineage, canonical bytes, typed IDs, and digests. |
 | Versioned work graph | `workspace`, `branch`, `goal`, `plan`, `task`, `reference`, `entity` | Workspace and Work Branch state, Goals, Plans, Tasks, structural references, lifecycle transitions, containment, dependency, ordering, and general entity inspection. |
-| Acceptance and evidence | `ac`, `vr`, `verify`, `verification`, `evidence` | Acceptance Criteria, Verification Requirements, single-target verification wrapper output, Verification judgments, Evidence records, and closeout support. |
+| Acceptance and evidence | `ac`, `vr`, `verify`, `verification`, `evidence` | Acceptance Criteria, Verification Requirements, single-target verification wrapper output, Verification judgments, and Evidence records. |
 | Resources and drift | `resource`, `projection`, `verification cache-refresh` | Resource registration, observations, applicability, stale/drift/unavailable/error projections, and explicit foreground refresh. |
 | Runtime coordination | `session`, `claim`, `handoff`, `next`, `runnable` | Agent Sessions, focus, exclusive/shared Claims, Claim transfer/takeover, focused Handoffs, runnable Task projection, and next-work selection. |
-| Query and explanation | `resume`, `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Compact continuation summaries, low-token recovery packets, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
+| Authorization receipts | `receipt issue`, `receipt show`, `receipt list`, `receipt consume` | Current P0-3a/P0-3b mechanical AuthorizationReceipt issue, redacted inspection/listing, and branch-scoped single-use consume; revoke is not current. |
+| Query and explanation | `resume`, `closeout inspect`, `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Compact continuation and closeout summaries, bounded mechanical inspection, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
 | Portability and branching | `checkpoint`, `bundle`, `restore`, `merge` | Checkpoints, local Bundle export/validate/apply flows, restore-as-new-commit semantics, and three-way Work Branch merge lifecycle. |
 | Error handling | `--error-format key-value|json` plus command stderr | Script-readable error code, category, retryability, optional JSON output, and actionable recovery boundaries. |
 

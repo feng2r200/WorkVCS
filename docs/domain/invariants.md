@@ -5,6 +5,95 @@ implementation that violates one must first revise the confirmed design under
 explicit authority. An ADR may record that revision under current repository
 policy, but does not create the authority by itself.
 
+## P0 cutover entry invariants
+
+### INV-081 — Project identity uses the Git common directory
+
+Project binding identifies a repository through its Git common directory, not
+through a mutable worktree path. Worktree aliases must not create duplicate
+project identities.
+
+### INV-082 — Store discovery is external and double-validated
+
+The registry is selected by explicit `--registry PATH` or the `WORKVCS_HOME`
+default and is not stored in the repository. A discovered Store undergoes a
+second identity/format/integrity validation before use.
+
+### INV-083 — Ambiguous active Session state fails closed
+
+Zero, multiple, or otherwise ambiguous active Sessions cannot be silently
+selected by project bind, resume, admission, or closeout inspection.
+
+### INV-084 — Read-only entrypoints do not write
+
+Project discovery, `resume --cwd`, and current `closeout inspect` must not
+create or mutate WorkVCS state, receipts, Sessions, Claims, or Work-State
+commits.
+
+### INV-085 — Plan admission is atomic and idempotent
+
+P0-2a admits one manifest as one atomic WorkVCS transition. Repeating the same
+idempotency key and manifest identity reuses the prior result rather than
+duplicating Goal, Plan, Task, Record, or Evidence state. Expected head/state
+guards are manifest fields, not CLI flags.
+
+### INV-086 — Registry writes are externally serialized and replace atomically
+
+The external project registry is outside the project/repository. Updates use
+cross-process mutual exclusion and atomic replacement; a partially written
+registry is never an accepted binding source.
+
+### INV-087 — Store use requires complete integrity validation
+
+Project discovery and Plan admission must fully validate Store identity,
+format, schema, and integrity before using the Store as an authority.
+
+### INV-088 — WorkVCS does not decide authorization policy
+
+WorkVCS may expose mechanical state and target-bound receipt Records, but
+authorization policy, confirmation gates, and completion judgment remain
+outside WorkVCS.
+
+### INV-089 — In-place Plan evolution preserves omitted state
+
+P0-2b `plan evolve` with `mode=in_place` updates only explicitly supplied Plan
+fields, preserves omitted fields, and atomically appends declared Tasks,
+Acceptance Criteria, Verification Requirements, Records, and Evidence. It
+does not implicitly delete or replace omitted state. Expected guards, target
+Plan identity/version/digest, and idempotency are manifest fields.
+
+### INV-090 — Supersede evolution preserves explicit Plan ancestry
+
+P0-2b2 `plan evolve` with `mode=supersede` transitions the old active Plan to
+`superseded`, creates a new active Plan under the same unique Goal, retains the
+old `contains` relation, adds the new `contains` relation, and creates the
+machine `new_plan→old_plan` `supersedes` relation. Constraints require explicit
+`carry_all` or `replace`; Tasks, Records, and Evidence are not automatically
+migrated. Expected IDs, versions, digests, and branch head provide CAS guards;
+the operation is one idempotent transaction.
+
+### INV-091 — P0-3a receipt inspection is mechanical and redacted
+
+Current receipt issue/show/list uses a dedicated AuthorizationReceipt Record
+subtype with branch, target, action, contract-digest, transaction, idempotency,
+and target-guard semantics. The authority reference contributes only its
+type/digest and a redacted marker; original text is absent from scope, payload,
+CLI/show/list, and debug output. P0-3b consume is branch-scoped single-use;
+idempotent replay may reuse only a committed `workstate_commit` result, never
+an orphan ChangeSet. No Store-global lock across restore histories is promised,
+and consume is not atomic with an external action. Receipt revoke remains
+deferred, and receipt projection into `context` or `why` is not current; these
+are not prerequisites for the current P0 surface.
+
+### INV-092 — Closeout inspect is a bounded read-only projection
+
+P0-4 `closeout inspect` requires an explicit goal/plan/task target and uses
+OS-level read-only plus database `query_only` access. It expands only the
+target's documented direct scope, uses a default budget of 50 and hard maximum
+of 200 with stable truncation/omitted reporting, aggregates exact-target
+runtime state, and proves before/after source state and Store main-WAL-SHM
+metadata without creating state or making policy conclusions.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

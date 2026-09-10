@@ -1,7 +1,17 @@
+use super::admission::{
+    ADMISSION_OPERATION_SCHEMA_VERSION, ADMISSION_OPERATION_TYPE,
+    EVOLUTION_OPERATION_SCHEMA_VERSION, EVOLUTION_OPERATION_TYPE,
+};
 use super::containment::PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE;
 use super::entity::{
     ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION, ENTITY_TRANSITION_OPERATION_TYPE,
     canonical_json_string,
+};
+use super::receipt::{
+    AUTHORIZATION_RECEIPT_CONSUME_OPERATION_SCHEMA_VERSION,
+    AUTHORIZATION_RECEIPT_CONSUME_OPERATION_TYPE,
+    AUTHORIZATION_RECEIPT_ISSUE_OPERATION_SCHEMA_VERSION,
+    AUTHORIZATION_RECEIPT_ISSUE_OPERATION_TYPE,
 };
 use super::record::{
     KNOWLEDGE_RELATION_CREATE_OPERATION_SCHEMA_VERSION, KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE,
@@ -597,6 +607,20 @@ fn validate_entity_transition_changeset(
                 )));
             }
         }
+        ADMISSION_OPERATION_TYPE => {
+            if operation_schema_version != ADMISSION_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        EVOLUTION_OPERATION_TYPE => {
+            if operation_schema_version != EVOLUTION_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
         PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE => {
             if operation_schema_version != PRIMARY_CONTAINMENT_CREATE_OPERATION_SCHEMA_VERSION {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
@@ -606,6 +630,20 @@ fn validate_entity_transition_changeset(
         }
         STRUCTURAL_REFERENCE_CREATE_OPERATION_TYPE => {
             if operation_schema_version != STRUCTURAL_REFERENCE_CREATE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        AUTHORIZATION_RECEIPT_ISSUE_OPERATION_TYPE => {
+            if operation_schema_version != AUTHORIZATION_RECEIPT_ISSUE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
+        AUTHORIZATION_RECEIPT_CONSUME_OPERATION_TYPE => {
+            if operation_schema_version != AUTHORIZATION_RECEIPT_CONSUME_OPERATION_SCHEMA_VERSION {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
                     "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
                 )));
@@ -647,7 +685,11 @@ struct ChangeSetRow {
 fn uses_summary_changeset_payload(operation_type: &str) -> bool {
     matches!(
         operation_type,
-        MERGE_CONTINUE_OPERATION_TYPE | RESTORE_OPERATION_TYPE
+        ADMISSION_OPERATION_TYPE
+            | EVOLUTION_OPERATION_TYPE
+            | AUTHORIZATION_RECEIPT_CONSUME_OPERATION_TYPE
+            | MERGE_CONTINUE_OPERATION_TYPE
+            | RESTORE_OPERATION_TYPE
     )
 }
 

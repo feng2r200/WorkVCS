@@ -292,7 +292,7 @@ pub(crate) fn load_workspace_info(
         genesis_changeset_id,
     )?;
 
-    let branch = load_initial_branch(connection, workspace_id, genesis_commit_id)?;
+    let branch = load_initial_branch(connection, workspace_id)?;
 
     Ok(WorkspaceInfo {
         workspace_id,
@@ -449,13 +449,12 @@ fn validate_workspace_genesis_shape(
         connection,
         "SELECT count(*)
          FROM branch
-         WHERE workspace_id = ?1
-           AND head_commit_id = ?2",
-        params![&workspace_id_bytes[..], &commit_id_bytes[..]],
+         WHERE workspace_id = ?1",
+        params![&workspace_id_bytes[..]],
     )?;
     if branch_count < 1 {
         return Err(WorkVcsError::StoreBootstrapInvalid(format!(
-            "workspace {workspace_id} Genesis must have at least one Branch head"
+            "workspace {workspace_id} must have at least one Branch"
         )));
     }
 
@@ -486,20 +485,17 @@ fn validate_workspace_genesis_shape(
 fn load_initial_branch(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
-    commit_id: CommitId,
 ) -> Result<(BranchId, String)> {
     let workspace_id_bytes = workspace_id.raw_bytes();
-    let commit_id_bytes = commit_id.raw_bytes();
     let branch = connection
         .inner()
         .query_row(
             "SELECT branch_id, name
              FROM branch
              WHERE workspace_id = ?1
-               AND head_commit_id = ?2
              ORDER BY created_at_us ASC, branch_id ASC
              LIMIT 1",
-            params![&workspace_id_bytes[..], &commit_id_bytes[..]],
+            params![&workspace_id_bytes[..]],
             |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()

@@ -2,47 +2,62 @@ use clap::{ArgGroup, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::{MatchOptions, Pattern, glob_with};
 use std::ffi::OsStr;
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write as IoWrite;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command as ProcessCommand;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
     AcceptanceCriterionRevisionCommit, AcceptanceCriterionRevisionOptions,
     AcceptanceCriterionSnapshot, ApplicabilityResourceObservationStatus,
-    ApplicabilityResourceStampInput, BranchForkOptions, BranchForkResult, BranchHead, BranchId,
-    BranchProjectionRefreshOptions, BranchProjectionRefreshResult, BranchProjectionSnapshot,
-    BundleBranchHeadPreflightDetail, BundleExportManifest, BundleExportOptions,
-    BundleImportApplyOptions, BundleImportApplyResult, BundleImportAttemptListOptions,
-    BundleImportAttemptListResult, BundleImportAttemptOptions, BundleImportAttemptResult,
-    BundleImportAttemptSnapshot, BundleImportPreflightOptions, BundleImportPreflightResult,
-    BundleManifestValidationOptions, BundleManifestValidationResult, BundlePayloadExport,
-    BundlePayloadExportOptions, BundlePayloadInput, BundlePayloadValidationOptions,
-    BundlePayloadValidationResult, CanonicalValue, ChangeOperationListResult,
-    ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot, CheckpointCreateOptions,
-    CheckpointCreateResult, CheckpointId, CheckpointLatestOptions, CheckpointLatestResult,
-    CheckpointListOptions, CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult,
-    ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardAction, ClaimGuardOptions,
-    ClaimGuardReason, ClaimGuardResult, ClaimId, ClaimLifecycleState, ClaimListOptions,
-    ClaimListResult, ClaimMode, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
-    ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
-    ClaimTransferResult, CommitId, CommitSnapshot, ContextItemCategory, ContextOverview,
-    ContextOverviewOptions, ContextPacket, ContextPacketId, ContextPacketListOptions,
-    ContextPacketListResult, ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot,
-    ContextPacketSnapshotSchemaMigrationResult, ContextProfile, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityTransitionCommit,
-    EntityTransitionOptions, EntityVersionId, EventId, EventListOptions, EventListResult,
-    EventSnapshot, EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions,
-    EvidenceCreateResult, EvidenceId, EvidenceListOptions, EvidenceListResult, EvidenceSnapshot,
-    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
-    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
-    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
-    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalStatus, GoalTransitionCommit,
-    GoalTransitionOptions, HistoryEntry, HistoryQueryOptions, ImportId, IntegrityReport,
-    KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
-    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
-    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    ApplicabilityResourceStampInput, AuthorizationReceiptConsumeManifest,
+    AuthorizationReceiptConsumeOptions, AuthorizationReceiptConsumeResult,
+    AuthorizationReceiptIssueManifest, AuthorizationReceiptIssueOptions,
+    AuthorizationReceiptIssueResult, AuthorizationReceiptListOptions,
+    AuthorizationReceiptListResult, AuthorizationReceiptOutcome, AuthorizationReceiptSnapshot,
+    BranchForkOptions, BranchForkResult, BranchHead, BranchId, BranchProjectionRefreshOptions,
+    BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleBranchHeadPreflightDetail,
+    BundleExportManifest, BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
+    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
+    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
+    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
+    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue,
+    ChangeOperationListResult, ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot,
+    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
+    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
+    CheckpointValidationResult, ClaimForceTakeoverOptions, ClaimForceTakeoverResult,
+    ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason, ClaimGuardResult, ClaimId,
+    ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions,
+    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
+    ClaimTaskResult, ClaimTransferOptions, ClaimTransferResult, CloseoutInspectCategory,
+    CloseoutInspectGapCategory, CloseoutInspectGoalProjection, CloseoutInspectNonExpandedCategory,
+    CloseoutInspectOptions, CloseoutInspectPlanProjection, CloseoutInspectReadObservation,
+    CloseoutInspectReadProof, CloseoutInspectRuntimeGapCategory, CloseoutInspectRuntimeSummary,
+    CloseoutInspectSource, CloseoutInspectSourceKind, CloseoutInspectStoreFileKind,
+    CloseoutInspectStoreFileMetadata, CloseoutInspectTargetDigestStatus, CloseoutInspectTargetKind,
+    CloseoutInspectTargetResolution, CloseoutInspectTaskProjection,
+    CloseoutInspectVerificationTargetKind, CommitId, CommitSnapshot, ContextItemCategory,
+    ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketId,
+    ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
+    ContextPacketSaveResult, ContextPacketSnapshot, ContextPacketSnapshotSchemaMigrationResult,
+    ContextProfile, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine,
+    EntityId, EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceContentInput,
+    EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceId,
+    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId,
+    ExternalObjectId, ExternalObjectRefListOptions, ExternalObjectRefListResult,
+    ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
+    ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalStatus, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryEntry, HistoryQueryOptions, ImportId, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -64,7 +79,9 @@ use workvcs_core::{
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
     MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
-    NextWorkOptions, NextWorkResult, OperationId, PlanCreateCommit, PlanCreateOptions,
+    NextWorkOptions, NextWorkResult, OperationId, PlanAdmissionManifest, PlanAdmissionOptions,
+    PlanAdmissionOutcome, PlanAdmissionResult, PlanCreateCommit, PlanCreateOptions,
+    PlanEvolutionManifest, PlanEvolutionOptions, PlanEvolutionOutcome, PlanEvolutionResult,
     PlanSnapshot, PlanStatus, PlanTransitionCommit, PlanTransitionOptions,
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
     RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
@@ -126,6 +143,7 @@ Commands:
   canonical     Encode and digest canonical JSON values
   id            Generate and validate typed WorkVCS identifiers
   store         Inspect Store metadata, lineage, and migrations
+  project       Bind and discover project Store entrypoints
   history       List commit history from a branch or commit
   changeset     Inspect changesets and change operations
   commit        Inspect commit metadata and causal anchors
@@ -141,6 +159,8 @@ Commands:
   knowledge     Manage knowledge statements, relations, and exposures
   goal          Create, show, list, and transition goals
   plan          Create, show, list, and transition plans
+  receipt       Issue and inspect mechanical authorization receipts
+  closeout      Inspect mechanical closeout projections
   task          Create, schedule, show, and transition tasks
   ac            Manage acceptance criteria
   vr            Manage verification requirements
@@ -169,6 +189,13 @@ Options:
 ";
 
 const RESUME_DEFAULT_BUDGET_ITEMS: usize = 12;
+const PROJECT_REGISTRY_ENV: &str = "WORKVCS_HOME";
+const PROJECT_REGISTRY_FILE: &str = "project-bindings.json";
+#[cfg(not(test))]
+const PROJECT_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const PROJECT_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_millis(500);
+const PROJECT_REGISTRY_LOCK_RETRY: Duration = Duration::from_millis(25);
 const RESUME_CATEGORY_ORDER: [ContextItemCategory; 19] = [
     ContextItemCategory::SessionAnchor,
     ContextItemCategory::BranchOverview,
@@ -281,6 +308,11 @@ enum Command {
     Store {
         #[command(subcommand)]
         command: StoreCommand,
+    },
+    #[command(about = "Bind and discover project Store entrypoints")]
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
     },
     #[command(group(
         ArgGroup::new("history-start")
@@ -515,6 +547,15 @@ enum Command {
         #[command(subcommand)]
         command: PlanCommand,
     },
+    Receipt {
+        #[command(subcommand)]
+        command: ReceiptCommand,
+    },
+    #[command(about = "Inspect mechanical closeout projections")]
+    Closeout {
+        #[command(subcommand)]
+        command: CloseoutCommand,
+    },
     Task {
         #[command(subcommand)]
         command: TaskCommand,
@@ -577,12 +618,24 @@ enum Command {
         #[arg(long)]
         expected_state_digest: Option<String>,
     },
+    #[command(group(
+        ArgGroup::new("resume-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
     Resume {
         #[arg(value_name = "STORE")]
-        store: PathBuf,
+        store: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
 
         #[arg(long)]
-        session: String,
+        session: Option<String>,
 
         #[arg(long)]
         budget_items: Option<usize>,
@@ -1443,6 +1496,78 @@ enum StoreCommand {
         #[arg(long)]
         expected_exposures: Option<usize>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProjectCommand {
+    #[command(about = "Bind a project cwd to a Store workspace and branch")]
+    Bind {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(long, value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        workspace: String,
+
+        #[arg(long)]
+        branch: String,
+    },
+    #[command(about = "Discover and verify the Store binding for a project cwd")]
+    Discover {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CloseoutCommand {
+    #[command(about = "Inspect a Task, Plan, or Goal closeout projection without writing")]
+    #[command(group(
+        ArgGroup::new("closeout-inspect-source")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    Inspect {
+        #[arg(value_name = "STORE")]
+        store: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long, value_enum)]
+        target_kind: CloseoutTargetKindArg,
+
+        #[arg(long)]
+        target: String,
+
+        #[arg(long)]
+        budget_items: Option<usize>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum CloseoutTargetKindArg {
+    Goal,
+    Plan,
+    Task,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2852,6 +2977,50 @@ enum GoalCommand {
 
 #[derive(Debug, Subcommand)]
 enum PlanCommand {
+    #[command(group(
+        ArgGroup::new("plan-admit-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    Admit {
+        #[arg(value_name = "STORE")]
+        store: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        manifest: PathBuf,
+    },
+    #[command(group(
+        ArgGroup::new("plan-evolve-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    Evolve {
+        #[arg(value_name = "STORE")]
+        store: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        manifest: PathBuf,
+    },
     Create {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -2974,6 +3143,112 @@ enum PlanCommand {
 
         #[arg(long)]
         rationale: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ReceiptCommand {
+    #[command(group(
+        ArgGroup::new("receipt-issue-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    Issue {
+        #[arg(value_name = "STORE")]
+        store: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long, value_name = "PATH")]
+        manifest: PathBuf,
+    },
+    #[command(group(
+        ArgGroup::new("receipt-consume-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    Consume {
+        #[arg(value_name = "STORE")]
+        store: Option<PathBuf>,
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        manifest: PathBuf,
+    },
+    #[command(group(
+        ArgGroup::new("receipt-show-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    Show {
+        #[arg(value_name = "STORE")]
+        store: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        receipt: String,
+
+        #[arg(long)]
+        expected_state_digest: Option<String>,
+    },
+    #[command(group(
+        ArgGroup::new("receipt-list-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    List {
+        #[arg(value_name = "STORE")]
+        store: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(long)]
+        branch: Option<String>,
+
+        #[arg(long)]
+        commit: Option<String>,
+
+        #[arg(long)]
+        status: Option<String>,
+
+        #[arg(long)]
+        target: Option<String>,
+
+        #[arg(long)]
+        action: Option<String>,
+
+        #[arg(long)]
+        expected_receipts: Option<usize>,
     },
 }
 
@@ -6170,6 +6445,40 @@ fn run(cli: Cli) -> Result<String> {
                 Ok(output)
             }
         },
+        Command::Project { command } => match command {
+            ProjectCommand::Bind {
+                cwd,
+                registry,
+                store,
+                workspace,
+                branch,
+            } => bind_project(cwd, registry, store, workspace, branch),
+            ProjectCommand::Discover { cwd, registry } => {
+                let discovery = discover_project(cwd, registry)?;
+                Ok(render_project_discovery(&discovery))
+            }
+        },
+        Command::Closeout { command } => match command {
+            CloseoutCommand::Inspect {
+                store,
+                cwd,
+                registry,
+                branch,
+                commit,
+                target_kind,
+                target,
+                budget_items,
+            } => run_closeout_inspect(
+                store,
+                cwd,
+                registry,
+                branch,
+                commit,
+                target_kind,
+                target,
+                budget_items,
+            ),
+        },
         Command::History {
             store,
             branch,
@@ -8365,6 +8674,20 @@ fn run(cli: Cli) -> Result<String> {
             }
         },
         Command::Plan { command } => match command {
+            PlanCommand::Admit {
+                store,
+                cwd,
+                registry,
+                branch,
+                manifest,
+            } => run_plan_admit(store, cwd, registry, branch, manifest),
+            PlanCommand::Evolve {
+                store,
+                cwd,
+                registry,
+                branch,
+                manifest,
+            } => run_plan_evolve(store, cwd, registry, branch, manifest),
             PlanCommand::Create {
                 store,
                 branch,
@@ -8501,6 +8824,60 @@ fn run(cli: Cli) -> Result<String> {
                 )?)?;
                 Ok(render_plan_transition(&transition))
             }
+        },
+        Command::Receipt { command } => match command {
+            ReceiptCommand::Issue {
+                store,
+                cwd,
+                registry,
+                branch,
+                manifest,
+            } => run_receipt_issue(store, cwd, registry, branch, manifest),
+            ReceiptCommand::Consume {
+                store,
+                cwd,
+                registry,
+                branch,
+                manifest,
+            } => run_receipt_consume(store, cwd, registry, branch, manifest),
+            ReceiptCommand::Show {
+                store,
+                cwd,
+                registry,
+                branch,
+                commit,
+                receipt,
+                expected_state_digest,
+            } => run_receipt_show(
+                store,
+                cwd,
+                registry,
+                branch,
+                commit,
+                receipt,
+                expected_state_digest,
+            ),
+            ReceiptCommand::List {
+                store,
+                cwd,
+                registry,
+                branch,
+                commit,
+                status,
+                target,
+                action,
+                expected_receipts,
+            } => run_receipt_list(
+                store,
+                cwd,
+                registry,
+                branch,
+                commit,
+                status,
+                target,
+                action,
+                expected_receipts,
+            ),
         },
         Command::Task {
             command:
@@ -10941,44 +11318,25 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Resume {
             store,
+            cwd,
+            registry,
             session,
             budget_items,
             scope_json,
             scope_path,
             scope_path_prefix,
             expected_state_digest,
-        } => {
-            let engine = Engine::open(store)?;
-            let session_id = SessionId::parse_canonical(&session)?;
-            let scope = scope_from_cli(
-                "resume scope",
-                "--scope-json",
-                "--scope-path",
-                "--scope-path-prefix",
-                scope_json,
-                scope_path,
-                scope_path_prefix,
-            )?;
-            let budget_items = resume_budget_items_from_cli(budget_items)?;
-            let mut options =
-                ContextPacketOptions::new(session_id).with_profile(ContextProfile::Brief);
-            if let Some(scope) = scope {
-                options = options.with_scope(scope.into_value())?;
-            }
-            let packet = engine.context_packet(options)?;
-            let mut output = render_resume_packet(&packet, budget_items);
-            if let Some(expected_state_digest) = expected_state_digest {
-                let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
-                if packet.envelope.state_digest != expected_state_digest {
-                    return Err(WorkVcsError::DigestInvalid(format!(
-                        "resume state digest {} does not match expected {expected_state_digest}",
-                        packet.envelope.state_digest
-                    )));
-                }
-                output.push_str("matches_expected=true\n");
-            }
-            Ok(output)
-        }
+        } => run_resume(
+            store,
+            cwd,
+            registry,
+            session,
+            budget_items,
+            scope_json,
+            scope_path,
+            scope_path_prefix,
+            expected_state_digest,
+        ),
         Command::ContextPacket { command } => match command {
             ContextPacketCommand::Save {
                 store,
@@ -13472,6 +13830,2138 @@ fn render_store_info(info: &StoreInfo) -> Result<String> {
         info.manifest.canonical_json_profile,
         info.manifest.canonical_manifest_json()?
     ))
+}
+
+#[derive(Clone, Debug)]
+struct ProjectIdentity {
+    kind: String,
+    identity: String,
+    root: String,
+    boundary_roots: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct ProjectBinding {
+    identity_kind: String,
+    identity: String,
+    root: String,
+    store_path: String,
+    store_id: StoreId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+}
+
+#[derive(Clone, Debug)]
+struct ProjectDiscovery {
+    registry_path: PathBuf,
+    current_identity: ProjectIdentity,
+    binding: ProjectBinding,
+}
+
+fn bind_project(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    store: PathBuf,
+    workspace: String,
+    branch: String,
+) -> Result<String> {
+    let identity = resolve_project_identity(&cwd)?;
+    let registry_path = project_registry_path(registry, true, &identity)?;
+    let store_path = canonical_existing_path("project binding store", &store)?;
+    reject_project_local_path("project binding store", &store_path, &identity)?;
+    let engine = open_verified_store(&store_path)?;
+    let store_info = engine.store_info()?;
+    let workspace_id = WorkspaceId::parse_canonical(&workspace)?;
+    let branch_id = BranchId::parse_canonical(&branch)?;
+    engine.workspace_info(workspace_id)?;
+    let branch_head = engine.branch_head(branch_id)?;
+    if branch_head.workspace_id != workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding branch {} belongs to workspace {}, not {}",
+            branch_id, branch_head.workspace_id, workspace_id
+        )));
+    }
+
+    let binding = ProjectBinding {
+        identity_kind: identity.kind,
+        identity: identity.identity,
+        root: identity.root,
+        store_path: store_path.display().to_string(),
+        store_id: store_info.store_id,
+        workspace_id,
+        branch_id,
+    };
+    update_project_registry(&registry_path, |bindings| {
+        bindings.retain(|candidate| {
+            !(candidate.identity_kind == binding.identity_kind
+                && candidate.identity == binding.identity)
+        });
+        bindings.push(binding);
+        Ok(())
+    })?;
+
+    let discovery = discover_project(cwd, Some(registry_path))?;
+    let mut output = render_project_discovery(&discovery);
+    output.push_str("binding_written=true\n");
+    Ok(output)
+}
+
+fn discover_project(cwd: PathBuf, registry: Option<PathBuf>) -> Result<ProjectDiscovery> {
+    let current_identity = resolve_project_identity(&cwd)?;
+    let registry_path = project_registry_path(registry, false, &current_identity)?;
+    let bindings = load_project_registry(&registry_path, false)?;
+    let matches = bindings
+        .into_iter()
+        .filter(|binding| {
+            binding.identity_kind == current_identity.kind
+                && binding.identity == current_identity.identity
+        })
+        .collect::<Vec<_>>();
+    let binding = match matches.as_slice() {
+        [binding] => binding.clone(),
+        [] => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "no project binding for {} identity {} in {}",
+                current_identity.kind,
+                current_identity.identity,
+                registry_path.display()
+            )));
+        }
+        _ => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "project registry {} has duplicate bindings for {} identity {}",
+                registry_path.display(),
+                current_identity.kind,
+                current_identity.identity
+            )));
+        }
+    };
+    verify_project_binding(&binding, &current_identity)?;
+    Ok(ProjectDiscovery {
+        registry_path,
+        current_identity,
+        binding,
+    })
+}
+
+fn discover_project_readonly(cwd: PathBuf, registry: Option<PathBuf>) -> Result<ProjectDiscovery> {
+    let current_identity = resolve_project_identity(&cwd)?;
+    let registry_path = project_registry_path(registry, false, &current_identity)?;
+    let bindings = load_project_registry(&registry_path, false)?;
+    let matches = bindings
+        .into_iter()
+        .filter(|binding| {
+            binding.identity_kind == current_identity.kind
+                && binding.identity == current_identity.identity
+        })
+        .collect::<Vec<_>>();
+    let binding = match matches.as_slice() {
+        [binding] => binding.clone(),
+        [] => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "no project binding for {} identity {} in {}",
+                current_identity.kind,
+                current_identity.identity,
+                registry_path.display()
+            )));
+        }
+        _ => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "project registry {} has duplicate bindings for {} identity {}",
+                registry_path.display(),
+                current_identity.kind,
+                current_identity.identity
+            )));
+        }
+    };
+    verify_project_binding_readonly(&binding, &current_identity)?;
+    Ok(ProjectDiscovery {
+        registry_path,
+        current_identity,
+        binding,
+    })
+}
+
+fn verify_project_binding(
+    binding: &ProjectBinding,
+    current_identity: &ProjectIdentity,
+) -> Result<()> {
+    if binding.identity_kind != current_identity.kind
+        || binding.identity != current_identity.identity
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "project binding identity does not match current project".to_owned(),
+        ));
+    }
+    if binding.identity_kind == "cwd" && binding.root != current_identity.root {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding root {} does not match current root {}",
+            binding.root, current_identity.root
+        )));
+    }
+    let store_path =
+        canonical_existing_path("project binding store", Path::new(&binding.store_path))?;
+    reject_project_local_path("project binding store", &store_path, current_identity)?;
+    let canonical_store_path = store_path.display().to_string();
+    if canonical_store_path != binding.store_path {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding store path drifted from {} to {}",
+            binding.store_path, canonical_store_path
+        )));
+    }
+    let engine = open_verified_store(&store_path)?;
+    let store_info = engine.store_info()?;
+    if store_info.store_id != binding.store_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding store id {} does not match opened store {}",
+            binding.store_id, store_info.store_id
+        )));
+    }
+    engine.workspace_info(binding.workspace_id)?;
+    let branch_head = engine.branch_head(binding.branch_id)?;
+    if branch_head.workspace_id != binding.workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding branch {} belongs to workspace {}, not {}",
+            binding.branch_id, branch_head.workspace_id, binding.workspace_id
+        )));
+    }
+    Ok(())
+}
+
+fn verify_project_binding_readonly(
+    binding: &ProjectBinding,
+    current_identity: &ProjectIdentity,
+) -> Result<()> {
+    if binding.identity_kind != current_identity.kind
+        || binding.identity != current_identity.identity
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "project binding identity does not match current project".to_owned(),
+        ));
+    }
+    if binding.identity_kind == "cwd" && binding.root != current_identity.root {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding root {} does not match current root {}",
+            binding.root, current_identity.root
+        )));
+    }
+    let store_path =
+        canonical_existing_path("project binding store", Path::new(&binding.store_path))?;
+    reject_project_local_path("project binding store", &store_path, current_identity)?;
+    let canonical_store_path = store_path.display().to_string();
+    if canonical_store_path != binding.store_path {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding store path drifted from {} to {}",
+            binding.store_path, canonical_store_path
+        )));
+    }
+    let engine = open_verified_store_readonly(&store_path)?;
+    let store_info = engine.store_info()?;
+    if store_info.store_id != binding.store_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding store id {} does not match opened store {}",
+            binding.store_id, store_info.store_id
+        )));
+    }
+    engine.workspace_info(binding.workspace_id)?;
+    let branch_head = engine.branch_head(binding.branch_id)?;
+    if branch_head.workspace_id != binding.workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding branch {} belongs to workspace {}, not {}",
+            binding.branch_id, branch_head.workspace_id, binding.workspace_id
+        )));
+    }
+    Ok(())
+}
+
+fn render_project_discovery(discovery: &ProjectDiscovery) -> String {
+    format!(
+        "registry_path={}\nidentity_kind={}\nproject_identity={}\ncurrent_project_root={}\nbound_project_root={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\nbinding_verified=true\n",
+        discovery.registry_path.display(),
+        discovery.current_identity.kind,
+        discovery.current_identity.identity,
+        discovery.current_identity.root,
+        discovery.binding.root,
+        discovery.binding.store_path,
+        discovery.binding.store_id,
+        discovery.binding.workspace_id,
+        discovery.binding.branch_id,
+    )
+}
+
+fn render_closeout_inspect_task_projection(projection: &CloseoutInspectTaskProjection) -> String {
+    let target_digest_status =
+        closeout_target_digest_status(projection.read_proof.before.target_digest_status);
+    let target_state_digest =
+        render_optional_display_or_none(projection.read_proof.before.target_state_digest.as_ref());
+    let mut output = format!(
+        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\nacceptance_criteria_total={}\nverification_requirements_total={}\nverifications_total={}\nevidence_total={}\ngaps_total={}\nacceptance_criteria={}\nverification_requirements={}\nverifications={}\nevidence={}\ngaps={}\nomitted={}\ntask_present={}\n",
+        closeout_source_kind(projection.source.kind),
+        render_optional_display_or_none(projection.source.branch_id.as_ref()),
+        projection.source.commit_id,
+        projection.source.state_digest,
+        closeout_target_kind(projection.target.kind),
+        projection.target.entity_id,
+        closeout_target_resolution(projection.target_resolution),
+        target_digest_status,
+        target_state_digest,
+        projection.budget.requested,
+        projection.budget.hard_limit,
+        projection.truncated,
+        projection.counts.acceptance_criteria_total,
+        projection.counts.verification_requirements_total,
+        projection.counts.verifications_total,
+        projection.counts.evidence_total,
+        projection.counts.gaps_total,
+        projection.acceptance_criteria.len(),
+        projection.verification_requirements.len(),
+        projection.verifications.len(),
+        projection.evidence.len(),
+        projection.gaps.len(),
+        projection.omitted.len(),
+        projection.task.is_some(),
+    );
+    if let Some(task) = &projection.task {
+        let _ = writeln!(output, "task.task_entity_id={}", task.task_entity_id);
+        let _ = writeln!(
+            output,
+            "task.task_entity_version_id={}",
+            task.task_entity_version_id
+        );
+        let _ = writeln!(output, "task.status={}", task.status);
+        let _ = writeln!(output, "task.state_digest={}", task.state_digest);
+        let _ = writeln!(
+            output,
+            "task.acceptance_criteria_count={}",
+            task.acceptance_criteria_count
+        );
+    }
+    for (index, item) in projection.acceptance_criteria.iter().enumerate() {
+        let prefix = format!("acceptance_criterion.{index}");
+        let _ = writeln!(output, "{prefix}.local_key={}", item.local_key);
+        let _ = writeln!(output, "{prefix}.task_entity_id={}", item.task_entity_id);
+        let _ = writeln!(
+            output,
+            "{prefix}.acceptance_criterion_entity_id={}",
+            item.acceptance_criterion_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.acceptance_criterion_entity_version_id={}",
+            item.acceptance_criterion_entity_version_id
+        );
+        let _ = writeln!(output, "{prefix}.classification={}", item.classification);
+        let _ = writeln!(output, "{prefix}.state_digest={}", item.state_digest);
+        let _ = writeln!(
+            output,
+            "{prefix}.verification_requirements_count={}",
+            item.verification_requirements_count
+        );
+    }
+    for (index, item) in projection.verification_requirements.iter().enumerate() {
+        let prefix = format!("verification_requirement.{index}");
+        let _ = writeln!(output, "{prefix}.local_key={}", item.local_key);
+        let _ = writeln!(
+            output,
+            "{prefix}.acceptance_criterion_entity_id={}",
+            item.acceptance_criterion_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.verification_requirement_entity_id={}",
+            item.verification_requirement_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.verification_requirement_entity_version_id={}",
+            item.verification_requirement_entity_version_id
+        );
+        let _ = writeln!(output, "{prefix}.state_digest={}", item.state_digest);
+    }
+    for (index, item) in projection.verifications.iter().enumerate() {
+        let prefix = format!("verification.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.verification_entity_id={}",
+            item.verification_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.verification_entity_version_id={}",
+            item.verification_entity_version_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.target_kind={}",
+            closeout_verification_target_kind(item.target_kind)
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.target_entity_id={}",
+            item.target_entity_id
+        );
+        let _ = writeln!(output, "{prefix}.result={}", item.result);
+        let _ = writeln!(
+            output,
+            "{prefix}.verified_at_commit_id={}",
+            item.verified_at_commit_id
+        );
+        let _ = writeln!(output, "{prefix}.state_digest={}", item.state_digest);
+        let _ = writeln!(
+            output,
+            "{prefix}.verifies_relation_state_digest={}",
+            item.verifies_relation_state_digest
+        );
+        let _ = writeln!(output, "{prefix}.evidence_count={}", item.evidence_count);
+        let _ = writeln!(
+            output,
+            "{prefix}.semantic_dependency_count={}",
+            item.semantic_dependency_count
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.resource_basis_count={}",
+            item.resource_basis_count
+        );
+    }
+    for (index, item) in projection.evidence.iter().enumerate() {
+        let prefix = format!("evidence.{index}");
+        let _ = writeln!(output, "{prefix}.evidence_id={}", item.evidence_id);
+        let _ = writeln!(output, "{prefix}.evidence_kind={}", item.evidence_kind);
+        let _ = writeln!(output, "{prefix}.captured_at_us={}", item.captured_at_us);
+        let _ = writeln!(
+            output,
+            "{prefix}.source_session_id={}",
+            render_optional_display_or_none(item.source_session_id.as_ref())
+        );
+        let _ = writeln!(output, "{prefix}.contents={}", item.contents.len());
+        for (content_index, content) in item.contents.iter().enumerate() {
+            let content_prefix = format!("{prefix}.content.{content_index}");
+            let _ = writeln!(output, "{content_prefix}.ordinal={}", content.ordinal);
+            let _ = writeln!(output, "{content_prefix}.role={}", content.role);
+            let _ = writeln!(
+                output,
+                "{content_prefix}.content_digest={}",
+                content.content_digest
+            );
+            let _ = writeln!(output, "{content_prefix}.size_bytes={}", content.size_bytes);
+        }
+    }
+    for (index, gap) in projection.gaps.iter().enumerate() {
+        let prefix = format!("gap.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.category={}",
+            closeout_gap_category(gap.category)
+        );
+        let _ = writeln!(output, "{prefix}.code={}", gap.code);
+        let _ = writeln!(
+            output,
+            "{prefix}.subject_id={}",
+            render_optional_display_or_none(gap.subject_id.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.related_id={}",
+            render_optional_display_or_none(gap.related_id.as_ref())
+        );
+        let _ = writeln!(output, "{prefix}.message={}", gap.message);
+    }
+    for (index, omitted) in projection.omitted.iter().enumerate() {
+        let prefix = format!("omitted.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.category={}",
+            closeout_category(omitted.category)
+        );
+        let _ = writeln!(output, "{prefix}.count={}", omitted.count);
+    }
+    append_closeout_runtime_summary(&mut output, &projection.runtime_summary);
+    append_closeout_read_proof(&mut output, &projection.read_proof);
+    output
+}
+
+fn render_closeout_inspect_plan_projection(projection: &CloseoutInspectPlanProjection) -> String {
+    let mut output = format!(
+        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\ndirect_tasks_total={}\ndirect_child_plans_total={}\ngaps_total={}\ndirect_tasks={}\nnon_expanded={}\ngaps={}\nomitted={}\nplan_present={}\n",
+        closeout_source_kind(projection.source.kind),
+        render_optional_display_or_none(projection.source.branch_id.as_ref()),
+        projection.source.commit_id,
+        projection.source.state_digest,
+        closeout_target_kind(projection.target.kind),
+        projection.target.entity_id,
+        closeout_target_resolution(projection.target_resolution),
+        closeout_target_digest_status(projection.read_proof.before.target_digest_status),
+        render_optional_display_or_none(projection.read_proof.before.target_state_digest.as_ref()),
+        projection.budget.requested,
+        projection.budget.hard_limit,
+        projection.truncated,
+        projection.counts.direct_tasks_total,
+        projection.counts.direct_child_plans_total,
+        projection.counts.gaps_total,
+        projection.direct_tasks.len(),
+        projection.non_expanded.len(),
+        projection.gaps.len(),
+        projection.omitted.len(),
+        projection.plan.is_some(),
+    );
+    if let Some(plan) = &projection.plan {
+        append_closeout_plan_item(&mut output, "plan", plan);
+    }
+    for (index, item) in projection.direct_tasks.iter().enumerate() {
+        let prefix = format!("direct_task.{index}");
+        append_closeout_containment_item(
+            &mut output,
+            &format!("{prefix}.containment"),
+            &item.containment,
+        );
+        append_closeout_task_item(&mut output, &format!("{prefix}.task"), &item.task);
+    }
+    append_closeout_non_expanded(&mut output, &projection.non_expanded);
+    append_closeout_gaps(&mut output, &projection.gaps);
+    append_closeout_omitted(&mut output, &projection.omitted);
+    append_closeout_runtime_summary(&mut output, &projection.runtime_summary);
+    append_closeout_read_proof(&mut output, &projection.read_proof);
+    output
+}
+
+fn render_closeout_inspect_goal_projection(projection: &CloseoutInspectGoalProjection) -> String {
+    let mut output = format!(
+        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\ndirect_plans_total={}\ndirect_tasks_total={}\ndirect_child_goals_total={}\ngaps_total={}\ndirect_plans={}\ndirect_tasks={}\nnon_expanded={}\ngaps={}\nomitted={}\ngoal_present={}\n",
+        closeout_source_kind(projection.source.kind),
+        render_optional_display_or_none(projection.source.branch_id.as_ref()),
+        projection.source.commit_id,
+        projection.source.state_digest,
+        closeout_target_kind(projection.target.kind),
+        projection.target.entity_id,
+        closeout_target_resolution(projection.target_resolution),
+        closeout_target_digest_status(projection.read_proof.before.target_digest_status),
+        render_optional_display_or_none(projection.read_proof.before.target_state_digest.as_ref()),
+        projection.budget.requested,
+        projection.budget.hard_limit,
+        projection.truncated,
+        projection.counts.direct_plans_total,
+        projection.counts.direct_tasks_total,
+        projection.counts.direct_child_goals_total,
+        projection.counts.gaps_total,
+        projection.direct_plans.len(),
+        projection.direct_tasks.len(),
+        projection.non_expanded.len(),
+        projection.gaps.len(),
+        projection.omitted.len(),
+        projection.goal.is_some(),
+    );
+    if let Some(goal) = &projection.goal {
+        append_closeout_goal_item(&mut output, "goal", goal);
+    }
+    for (index, item) in projection.direct_plans.iter().enumerate() {
+        let prefix = format!("direct_plan.{index}");
+        append_closeout_containment_item(
+            &mut output,
+            &format!("{prefix}.containment"),
+            &item.containment,
+        );
+        append_closeout_plan_item(&mut output, &format!("{prefix}.plan"), &item.plan);
+    }
+    for (index, item) in projection.direct_tasks.iter().enumerate() {
+        let prefix = format!("direct_task.{index}");
+        append_closeout_containment_item(
+            &mut output,
+            &format!("{prefix}.containment"),
+            &item.containment,
+        );
+        append_closeout_task_item(&mut output, &format!("{prefix}.task"), &item.task);
+    }
+    append_closeout_non_expanded(&mut output, &projection.non_expanded);
+    append_closeout_gaps(&mut output, &projection.gaps);
+    append_closeout_omitted(&mut output, &projection.omitted);
+    append_closeout_runtime_summary(&mut output, &projection.runtime_summary);
+    append_closeout_read_proof(&mut output, &projection.read_proof);
+    output
+}
+
+fn append_closeout_task_item(
+    output: &mut String,
+    prefix: &str,
+    task: &workvcs_core::CloseoutInspectTaskItem,
+) {
+    let _ = writeln!(output, "{prefix}.task_entity_id={}", task.task_entity_id);
+    let _ = writeln!(
+        output,
+        "{prefix}.task_entity_version_id={}",
+        task.task_entity_version_id
+    );
+    let _ = writeln!(output, "{prefix}.status={}", task.status);
+    let _ = writeln!(output, "{prefix}.state_digest={}", task.state_digest);
+    let _ = writeln!(
+        output,
+        "{prefix}.acceptance_criteria_count={}",
+        task.acceptance_criteria_count
+    );
+}
+
+fn append_closeout_plan_item(
+    output: &mut String,
+    prefix: &str,
+    plan: &workvcs_core::CloseoutInspectPlanItem,
+) {
+    let _ = writeln!(output, "{prefix}.plan_entity_id={}", plan.plan_entity_id);
+    let _ = writeln!(
+        output,
+        "{prefix}.plan_entity_version_id={}",
+        plan.plan_entity_version_id
+    );
+    let _ = writeln!(output, "{prefix}.status={}", plan.status);
+    let _ = writeln!(output, "{prefix}.state_digest={}", plan.state_digest);
+}
+
+fn append_closeout_goal_item(
+    output: &mut String,
+    prefix: &str,
+    goal: &workvcs_core::CloseoutInspectGoalItem,
+) {
+    let _ = writeln!(output, "{prefix}.goal_entity_id={}", goal.goal_entity_id);
+    let _ = writeln!(
+        output,
+        "{prefix}.goal_entity_version_id={}",
+        goal.goal_entity_version_id
+    );
+    let _ = writeln!(output, "{prefix}.status={}", goal.status);
+    let _ = writeln!(output, "{prefix}.state_digest={}", goal.state_digest);
+}
+
+fn append_closeout_containment_item(
+    output: &mut String,
+    prefix: &str,
+    containment: &workvcs_core::CloseoutInspectContainmentItem,
+) {
+    let _ = writeln!(output, "{prefix}.relation_id={}", containment.relation_id);
+    let _ = writeln!(
+        output,
+        "{prefix}.relation_version_id={}",
+        containment.relation_version_id
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.relation_state_digest={}",
+        containment.relation_state_digest
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.parent_entity_id={}",
+        containment.parent_entity_id
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.child_entity_id={}",
+        containment.child_entity_id
+    );
+}
+
+fn append_closeout_non_expanded(
+    output: &mut String,
+    non_expanded: &[workvcs_core::CloseoutInspectNonExpanded],
+) {
+    for (index, item) in non_expanded.iter().enumerate() {
+        let prefix = format!("non_expanded.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.category={}",
+            closeout_non_expanded_category(item.category)
+        );
+        let _ = writeln!(output, "{prefix}.count={}", item.count);
+    }
+}
+
+fn append_closeout_gaps(output: &mut String, gaps: &[workvcs_core::CloseoutInspectGap]) {
+    for (index, gap) in gaps.iter().enumerate() {
+        let prefix = format!("gap.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.category={}",
+            closeout_gap_category(gap.category)
+        );
+        let _ = writeln!(output, "{prefix}.code={}", gap.code);
+        let _ = writeln!(
+            output,
+            "{prefix}.subject_id={}",
+            render_optional_display_or_none(gap.subject_id.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.related_id={}",
+            render_optional_display_or_none(gap.related_id.as_ref())
+        );
+        let _ = writeln!(output, "{prefix}.message={}", gap.message);
+    }
+}
+
+fn append_closeout_omitted(output: &mut String, omitted: &[workvcs_core::CloseoutInspectOmitted]) {
+    for (index, omitted) in omitted.iter().enumerate() {
+        let prefix = format!("omitted.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.category={}",
+            closeout_category(omitted.category)
+        );
+        let _ = writeln!(output, "{prefix}.count={}", omitted.count);
+    }
+}
+
+fn append_closeout_read_proof(output: &mut String, read_proof: &CloseoutInspectReadProof) {
+    let _ = writeln!(output, "read_proof.stable={}", read_proof.stable);
+    let _ = writeln!(output, "read_proof.drifts={}", read_proof.drift.len());
+    append_closeout_read_observation(output, "read_proof.before", &read_proof.before);
+    append_closeout_read_observation(output, "read_proof.after", &read_proof.after);
+    for (index, drift) in read_proof.drift.iter().enumerate() {
+        let prefix = format!("read_proof.drift.{index}");
+        let _ = writeln!(output, "{prefix}.field={}", drift.field);
+        let _ = writeln!(output, "{prefix}.before={}", drift.before);
+        let _ = writeln!(output, "{prefix}.after={}", drift.after);
+    }
+}
+
+fn append_closeout_runtime_summary(output: &mut String, summary: &CloseoutInspectRuntimeSummary) {
+    let _ = writeln!(
+        output,
+        "runtime.sessions_total={}",
+        summary.counts.sessions_total
+    );
+    let _ = writeln!(
+        output,
+        "runtime.claims_total={}",
+        summary.counts.claims_total
+    );
+    let _ = writeln!(
+        output,
+        "runtime.handoffs_total={}",
+        summary.counts.handoffs_total
+    );
+    let _ = writeln!(
+        output,
+        "runtime.authorization_receipts_total={}",
+        summary.counts.authorization_receipts_total
+    );
+    let _ = writeln!(
+        output,
+        "runtime.receipt_evaluation_at_us={}",
+        summary.receipt_evaluation_at_us
+    );
+    let _ = writeln!(output, "runtime.gaps_total={}", summary.counts.gaps_total);
+    let _ = writeln!(output, "runtime.sessions={}", summary.sessions.len());
+    let _ = writeln!(output, "runtime.claims={}", summary.claims.len());
+    let _ = writeln!(output, "runtime.handoffs={}", summary.handoffs.len());
+    let _ = writeln!(
+        output,
+        "runtime.authorization_receipts={}",
+        summary.authorization_receipts.len()
+    );
+    let _ = writeln!(output, "runtime.gaps={}", summary.gaps.len());
+
+    for (index, session) in summary.sessions.iter().enumerate() {
+        let prefix = format!("runtime.session.{index}");
+        let _ = writeln!(output, "{prefix}.session_id={}", session.session_id);
+        let _ = writeln!(
+            output,
+            "{prefix}.lifecycle_state={}",
+            session.lifecycle_state
+        );
+        let _ = writeln!(output, "{prefix}.started_at_us={}", session.started_at_us);
+        let _ = writeln!(
+            output,
+            "{prefix}.last_activity_at_us={}",
+            render_optional_display_or_none(session.last_activity_at_us.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.active_workspace_id={}",
+            render_optional_display_or_none(session.active_workspace_id.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.active_branch_id={}",
+            render_optional_display_or_none(session.active_branch_id.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.focus_entity_id={}",
+            session.focus_entity_id
+        );
+        let _ = writeln!(output, "{prefix}.focus_path_len={}", session.focus_path_len);
+        let _ = writeln!(
+            output,
+            "{prefix}.session_diff_id={}",
+            render_optional_display_or_none(session.session_diff_id.as_ref())
+        );
+    }
+    for (index, claim) in summary.claims.iter().enumerate() {
+        let prefix = format!("runtime.claim.{index}");
+        let _ = writeln!(output, "{prefix}.claim_id={}", claim.claim_id);
+        let _ = writeln!(output, "{prefix}.lifecycle_state={}", claim.lifecycle_state);
+        let _ = writeln!(output, "{prefix}.session_id={}", claim.session_id);
+        let _ = writeln!(output, "{prefix}.workspace_id={}", claim.workspace_id);
+        let _ = writeln!(output, "{prefix}.branch_id={}", claim.branch_id);
+        let _ = writeln!(output, "{prefix}.task_entity_id={}", claim.task_entity_id);
+        let _ = writeln!(output, "{prefix}.mode={}", claim.mode);
+        let _ = writeln!(output, "{prefix}.created_at_us={}", claim.created_at_us);
+        let _ = writeln!(
+            output,
+            "{prefix}.last_activity_at_us={}",
+            render_optional_display_or_none(claim.last_activity_at_us.as_ref())
+        );
+    }
+    for (index, handoff) in summary.handoffs.iter().enumerate() {
+        let prefix = format!("runtime.handoff.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.handoff_record_entity_id={}",
+            handoff.handoff_record_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.handoff_record_entity_version_id={}",
+            handoff.handoff_record_entity_version_id
+        );
+        let _ = writeln!(output, "{prefix}.status={}", handoff.status);
+        let _ = writeln!(output, "{prefix}.state_digest={}", handoff.state_digest);
+        let _ = writeln!(
+            output,
+            "{prefix}.focus_entity_id={}",
+            handoff.focus_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.session_id={}",
+            render_optional_display_or_none(handoff.session_id.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.session_lifecycle_state={}",
+            render_optional_display_or_none(handoff.session_lifecycle_state.as_ref())
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.session_diff_id={}",
+            render_optional_display_or_none(handoff.session_diff_id.as_ref())
+        );
+    }
+    for (index, receipt) in summary.authorization_receipts.iter().enumerate() {
+        let prefix = format!("runtime.authorization_receipt.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.receipt_entity_id={}",
+            receipt.receipt_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.receipt_entity_version_id={}",
+            receipt.receipt_entity_version_id
+        );
+        let _ = writeln!(output, "{prefix}.state_digest={}", receipt.state_digest);
+        let _ = writeln!(
+            output,
+            "{prefix}.evaluated_at_us={}",
+            receipt.evaluated_at_us
+        );
+        let _ = writeln!(output, "{prefix}.record_status={}", receipt.record_status);
+        let _ = writeln!(
+            output,
+            "{prefix}.mechanical_status={}",
+            receipt.mechanical_status
+        );
+        let _ = writeln!(output, "{prefix}.action={}", receipt.action);
+        let _ = writeln!(
+            output,
+            "{prefix}.target_entity_id={}",
+            receipt.target_entity_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.target_entity_kind={}",
+            receipt.target_entity_kind
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.target_state_digest={}",
+            receipt.target_state_digest
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.contract_digest_domain={}",
+            receipt.contract_digest_domain
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.contract_digest={}",
+            receipt.contract_digest
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.authority_ref_kind={}",
+            receipt.authority_ref_kind
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.authority_ref_digest={}",
+            receipt.authority_ref_digest
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.authority_digest={}",
+            receipt.authority_digest
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.expires_at_us={}",
+            render_optional_display_or_none(receipt.expires_at_us.as_ref())
+        );
+    }
+    for (index, gap) in summary.gaps.iter().enumerate() {
+        let prefix = format!("runtime.gap.{index}");
+        let _ = writeln!(
+            output,
+            "{prefix}.category={}",
+            closeout_runtime_gap_category(gap.category)
+        );
+        let _ = writeln!(output, "{prefix}.code={}", gap.code);
+        let _ = writeln!(output, "{prefix}.message={}", gap.message);
+    }
+}
+
+fn append_closeout_read_observation(
+    output: &mut String,
+    prefix: &str,
+    observation: &CloseoutInspectReadObservation,
+) {
+    let _ = writeln!(
+        output,
+        "{prefix}.branch_head_present={}",
+        observation.branch_head.is_some()
+    );
+    if let Some(branch_head) = &observation.branch_head {
+        let _ = writeln!(
+            output,
+            "{prefix}.branch_head.branch_id={}",
+            branch_head.branch_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.branch_head.head_commit_id={}",
+            branch_head.head_commit_id
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.branch_head.state_digest={}",
+            branch_head.state_digest
+        );
+    } else {
+        let _ = writeln!(output, "{prefix}.branch_head.branch_id=none");
+        let _ = writeln!(output, "{prefix}.branch_head.head_commit_id=none");
+        let _ = writeln!(output, "{prefix}.branch_head.state_digest=none");
+    }
+    let _ = writeln!(
+        output,
+        "{prefix}.source_state_digest={}",
+        observation.source_state_digest
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.target_digest_status={}",
+        closeout_target_digest_status(observation.target_digest_status)
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.target_state_digest={}",
+        render_optional_display_or_none(observation.target_state_digest.as_ref())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.store_files={}",
+        observation.store_files.len()
+    );
+    for (index, metadata) in observation.store_files.iter().enumerate() {
+        append_closeout_store_file_metadata(
+            output,
+            &format!("{prefix}.store_file.{index}"),
+            metadata,
+        );
+    }
+}
+
+fn append_closeout_store_file_metadata(
+    output: &mut String,
+    prefix: &str,
+    metadata: &CloseoutInspectStoreFileMetadata,
+) {
+    let _ = writeln!(
+        output,
+        "{prefix}.kind={}",
+        closeout_store_file_kind(metadata.kind)
+    );
+    let _ = writeln!(output, "{prefix}.path={}", metadata.path);
+    let _ = writeln!(output, "{prefix}.exists={}", metadata.exists);
+    let _ = writeln!(
+        output,
+        "{prefix}.size_bytes={}",
+        render_optional_display_or_none(metadata.size_bytes.as_ref())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.modified_unix_epoch_nanos={}",
+        render_optional_display_or_none(metadata.modified_unix_epoch_nanos.as_ref())
+    );
+}
+
+fn closeout_source_kind(kind: CloseoutInspectSourceKind) -> &'static str {
+    match kind {
+        CloseoutInspectSourceKind::Branch => "branch",
+        CloseoutInspectSourceKind::Commit => "commit",
+    }
+}
+
+fn closeout_target_kind(kind: CloseoutInspectTargetKind) -> &'static str {
+    match kind {
+        CloseoutInspectTargetKind::Goal => "goal",
+        CloseoutInspectTargetKind::Plan => "plan",
+        CloseoutInspectTargetKind::Task => "task",
+    }
+}
+
+fn closeout_target_resolution(resolution: CloseoutInspectTargetResolution) -> &'static str {
+    match resolution {
+        CloseoutInspectTargetResolution::Found => "found",
+        CloseoutInspectTargetResolution::TargetNotFound => "target_not_found",
+        CloseoutInspectTargetResolution::WrongKind => "wrong_kind",
+    }
+}
+
+fn closeout_target_digest_status(status: CloseoutInspectTargetDigestStatus) -> &'static str {
+    match status {
+        CloseoutInspectTargetDigestStatus::Found => "found",
+        CloseoutInspectTargetDigestStatus::TargetNotFound => "target_not_found",
+        CloseoutInspectTargetDigestStatus::WrongKind => "wrong_kind",
+    }
+}
+
+fn closeout_store_file_kind(kind: CloseoutInspectStoreFileKind) -> &'static str {
+    match kind {
+        CloseoutInspectStoreFileKind::Main => "main",
+        CloseoutInspectStoreFileKind::Wal => "wal",
+        CloseoutInspectStoreFileKind::Shm => "shm",
+    }
+}
+
+fn closeout_category(category: CloseoutInspectCategory) -> &'static str {
+    match category {
+        CloseoutInspectCategory::AuthorizationReceipts => "authorization_receipts",
+        CloseoutInspectCategory::AcceptanceCriteria => "acceptance_criteria",
+        CloseoutInspectCategory::DirectPlans => "direct_plans",
+        CloseoutInspectCategory::DirectTasks => "direct_tasks",
+        CloseoutInspectCategory::VerificationRequirements => "verification_requirements",
+        CloseoutInspectCategory::Verifications => "verifications",
+        CloseoutInspectCategory::Evidence => "evidence",
+        CloseoutInspectCategory::Gaps => "gaps",
+        CloseoutInspectCategory::Handoffs => "handoffs",
+        CloseoutInspectCategory::RuntimeClaims => "runtime_claims",
+        CloseoutInspectCategory::RuntimeGaps => "runtime_gaps",
+        CloseoutInspectCategory::RuntimeSessions => "runtime_sessions",
+    }
+}
+
+fn closeout_non_expanded_category(category: CloseoutInspectNonExpandedCategory) -> &'static str {
+    match category {
+        CloseoutInspectNonExpandedCategory::DirectChildGoals => "direct_child_goals",
+        CloseoutInspectNonExpandedCategory::DirectChildPlans => "direct_child_plans",
+    }
+}
+
+fn closeout_gap_category(category: CloseoutInspectGapCategory) -> &'static str {
+    match category {
+        CloseoutInspectGapCategory::Target => "target",
+        CloseoutInspectGapCategory::AcceptanceCriterion => "acceptance_criterion",
+        CloseoutInspectGapCategory::Containment => "containment",
+        CloseoutInspectGapCategory::VerificationRequirement => "verification_requirement",
+        CloseoutInspectGapCategory::Verification => "verification",
+        CloseoutInspectGapCategory::Evidence => "evidence",
+    }
+}
+
+fn closeout_runtime_gap_category(category: CloseoutInspectRuntimeGapCategory) -> &'static str {
+    match category {
+        CloseoutInspectRuntimeGapCategory::Claims => "claims",
+        CloseoutInspectRuntimeGapCategory::Handoffs => "handoffs",
+        CloseoutInspectRuntimeGapCategory::Receipts => "receipts",
+        CloseoutInspectRuntimeGapCategory::Sessions => "sessions",
+    }
+}
+
+fn closeout_verification_target_kind(kind: CloseoutInspectVerificationTargetKind) -> &'static str {
+    match kind {
+        CloseoutInspectVerificationTargetKind::AcceptanceCriterion => "acceptance_criterion",
+        CloseoutInspectVerificationTargetKind::VerificationRequirement => {
+            "verification_requirement"
+        }
+    }
+}
+
+fn run_resume(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    session: Option<String>,
+    budget_items: Option<usize>,
+    scope_json: Option<String>,
+    scope_path: Option<PathBuf>,
+    scope_path_prefix: Option<PathBuf>,
+    expected_state_digest: Option<String>,
+) -> Result<String> {
+    let (engine, session_id) = match (store, cwd) {
+        (Some(store), None) => {
+            if registry.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "resume STORE does not accept --registry; use --cwd for registry discovery"
+                        .to_owned(),
+                ));
+            }
+            let session = session.ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "resume STORE requires --session with a concrete Session id".to_owned(),
+                )
+            })?;
+            let session_id = SessionId::parse_canonical(&session)?;
+            (open_verified_store(&store)?, session_id)
+        }
+        (None, Some(cwd)) => {
+            let discovery = discover_project(cwd, registry)?;
+            let engine = open_verified_store(Path::new(&discovery.binding.store_path))?;
+            let session_id = resolve_resume_session(&engine, &discovery, session)?;
+            (engine, session_id)
+        }
+        _ => {
+            return Err(WorkVcsError::QueryInvalid(
+                "resume requires exactly one of STORE or --cwd".to_owned(),
+            ));
+        }
+    };
+    let scope = scope_from_cli(
+        "resume scope",
+        "--scope-json",
+        "--scope-path",
+        "--scope-path-prefix",
+        scope_json,
+        scope_path,
+        scope_path_prefix,
+    )?;
+    let budget_items = resume_budget_items_from_cli(budget_items)?;
+    let mut options = ContextPacketOptions::new(session_id).with_profile(ContextProfile::Brief);
+    if let Some(scope) = scope {
+        options = options.with_scope(scope.into_value())?;
+    }
+    let packet = engine.context_packet(options)?;
+    let mut output = render_resume_packet(&packet, budget_items);
+    if let Some(expected_state_digest) = expected_state_digest {
+        let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+        if packet.envelope.state_digest != expected_state_digest {
+            return Err(WorkVcsError::DigestInvalid(format!(
+                "resume state digest {} does not match expected {expected_state_digest}",
+                packet.envelope.state_digest
+            )));
+        }
+        output.push_str("matches_expected=true\n");
+    }
+    Ok(output)
+}
+
+fn resolve_resume_session(
+    engine: &Engine,
+    discovery: &ProjectDiscovery,
+    session: Option<String>,
+) -> Result<SessionId> {
+    match session.as_deref().unwrap_or("current") {
+        "current" | "latest-active" => {
+            let result = engine.sessions(
+                SessionListOptions::all()
+                    .with_lifecycle_state(SessionLifecycleState::Active)
+                    .with_active_workspace_id(discovery.binding.workspace_id)
+                    .with_active_branch_id(discovery.binding.branch_id),
+            )?;
+            match result.sessions.as_slice() {
+                [session] => Ok(session.session_id),
+                [] => Err(WorkVcsError::QueryInvalid(format!(
+                    "resume --cwd found no active session for workspace {} branch {}",
+                    discovery.binding.workspace_id, discovery.binding.branch_id
+                ))),
+                sessions => Err(WorkVcsError::QueryInvalid(format!(
+                    "resume --cwd found {} active sessions for workspace {} branch {}; pass --session SESSION",
+                    sessions.len(),
+                    discovery.binding.workspace_id,
+                    discovery.binding.branch_id
+                ))),
+            }
+        }
+        session => {
+            let session_id = SessionId::parse_canonical(session)?;
+            let snapshot = engine.session_snapshot(session_id)?;
+            if snapshot.lifecycle_state != SessionLifecycleState::Active {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "resume --cwd session {session_id} is not active"
+                )));
+            }
+            if snapshot.active_workspace_id != Some(discovery.binding.workspace_id) {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "resume --cwd session {session_id} workspace does not match binding {}",
+                    discovery.binding.workspace_id
+                )));
+            }
+            if snapshot.active_branch_id != Some(discovery.binding.branch_id) {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "resume --cwd session {session_id} branch does not match binding {}",
+                    discovery.binding.branch_id
+                )));
+            }
+            Ok(session_id)
+        }
+    }
+}
+
+fn run_plan_admit(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    manifest_path: PathBuf,
+) -> Result<String> {
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read plan admission manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest = PlanAdmissionManifest::from_json_bytes(&manifest_bytes)?;
+    let (store_path, branch_id) = match (store, cwd) {
+        (Some(store_path), None) => {
+            if registry.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "plan admit explicit STORE does not accept --registry".to_owned(),
+                ));
+            }
+            let branch = branch.ok_or_else(|| {
+                WorkVcsError::QueryInvalid("plan admit explicit STORE requires --branch".to_owned())
+            })?;
+            let current_dir = std::env::current_dir().map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot resolve current directory for plan admit STORE boundary: {error}"
+                ))
+            })?;
+            let current_identity = resolve_project_identity(&current_dir)?;
+            let store_path = canonical_existing_path("plan admit store", &store_path)?;
+            reject_project_local_path("plan admit store", &store_path, &current_identity)?;
+            (store_path, BranchId::parse_canonical(&branch)?)
+        }
+        (None, Some(cwd)) => {
+            if branch.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "plan admit --cwd uses bound branch and must not pass --branch".to_owned(),
+                ));
+            }
+            let discovery = discover_project(cwd, registry)?;
+            (
+                PathBuf::from(discovery.binding.store_path),
+                discovery.binding.branch_id,
+            )
+        }
+        _ => {
+            return Err(WorkVcsError::QueryInvalid(
+                "plan admit requires exactly one of STORE or --cwd".to_owned(),
+            ));
+        }
+    };
+    let mut engine = open_verified_store(&store_path)?;
+    let result = engine.admit_plan(PlanAdmissionOptions::new(branch_id, manifest))?;
+    Ok(render_plan_admission(&result))
+}
+
+fn run_plan_evolve(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    manifest_path: PathBuf,
+) -> Result<String> {
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read plan evolution manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest = PlanEvolutionManifest::from_json_bytes(&manifest_bytes)?;
+    let (store_path, branch_id) = match (store, cwd) {
+        (Some(store_path), None) => {
+            if registry.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "plan evolve explicit STORE does not accept --registry".to_owned(),
+                ));
+            }
+            let branch = branch.ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "plan evolve explicit STORE requires --branch".to_owned(),
+                )
+            })?;
+            let current_dir = std::env::current_dir().map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot resolve current directory for plan evolve STORE boundary: {error}"
+                ))
+            })?;
+            let current_identity = resolve_project_identity(&current_dir)?;
+            let store_path = canonical_existing_path("plan evolve store", &store_path)?;
+            reject_project_local_path("plan evolve store", &store_path, &current_identity)?;
+            (store_path, BranchId::parse_canonical(&branch)?)
+        }
+        (None, Some(cwd)) => {
+            if branch.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "plan evolve --cwd uses bound branch and must not pass --branch".to_owned(),
+                ));
+            }
+            let discovery = discover_project(cwd, registry)?;
+            (
+                PathBuf::from(discovery.binding.store_path),
+                discovery.binding.branch_id,
+            )
+        }
+        _ => {
+            return Err(WorkVcsError::QueryInvalid(
+                "plan evolve requires exactly one of STORE or --cwd".to_owned(),
+            ));
+        }
+    };
+    let mut engine = open_verified_store(&store_path)?;
+    let result = engine.evolve_plan(PlanEvolutionOptions::new(branch_id, manifest))?;
+    Ok(render_plan_evolution(&result))
+}
+
+fn run_receipt_issue(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    manifest_path: PathBuf,
+) -> Result<String> {
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read receipt issue manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest = AuthorizationReceiptIssueManifest::from_json_bytes(&manifest_bytes)?;
+    let (store_path, branch_id) =
+        resolve_receipt_write_target(store, cwd, registry, branch, "receipt issue")?;
+    let mut engine = open_verified_store(&store_path)?;
+    let result = engine
+        .issue_authorization_receipt(AuthorizationReceiptIssueOptions::new(branch_id, manifest))?;
+    Ok(render_authorization_receipt_issue(&result))
+}
+
+fn run_receipt_consume(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    manifest_path: PathBuf,
+) -> Result<String> {
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read receipt consume manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest = AuthorizationReceiptConsumeManifest::from_json_bytes(&manifest_bytes)?;
+    let (store_path, branch_id) =
+        resolve_receipt_write_target(store, cwd, registry, branch, "receipt consume")?;
+    let mut engine = open_verified_store(&store_path)?;
+    let result = engine.consume_authorization_receipt(AuthorizationReceiptConsumeOptions::new(
+        branch_id, manifest,
+    ))?;
+    Ok(render_authorization_receipt_consume(&result))
+}
+
+fn run_receipt_show(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    commit: Option<String>,
+    receipt: String,
+    expected_state_digest: Option<String>,
+) -> Result<String> {
+    let (store_path, bound_branch_id) =
+        resolve_receipt_query_target(store, cwd, registry, "receipt show")?;
+    let engine = open_verified_store(&store_path)?;
+    let commit_id = resolve_receipt_query_commit(&engine, bound_branch_id, branch, commit)?;
+    let snapshot =
+        engine.authorization_receipt_at(commit_id, EntityId::parse_canonical(&receipt)?)?;
+    let mut output = render_authorization_receipt_snapshot(&snapshot)?;
+    if let Some(expected_state_digest) = expected_state_digest {
+        let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
+        if snapshot.state_digest != expected_state_digest {
+            return Err(WorkVcsError::DigestInvalid(format!(
+                "receipt state digest {} does not match expected {}",
+                snapshot.state_digest, expected_state_digest
+            )));
+        }
+        output.push_str("matches_expected=true\n");
+    }
+    Ok(output)
+}
+
+fn run_receipt_list(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    commit: Option<String>,
+    status: Option<String>,
+    target: Option<String>,
+    action: Option<String>,
+    expected_receipts: Option<usize>,
+) -> Result<String> {
+    let (store_path, bound_branch_id) =
+        resolve_receipt_query_target(store, cwd, registry, "receipt list")?;
+    let engine = open_verified_store(&store_path)?;
+    let commit_id = resolve_receipt_query_commit(&engine, bound_branch_id, branch, commit)?;
+    let mut options = AuthorizationReceiptListOptions::new(commit_id);
+    if let Some(status) = status {
+        options = options.with_status(parse_receipt_status(&status)?);
+    }
+    if let Some(target) = target {
+        options = options.with_target_entity_id(EntityId::parse_canonical(&target)?);
+    }
+    if let Some(action) = action {
+        options = options.with_action(action)?;
+    }
+    let result = engine.authorization_receipts_at(options)?;
+    let mut output = render_authorization_receipt_list(&result)?;
+    if let Some(expected_receipts) = expected_receipts {
+        let actual_receipts = result.receipts.len();
+        if actual_receipts != expected_receipts {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "receipts {actual_receipts} does not match expected {expected_receipts}"
+            )));
+        }
+        output.push_str("receipts_match_expected=true\n");
+    }
+    Ok(output)
+}
+
+fn resolve_receipt_write_target(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    label: &str,
+) -> Result<(PathBuf, BranchId)> {
+    match (store, cwd) {
+        (Some(store_path), None) => {
+            if registry.is_some() {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "{label} explicit STORE does not accept --registry"
+                )));
+            }
+            let branch = branch.ok_or_else(|| {
+                WorkVcsError::QueryInvalid(format!("{label} explicit STORE requires --branch"))
+            })?;
+            let current_dir = std::env::current_dir().map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot resolve current directory for {label} STORE boundary: {error}"
+                ))
+            })?;
+            let current_identity = resolve_project_identity(&current_dir)?;
+            let store_path = canonical_existing_path(label, &store_path)?;
+            reject_project_local_path(label, &store_path, &current_identity)?;
+            Ok((store_path, BranchId::parse_canonical(&branch)?))
+        }
+        (None, Some(cwd)) => {
+            if branch.is_some() {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "{label} --cwd uses bound branch and must not pass --branch"
+                )));
+            }
+            let discovery = discover_project(cwd, registry)?;
+            Ok((
+                PathBuf::from(discovery.binding.store_path),
+                discovery.binding.branch_id,
+            ))
+        }
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} requires exactly one of STORE or --cwd"
+        ))),
+    }
+}
+
+fn resolve_receipt_query_target(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    label: &str,
+) -> Result<(PathBuf, Option<BranchId>)> {
+    match (store, cwd) {
+        (Some(store_path), None) => {
+            if registry.is_some() {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "{label} explicit STORE does not accept --registry"
+                )));
+            }
+            let current_dir = std::env::current_dir().map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot resolve current directory for {label} STORE boundary: {error}"
+                ))
+            })?;
+            let current_identity = resolve_project_identity(&current_dir)?;
+            let store_path = canonical_existing_path(label, &store_path)?;
+            reject_project_local_path(label, &store_path, &current_identity)?;
+            Ok((store_path, None))
+        }
+        (None, Some(cwd)) => {
+            let discovery = discover_project(cwd, registry)?;
+            Ok((
+                PathBuf::from(discovery.binding.store_path),
+                Some(discovery.binding.branch_id),
+            ))
+        }
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "{label} requires exactly one of STORE or --cwd"
+        ))),
+    }
+}
+
+fn resolve_receipt_query_commit(
+    engine: &Engine,
+    bound_branch_id: Option<BranchId>,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<CommitId> {
+    match (branch, commit) {
+        (Some(_), Some(_)) => Err(WorkVcsError::QueryInvalid(
+            "receipt query requires at most one of --branch or --commit".to_owned(),
+        )),
+        (None, Some(commit)) => CommitId::parse_canonical(&commit),
+        (Some(branch), None) => {
+            let branch = BranchId::parse_canonical(&branch)?;
+            Ok(engine.branch_head(branch)?.head_commit_id)
+        }
+        (None, None) => {
+            let branch = bound_branch_id.ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "receipt query explicit STORE requires --branch or --commit".to_owned(),
+                )
+            })?;
+            Ok(engine.branch_head(branch)?.head_commit_id)
+        }
+    }
+}
+
+fn run_closeout_inspect(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    commit: Option<String>,
+    target_kind: CloseoutTargetKindArg,
+    target: String,
+    budget_items: Option<usize>,
+) -> Result<String> {
+    let (store_path, source) =
+        resolve_closeout_inspect_source(store, cwd, registry, branch, commit)?;
+    let engine = open_verified_store_readonly(&store_path)?;
+    let target = EntityId::parse_canonical(&target)?;
+    let mut options = match (target_kind, source) {
+        (CloseoutTargetKindArg::Task, CloseoutInspectSource::Branch(branch_id)) => {
+            CloseoutInspectOptions::for_task_on_branch(branch_id, target)
+        }
+        (CloseoutTargetKindArg::Task, CloseoutInspectSource::Commit(commit_id)) => {
+            CloseoutInspectOptions::for_task_at_commit(commit_id, target)
+        }
+        (CloseoutTargetKindArg::Plan, CloseoutInspectSource::Branch(branch_id)) => {
+            CloseoutInspectOptions::for_plan_on_branch(branch_id, target)
+        }
+        (CloseoutTargetKindArg::Plan, CloseoutInspectSource::Commit(commit_id)) => {
+            CloseoutInspectOptions::for_plan_at_commit(commit_id, target)
+        }
+        (CloseoutTargetKindArg::Goal, CloseoutInspectSource::Branch(branch_id)) => {
+            CloseoutInspectOptions::for_goal_on_branch(branch_id, target)
+        }
+        (CloseoutTargetKindArg::Goal, CloseoutInspectSource::Commit(commit_id)) => {
+            CloseoutInspectOptions::for_goal_at_commit(commit_id, target)
+        }
+    };
+    if let Some(budget_items) = budget_items {
+        options = options.with_budget(budget_items)?;
+    }
+    match target_kind {
+        CloseoutTargetKindArg::Task => {
+            let projection = engine.closeout_inspect_task(options)?;
+            Ok(render_closeout_inspect_task_projection(&projection))
+        }
+        CloseoutTargetKindArg::Plan => {
+            let projection = engine.closeout_inspect_plan(options)?;
+            Ok(render_closeout_inspect_plan_projection(&projection))
+        }
+        CloseoutTargetKindArg::Goal => {
+            let projection = engine.closeout_inspect_goal(options)?;
+            Ok(render_closeout_inspect_goal_projection(&projection))
+        }
+    }
+}
+
+fn resolve_closeout_inspect_source(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<(PathBuf, CloseoutInspectSource)> {
+    match (store, cwd) {
+        (Some(store_path), None) => {
+            if registry.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "closeout inspect explicit STORE does not accept --registry".to_owned(),
+                ));
+            }
+            let source = match (branch, commit) {
+                (Some(_), Some(_)) => {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "closeout inspect explicit STORE requires exactly one of --branch or --commit"
+                            .to_owned(),
+                    ));
+                }
+                (Some(branch), None) => {
+                    CloseoutInspectSource::Branch(BranchId::parse_canonical(&branch)?)
+                }
+                (None, Some(commit)) => {
+                    CloseoutInspectSource::Commit(CommitId::parse_canonical(&commit)?)
+                }
+                (None, None) => {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "closeout inspect explicit STORE requires --branch or --commit".to_owned(),
+                    ));
+                }
+            };
+            Ok((
+                canonical_existing_path("closeout inspect store", &store_path)?,
+                source,
+            ))
+        }
+        (None, Some(cwd)) => {
+            if branch.is_some() || commit.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "closeout inspect --cwd uses the bound branch and must not pass --branch or --commit"
+                        .to_owned(),
+                ));
+            }
+            let discovery = discover_project_readonly(cwd, registry)?;
+            Ok((
+                PathBuf::from(discovery.binding.store_path),
+                CloseoutInspectSource::Branch(discovery.binding.branch_id),
+            ))
+        }
+        _ => Err(WorkVcsError::QueryInvalid(
+            "closeout inspect requires exactly one of STORE or --cwd".to_owned(),
+        )),
+    }
+}
+
+fn parse_receipt_status(value: &str) -> Result<RecordStatus> {
+    match value {
+        "active" => Ok(RecordStatus::Active),
+        "consumed" => Ok(RecordStatus::Consumed),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "receipt status {other:?} is not in the CLI vocabulary"
+        ))),
+    }
+}
+
+fn open_verified_store(path: &Path) -> Result<Engine> {
+    let engine = Engine::open(path)?;
+    let integrity = engine.validate_integrity()?;
+    require_integrity_report_valid(&integrity)?;
+    Ok(engine)
+}
+
+fn open_verified_store_readonly(path: &Path) -> Result<Engine> {
+    let engine = Engine::open_readonly(path)?;
+    let integrity = engine.validate_integrity()?;
+    require_integrity_report_valid(&integrity)?;
+    Ok(engine)
+}
+
+fn resolve_project_identity(cwd: &Path) -> Result<ProjectIdentity> {
+    let canonical_cwd = canonical_existing_path("project cwd", cwd)?;
+    if let Ok(common_dir) = git_output_line(
+        &canonical_cwd,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        "git common-dir",
+    ) {
+        let root = git_output_line(
+            &canonical_cwd,
+            &["rev-parse", "--show-toplevel"],
+            "git toplevel",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?;
+        let worktree_root = canonical_existing_path("git toplevel", Path::new(&root))?;
+        let common_dir = canonical_existing_path("git common-dir", Path::new(&common_dir))?;
+        let common_repo_root = common_dir.parent().ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "git common-dir {} has no repository parent",
+                common_dir.display()
+            ))
+        })?;
+        let common_repo_root =
+            canonical_existing_path("git common repository root", common_repo_root)?;
+        let mut boundary_roots = vec![worktree_root.clone(), common_repo_root];
+        boundary_roots.sort();
+        boundary_roots.dedup();
+        return Ok(ProjectIdentity {
+            kind: "git-common-dir".to_owned(),
+            identity: common_dir.display().to_string(),
+            root: worktree_root.display().to_string(),
+            boundary_roots,
+        });
+    }
+    Ok(ProjectIdentity {
+        kind: "cwd".to_owned(),
+        identity: canonical_cwd.display().to_string(),
+        root: canonical_cwd.display().to_string(),
+        boundary_roots: vec![canonical_cwd],
+    })
+}
+
+fn git_output_line(repo: &Path, args: &[&str], label: &str) -> std::result::Result<String, String> {
+    let output = ProcessCommand::new("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .map_err(|error| format!("{label} failed: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "{label} exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|error| format!("{label} output is not UTF-8: {error}"))?;
+    text.lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{label} output is empty"))
+}
+
+fn canonical_existing_path(label: &str, path: &Path) -> Result<PathBuf> {
+    fs::canonicalize(path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "{label} path {} cannot be canonicalized: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn project_registry_path(
+    registry: Option<PathBuf>,
+    for_write: bool,
+    identity: &ProjectIdentity,
+) -> Result<PathBuf> {
+    let raw_path = match registry {
+        Some(path) => path,
+        None => {
+            let home = std::env::var_os(PROJECT_REGISTRY_ENV).ok_or_else(|| {
+                WorkVcsError::QueryInvalid(format!(
+                    "project registry requires --registry PATH or {PROJECT_REGISTRY_ENV}"
+                ))
+            })?;
+            if home.is_empty() {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "{PROJECT_REGISTRY_ENV} must not be empty"
+                )));
+            }
+            PathBuf::from(home).join(PROJECT_REGISTRY_FILE)
+        }
+    };
+    let absolute_path = absolute_cli_path("project registry", raw_path)?;
+    reject_project_local_unresolved_path("project registry", &absolute_path, identity)?;
+    let registry_path = canonical_registry_path(absolute_path, for_write)?;
+    reject_project_local_path("project registry", &registry_path, identity)?;
+    Ok(registry_path)
+}
+
+fn canonical_registry_path(path: PathBuf, for_write: bool) -> Result<PathBuf> {
+    if path.exists() {
+        return canonical_existing_path("project registry", &path);
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no file name",
+            path.display()
+        ))
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    if for_write {
+        fs::create_dir_all(parent).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot create project registry directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    let parent = canonical_existing_path("project registry directory", parent)?;
+    Ok(parent.join(file_name))
+}
+
+fn absolute_cli_path(label: &str, path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()
+            .map_err(|error| {
+                WorkVcsError::QueryInvalid(format!("cannot resolve relative {label} path: {error}"))
+            })?
+            .join(path))
+    }
+}
+
+fn reject_project_local_path(label: &str, path: &Path, identity: &ProjectIdentity) -> Result<()> {
+    for root in &identity.boundary_roots {
+        if path == root || path.starts_with(root) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {} must be outside project boundary {}",
+                path.display(),
+                root.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn reject_project_local_unresolved_path(
+    label: &str,
+    path: &Path,
+    identity: &ProjectIdentity,
+) -> Result<()> {
+    for root in &identity.boundary_roots {
+        if path == root || path.starts_with(root) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} {} must be outside project boundary {}",
+                path.display(),
+                root.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn load_project_registry(path: &Path, allow_missing: bool) -> Result<Vec<ProjectBinding>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(error) => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "cannot read project registry {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry {} is not valid JSON: {error}",
+            path.display()
+        ))
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry {} must be a JSON object",
+            path.display()
+        ))
+    })?;
+    let version = object
+        .get("version")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry {} requires integer version",
+                path.display()
+            ))
+        })?;
+    if version != 1 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project registry {} has unsupported version {version}",
+            path.display()
+        )));
+    }
+    let bindings = object
+        .get("bindings")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry {} requires bindings array",
+                path.display()
+            ))
+        })?;
+    bindings
+        .iter()
+        .enumerate()
+        .map(|(index, value)| project_binding_from_json(path, index, value))
+        .collect()
+}
+
+fn project_binding_from_json(
+    path: &Path,
+    index: usize,
+    value: &serde_json::Value,
+) -> Result<ProjectBinding> {
+    let object = value.as_object().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry {} binding {index} must be an object",
+            path.display()
+        ))
+    })?;
+    let identity_kind = project_registry_string(path, index, object, "identity_kind")?;
+    let identity = project_registry_string(path, index, object, "identity")?;
+    let root = project_registry_string(path, index, object, "root")?;
+    let store_path = project_registry_string(path, index, object, "store_path")?;
+    let store_id =
+        StoreId::parse_canonical(&project_registry_string(path, index, object, "store_id")?)?;
+    let workspace_id = WorkspaceId::parse_canonical(&project_registry_string(
+        path,
+        index,
+        object,
+        "workspace_id",
+    )?)?;
+    let branch_id =
+        BranchId::parse_canonical(&project_registry_string(path, index, object, "branch_id")?)?;
+    Ok(ProjectBinding {
+        identity_kind,
+        identity,
+        root,
+        store_path,
+        store_id,
+        workspace_id,
+        branch_id,
+    })
+}
+
+fn project_registry_string(
+    path: &Path,
+    index: usize,
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<String> {
+    object
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry {} binding {index} requires string field {field}",
+                path.display()
+            ))
+        })
+}
+
+fn update_project_registry(
+    path: &Path,
+    update: impl FnOnce(&mut Vec<ProjectBinding>) -> Result<()>,
+) -> Result<()> {
+    let _lock = ProjectRegistryLock::acquire(path)?;
+    let mut bindings = load_project_registry(path, true)?;
+    update(&mut bindings)?;
+    bindings.sort_by(|left, right| {
+        (&left.identity_kind, &left.identity).cmp(&(&right.identity_kind, &right.identity))
+    });
+    save_project_registry_atomically(path, &bindings)
+}
+
+fn save_project_registry_atomically(path: &Path, bindings: &[ProjectBinding]) -> Result<()> {
+    let values = bindings
+        .iter()
+        .map(|binding| {
+            serde_json::json!({
+                "identity_kind": binding.identity_kind,
+                "identity": binding.identity,
+                "root": binding.root,
+                "store_path": binding.store_path,
+                "store_id": binding.store_id.to_string(),
+                "workspace_id": binding.workspace_id.to_string(),
+                "branch_id": binding.branch_id.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let text = serde_json::to_string_pretty(&serde_json::json!({
+        "version": 1,
+        "bindings": values,
+    }))
+    .expect("project registry JSON should serialize");
+    let payload = format!("{text}\n");
+    let parent = path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    let temp_path = unique_project_registry_temp_path(path)?;
+    let write_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot create project registry temp file {}: {error}",
+                    temp_path.display()
+                ))
+            })?;
+        file.write_all(payload.as_bytes()).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot write project registry temp file {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot sync project registry temp file {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        drop(file);
+        fs::rename(&temp_path, path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot atomically replace project registry {} with {}: {error}",
+                path.display(),
+                temp_path.display()
+            ))
+        })?;
+        sync_directory(parent)?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
+fn unique_project_registry_temp_path(path: &Path) -> Result<PathBuf> {
+    let parent = path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    let file_name = path.file_name().and_then(OsStr::to_str).ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no UTF-8 file name",
+            path.display()
+        ))
+    })?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            WorkVcsError::QueryInvalid(format!("system clock before UNIX epoch: {error}"))
+        })?
+        .as_nanos();
+    Ok(parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nanos)))
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot sync directory {} after registry update: {error}",
+                path.display()
+            ))
+        })
+}
+
+struct ProjectRegistryLock {
+    path: PathBuf,
+}
+
+impl ProjectRegistryLock {
+    fn acquire(registry_path: &Path) -> Result<Self> {
+        let lock_path = registry_path.with_extension(format!(
+            "{}.lock",
+            registry_path
+                .extension()
+                .and_then(OsStr::to_str)
+                .unwrap_or("registry")
+        ));
+        let started = Instant::now();
+        loop {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(mut file) => {
+                    writeln!(
+                        file,
+                        "pid={}\ncreated_at_nanos={}",
+                        std::process::id(),
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map_err(|error| WorkVcsError::QueryInvalid(format!(
+                                "system clock before UNIX epoch: {error}"
+                            )))?
+                            .as_nanos()
+                    )
+                    .map_err(|error| {
+                        WorkVcsError::QueryInvalid(format!(
+                            "cannot write project registry lock {}: {error}",
+                            lock_path.display()
+                        ))
+                    })?;
+                    file.sync_all().map_err(|error| {
+                        WorkVcsError::QueryInvalid(format!(
+                            "cannot sync project registry lock {}: {error}",
+                            lock_path.display()
+                        ))
+                    })?;
+                    return Ok(Self { path: lock_path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if started.elapsed() >= PROJECT_REGISTRY_LOCK_TIMEOUT {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "project registry lock {} is already held; refusing to update registry",
+                            lock_path.display()
+                        )));
+                    }
+                    thread::sleep(PROJECT_REGISTRY_LOCK_RETRY);
+                }
+                Err(error) => {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "cannot acquire project registry lock {}: {error}",
+                        lock_path.display()
+                    )));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ProjectRegistryLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn render_integrity_report(report: &IntegrityReport) -> String {
@@ -16092,6 +18582,520 @@ fn canonical_string_array_json(label: &str, values: &[String]) -> Result<String>
             .collect(),
     );
     knowledge_value_json(label, &value)
+}
+
+fn render_plan_admission(result: &PlanAdmissionResult) -> String {
+    let mut output = format!(
+        "admission_status={}\nreused={}\nworkspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\nidempotency_key={}\npayload_digest={}\nwork_state_digest={}\ngoal_created={}\ngoal_entity_id={}\ngoal_entity_version_id={}\nplan_entity_id={}\nplan_entity_version_id={}\nplan_state_digest={}\ntasks={}\nrecords={}\nevidence={}\n",
+        result.outcome.as_str(),
+        matches!(result.outcome, PlanAdmissionOutcome::Reused),
+        result.workspace_id,
+        result.branch_id,
+        result.previous_head_commit_id,
+        result.commit_id,
+        result.changeset_id,
+        result.idempotency_key,
+        result.payload_digest,
+        result.work_state_digest,
+        result.goal.created,
+        result.goal.entity_id,
+        result.goal.entity_version_id,
+        result.plan.entity_id,
+        result.plan.entity_version_id,
+        result.plan.state_digest,
+        result.tasks.len(),
+        result.records.len(),
+        result.evidence.len()
+    );
+    for (task_index, task) in result.tasks.iter().enumerate() {
+        writeln!(output, "task.{task_index}.local_id={}", task.local_id).expect("write to String");
+        writeln!(output, "task.{task_index}.entity_id={}", task.entity_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "task.{task_index}.entity_version_id={}",
+            task.entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{task_index}.state_digest={}",
+            task.state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{task_index}.acceptance_criteria={}",
+            task.acceptance_criteria.len()
+        )
+        .expect("write to String");
+        for (criterion_index, criterion) in task.acceptance_criteria.iter().enumerate() {
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.local_id={}",
+                criterion.local_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.entity_id={}",
+                criterion.entity_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.entity_version_id={}",
+                criterion.entity_version_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.state_digest={}",
+                criterion.state_digest
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.verification_requirements={}",
+                criterion.verification_requirements.len()
+            )
+            .expect("write to String");
+            for (requirement_index, requirement) in
+                criterion.verification_requirements.iter().enumerate()
+            {
+                writeln!(
+                    output,
+                    "task.{task_index}.ac.{criterion_index}.vr.{requirement_index}.local_id={}",
+                    requirement.local_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "task.{task_index}.ac.{criterion_index}.vr.{requirement_index}.entity_id={}",
+                    requirement.entity_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "task.{task_index}.ac.{criterion_index}.vr.{requirement_index}.entity_version_id={}",
+                    requirement.entity_version_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "task.{task_index}.ac.{criterion_index}.vr.{requirement_index}.state_digest={}",
+                    requirement.state_digest
+                )
+                .expect("write to String");
+            }
+        }
+    }
+    for (record_index, record) in result.records.iter().enumerate() {
+        writeln!(output, "record.{record_index}.local_id={}", record.local_id)
+            .expect("write to String");
+        writeln!(output, "record.{record_index}.kind={}", record.kind).expect("write to String");
+        writeln!(
+            output,
+            "record.{record_index}.entity_id={}",
+            record.entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "record.{record_index}.entity_version_id={}",
+            record.entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "record.{record_index}.state_digest={}",
+            record.state_digest
+        )
+        .expect("write to String");
+    }
+    for (evidence_index, evidence) in result.evidence.iter().enumerate() {
+        writeln!(
+            output,
+            "evidence.{evidence_index}.local_id={}",
+            evidence.local_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidence.{evidence_index}.evidence_id={}",
+            evidence.evidence_id
+        )
+        .expect("write to String");
+    }
+    output
+}
+
+fn render_plan_evolution(result: &PlanEvolutionResult) -> String {
+    let new_plan_entity_id = result
+        .new_plan
+        .as_ref()
+        .map(|plan| plan.entity_id)
+        .unwrap_or(result.plan.entity_id);
+    let new_plan_entity_version_id = result
+        .new_plan
+        .as_ref()
+        .map(|plan| plan.entity_version_id)
+        .unwrap_or(result.plan.entity_version_id);
+    let new_plan_state_digest = result
+        .new_plan
+        .as_ref()
+        .map(|plan| plan.state_digest)
+        .unwrap_or(result.plan.state_digest);
+    let mut output = format!(
+        "mode={}\nevolution_status={}\noutcome={}\nreused={}\nworkspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nhead_commit_id={}\nchangeset_id={}\nidempotency_key={}\npayload_digest={}\nwork_state_digest={}\ngoal_entity_id={}\nplan_entity_id={}\nold_plan_entity_id={}\nold_plan_entity_version_id={}\nold_plan_state_digest={}\nsuperseded_plan_entity_version_id={}\nsuperseded_plan_state_digest={}\nnew_plan_entity_id={}\nnew_plan_entity_version_id={}\nnew_plan_state_digest={}\ntasks={}\nrecords={}\nevidence={}\n",
+        result.mode,
+        result.outcome.as_str(),
+        result.outcome.as_str(),
+        matches!(result.outcome, PlanEvolutionOutcome::Reused),
+        result.workspace_id,
+        result.branch_id,
+        result.previous_head_commit_id,
+        result.commit_id,
+        result.commit_id,
+        result.changeset_id,
+        result.idempotency_key,
+        result.payload_digest,
+        result.work_state_digest,
+        result.goal_entity_id,
+        result.plan.entity_id,
+        result.plan.entity_id,
+        result.plan.previous_entity_version_id,
+        result.plan.previous_state_digest,
+        result.plan.entity_version_id,
+        result.plan.state_digest,
+        new_plan_entity_id,
+        new_plan_entity_version_id,
+        new_plan_state_digest,
+        result.tasks.len(),
+        result.records.len(),
+        result.evidence.len()
+    );
+    if let Some(relation) = &result.goal_contains_relation {
+        writeln!(
+            output,
+            "goal_contains_relation_id={}\ngoal_contains_relation_version_id={}\ngoal_contains_relation_state_digest={}\ngoal_contains_relation_source_entity_id={}\ngoal_contains_relation_target_entity_id={}",
+            relation.relation_id,
+            relation.relation_version_id,
+            relation.state_digest,
+            relation.source_entity_id,
+            relation.target_entity_id
+        )
+        .expect("write to String");
+    }
+    if let Some(relation) = &result.supersedes_relation {
+        writeln!(
+            output,
+            "supersedes_relation_id={}\nsupersedes_relation_version_id={}\nsupersedes_relation_state_digest={}\nsupersedes_relation_source_entity_id={}\nsupersedes_relation_target_entity_id={}",
+            relation.relation_id,
+            relation.relation_version_id,
+            relation.state_digest,
+            relation.source_entity_id,
+            relation.target_entity_id
+        )
+        .expect("write to String");
+    }
+    for (task_index, task) in result.tasks.iter().enumerate() {
+        writeln!(output, "task.{task_index}.local_id={}", task.local_id).expect("write to String");
+        writeln!(output, "task.{task_index}.entity_id={}", task.entity_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "task.{task_index}.entity_version_id={}",
+            task.entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{task_index}.state_digest={}",
+            task.state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{task_index}.acceptance_criteria={}",
+            task.acceptance_criteria.len()
+        )
+        .expect("write to String");
+        for (criterion_index, criterion) in task.acceptance_criteria.iter().enumerate() {
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.local_id={}",
+                criterion.local_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.entity_id={}",
+                criterion.entity_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.entity_version_id={}",
+                criterion.entity_version_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.state_digest={}",
+                criterion.state_digest
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{task_index}.ac.{criterion_index}.verification_requirements={}",
+                criterion.verification_requirements.len()
+            )
+            .expect("write to String");
+            for (requirement_index, requirement) in
+                criterion.verification_requirements.iter().enumerate()
+            {
+                writeln!(
+                    output,
+                    "task.{task_index}.ac.{criterion_index}.vr.{requirement_index}.local_id={}",
+                    requirement.local_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "task.{task_index}.ac.{criterion_index}.vr.{requirement_index}.entity_id={}",
+                    requirement.entity_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "task.{task_index}.ac.{criterion_index}.vr.{requirement_index}.entity_version_id={}",
+                    requirement.entity_version_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "task.{task_index}.ac.{criterion_index}.vr.{requirement_index}.state_digest={}",
+                    requirement.state_digest
+                )
+                .expect("write to String");
+            }
+        }
+    }
+    for (record_index, record) in result.records.iter().enumerate() {
+        writeln!(output, "record.{record_index}.local_id={}", record.local_id)
+            .expect("write to String");
+        writeln!(output, "record.{record_index}.kind={}", record.kind).expect("write to String");
+        writeln!(
+            output,
+            "record.{record_index}.entity_id={}",
+            record.entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "record.{record_index}.entity_version_id={}",
+            record.entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "record.{record_index}.state_digest={}",
+            record.state_digest
+        )
+        .expect("write to String");
+    }
+    for (evidence_index, evidence) in result.evidence.iter().enumerate() {
+        writeln!(
+            output,
+            "evidence.{evidence_index}.local_id={}",
+            evidence.local_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "evidence.{evidence_index}.evidence_id={}",
+            evidence.evidence_id
+        )
+        .expect("write to String");
+    }
+    output
+}
+
+fn render_authorization_receipt_issue(result: &AuthorizationReceiptIssueResult) -> String {
+    let mut output = format!(
+        "outcome={}\nreused={}\nworkspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\nidempotency_key={}\npayload_digest={}\nwork_state_digest={}\nreceipt_entity_id={}\nreceipt_entity_version_id={}\nreceipt_state_digest={}\nreceipt_status={}\nrelation_id={}\nrelation_version_id={}\nrelation_state_digest={}\nrelation_receipt_entity_id={}\nrelation_target_entity_id={}\n",
+        result.outcome.as_str(),
+        matches!(result.outcome, AuthorizationReceiptOutcome::Reused),
+        result.workspace_id,
+        result.branch_id,
+        result.previous_head_commit_id,
+        result.commit_id,
+        result.changeset_id,
+        result.idempotency_key,
+        result.payload_digest,
+        result.work_state_digest,
+        result.receipt.entity_id,
+        result.receipt.entity_version_id,
+        result.receipt.state_digest,
+        result.receipt.status,
+        result.relation.relation_id,
+        result.relation.relation_version_id,
+        result.relation.state_digest,
+        result.relation.receipt_entity_id,
+        result.relation.target_entity_id,
+    );
+    append_authorization_receipt_binding(&mut output, "", &result.receipt.binding);
+    output
+}
+
+fn render_authorization_receipt_consume(result: &AuthorizationReceiptConsumeResult) -> String {
+    let mut output = format!(
+        "outcome={}\nreused={}\nworkspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\nidempotency_key={}\npayload_digest={}\nwork_state_digest={}\nreceipt_entity_id={}\nreceipt_entity_version_id={}\nreceipt_state_digest={}\nreceipt_status={}\n",
+        result.outcome.as_str(),
+        matches!(
+            result.outcome,
+            workvcs_core::AuthorizationReceiptConsumeOutcome::Reused
+        ),
+        result.workspace_id,
+        result.branch_id,
+        result.previous_head_commit_id,
+        result.commit_id,
+        result.changeset_id,
+        result.idempotency_key,
+        result.payload_digest,
+        result.work_state_digest,
+        result.receipt.entity_id,
+        result.receipt.entity_version_id,
+        result.receipt.state_digest,
+        result.receipt.status,
+    );
+    append_authorization_receipt_binding(&mut output, "", &result.receipt.binding);
+    output
+}
+
+fn render_authorization_receipt_snapshot(receipt: &AuthorizationReceiptSnapshot) -> Result<String> {
+    let statement_json = serde_json::to_string(&receipt.statement).map_err(|error| {
+        WorkVcsError::RecordInvalid(format!("receipt statement encode failed: {error}"))
+    })?;
+    let mut output = format!(
+        "workspace_id={}\ncommit_id={}\nreceipt_entity_id={}\nreceipt_entity_version_id={}\nreceipt_state_digest={}\nreceipt_status={}\nreceipt_statement_json={}\n",
+        receipt.workspace_id,
+        receipt.commit_id,
+        receipt.receipt_entity_id,
+        receipt.receipt_entity_version_id,
+        receipt.state_digest,
+        receipt.status,
+        statement_json,
+    );
+    append_authorization_receipt_binding(&mut output, "", &receipt.binding);
+    Ok(output)
+}
+
+fn render_authorization_receipt_list(result: &AuthorizationReceiptListResult) -> Result<String> {
+    let mut output = format!(
+        "workspace_id={}\ncommit_id={}\nreceipts={}\n",
+        result.workspace_id,
+        result.commit_id,
+        result.receipts.len()
+    );
+    for (index, receipt) in result.receipts.iter().enumerate() {
+        writeln!(
+            output,
+            "receipt.{index}.receipt_entity_id={}",
+            receipt.receipt_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "receipt.{index}.receipt_entity_version_id={}",
+            receipt.receipt_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "receipt.{index}.receipt_state_digest={}",
+            receipt.state_digest
+        )
+        .expect("write to String");
+        writeln!(output, "receipt.{index}.receipt_status={}", receipt.status)
+            .expect("write to String");
+        append_authorization_receipt_binding(
+            &mut output,
+            &format!("receipt.{index}."),
+            &receipt.binding,
+        );
+    }
+    Ok(output)
+}
+
+fn append_authorization_receipt_binding(
+    output: &mut String,
+    prefix: &str,
+    binding: &workvcs_core::AuthorizationReceiptBinding,
+) {
+    let expires_at_us = binding
+        .expires_at_us
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    writeln!(output, "{prefix}receipt_branch_id={}", binding.branch_id).expect("write to String");
+    writeln!(
+        output,
+        "{prefix}target_entity_id={}",
+        binding.target_entity_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{prefix}target_entity_kind={}",
+        binding.target_entity_kind
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{prefix}target_entity_version_id={}",
+        binding.target_entity_version_id
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{prefix}target_state_digest={}",
+        binding.target_state_digest
+    )
+    .expect("write to String");
+    writeln!(output, "{prefix}action={}", binding.action).expect("write to String");
+    writeln!(
+        output,
+        "{prefix}contract_digest_domain={}",
+        binding.contract_digest_domain
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{prefix}contract_digest={}",
+        binding.contract_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{prefix}authority_ref_kind={}",
+        binding.authority_ref_kind
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{prefix}authority_ref_digest={}",
+        binding.authority_ref_digest
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "{prefix}authority_digest={}",
+        binding.authority_digest
+    )
+    .expect("write to String");
+    writeln!(output, "{prefix}authority_ref_redacted=true").expect("write to String");
+    writeln!(output, "{prefix}expires_at_us={expires_at_us}").expect("write to String");
 }
 
 fn render_goal_create(goal: &GoalCreateCommit) -> String {
@@ -23526,6 +26530,7 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::TaskOrderedBefore => "task_ordered_before",
         WhyRelationKind::KnowledgeExposureDerivedFrom => "knowledge_exposure_derived_from",
         WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
+        WhyRelationKind::PlanSupersedes => "plan_supersedes",
     }
 }
 
@@ -23568,6 +26573,7 @@ fn is_supported_why_relation_kind_filter(value: &str) -> bool {
             | "task_ordered_before"
             | "knowledge_exposure_derived_from"
             | "knowledge_supersedes"
+            | "plan_supersedes"
     )
 }
 
@@ -23875,6 +26881,21 @@ fn render_structural_reference_list(references: &[StructuralReferenceSnapshot]) 
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    use std::sync::{Arc, Barrier, Mutex};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn run_cli_test_with_large_stack(name: &str, test: fn()) {
+        let result = std::thread::Builder::new()
+            .name(name.to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn CLI test with larger stack")
+            .join();
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
 
     #[test]
     fn cli_renders_stable_workvcs_error_fields() {
@@ -24017,6 +27038,7 @@ mod tests {
                 "canonical",
                 "id",
                 "store",
+                "project",
                 "history",
                 "changeset",
                 "commit",
@@ -24032,6 +27054,8 @@ mod tests {
                 "knowledge",
                 "goal",
                 "plan",
+                "receipt",
+                "closeout",
                 "task",
                 "ac",
                 "vr",
@@ -24077,6 +27101,7 @@ mod tests {
             ("canonical", "Encode and digest canonical JSON values"),
             ("id", "Generate and validate typed WorkVCS identifiers"),
             ("store", "Inspect Store metadata, lineage, and migrations"),
+            ("project", "Bind and discover project Store entrypoints"),
             ("history", "List commit history from a branch or commit"),
             ("changeset", "Inspect changesets and change operations"),
             ("commit", "Inspect commit metadata and causal anchors"),
@@ -24098,6 +27123,11 @@ mod tests {
             ),
             ("goal", "Create, show, list, and transition goals"),
             ("plan", "Create, show, list, and transition plans"),
+            (
+                "receipt",
+                "Issue and inspect mechanical authorization receipts",
+            ),
+            ("closeout", "Inspect mechanical closeout projections"),
             ("task", "Create, schedule, show, and transition tasks"),
             ("ac", "Manage acceptance criteria"),
             ("vr", "Manage verification requirements"),
@@ -24144,12 +27174,48 @@ mod tests {
 
     #[test]
     fn cli_lazy_record_and_verify_commands_render_nested_help() {
+        let result = std::thread::Builder::new()
+            .name("cli-nested-help-test".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(assert_cli_lazy_record_and_verify_commands_render_nested_help)
+            .expect("spawn CLI nested help test")
+            .join();
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn assert_cli_lazy_record_and_verify_commands_render_nested_help() {
         let record_help =
             run(Cli::try_parse_from(["workvcs", "record", "--help"]).expect("parse record help"))
                 .expect("record help");
         assert!(record_help.contains("Record and inspect semantic work notes"));
         assert!(record_help.contains("Usage: workvcs record <COMMAND>"));
         assert!(record_help.contains("assumption"));
+
+        let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
+            .expect_err("project help should render through clap DisplayHelp")
+            .to_string();
+        assert!(project_help.contains("Bind and discover project Store entrypoints"));
+        assert!(project_help.contains("bind"));
+        assert!(project_help.contains("discover"));
+
+        let resume_help = Cli::try_parse_from(["workvcs", "resume", "--help"])
+            .expect_err("resume help should render through clap DisplayHelp")
+            .to_string();
+        assert!(resume_help.contains("--cwd"));
+        assert!(resume_help.contains("--registry"));
+
+        let closeout_help = Cli::try_parse_from(["workvcs", "closeout", "inspect", "--help"])
+            .expect_err("closeout inspect help should render through clap DisplayHelp")
+            .to_string();
+        assert!(
+            closeout_help
+                .contains("Inspect a Task, Plan, or Goal closeout projection without writing")
+        );
+        assert!(closeout_help.contains("--cwd"));
+        assert!(closeout_help.contains("--target-kind"));
+        assert!(closeout_help.contains("--budget-items"));
 
         let verify_help =
             run(Cli::try_parse_from(["workvcs", "verify", "--help"]).expect("parse verify help"))
@@ -30332,6 +33398,13 @@ mod tests {
 
     #[test]
     fn cli_links_knowledge_derived_from_exposure() {
+        run_cli_test_with_large_stack(
+            "cli-link-knowledge-derived-from-exposure-test",
+            assert_cli_links_knowledge_derived_from_exposure,
+        );
+    }
+
+    fn assert_cli_links_knowledge_derived_from_exposure() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -40642,6 +43715,23 @@ mod tests {
         .expect("list achieved goals at commit");
         assert_eq!(value(&achieved_goals_at_create, "goals"), "0");
 
+        let consumed_goals_at_create = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "list",
+            store,
+            "--commit",
+            &value(&goal, "commit_id"),
+            "--status",
+            "consumed",
+        ])
+        .expect("parse consumed goal list at commit"));
+        assert!(matches!(
+            consumed_goals_at_create,
+            Err(WorkVcsError::GoalInvalid(message))
+                if message.contains("goal status \"consumed\"")
+        ));
+
         let achieved_goal = run(Cli::try_parse_from([
             "workvcs",
             "goal",
@@ -47358,6 +50448,2625 @@ mod tests {
         assert_eq!(value(&claims_after, "claims_match_expected"), "true");
     }
 
+    struct ProjectBindingFixture {
+        _tempdir: tempfile::TempDir,
+        store_path: PathBuf,
+        store: String,
+        project_text: String,
+        registry_path: PathBuf,
+        registry: String,
+        workspace_id: String,
+        branch: String,
+        genesis_commit_id: String,
+        session_id: Option<String>,
+    }
+
+    fn path_text(path: &Path) -> String {
+        path.to_str().expect("path text").to_owned()
+    }
+
+    struct UnboundProjectFixture {
+        _tempdir: tempfile::TempDir,
+        store: String,
+        project_path: PathBuf,
+        project_text: String,
+        workspace_id: String,
+        branch: String,
+    }
+
+    fn create_unbound_project_fixture() -> UnboundProjectFixture {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = path_text(&store_path);
+        let project_path = tempdir.path().join("project");
+        fs::create_dir_all(&project_path).expect("create project dir");
+        let project_text = path_text(&project_path);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", &store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            &store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+
+        UnboundProjectFixture {
+            _tempdir: tempdir,
+            store,
+            project_path,
+            project_text,
+            workspace_id,
+            branch,
+        }
+    }
+
+    fn bind_project_for_test(
+        project_text: &str,
+        registry: &str,
+        store: &str,
+        workspace_id: &str,
+        branch: &str,
+    ) -> Result<String> {
+        run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "bind",
+            "--cwd",
+            project_text,
+            "--registry",
+            registry,
+            "--store",
+            store,
+            "--workspace",
+            workspace_id,
+            "--branch",
+            branch,
+        ])
+        .expect("parse project bind"))
+    }
+
+    fn minimal_admit_manifest(head: &str, state_digest: &str, key: &str) -> String {
+        format!(
+            r#"{{
+  "schema_version": 1,
+  "idempotency_key": "{key}",
+  "expected_head_commit_id": "{head}",
+  "expected_state_digest": "{state_digest}",
+  "goal": {{"mode": "create", "description": "Goal"}},
+  "plan": {{"description": "Plan", "strategy": "Strategy", "constraints": []}},
+  "tasks": [],
+  "records": [],
+  "evidence": [],
+  "rationale": {{}}
+}}"#
+        )
+    }
+
+    fn create_project_binding_fixture(start_session: bool) -> ProjectBindingFixture {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = path_text(&store_path);
+        let project = tempdir.path().join("project");
+        fs::create_dir_all(&project).expect("create project dir");
+        let project_text = path_text(&project);
+        let registry_path = tempdir
+            .path()
+            .join("registry")
+            .join("project-bindings.json");
+        let registry = path_text(&registry_path);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", &store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let canonical_store_path = fs::canonicalize(&store_path).expect("canonical store path");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            &store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let workspace_id = value(&workspace, "workspace_id");
+        let branch = value(&workspace, "branch_id");
+        let session_id = if start_session {
+            let session = run(Cli::try_parse_from([
+                "workvcs",
+                "session",
+                "start",
+                &store,
+                "--workspace",
+                &workspace_id,
+                "--branch",
+                &branch,
+            ])
+            .expect("parse session start"))
+            .expect("start session");
+            Some(value(&session, "session_id"))
+        } else {
+            None
+        };
+
+        let bind = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "bind",
+            "--cwd",
+            &project_text,
+            "--registry",
+            &registry,
+            "--store",
+            &store,
+            "--workspace",
+            &workspace_id,
+            "--branch",
+            &branch,
+        ])
+        .expect("parse project bind"))
+        .expect("bind project");
+        assert_eq!(value(&bind, "identity_kind"), "cwd");
+        assert_eq!(
+            value(&bind, "store_path"),
+            canonical_store_path.display().to_string()
+        );
+        assert_eq!(value(&bind, "workspace_id"), workspace_id);
+        assert_eq!(value(&bind, "branch_id"), branch);
+        assert_eq!(value(&bind, "binding_verified"), "true");
+        assert_eq!(value(&bind, "binding_written"), "true");
+
+        ProjectBindingFixture {
+            _tempdir: tempdir,
+            store_path: canonical_store_path,
+            store,
+            project_text,
+            registry_path,
+            registry,
+            workspace_id,
+            branch,
+            genesis_commit_id: value(&workspace, "genesis_commit_id"),
+            session_id,
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct CliFileSnapshot {
+        exists: bool,
+        len: Option<u64>,
+        modified: Option<SystemTime>,
+    }
+
+    struct CloseoutCliFixture {
+        binding: ProjectBindingFixture,
+        task_id: String,
+        task_version_id: String,
+        task_commit_id: String,
+        criterion_id: String,
+        requirement_id: String,
+        evidence_id: String,
+        verification_commit_id: String,
+    }
+
+    fn cli_sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+        let mut raw = std::ffi::OsString::from(path.as_os_str());
+        raw.push(suffix);
+        PathBuf::from(raw)
+    }
+
+    fn cli_sqlite_file_paths(path: &Path) -> [PathBuf; 3] {
+        [
+            path.to_path_buf(),
+            cli_sqlite_sidecar_path(path, "-wal"),
+            cli_sqlite_sidecar_path(path, "-shm"),
+        ]
+    }
+
+    fn cli_file_snapshot(path: &Path) -> CliFileSnapshot {
+        match fs::metadata(path) {
+            Ok(metadata) => CliFileSnapshot {
+                exists: true,
+                len: Some(metadata.len()),
+                modified: Some(metadata.modified().expect("modified time")),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => CliFileSnapshot {
+                exists: false,
+                len: None,
+                modified: None,
+            },
+            Err(error) => panic!("snapshot {path:?}: {error}"),
+        }
+    }
+
+    fn cli_sqlite_file_snapshots(path: &Path) -> Vec<(PathBuf, CliFileSnapshot)> {
+        cli_sqlite_file_paths(path)
+            .into_iter()
+            .map(|path| {
+                let snapshot = cli_file_snapshot(&path);
+                (path, snapshot)
+            })
+            .collect()
+    }
+
+    fn cli_system_time_epoch_nanos(time: SystemTime) -> String {
+        match time.duration_since(UNIX_EPOCH) {
+            Ok(duration) => duration.as_nanos().to_string(),
+            Err(error) => format!("-{}", error.duration().as_nanos()),
+        }
+    }
+
+    fn assert_closeout_store_file_output_matches(
+        output: &str,
+        prefix: &str,
+        expected_path: &Path,
+        expected_snapshot: &CliFileSnapshot,
+    ) {
+        assert_eq!(
+            value(output, &format!("{prefix}.path")),
+            path_text(expected_path)
+        );
+        assert_eq!(
+            value(output, &format!("{prefix}.exists")),
+            expected_snapshot.exists.to_string()
+        );
+        assert_eq!(
+            value(output, &format!("{prefix}.size_bytes")),
+            expected_snapshot
+                .len
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_owned())
+        );
+        assert_eq!(
+            value(output, &format!("{prefix}.modified_unix_epoch_nanos")),
+            expected_snapshot
+                .modified
+                .map(cli_system_time_epoch_nanos)
+                .unwrap_or_else(|| "none".to_owned())
+        );
+    }
+
+    fn assert_closeout_runtime_summary_common_keys(output: &str) {
+        value(output, "runtime.sessions_total");
+        value(output, "runtime.claims_total");
+        value(output, "runtime.handoffs_total");
+        value(output, "runtime.authorization_receipts_total");
+        let evaluated_at = value(output, "runtime.receipt_evaluation_at_us")
+            .parse::<i64>()
+            .expect("receipt evaluation timestamp should be an i64");
+        assert!(
+            evaluated_at > 0,
+            "receipt evaluation timestamp should be recorded"
+        );
+        value(output, "runtime.gaps_total");
+        value(output, "runtime.sessions");
+        value(output, "runtime.claims");
+        value(output, "runtime.handoffs");
+        value(output, "runtime.authorization_receipts");
+        value(output, "runtime.gaps");
+    }
+
+    fn create_closeout_cli_fixture() -> CloseoutCliFixture {
+        let binding = create_project_binding_fixture(false);
+        let store = binding.store.as_str();
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &binding.branch,
+            "--head",
+            &binding.genesis_commit_id,
+            "--description",
+            "CLI closeout task",
+        ])
+        .expect("parse closeout task create"))
+        .expect("create closeout task");
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            store,
+            "--branch",
+            &binding.branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC key = one",
+            "--statement",
+            "CLI closeout acceptance criterion is present.",
+        ])
+        .expect("parse closeout ac create"))
+        .expect("create closeout ac");
+        let requirement = run(Cli::try_parse_from([
+            "workvcs",
+            "vr",
+            "create",
+            store,
+            "--branch",
+            &binding.branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--criterion-version",
+            &value(&criterion, "acceptance_criterion_entity_version_id"),
+            "--local-key",
+            "VR-1",
+            "--statement",
+            "CLI closeout verification requirement is present.",
+        ])
+        .expect("parse closeout vr create"))
+        .expect("create closeout vr");
+        let evidence = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "create",
+            store,
+            "--kind",
+            "command_output",
+            "--metadata-json",
+            r#"{"summary":"closeout evidence"}"#,
+        ])
+        .expect("parse closeout evidence create"))
+        .expect("create closeout evidence");
+        let verification = run(Cli::try_parse_from([
+            "workvcs",
+            "verification",
+            "record",
+            store,
+            "--branch",
+            &binding.branch,
+            "--head",
+            &value(&requirement, "commit_id"),
+            "--result",
+            "passed",
+            "--verification-requirement",
+            &value(&requirement, "verification_requirement_entity_id"),
+            "--evidence",
+            &value(&evidence, "evidence_id"),
+        ])
+        .expect("parse closeout verification record"))
+        .expect("record closeout verification");
+
+        CloseoutCliFixture {
+            binding,
+            task_id: value(&task, "task_entity_id"),
+            task_version_id: value(&criterion, "task_entity_version_id"),
+            task_commit_id: value(&task, "commit_id"),
+            criterion_id: value(&criterion, "acceptance_criterion_entity_id"),
+            requirement_id: value(&requirement, "verification_requirement_entity_id"),
+            evidence_id: value(&evidence, "evidence_id"),
+            verification_commit_id: value(&verification, "commit_id"),
+        }
+    }
+
+    #[test]
+    fn cli_closeout_inspect_explicit_branch_outputs_mechanical_read_proof_without_writes() {
+        let fixture = create_closeout_cli_fixture();
+        let before_files = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        let readonly = Engine::open_readonly(&fixture.binding.store_path).expect("readonly before");
+        let branch_id = BranchId::parse_canonical(&fixture.binding.branch).expect("branch id");
+        let before_head = readonly.branch_head(branch_id).expect("branch head before");
+        let before_state = readonly
+            .state_at(before_head.head_commit_id)
+            .expect("state before");
+        drop(readonly);
+
+        let output = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            &fixture.binding.store,
+            "--branch",
+            &fixture.binding.branch,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ])
+        .expect("parse explicit branch closeout inspect"))
+        .expect("explicit branch closeout inspect");
+
+        assert_eq!(value(&output, "source_kind"), "branch");
+        assert_eq!(value(&output, "source_branch_id"), fixture.binding.branch);
+        assert_eq!(
+            value(&output, "source_commit_id"),
+            fixture.verification_commit_id
+        );
+        assert_eq!(
+            value(&output, "source_state_digest"),
+            before_state.state_digest.to_string()
+        );
+        assert_eq!(value(&output, "target_kind"), "task");
+        assert_eq!(value(&output, "target_entity_id"), fixture.task_id);
+        assert_eq!(value(&output, "target_resolution"), "found");
+        assert_eq!(value(&output, "target_digest_status"), "found");
+        assert_ne!(value(&output, "target_state_digest"), "none");
+        assert_eq!(value(&output, "budget_requested"), "50");
+        assert_eq!(value(&output, "budget_hard_limit"), "200");
+        assert_eq!(value(&output, "truncated"), "false");
+        assert_eq!(value(&output, "acceptance_criteria_total"), "1");
+        assert_eq!(value(&output, "verification_requirements_total"), "1");
+        assert_eq!(value(&output, "verifications_total"), "1");
+        assert_eq!(value(&output, "evidence_total"), "1");
+        assert_eq!(value(&output, "gaps_total"), "0");
+        assert_eq!(value(&output, "task_present"), "true");
+        assert_eq!(value(&output, "task.task_entity_id"), fixture.task_id);
+        assert_eq!(
+            value(&output, "task.task_entity_version_id"),
+            fixture.task_version_id
+        );
+        assert_eq!(
+            value(&output, "acceptance_criterion.0.local_key"),
+            "AC key = one"
+        );
+        assert_eq!(
+            value(
+                &output,
+                "acceptance_criterion.0.acceptance_criterion_entity_id"
+            ),
+            fixture.criterion_id
+        );
+        assert_eq!(
+            value(&output, "verification_requirement.0.local_key"),
+            "VR-1"
+        );
+        assert_eq!(
+            value(
+                &output,
+                "verification_requirement.0.verification_requirement_entity_id"
+            ),
+            fixture.requirement_id
+        );
+        assert_eq!(value(&output, "verification.0.result"), "passed");
+        assert_eq!(
+            value(&output, "evidence.0.evidence_id"),
+            fixture.evidence_id
+        );
+        assert_eq!(value(&output, "read_proof.stable"), "true");
+        assert_eq!(value(&output, "read_proof.drifts"), "0");
+        assert_eq!(
+            value(&output, "read_proof.before.branch_head_present"),
+            "true"
+        );
+        assert_eq!(
+            value(&output, "read_proof.before.branch_head.head_commit_id"),
+            before_head.head_commit_id.to_string()
+        );
+        assert_eq!(
+            value(&output, "read_proof.before.source_state_digest"),
+            before_state.state_digest.to_string()
+        );
+        assert_eq!(
+            value(&output, "read_proof.before.target_digest_status"),
+            "found"
+        );
+        assert_eq!(value(&output, "read_proof.before.store_files"), "3");
+        assert_eq!(
+            value(&output, "read_proof.before.store_file.0.kind"),
+            "main"
+        );
+        assert_eq!(value(&output, "read_proof.before.store_file.1.kind"), "wal");
+        assert_eq!(value(&output, "read_proof.before.store_file.2.kind"), "shm");
+        assert_closeout_store_file_output_matches(
+            &output,
+            "read_proof.before.store_file.0",
+            &before_files[0].0,
+            &before_files[0].1,
+        );
+        assert_closeout_runtime_summary_common_keys(&output);
+        assert_eq!(value(&output, "runtime.authorization_receipts"), "0");
+        assert!(!output.contains("ready"));
+        assert!(!output.contains("complete"));
+        assert!(!output.contains("authorized"));
+        assert!(!output.contains("quality"));
+
+        let after_files = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        assert_eq!(after_files, before_files);
+        let readonly = Engine::open_readonly(&fixture.binding.store_path).expect("readonly after");
+        let after_head = readonly.branch_head(branch_id).expect("branch head after");
+        let after_state = readonly
+            .state_at(after_head.head_commit_id)
+            .expect("state after");
+        assert_eq!(after_head, before_head);
+        assert_eq!(after_state.state_digest, before_state.state_digest);
+        assert_closeout_store_file_output_matches(
+            &output,
+            "read_proof.after.store_file.0",
+            &after_files[0].0,
+            &after_files[0].1,
+        );
+    }
+
+    #[test]
+    fn cli_closeout_inspect_supports_explicit_commit_and_cwd_binding_sources() {
+        let fixture = create_closeout_cli_fixture();
+        let historical = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            &fixture.binding.store,
+            "--commit",
+            &fixture.task_commit_id,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ])
+        .expect("parse explicit commit closeout inspect"))
+        .expect("explicit commit closeout inspect");
+        assert_eq!(value(&historical, "source_kind"), "commit");
+        assert_eq!(value(&historical, "source_branch_id"), "none");
+        assert_eq!(
+            value(&historical, "source_commit_id"),
+            fixture.task_commit_id
+        );
+        assert_eq!(
+            value(&historical, "read_proof.before.branch_head_present"),
+            "false"
+        );
+        assert_eq!(
+            value(&historical, "read_proof.before.branch_head.head_commit_id"),
+            "none"
+        );
+        assert_eq!(value(&historical, "target_resolution"), "found");
+        assert_eq!(value(&historical, "acceptance_criteria_total"), "0");
+        assert_eq!(value(&historical, "gaps_total"), "1");
+        assert_eq!(
+            value(&historical, "gap.0.code"),
+            "task_has_no_acceptance_criteria"
+        );
+
+        let registry_bytes_before =
+            fs::read(&fixture.binding.registry_path).expect("read registry before closeout");
+        let registry_mtime_before = fs::metadata(&fixture.binding.registry_path)
+            .expect("registry metadata before closeout")
+            .modified()
+            .expect("registry mtime before closeout");
+        let cwd = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            "--cwd",
+            &fixture.binding.project_text,
+            "--registry",
+            &fixture.binding.registry,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ])
+        .expect("parse cwd closeout inspect"))
+        .expect("cwd closeout inspect");
+        assert_eq!(value(&cwd, "source_kind"), "branch");
+        assert_eq!(value(&cwd, "source_branch_id"), fixture.binding.branch);
+        assert_eq!(
+            value(&cwd, "source_commit_id"),
+            fixture.verification_commit_id
+        );
+        assert_eq!(value(&cwd, "target_resolution"), "found");
+        assert_eq!(value(&cwd, "acceptance_criteria_total"), "1");
+        assert_eq!(
+            fs::read(&fixture.binding.registry_path).expect("read registry after closeout"),
+            registry_bytes_before
+        );
+        assert_eq!(
+            fs::metadata(&fixture.binding.registry_path)
+                .expect("registry metadata after closeout")
+                .modified()
+                .expect("registry mtime after closeout"),
+            registry_mtime_before
+        );
+    }
+
+    #[test]
+    fn cli_closeout_inspect_rejects_missing_or_ambiguous_source_and_target() {
+        let fixture = create_closeout_cli_fixture();
+        let missing_source = Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ]);
+        assert!(missing_source.is_err());
+
+        let missing_target = Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            &fixture.binding.store,
+            "--branch",
+            &fixture.binding.branch,
+            "--target-kind",
+            "task",
+        ]);
+        assert!(missing_target.is_err());
+
+        let unknown_kind = Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            &fixture.binding.store,
+            "--branch",
+            &fixture.binding.branch,
+            "--target-kind",
+            "milestone",
+            "--target",
+            &fixture.task_id,
+        ]);
+        assert!(unknown_kind.is_err());
+
+        let missing_branch_or_commit = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            &fixture.binding.store,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ])
+        .expect("parse missing branch or commit closeout"));
+        assert!(matches!(
+            missing_branch_or_commit,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("requires --branch or --commit")
+        ));
+
+        let ambiguous_branch_and_commit = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            &fixture.binding.store,
+            "--branch",
+            &fixture.binding.branch,
+            "--commit",
+            &fixture.verification_commit_id,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ])
+        .expect("parse ambiguous closeout"));
+        assert!(matches!(
+            ambiguous_branch_and_commit,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("exactly one of --branch or --commit")
+        ));
+
+        let cwd_with_branch = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            "--cwd",
+            &fixture.binding.project_text,
+            "--registry",
+            &fixture.binding.registry,
+            "--branch",
+            &fixture.binding.branch,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ])
+        .expect("parse cwd with branch closeout"));
+        assert!(matches!(
+            cwd_with_branch,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("must not pass --branch or --commit")
+        ));
+    }
+
+    #[test]
+    fn cli_closeout_inspect_budget_and_missing_inputs_fail_closed_without_creation() {
+        let fixture = create_closeout_cli_fixture();
+        let over_budget = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            &fixture.binding.store,
+            "--branch",
+            &fixture.binding.branch,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+            "--budget-items",
+            "201",
+        ])
+        .expect("parse over-budget closeout"));
+        assert!(matches!(
+            over_budget,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("budget must be between 1 and 200")
+        ));
+
+        let missing_store_path = fixture.binding._tempdir.path().join("missing.sqlite");
+        let missing_store_text = path_text(&missing_store_path);
+        let missing_store = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            &missing_store_text,
+            "--branch",
+            &fixture.binding.branch,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ])
+        .expect("parse missing store closeout"));
+        assert!(matches!(
+            missing_store,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("cannot be canonicalized")
+        ));
+        assert!(!missing_store_path.exists());
+        assert!(!cli_sqlite_sidecar_path(&missing_store_path, "-wal").exists());
+        assert!(!cli_sqlite_sidecar_path(&missing_store_path, "-shm").exists());
+
+        let unbound = create_unbound_project_fixture();
+        let missing_registry_path = unbound._tempdir.path().join("missing-registry.json");
+        let missing_registry = path_text(&missing_registry_path);
+        let missing_binding = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            "--cwd",
+            &unbound.project_text,
+            "--registry",
+            &missing_registry,
+            "--target-kind",
+            "task",
+            "--target",
+            &fixture.task_id,
+        ])
+        .expect("parse missing binding closeout"));
+        assert!(matches!(
+            missing_binding,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("cannot read project registry")
+        ));
+        assert!(!missing_registry_path.exists());
+    }
+
+    #[test]
+    fn cli_closeout_inspect_plan_lists_direct_tasks_and_child_plans_without_recursing() {
+        let fixture = create_project_binding_fixture(false);
+        let store = fixture.store.as_str();
+        let parent_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &fixture.genesis_commit_id,
+            "--description",
+            "CLI closeout parent plan",
+            "--strategy",
+            "Inspect direct tasks only",
+        ])
+        .expect("parse parent plan"))
+        .expect("create parent plan");
+        let child_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&parent_plan, "commit_id"),
+            "--description",
+            "CLI closeout child plan",
+            "--strategy",
+            "Must not recurse into this child",
+        ])
+        .expect("parse child plan"))
+        .expect("create child plan");
+        let nested_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&child_plan, "commit_id"),
+            "--description",
+            "Nested task under child plan",
+        ])
+        .expect("parse nested task"))
+        .expect("create nested task");
+        let direct_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&nested_task, "commit_id"),
+            "--description",
+            "Direct task under parent plan",
+        ])
+        .expect("parse direct task"))
+        .expect("create direct task");
+        let parent_to_child = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&direct_task, "commit_id"),
+            "--parent",
+            &value(&parent_plan, "plan_entity_id"),
+            "--child",
+            &value(&child_plan, "plan_entity_id"),
+        ])
+        .expect("parse parent child-plan containment"))
+        .expect("create parent child-plan containment");
+        let child_to_nested = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&parent_to_child, "commit_id"),
+            "--parent",
+            &value(&child_plan, "plan_entity_id"),
+            "--child",
+            &value(&nested_task, "task_entity_id"),
+        ])
+        .expect("parse child nested-task containment"))
+        .expect("create child nested-task containment");
+        let parent_to_direct_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&child_to_nested, "commit_id"),
+            "--parent",
+            &value(&parent_plan, "plan_entity_id"),
+            "--child",
+            &value(&direct_task, "task_entity_id"),
+        ])
+        .expect("parse parent direct-task containment"))
+        .expect("create parent direct-task containment");
+
+        let output = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--target-kind",
+            "plan",
+            "--target",
+            &value(&parent_plan, "plan_entity_id"),
+        ])
+        .expect("parse plan closeout inspect"))
+        .expect("plan closeout inspect");
+
+        assert_eq!(value(&output, "source_kind"), "branch");
+        assert_eq!(
+            value(&output, "source_commit_id"),
+            value(&parent_to_direct_task, "commit_id")
+        );
+        assert_eq!(value(&output, "target_kind"), "plan");
+        assert_eq!(
+            value(&output, "target_entity_id"),
+            value(&parent_plan, "plan_entity_id")
+        );
+        assert_eq!(value(&output, "target_resolution"), "found");
+        assert_eq!(value(&output, "plan_present"), "true");
+        assert_eq!(
+            value(&output, "plan.plan_entity_id"),
+            value(&parent_plan, "plan_entity_id")
+        );
+        assert_eq!(value(&output, "budget_requested"), "50");
+        assert_eq!(value(&output, "budget_hard_limit"), "200");
+        assert_eq!(value(&output, "truncated"), "false");
+        assert_eq!(value(&output, "direct_tasks_total"), "1");
+        assert_eq!(value(&output, "direct_child_plans_total"), "1");
+        assert_eq!(value(&output, "direct_tasks"), "1");
+        assert_eq!(
+            value(&output, "direct_task.0.task.task_entity_id"),
+            value(&direct_task, "task_entity_id")
+        );
+        assert_eq!(value(&output, "non_expanded"), "1");
+        assert_eq!(
+            value(&output, "non_expanded.0.category"),
+            "direct_child_plans"
+        );
+        assert_eq!(value(&output, "non_expanded.0.count"), "1");
+        assert_eq!(value(&output, "omitted"), "0");
+        assert_closeout_runtime_summary_common_keys(&output);
+        assert_eq!(value(&output, "read_proof.stable"), "true");
+        assert!(
+            !output.contains(&value(&nested_task, "task_entity_id")),
+            "Plan closeout inspect must not recurse into child Plan tasks"
+        );
+    }
+
+    #[test]
+    fn cli_closeout_inspect_goal_lists_direct_entities_runtime_receipts_and_cwd_source() {
+        let fixture = create_project_binding_fixture(false);
+        let store = fixture.store.as_str();
+        let root_goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &fixture.genesis_commit_id,
+            "--description",
+            "CLI closeout root goal",
+        ])
+        .expect("parse root goal"))
+        .expect("create root goal");
+        let manifest_path = fixture._tempdir.path().join("goal-closeout-receipt.json");
+        write_cli_receipt_manifest(
+            &manifest_path,
+            &root_goal,
+            "cli-closeout-goal-receipt",
+            "deploy",
+        );
+        let issued_receipt = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "issue",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .expect("parse goal receipt issue"))
+        .expect("issue goal receipt");
+        let direct_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&issued_receipt, "commit_id"),
+            "--description",
+            "CLI closeout direct plan",
+            "--strategy",
+            "Goal lists this direct Plan",
+        ])
+        .expect("parse direct plan"))
+        .expect("create direct plan");
+        let direct_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&direct_plan, "commit_id"),
+            "--description",
+            "Direct task under root goal",
+        ])
+        .expect("parse direct task"))
+        .expect("create direct task");
+        let child_goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&direct_task, "commit_id"),
+            "--description",
+            "Child goal not expanded",
+        ])
+        .expect("parse child goal"))
+        .expect("create child goal");
+        let nested_plan_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&child_goal, "commit_id"),
+            "--description",
+            "Nested task under direct plan",
+        ])
+        .expect("parse nested plan task"))
+        .expect("create nested plan task");
+        let child_goal_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&nested_plan_task, "commit_id"),
+            "--description",
+            "Nested task under child goal",
+        ])
+        .expect("parse child goal task"))
+        .expect("create child goal task");
+        let goal_to_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&child_goal_task, "commit_id"),
+            "--parent",
+            &value(&root_goal, "goal_entity_id"),
+            "--child",
+            &value(&direct_plan, "plan_entity_id"),
+        ])
+        .expect("parse goal plan containment"))
+        .expect("create goal plan containment");
+        let plan_to_nested_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&goal_to_plan, "commit_id"),
+            "--parent",
+            &value(&direct_plan, "plan_entity_id"),
+            "--child",
+            &value(&nested_plan_task, "task_entity_id"),
+        ])
+        .expect("parse plan nested-task containment"))
+        .expect("create plan nested-task containment");
+        let goal_to_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&plan_to_nested_task, "commit_id"),
+            "--parent",
+            &value(&root_goal, "goal_entity_id"),
+            "--child",
+            &value(&direct_task, "task_entity_id"),
+        ])
+        .expect("parse goal task containment"))
+        .expect("create goal task containment");
+        let goal_to_goal = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&goal_to_task, "commit_id"),
+            "--parent",
+            &value(&root_goal, "goal_entity_id"),
+            "--child",
+            &value(&child_goal, "goal_entity_id"),
+        ])
+        .expect("parse goal child-goal containment"))
+        .expect("create goal child-goal containment");
+        let child_goal_to_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "contain",
+            store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&goal_to_goal, "commit_id"),
+            "--parent",
+            &value(&child_goal, "goal_entity_id"),
+            "--child",
+            &value(&child_goal_task, "task_entity_id"),
+        ])
+        .expect("parse child-goal task containment"))
+        .expect("create child-goal task containment");
+
+        let output = run(Cli::try_parse_from([
+            "workvcs",
+            "closeout",
+            "inspect",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--target-kind",
+            "goal",
+            "--target",
+            &value(&root_goal, "goal_entity_id"),
+        ])
+        .expect("parse goal closeout inspect"))
+        .expect("goal closeout inspect");
+
+        assert_eq!(value(&output, "source_kind"), "branch");
+        assert_eq!(value(&output, "source_branch_id"), fixture.branch);
+        assert_eq!(
+            value(&output, "source_commit_id"),
+            value(&child_goal_to_task, "commit_id")
+        );
+        assert_eq!(value(&output, "target_kind"), "goal");
+        assert_eq!(value(&output, "target_resolution"), "found");
+        assert_eq!(value(&output, "goal_present"), "true");
+        assert_eq!(
+            value(&output, "goal.goal_entity_id"),
+            value(&root_goal, "goal_entity_id")
+        );
+        assert_eq!(value(&output, "budget_requested"), "50");
+        assert_eq!(value(&output, "budget_hard_limit"), "200");
+        assert_eq!(value(&output, "truncated"), "false");
+        assert_eq!(value(&output, "direct_plans_total"), "1");
+        assert_eq!(value(&output, "direct_tasks_total"), "1");
+        assert_eq!(value(&output, "direct_child_goals_total"), "1");
+        assert_eq!(value(&output, "direct_plans"), "1");
+        assert_eq!(
+            value(&output, "direct_plan.0.plan.plan_entity_id"),
+            value(&direct_plan, "plan_entity_id")
+        );
+        assert_eq!(value(&output, "direct_tasks"), "1");
+        assert_eq!(
+            value(&output, "direct_task.0.task.task_entity_id"),
+            value(&direct_task, "task_entity_id")
+        );
+        assert_eq!(value(&output, "non_expanded"), "1");
+        assert_eq!(
+            value(&output, "non_expanded.0.category"),
+            "direct_child_goals"
+        );
+        assert_eq!(value(&output, "non_expanded.0.count"), "1");
+        assert_closeout_runtime_summary_common_keys(&output);
+        assert_eq!(value(&output, "runtime.authorization_receipts_total"), "1");
+        assert_eq!(value(&output, "runtime.authorization_receipts"), "1");
+        assert_eq!(
+            value(&output, "runtime.authorization_receipt.0.receipt_entity_id"),
+            value(&issued_receipt, "receipt_entity_id")
+        );
+        assert_eq!(
+            value(&output, "runtime.authorization_receipt.0.mechanical_status"),
+            "active"
+        );
+        assert!(
+            value(&output, "runtime.authorization_receipt.0.evaluated_at_us")
+                .parse::<i64>()
+                .expect("receipt item evaluated timestamp")
+                > 0
+        );
+        assert_ne!(
+            value(
+                &output,
+                "runtime.authorization_receipt.0.authority_ref_digest"
+            ),
+            ""
+        );
+        assert!(!output.contains("user:session/ref-original"));
+        assert_eq!(value(&output, "read_proof.stable"), "true");
+        assert!(
+            !output.contains(&value(&nested_plan_task, "task_entity_id"))
+                && !output.contains(&value(&child_goal_task, "task_entity_id")),
+            "Goal closeout inspect must not recurse into direct Plan or child Goal contents"
+        );
+    }
+
+    #[test]
+    fn cli_project_binding_uses_git_common_dir_identity_across_worktrees() {
+        let fixture = create_project_binding_fixture(false);
+        let repo = fixture._tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("README.md"), b"baseline\n").expect("write readme");
+        git_test(&repo, &["add", "README.md"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+        let linked = fixture._tempdir.path().join("repo-linked");
+        let linked_text = path_text(&linked);
+        git_test(
+            &repo,
+            &["worktree", "add", "-q", &linked_text, "-b", "linked"],
+        );
+        let repo_text = path_text(&repo);
+
+        let bind = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "bind",
+            "--cwd",
+            &repo_text,
+            "--registry",
+            &fixture.registry,
+            "--store",
+            &fixture.store,
+            "--workspace",
+            &fixture.workspace_id,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse git project bind"))
+        .expect("bind git project");
+        let discover = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &linked_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse linked project discover"))
+        .expect("discover linked git project");
+
+        assert_eq!(value(&bind, "identity_kind"), "git-common-dir");
+        assert_eq!(value(&discover, "identity_kind"), "git-common-dir");
+        assert_eq!(
+            value(&discover, "project_identity"),
+            value(&bind, "project_identity")
+        );
+        assert_ne!(
+            value(&discover, "current_project_root"),
+            value(&discover, "bound_project_root")
+        );
+        assert_eq!(
+            value(&discover, "store_path"),
+            fixture.store_path.display().to_string()
+        );
+        assert_eq!(value(&discover, "binding_verified"), "true");
+    }
+
+    #[test]
+    fn cli_project_binding_keeps_distinct_repositories_separate() {
+        let fixture = create_project_binding_fixture(false);
+        let repo_a = fixture._tempdir.path().join("repo-a");
+        let repo_b = fixture._tempdir.path().join("repo-b");
+        git_test_init(&repo_a);
+        git_test_init(&repo_b);
+        fs::write(repo_a.join("README.md"), b"a\n").expect("write repo a");
+        fs::write(repo_b.join("README.md"), b"b\n").expect("write repo b");
+        git_test(&repo_a, &["add", "README.md"]);
+        git_test(&repo_a, &["commit", "-q", "-m", "baseline a"]);
+        git_test(&repo_b, &["add", "README.md"]);
+        git_test(&repo_b, &["commit", "-q", "-m", "baseline b"]);
+        let repo_a_text = path_text(&repo_a);
+        let repo_b_text = path_text(&repo_b);
+
+        run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "bind",
+            "--cwd",
+            &repo_a_text,
+            "--registry",
+            &fixture.registry,
+            "--store",
+            &fixture.store,
+            "--workspace",
+            &fixture.workspace_id,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse repo a bind"))
+        .expect("bind repo a");
+        let missing = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &repo_b_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse repo b discover"));
+
+        assert!(matches!(
+            missing,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("no project binding")
+        ));
+    }
+
+    #[test]
+    fn cli_project_discover_rejects_binding_store_drift() {
+        let fixture = create_project_binding_fixture(false);
+        let drift_store_path = fixture._tempdir.path().join("drift.sqlite");
+        let drift_store = path_text(&drift_store_path);
+        run(
+            Cli::try_parse_from(["workvcs", "init", &drift_store, "--display-name", "drift"])
+                .expect("parse drift init"),
+        )
+        .expect("init drift store");
+        let drift_store_canonical =
+            fs::canonicalize(&drift_store_path).expect("canonical drift store");
+        let registry_before =
+            fs::read_to_string(&fixture.registry_path).expect("read registry before drift");
+        let registry_after = registry_before.replace(
+            &fixture.store_path.display().to_string(),
+            &drift_store_canonical.display().to_string(),
+        );
+        fs::write(&fixture.registry_path, registry_after).expect("write drifted registry");
+
+        let drift = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse drift discover"));
+
+        assert!(matches!(
+            drift,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("store id")
+        ));
+    }
+
+    #[test]
+    fn cli_project_binding_rejects_project_local_registry_and_store_paths() {
+        let fixture = create_unbound_project_fixture();
+
+        let registry_in_project = fixture.project_path.join("project-bindings.json");
+        let rejected_registry = bind_project_for_test(
+            &fixture.project_text,
+            &path_text(&registry_in_project),
+            &fixture.store,
+            &fixture.workspace_id,
+            &fixture.branch,
+        );
+        assert!(matches!(
+            rejected_registry,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("project registry")
+                    && message.contains("outside project boundary")
+        ));
+
+        let store_in_project_path = fixture.project_path.join("workvcs.sqlite");
+        let store_in_project = path_text(&store_in_project_path);
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            &store_in_project,
+            "--display-name",
+            "inside-project",
+        ])
+        .expect("parse inside init"))
+        .expect("init inside project store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            &store_in_project,
+            "--display-name",
+            "inside workspace",
+        ])
+        .expect("parse inside workspace"))
+        .expect("create inside workspace");
+        let external_registry = fixture
+            ._tempdir
+            .path()
+            .join("external-registry")
+            .join("project-bindings.json");
+        let rejected_store = bind_project_for_test(
+            &fixture.project_text,
+            &path_text(&external_registry),
+            &store_in_project,
+            &value(&workspace, "workspace_id"),
+            &value(&workspace, "branch_id"),
+        );
+        assert!(matches!(
+            rejected_store,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("project binding store")
+                    && message.contains("outside project boundary")
+        ));
+    }
+
+    #[test]
+    fn cli_project_binding_rejects_default_registry_home_inside_project() {
+        let fixture = create_unbound_project_fixture();
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let previous_home = std::env::var_os(PROJECT_REGISTRY_ENV);
+        unsafe {
+            std::env::set_var(PROJECT_REGISTRY_ENV, &fixture.project_path);
+        }
+        let rejected = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "bind",
+            "--cwd",
+            &fixture.project_text,
+            "--store",
+            &fixture.store,
+            "--workspace",
+            &fixture.workspace_id,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse project bind with default home"));
+        match previous_home {
+            Some(value) => unsafe {
+                std::env::set_var(PROJECT_REGISTRY_ENV, value);
+            },
+            None => unsafe {
+                std::env::remove_var(PROJECT_REGISTRY_ENV);
+            },
+        }
+        assert!(matches!(
+            rejected,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("project registry")
+                    && message.contains("outside project boundary")
+        ));
+    }
+
+    #[test]
+    fn cli_project_binding_rejects_store_inside_git_common_repository_root() {
+        let fixture = create_unbound_project_fixture();
+        let repo = fixture._tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("README.md"), b"baseline\n").expect("write readme");
+        git_test(&repo, &["add", "README.md"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+        let linked = fixture._tempdir.path().join("repo-linked");
+        let linked_text = path_text(&linked);
+        git_test(
+            &repo,
+            &["worktree", "add", "-q", &linked_text, "-b", "linked"],
+        );
+
+        let store_in_common_root_path = repo.join("workvcs.sqlite");
+        let store_in_common_root = path_text(&store_in_common_root_path);
+        run(Cli::try_parse_from([
+            "workvcs",
+            "init",
+            &store_in_common_root,
+            "--display-name",
+            "inside-common-root",
+        ])
+        .expect("parse common-root init"))
+        .expect("init common-root store");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            &store_in_common_root,
+            "--display-name",
+            "common root workspace",
+        ])
+        .expect("parse common-root workspace"))
+        .expect("create common-root workspace");
+        let registry = fixture
+            ._tempdir
+            .path()
+            .join("registry")
+            .join("project-bindings.json");
+
+        let rejected = bind_project_for_test(
+            &linked_text,
+            &path_text(&registry),
+            &store_in_common_root,
+            &value(&workspace, "workspace_id"),
+            &value(&workspace, "branch_id"),
+        );
+        assert!(matches!(
+            rejected,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("project binding store")
+                    && message.contains("outside project boundary")
+        ));
+    }
+
+    #[test]
+    fn cli_project_registry_concurrent_binds_preserve_both_entries() {
+        let fixture = create_unbound_project_fixture();
+        let project_a = fixture._tempdir.path().join("project-a");
+        let project_b = fixture._tempdir.path().join("project-b");
+        fs::create_dir_all(&project_a).expect("project a");
+        fs::create_dir_all(&project_b).expect("project b");
+        let registry = fixture
+            ._tempdir
+            .path()
+            .join("registry")
+            .join("project-bindings.json");
+        let registry_text = path_text(&registry);
+        let barrier = Arc::new(Barrier::new(2));
+
+        let thread_a = {
+            let barrier = Arc::clone(&barrier);
+            let project = path_text(&project_a);
+            let registry = registry_text.clone();
+            let store = fixture.store.clone();
+            let workspace = fixture.workspace_id.clone();
+            let branch = fixture.branch.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                bind_project_for_test(&project, &registry, &store, &workspace, &branch)
+            })
+        };
+        let thread_b = {
+            let barrier = Arc::clone(&barrier);
+            let project = path_text(&project_b);
+            let registry = registry_text.clone();
+            let store = fixture.store.clone();
+            let workspace = fixture.workspace_id.clone();
+            let branch = fixture.branch.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                bind_project_for_test(&project, &registry, &store, &workspace, &branch)
+            })
+        };
+
+        thread_a.join().expect("thread a").expect("bind a");
+        thread_b.join().expect("thread b").expect("bind b");
+
+        let registry_json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&registry).expect("read registry"))
+                .expect("registry json");
+        assert_eq!(
+            registry_json["bindings"]
+                .as_array()
+                .expect("bindings")
+                .len(),
+            2
+        );
+        run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &path_text(&project_a),
+            "--registry",
+            &registry_text,
+        ])
+        .expect("parse discover a"))
+        .expect("discover a");
+        run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &path_text(&project_b),
+            "--registry",
+            &registry_text,
+        ])
+        .expect("parse discover b"))
+        .expect("discover b");
+    }
+
+    #[test]
+    fn cli_project_registry_lock_failure_preserves_old_registry_bytes() {
+        let fixture = create_project_binding_fixture(false);
+        let old_bytes = fs::read(&fixture.registry_path).expect("old registry bytes");
+        let lock_path = fixture.registry_path.with_extension("json.lock");
+        let _lock_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+            .expect("create stale lock");
+
+        let second_project = fixture._tempdir.path().join("second-project");
+        fs::create_dir_all(&second_project).expect("second project");
+        let rejected = bind_project_for_test(
+            &path_text(&second_project),
+            &fixture.registry,
+            &fixture.store,
+            &fixture.workspace_id,
+            &fixture.branch,
+        );
+        assert!(matches!(
+            rejected,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("project registry lock")
+                    && message.contains("already held")
+        ));
+        assert_eq!(
+            fs::read(&fixture.registry_path).expect("registry after lock failure"),
+            old_bytes
+        );
+        drop(_lock_file);
+        fs::remove_file(lock_path).expect("remove stale lock");
+    }
+
+    #[test]
+    fn cli_project_discover_and_admit_reject_damaged_bound_store() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse head"))
+        .expect("head");
+        let manifest_path = fixture._tempdir.path().join("damaged-admit.json");
+        fs::write(
+            &manifest_path,
+            minimal_admit_manifest(
+                &value(&head, "head_commit_id"),
+                &value(&head, "state_digest"),
+                "damaged-bound-store",
+            ),
+        )
+        .expect("write manifest");
+        let mut store_file = OpenOptions::new()
+            .write(true)
+            .open(&fixture.store_path)
+            .expect("open store for corruption");
+        store_file
+            .write_all(b"not-a-workvcs-sqlite-store")
+            .expect("corrupt store");
+        store_file.sync_all().expect("sync corrupted store");
+        drop(store_file);
+
+        let discover = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse damaged discover"));
+        assert!(discover.is_err());
+
+        let admit = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .expect("parse damaged admit"));
+        assert!(admit.is_err());
+    }
+
+    #[test]
+    fn cli_resume_cwd_uses_unique_active_session_without_writes() {
+        let fixture = create_project_binding_fixture(true);
+        let session_id = fixture.session_id.as_deref().expect("session id");
+        let store_bytes_before = fs::read(&fixture.store_path).expect("read store before");
+        let registry_bytes_before = fs::read(&fixture.registry_path).expect("read registry before");
+        let store_mtime_before = fs::metadata(&fixture.store_path)
+            .expect("store metadata before")
+            .modified()
+            .expect("store modified before");
+        let registry_mtime_before = fs::metadata(&fixture.registry_path)
+            .expect("registry metadata before")
+            .modified()
+            .expect("registry modified before");
+
+        let resume = run(Cli::try_parse_from([
+            "workvcs",
+            "resume",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse cwd resume"))
+        .expect("cwd resume");
+
+        assert_eq!(value(&resume, "session_id"), session_id);
+        assert_eq!(value(&resume, "workspace_id"), fixture.workspace_id);
+        assert_eq!(value(&resume, "branch_id"), fixture.branch);
+        assert_eq!(value(&resume, "resume_profile"), "brief");
+        assert_eq!(
+            fs::read(&fixture.store_path).expect("read store after"),
+            store_bytes_before
+        );
+        assert_eq!(
+            fs::read(&fixture.registry_path).expect("read registry after"),
+            registry_bytes_before
+        );
+        assert_eq!(
+            fs::metadata(&fixture.store_path)
+                .expect("store metadata after")
+                .modified()
+                .expect("store modified after"),
+            store_mtime_before
+        );
+        assert_eq!(
+            fs::metadata(&fixture.registry_path)
+                .expect("registry metadata after")
+                .modified()
+                .expect("registry modified after"),
+            registry_mtime_before
+        );
+    }
+
+    #[test]
+    fn cli_resume_cwd_requires_one_active_session_when_session_is_implicit() {
+        let no_session = create_project_binding_fixture(false);
+        let none = run(Cli::try_parse_from([
+            "workvcs",
+            "resume",
+            "--cwd",
+            &no_session.project_text,
+            "--registry",
+            &no_session.registry,
+        ])
+        .expect("parse no-session cwd resume"));
+        assert!(matches!(
+            none,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("no active session")
+        ));
+
+        let multiple = create_project_binding_fixture(true);
+        run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            &multiple.store,
+            "--workspace",
+            &multiple.workspace_id,
+            "--branch",
+            &multiple.branch,
+        ])
+        .expect("parse second session start"))
+        .expect("start second session");
+
+        let ambiguous = run(Cli::try_parse_from([
+            "workvcs",
+            "resume",
+            "--cwd",
+            &multiple.project_text,
+            "--registry",
+            &multiple.registry,
+        ])
+        .expect("parse ambiguous cwd resume"));
+        assert!(matches!(
+            ambiguous,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("2 active sessions")
+        ));
+        let latest_active = run(Cli::try_parse_from([
+            "workvcs",
+            "resume",
+            "--cwd",
+            &multiple.project_text,
+            "--registry",
+            &multiple.registry,
+            "--session",
+            "latest-active",
+        ])
+        .expect("parse latest-active cwd resume"));
+        assert!(matches!(
+            latest_active,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("2 active sessions")
+        ));
+    }
+
+    #[test]
+    fn cli_plan_admit_uses_manifest_and_bound_project() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse initial branch head"))
+        .expect("initial branch head");
+        let initial_head = value(&head, "head_commit_id");
+        let initial_state_digest = value(&head, "state_digest");
+        let manifest_path = fixture._tempdir.path().join("admit-manifest.json");
+        let manifest = format!(
+            r#"{{
+  "schema_version": 1,
+  "idempotency_key": "cli-plan-admit-bound-project",
+  "expected_head_commit_id": "{initial_head}",
+  "expected_state_digest": "{initial_state_digest}",
+  "goal": {{
+    "mode": "create",
+    "description": "Replace plugin-local Plan state"
+  }},
+  "plan": {{
+    "description": "Use WorkVCS as the durable Plan carrier",
+    "strategy": "Admit the smallest current goal and first task",
+    "constraints": ["No workctl double-write"]
+  }},
+  "tasks": [
+    {{
+      "local_id": "task-1",
+      "description": "Carry prior useful discovery into the first Plan",
+      "acceptance_criteria": [
+        {{
+          "local_id": "ac-1",
+          "statement": "Admission is visible in one semantic commit",
+          "verification_requirements": [
+            {{
+              "local_id": "vr-1",
+              "statement": "CLI output returns commit and digest"
+            }}
+          ]
+        }}
+      ]
+    }}
+  ],
+  "records": [
+    {{
+      "local_id": "finding-1",
+      "kind": "finding",
+      "statement": "Project bind/discover is available",
+      "scope": {{"source": "p0-1"}}
+    }},
+    {{
+      "local_id": "decision-1",
+      "kind": "decision",
+      "statement": "Plan admission uses a stable manifest",
+      "scope": {{"source": "adr-0497"}}
+    }},
+    {{
+      "local_id": "unknown-1",
+      "kind": "unknown",
+      "statement": "Future evolve remains out of scope",
+      "scope": {{"source": "p0-2a"}}
+    }}
+  ],
+  "evidence": [
+    {{
+      "local_id": "evidence-1",
+      "kind": "terminal-output",
+      "metadata": {{"command": "workvcs plan admit"}}
+    }}
+  ],
+  "rationale": {{"source": "cli-test"}}
+}}"#
+        );
+        fs::write(&manifest_path, manifest).expect("write manifest");
+        let manifest_text = path_text(&manifest_path);
+
+        let admit = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &manifest_text,
+        ])
+        .expect("parse plan admit"))
+        .expect("plan admit");
+
+        assert_eq!(value(&admit, "admission_status"), "created");
+        assert_eq!(value(&admit, "reused"), "false");
+        assert_eq!(value(&admit, "branch_id"), fixture.branch);
+        let plan_id = value(&admit, "plan_entity_id");
+        let admitted_head = value(&admit, "commit_id");
+        assert_eq!(value(&admit, "previous_head_commit_id"), initial_head);
+        assert_eq!(value(&admit, "tasks"), "1");
+        assert_eq!(value(&admit, "records"), "3");
+        assert_eq!(value(&admit, "evidence"), "1");
+
+        let shown_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            &fixture.store,
+            "--commit",
+            &admitted_head,
+            "--plan",
+            &plan_id,
+        ])
+        .expect("parse shown plan"))
+        .expect("shown plan");
+        assert!(shown_plan.contains("No workctl double-write"));
+
+        let replay = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &manifest_text,
+        ])
+        .expect("parse plan admit replay"))
+        .expect("plan admit replay");
+        assert_eq!(value(&replay, "admission_status"), "reused");
+        assert_eq!(value(&replay, "reused"), "true");
+        assert_eq!(value(&replay, "commit_id"), admitted_head);
+
+        let after_replay = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse branch head after replay"))
+        .expect("branch head after replay");
+        assert_eq!(value(&after_replay, "head_commit_id"), admitted_head);
+    }
+
+    #[test]
+    fn cli_plan_evolve_uses_in_place_manifest_and_bound_project() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse initial branch head"))
+        .expect("initial branch head");
+        let admit_path = fixture._tempdir.path().join("evolve-admit.json");
+        fs::write(
+            &admit_path,
+            minimal_admit_manifest(
+                &value(&head, "head_commit_id"),
+                &value(&head, "state_digest"),
+                "cli-plan-evolve-admit",
+            ),
+        )
+        .expect("write admit manifest");
+        let admit_text = path_text(&admit_path);
+        let admit = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &admit_text,
+        ])
+        .expect("parse plan admit"))
+        .expect("plan admit");
+
+        let evolve_path = fixture._tempdir.path().join("evolve-manifest.json");
+        let admitted_head = value(&admit, "commit_id");
+        let admitted_state = value(&admit, "work_state_digest");
+        let plan_id = value(&admit, "plan_entity_id");
+        let old_plan_version = value(&admit, "plan_entity_version_id");
+        let old_plan_digest = value(&admit, "plan_state_digest");
+        fs::write(
+            &evolve_path,
+            format!(
+                r#"{{
+  "mode": "in_place",
+  "schema_version": 1,
+  "idempotency_key": "cli-plan-evolve",
+  "expected_head_commit_id": "{admitted_head}",
+  "expected_state_digest": "{admitted_state}",
+  "target_plan_entity_id": "{plan_id}",
+  "expected_plan_entity_version_id": "{old_plan_version}",
+  "expected_plan_state_digest": "{old_plan_digest}",
+  "plan": {{"strategy": "Evolved Strategy"}},
+  "tasks": [
+    {{
+      "local_id": "task-2",
+      "description": "Append context task",
+      "acceptance_criteria": [
+        {{
+          "local_id": "ac-2",
+          "statement": "CLI reports appended ids",
+          "verification_requirements": [
+            {{"local_id": "vr-2", "statement": "Output includes mode and outcome"}}
+          ]
+        }}
+      ]
+    }}
+  ],
+  "records": [
+    {{
+      "local_id": "finding-2",
+      "kind": "finding",
+      "statement": "CLI evolve accepts in_place",
+      "scope": {{"source": "cli-test"}}
+    }}
+  ],
+  "evidence": [
+    {{
+      "local_id": "evidence-2",
+      "kind": "terminal-output",
+      "metadata": {{"command": "workvcs plan evolve"}}
+    }}
+  ],
+  "rationale": {{"source": "cli-test"}}
+}}"#
+            ),
+        )
+        .expect("write evolve manifest");
+        let evolve_text = path_text(&evolve_path);
+
+        let evolve = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &evolve_text,
+        ])
+        .expect("parse plan evolve"))
+        .expect("plan evolve");
+
+        assert_eq!(value(&evolve, "mode"), "in_place");
+        assert_eq!(value(&evolve, "evolution_status"), "created");
+        assert_eq!(value(&evolve, "outcome"), "created");
+        assert_eq!(value(&evolve, "reused"), "false");
+        assert_eq!(value(&evolve, "previous_head_commit_id"), admitted_head);
+        assert_eq!(
+            value(&evolve, "head_commit_id"),
+            value(&evolve, "commit_id")
+        );
+        assert_eq!(value(&evolve, "plan_entity_id"), plan_id);
+        assert_eq!(
+            value(&evolve, "old_plan_entity_version_id"),
+            old_plan_version
+        );
+        assert_eq!(value(&evolve, "old_plan_state_digest"), old_plan_digest);
+        assert_eq!(value(&evolve, "tasks"), "1");
+        assert_eq!(value(&evolve, "records"), "1");
+        assert_eq!(value(&evolve, "evidence"), "1");
+        assert_eq!(value(&evolve, "task.0.local_id"), "task-2");
+        assert_eq!(value(&evolve, "record.0.local_id"), "finding-2");
+        assert_eq!(value(&evolve, "evidence.0.local_id"), "evidence-2");
+
+        let shown_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            &fixture.store,
+            "--commit",
+            &value(&evolve, "commit_id"),
+            "--plan",
+            &plan_id,
+        ])
+        .expect("parse evolved plan"))
+        .expect("evolved plan");
+        assert!(shown_plan.contains("Evolved Strategy"));
+
+        let replay = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &evolve_text,
+        ])
+        .expect("parse plan evolve replay"))
+        .expect("plan evolve replay");
+        assert_eq!(value(&replay, "evolution_status"), "reused");
+        assert_eq!(value(&replay, "reused"), "true");
+        assert_eq!(value(&replay, "commit_id"), value(&evolve, "commit_id"));
+
+        let after_replay = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse branch head after evolve replay"))
+        .expect("branch head after evolve replay");
+        assert_eq!(
+            value(&after_replay, "head_commit_id"),
+            value(&evolve, "commit_id")
+        );
+    }
+
+    #[test]
+    fn cli_plan_evolve_accepts_explicit_store_branch_manifest() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse initial branch head"))
+        .expect("initial branch head");
+        let admit_path = fixture._tempdir.path().join("explicit-store-admit.json");
+        fs::write(
+            &admit_path,
+            minimal_admit_manifest(
+                &value(&head, "head_commit_id"),
+                &value(&head, "state_digest"),
+                "cli-plan-evolve-explicit-store-admit",
+            ),
+        )
+        .expect("write admit manifest");
+        let admit = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&admit_path),
+        ])
+        .expect("parse explicit-store plan admit"))
+        .expect("explicit-store plan admit");
+
+        let admitted_head = value(&admit, "commit_id");
+        let admitted_state = value(&admit, "work_state_digest");
+        let plan_id = value(&admit, "plan_entity_id");
+        let old_plan_version = value(&admit, "plan_entity_version_id");
+        let old_plan_digest = value(&admit, "plan_state_digest");
+        let evolve_path = fixture._tempdir.path().join("explicit-store-evolve.json");
+        fs::write(
+            &evolve_path,
+            format!(
+                r#"{{
+  "mode": "in_place",
+  "schema_version": 1,
+  "idempotency_key": "cli-plan-evolve-explicit-store",
+  "expected_head_commit_id": "{admitted_head}",
+  "expected_state_digest": "{admitted_state}",
+  "target_plan_entity_id": "{plan_id}",
+  "expected_plan_entity_version_id": "{old_plan_version}",
+  "expected_plan_state_digest": "{old_plan_digest}",
+  "plan": {{"description": "Explicit Store Evolved Plan"}},
+  "tasks": [],
+  "records": [],
+  "evidence": [],
+  "rationale": {{"source": "explicit-store-cli-test"}}
+}}"#
+            ),
+        )
+        .expect("write explicit-store evolve manifest");
+
+        let evolve = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&evolve_path),
+        ])
+        .expect("parse explicit-store plan evolve"))
+        .expect("explicit-store plan evolve");
+
+        assert_eq!(value(&evolve, "mode"), "in_place");
+        assert_eq!(value(&evolve, "evolution_status"), "created");
+        assert_eq!(value(&evolve, "branch_id"), fixture.branch);
+        assert_eq!(value(&evolve, "previous_head_commit_id"), admitted_head);
+        assert_eq!(value(&evolve, "plan_entity_id"), plan_id);
+        assert_eq!(
+            value(&evolve, "old_plan_entity_version_id"),
+            old_plan_version
+        );
+        assert_eq!(value(&evolve, "tasks"), "0");
+        assert_eq!(value(&evolve, "records"), "0");
+        assert_eq!(value(&evolve, "evidence"), "0");
+
+        let shown_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            &fixture.store,
+            "--commit",
+            &value(&evolve, "commit_id"),
+            "--plan",
+            &plan_id,
+        ])
+        .expect("parse explicit-store evolved plan"))
+        .expect("explicit-store evolved plan");
+        assert!(shown_plan.contains("Explicit Store Evolved Plan"));
+    }
+
+    #[test]
+    fn cli_plan_evolve_supersede_explicit_store_branch_reports_lineage() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse initial branch head"))
+        .expect("initial branch head");
+        let admit_path = fixture._tempdir.path().join("supersede-admit.json");
+        fs::write(
+            &admit_path,
+            minimal_admit_manifest(
+                &value(&head, "head_commit_id"),
+                &value(&head, "state_digest"),
+                "cli-plan-evolve-supersede-admit",
+            ),
+        )
+        .expect("write admit manifest");
+        let admit = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&admit_path),
+        ])
+        .expect("parse explicit-store plan admit"))
+        .expect("explicit-store plan admit");
+
+        let admitted_head = value(&admit, "commit_id");
+        let admitted_state = value(&admit, "work_state_digest");
+        let goal_id = value(&admit, "goal_entity_id");
+        let goal_version = value(&admit, "goal_entity_version_id");
+        let plan_id = value(&admit, "plan_entity_id");
+        let old_plan_version = value(&admit, "plan_entity_version_id");
+        let old_plan_digest = value(&admit, "plan_state_digest");
+        let relation = {
+            let engine = Engine::open(&fixture.store_path).expect("open store");
+            let commit_id = CommitId::parse_canonical(&admitted_head).expect("parse commit");
+            let parsed_goal_id = EntityId::parse_canonical(&goal_id).expect("parse goal id");
+            let parsed_plan_id = EntityId::parse_canonical(&plan_id).expect("parse plan id");
+            engine
+                .primary_containment_relations_at(commit_id)
+                .expect("primary containment")
+                .into_iter()
+                .find(|relation| {
+                    relation.parent_entity_id == parsed_goal_id
+                        && relation.child_entity_id == parsed_plan_id
+                })
+                .expect("goal-plan relation")
+        };
+        let evolve_path = fixture._tempdir.path().join("supersede-evolve.json");
+        fs::write(
+            &evolve_path,
+            format!(
+                r#"{{
+  "mode": "supersede",
+  "schema_version": 1,
+  "idempotency_key": "cli-plan-evolve-supersede",
+  "expected_head_commit_id": "{admitted_head}",
+  "expected_state_digest": "{admitted_state}",
+  "target_plan_entity_id": "{plan_id}",
+  "expected_plan_entity_version_id": "{old_plan_version}",
+  "expected_plan_state_digest": "{old_plan_digest}",
+  "expected_goal_entity_id": "{goal_id}",
+  "expected_goal_entity_version_id": "{goal_version}",
+  "expected_goal_plan_relation_id": "{relation_id}",
+  "expected_goal_plan_relation_version_id": "{relation_version}",
+  "plan": {{
+    "description": "Replacement Plan",
+    "strategy": "Replacement Strategy",
+    "constraints": {{"mode":"carry_all"}}
+  }},
+  "tasks": [],
+  "records": [],
+  "evidence": [],
+  "rationale": {{"kind": "strategy-change", "source": "cli-test"}}
+}}"#,
+                relation_id = relation.relation_id,
+                relation_version = relation.relation_version_id,
+            ),
+        )
+        .expect("write supersede evolve manifest");
+
+        let evolve = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&evolve_path),
+        ])
+        .expect("parse explicit-store supersede plan evolve"))
+        .expect("explicit-store supersede plan evolve");
+
+        assert_eq!(value(&evolve, "mode"), "supersede");
+        assert_eq!(value(&evolve, "evolution_status"), "created");
+        assert_eq!(value(&evolve, "branch_id"), fixture.branch);
+        assert_eq!(value(&evolve, "previous_head_commit_id"), admitted_head);
+        assert_eq!(value(&evolve, "old_plan_entity_id"), plan_id);
+        assert_eq!(
+            value(&evolve, "old_plan_entity_version_id"),
+            old_plan_version
+        );
+        let new_plan_id = value(&evolve, "new_plan_entity_id");
+        assert_ne!(new_plan_id, plan_id);
+        assert_eq!(
+            value(&evolve, "goal_contains_relation_source_entity_id"),
+            goal_id
+        );
+        assert_eq!(
+            value(&evolve, "goal_contains_relation_target_entity_id"),
+            new_plan_id
+        );
+        assert_eq!(
+            value(&evolve, "supersedes_relation_source_entity_id"),
+            new_plan_id
+        );
+        assert_eq!(
+            value(&evolve, "supersedes_relation_target_entity_id"),
+            plan_id
+        );
+        assert_eq!(value(&evolve, "tasks"), "0");
+        assert_eq!(value(&evolve, "records"), "0");
+        assert_eq!(value(&evolve, "evidence"), "0");
+
+        let old_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            &fixture.store,
+            "--commit",
+            &value(&evolve, "commit_id"),
+            "--plan",
+            &plan_id,
+        ])
+        .expect("parse old superseded plan"))
+        .expect("old superseded plan");
+        assert!(old_plan.contains("status=superseded"));
+        let new_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            &fixture.store,
+            "--commit",
+            &value(&evolve, "commit_id"),
+            "--plan",
+            &new_plan_id,
+        ])
+        .expect("parse replacement plan"))
+        .expect("replacement plan");
+        assert!(new_plan.contains("Replacement Strategy"));
+        let doctor =
+            run(
+                Cli::try_parse_from(["workvcs", "doctor", &fixture.store, "--require-valid"])
+                    .expect("parse doctor"),
+            )
+            .expect("doctor after supersede");
+        assert!(doctor.contains("checked_changesets=3"));
+    }
+
+    #[test]
+    fn cli_plan_evolve_supersede_uses_cwd_registry_and_reports_lineage() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse initial branch head"))
+        .expect("initial branch head");
+        let admit_path = fixture._tempdir.path().join("cwd-supersede-admit.json");
+        fs::write(
+            &admit_path,
+            minimal_admit_manifest(
+                &value(&head, "head_commit_id"),
+                &value(&head, "state_digest"),
+                "cli-plan-evolve-cwd-supersede-admit",
+            ),
+        )
+        .expect("write admit manifest");
+        let admit = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&admit_path),
+        ])
+        .expect("parse cwd plan admit"))
+        .expect("cwd plan admit");
+
+        let admitted_head = value(&admit, "commit_id");
+        let admitted_state = value(&admit, "work_state_digest");
+        let goal_id = value(&admit, "goal_entity_id");
+        let goal_version = value(&admit, "goal_entity_version_id");
+        let plan_id = value(&admit, "plan_entity_id");
+        let old_plan_version = value(&admit, "plan_entity_version_id");
+        let old_plan_digest = value(&admit, "plan_state_digest");
+        let relation = {
+            let engine = Engine::open(&fixture.store_path).expect("open store");
+            let commit_id = CommitId::parse_canonical(&admitted_head).expect("parse commit");
+            let parsed_goal_id = EntityId::parse_canonical(&goal_id).expect("parse goal id");
+            let parsed_plan_id = EntityId::parse_canonical(&plan_id).expect("parse plan id");
+            engine
+                .primary_containment_relations_at(commit_id)
+                .expect("primary containment")
+                .into_iter()
+                .find(|relation| {
+                    relation.parent_entity_id == parsed_goal_id
+                        && relation.child_entity_id == parsed_plan_id
+                })
+                .expect("goal-plan relation")
+        };
+        let evolve_path = fixture._tempdir.path().join("cwd-supersede-evolve.json");
+        fs::write(
+            &evolve_path,
+            format!(
+                r#"{{
+  "mode": "supersede",
+  "schema_version": 1,
+  "idempotency_key": "cli-plan-evolve-cwd-supersede",
+  "expected_head_commit_id": "{admitted_head}",
+  "expected_state_digest": "{admitted_state}",
+  "target_plan_entity_id": "{plan_id}",
+  "expected_plan_entity_version_id": "{old_plan_version}",
+  "expected_plan_state_digest": "{old_plan_digest}",
+  "expected_goal_entity_id": "{goal_id}",
+  "expected_goal_entity_version_id": "{goal_version}",
+  "expected_goal_plan_relation_id": "{relation_id}",
+  "expected_goal_plan_relation_version_id": "{relation_version}",
+  "plan": {{
+    "description": "CWD Replacement Plan",
+    "strategy": "CWD Replacement Strategy",
+    "constraints": {{"mode":"carry_all"}}
+  }},
+  "tasks": [],
+  "records": [],
+  "evidence": [],
+  "rationale": {{"kind": "strategy-change", "source": "cwd-cli-test"}}
+}}"#,
+                relation_id = relation.relation_id,
+                relation_version = relation.relation_version_id,
+            ),
+        )
+        .expect("write cwd supersede evolve manifest");
+
+        let evolve = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&evolve_path),
+        ])
+        .expect("parse cwd supersede plan evolve"))
+        .expect("cwd supersede plan evolve");
+
+        assert_eq!(value(&evolve, "mode"), "supersede");
+        assert_eq!(value(&evolve, "evolution_status"), "created");
+        assert_eq!(value(&evolve, "branch_id"), fixture.branch);
+        assert_eq!(value(&evolve, "previous_head_commit_id"), admitted_head);
+        assert_eq!(value(&evolve, "old_plan_entity_id"), plan_id);
+        let new_plan_id = value(&evolve, "new_plan_entity_id");
+        assert_ne!(new_plan_id, plan_id);
+        assert_eq!(
+            value(&evolve, "goal_contains_relation_source_entity_id"),
+            goal_id
+        );
+        assert_eq!(
+            value(&evolve, "goal_contains_relation_target_entity_id"),
+            new_plan_id
+        );
+        assert_eq!(
+            value(&evolve, "supersedes_relation_source_entity_id"),
+            new_plan_id
+        );
+        assert_eq!(
+            value(&evolve, "supersedes_relation_target_entity_id"),
+            plan_id
+        );
+
+        let old_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            &fixture.store,
+            "--commit",
+            &value(&evolve, "commit_id"),
+            "--plan",
+            &plan_id,
+        ])
+        .expect("parse old superseded plan"))
+        .expect("old superseded plan");
+        assert!(old_plan.contains("status=superseded"));
+        let new_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "show",
+            &fixture.store,
+            "--commit",
+            &value(&evolve, "commit_id"),
+            "--plan",
+            &new_plan_id,
+        ])
+        .expect("parse cwd replacement plan"))
+        .expect("cwd replacement plan");
+        assert!(new_plan.contains("CWD Replacement Strategy"));
+        let why = run(Cli::try_parse_from([
+            "workvcs",
+            "why",
+            &fixture.store,
+            "--commit",
+            &value(&evolve, "commit_id"),
+            "--entity",
+            &plan_id,
+            "--relation-kind",
+            "plan_supersedes",
+            "--expected-relation-edges",
+            "1",
+        ])
+        .expect("parse why plan supersedes"))
+        .expect("why plan supersedes");
+        assert_eq!(value(&why, "relation_edges"), "1");
+        assert_eq!(value(&why, "relation.0.relation_kind"), "plan_supersedes");
+        assert_eq!(value(&why, "relation.0.source_entity_id"), new_plan_id);
+        assert_eq!(value(&why, "relation.0.target_entity_id"), plan_id);
+    }
+
     #[test]
     fn cli_shows_and_lists_session_active_claims() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -48173,6 +53882,13 @@ mod tests {
 
     #[test]
     fn cli_context_includes_current_record_summary() {
+        run_cli_test_with_large_stack(
+            "cli-context-record-summary-test",
+            assert_cli_context_includes_current_record_summary,
+        );
+    }
+
+    fn assert_cli_context_includes_current_record_summary() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -48249,6 +53965,13 @@ mod tests {
 
     #[test]
     fn cli_context_brief_exposes_resource_basis_recovery_hint_for_requirement() {
+        run_cli_test_with_large_stack(
+            "cli-context-brief-resource-requirement-test",
+            assert_cli_context_brief_exposes_resource_basis_recovery_hint_for_requirement,
+        );
+    }
+
+    fn assert_cli_context_brief_exposes_resource_basis_recovery_hint_for_requirement() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -48451,6 +54174,13 @@ mod tests {
 
     #[test]
     fn cli_context_brief_exposes_resource_basis_recovery_hint_for_blocked_dependency() {
+        run_cli_test_with_large_stack(
+            "cli-context-brief-blocked-dependency-test",
+            assert_cli_context_brief_exposes_resource_basis_recovery_hint_for_blocked_dependency,
+        );
+    }
+
+    fn assert_cli_context_brief_exposes_resource_basis_recovery_hint_for_blocked_dependency() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -48717,6 +54447,13 @@ mod tests {
 
     #[test]
     fn cli_context_normal_exposes_same_plan_peer_resource_basis_recovery_hint() {
+        run_cli_test_with_large_stack(
+            "cli-context-normal-same-plan-peer-test",
+            assert_cli_context_normal_exposes_same_plan_peer_resource_basis_recovery_hint,
+        );
+    }
+
+    fn assert_cli_context_normal_exposes_same_plan_peer_resource_basis_recovery_hint() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -49094,6 +54831,13 @@ mod tests {
 
     #[test]
     fn cli_context_normal_exposes_same_goal_cross_plan_peer_resource_basis_recovery_hint() {
+        run_cli_test_with_large_stack(
+            "cli-context-normal-cross-plan-peer-test",
+            assert_cli_context_normal_exposes_same_goal_cross_plan_peer_resource_basis_recovery_hint,
+        );
+    }
+
+    fn assert_cli_context_normal_exposes_same_goal_cross_plan_peer_resource_basis_recovery_hint() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -49512,6 +55256,13 @@ mod tests {
 
     #[test]
     fn cli_context_includes_current_active_knowledge_summary() {
+        run_cli_test_with_large_stack(
+            "cli-context-active-knowledge-summary-test",
+            assert_cli_context_includes_current_active_knowledge_summary,
+        );
+    }
+
+    fn assert_cli_context_includes_current_active_knowledge_summary() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -49624,6 +55375,13 @@ mod tests {
 
     #[test]
     fn cli_context_packet_filters_path_scoped_knowledge_by_scope_json() {
+        run_cli_test_with_large_stack(
+            "cli-context-packet-path-scope-json-test",
+            assert_cli_context_packet_filters_path_scoped_knowledge_by_scope_json,
+        );
+    }
+
+    fn assert_cli_context_packet_filters_path_scoped_knowledge_by_scope_json() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -49740,6 +55498,13 @@ mod tests {
 
     #[test]
     fn cli_context_packet_accepts_path_scope_shorthands() {
+        run_cli_test_with_large_stack(
+            "cli-context-packet-path-scope-shorthands-test",
+            assert_cli_context_packet_accepts_path_scope_shorthands,
+        );
+    }
+
+    fn assert_cli_context_packet_accepts_path_scope_shorthands() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -49970,6 +55735,13 @@ mod tests {
 
     #[test]
     fn cli_context_packet_projects_transition_rationale() {
+        run_cli_test_with_large_stack(
+            "cli-context-packet-transition-rationale-test",
+            assert_cli_context_packet_projects_transition_rationale,
+        );
+    }
+
+    fn assert_cli_context_packet_projects_transition_rationale() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -50293,6 +56065,18 @@ mod tests {
 
     #[test]
     fn cli_context_includes_current_record_relation_summary() {
+        let result = std::thread::Builder::new()
+            .name("cli-context-record-relation-test".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(assert_cli_context_includes_current_record_relation_summary)
+            .expect("spawn CLI context record relation test")
+            .join();
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn assert_cli_context_includes_current_record_relation_summary() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -50408,6 +56192,13 @@ mod tests {
 
     #[test]
     fn cli_context_includes_current_record_knowledge_relation_summary() {
+        run_cli_test_with_large_stack(
+            "cli-context-record-knowledge-relation-test",
+            assert_cli_context_includes_current_record_knowledge_relation_summary,
+        );
+    }
+
+    fn assert_cli_context_includes_current_record_knowledge_relation_summary() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -50522,6 +56313,13 @@ mod tests {
 
     #[test]
     fn cli_context_includes_current_knowledge_relation_summary() {
+        run_cli_test_with_large_stack(
+            "cli-context-knowledge-relation-test",
+            assert_cli_context_includes_current_knowledge_relation_summary,
+        );
+    }
+
+    fn assert_cli_context_includes_current_knowledge_relation_summary() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -50682,6 +56480,13 @@ mod tests {
 
     #[test]
     fn cli_context_includes_knowledge_exposure_provenance_relations() {
+        run_cli_test_with_large_stack(
+            "cli-context-knowledge-exposure-provenance-test",
+            assert_cli_context_includes_knowledge_exposure_provenance_relations,
+        );
+    }
+
+    fn assert_cli_context_includes_knowledge_exposure_provenance_relations() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -52007,6 +57812,13 @@ mod tests {
 
     #[test]
     fn cli_links_record_derived_from_source_record() {
+        run_cli_test_with_large_stack(
+            "cli-link-record-derived-from-source-test",
+            assert_cli_links_record_derived_from_source_record,
+        );
+    }
+
+    fn assert_cli_links_record_derived_from_source_record() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -52660,6 +58472,13 @@ mod tests {
 
     #[test]
     fn cli_links_finding_to_invalidated_assumption() {
+        run_cli_test_with_large_stack(
+            "cli-link-finding-invalidated-assumption-test",
+            assert_cli_links_finding_to_invalidated_assumption,
+        );
+    }
+
+    fn assert_cli_links_finding_to_invalidated_assumption() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -52869,6 +58688,13 @@ mod tests {
 
     #[test]
     fn cli_links_finding_to_validated_assumption() {
+        run_cli_test_with_large_stack(
+            "cli-link-finding-validated-assumption-test",
+            assert_cli_links_finding_to_validated_assumption,
+        );
+    }
+
+    fn assert_cli_links_finding_to_validated_assumption() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -53125,6 +58951,13 @@ mod tests {
 
     #[test]
     fn cli_links_finding_to_supported_decision() {
+        run_cli_test_with_large_stack(
+            "cli-link-finding-supported-decision-test",
+            assert_cli_links_finding_to_supported_decision,
+        );
+    }
+
+    fn assert_cli_links_finding_to_supported_decision() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -53294,6 +59127,13 @@ mod tests {
 
     #[test]
     fn cli_why_projects_created_record_relation_as_endpoint_evolution() {
+        run_cli_test_with_large_stack(
+            "cli-why-created-record-relation-test",
+            assert_cli_why_projects_created_record_relation_as_endpoint_evolution,
+        );
+    }
+
+    fn assert_cli_why_projects_created_record_relation_as_endpoint_evolution() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -53434,6 +59274,13 @@ mod tests {
 
     #[test]
     fn cli_why_projects_removed_record_relation_as_endpoint_evolution() {
+        run_cli_test_with_large_stack(
+            "cli-why-removed-record-relation-test",
+            assert_cli_why_projects_removed_record_relation_as_endpoint_evolution,
+        );
+    }
+
+    fn assert_cli_why_projects_removed_record_relation_as_endpoint_evolution() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -53636,6 +59483,13 @@ mod tests {
 
     #[test]
     fn cli_why_projects_removed_record_knowledge_relation_as_endpoint_evolution() {
+        run_cli_test_with_large_stack(
+            "cli-why-removed-record-knowledge-relation-test",
+            assert_cli_why_projects_removed_record_knowledge_relation_as_endpoint_evolution,
+        );
+    }
+
+    fn assert_cli_why_projects_removed_record_knowledge_relation_as_endpoint_evolution() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -53831,6 +59685,13 @@ mod tests {
 
     #[test]
     fn cli_links_finding_to_contradicted_decision() {
+        run_cli_test_with_large_stack(
+            "cli-link-contradicted-decision-test",
+            assert_cli_links_finding_to_contradicted_decision,
+        );
+    }
+
+    fn assert_cli_links_finding_to_contradicted_decision() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -53939,6 +59800,13 @@ mod tests {
 
     #[test]
     fn cli_links_custom_related_records_with_label() {
+        run_cli_test_with_large_stack(
+            "cli-link-custom-related-records-test",
+            assert_cli_links_custom_related_records_with_label,
+        );
+    }
+
+    fn assert_cli_links_custom_related_records_with_label() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -54101,6 +59969,13 @@ mod tests {
 
     #[test]
     fn cli_removes_record_relation_from_current_projection() {
+        run_cli_test_with_large_stack(
+            "cli-remove-record-relation-test",
+            assert_cli_removes_record_relation_from_current_projection,
+        );
+    }
+
+    fn assert_cli_removes_record_relation_from_current_projection() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -54701,6 +60576,13 @@ mod tests {
 
     #[test]
     fn cli_links_knowledge_supersession() {
+        run_cli_test_with_large_stack(
+            "cli-link-knowledge-supersession-test",
+            assert_cli_links_knowledge_supersession,
+        );
+    }
+
+    fn assert_cli_links_knowledge_supersession() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -55070,6 +60952,13 @@ mod tests {
 
     #[test]
     fn cli_why_projects_removed_knowledge_relation_as_endpoint_evolution() {
+        run_cli_test_with_large_stack(
+            "cli-why-removed-knowledge-relation-test",
+            assert_cli_why_projects_removed_knowledge_relation_as_endpoint_evolution,
+        );
+    }
+
+    fn assert_cli_why_projects_removed_knowledge_relation_as_endpoint_evolution() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -55274,6 +61163,13 @@ mod tests {
 
     #[test]
     fn cli_links_record_support_to_knowledge() {
+        run_cli_test_with_large_stack(
+            "cli-link-record-support-knowledge-test",
+            assert_cli_links_record_support_to_knowledge,
+        );
+    }
+
+    fn assert_cli_links_record_support_to_knowledge() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -55423,6 +61319,13 @@ mod tests {
 
     #[test]
     fn cli_why_epistemic_explanations_follow_relation_filters_and_limit() {
+        run_cli_test_with_large_stack(
+            "cli-why-epistemic-relation-filters-test",
+            assert_cli_why_epistemic_explanations_follow_relation_filters_and_limit,
+        );
+    }
+
+    fn assert_cli_why_epistemic_explanations_follow_relation_filters_and_limit() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -55615,6 +61518,13 @@ mod tests {
 
     #[test]
     fn cli_links_record_invalidation_to_knowledge() {
+        run_cli_test_with_large_stack(
+            "cli-link-record-invalidation-knowledge-test",
+            assert_cli_links_record_invalidation_to_knowledge,
+        );
+    }
+
+    fn assert_cli_links_record_invalidation_to_knowledge() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -55730,6 +61640,13 @@ mod tests {
 
     #[test]
     fn cli_links_record_validation_to_knowledge() {
+        run_cli_test_with_large_stack(
+            "cli-link-record-validation-knowledge-test",
+            assert_cli_links_record_validation_to_knowledge,
+        );
+    }
+
+    fn assert_cli_links_record_validation_to_knowledge() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -55820,6 +61737,13 @@ mod tests {
 
     #[test]
     fn cli_links_record_contradiction_to_knowledge() {
+        run_cli_test_with_large_stack(
+            "cli-link-record-contradiction-knowledge-test",
+            assert_cli_links_record_contradiction_to_knowledge,
+        );
+    }
+
+    fn assert_cli_links_record_contradiction_to_knowledge() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -55913,6 +61837,13 @@ mod tests {
 
     #[test]
     fn cli_lists_record_knowledge_relations() {
+        run_cli_test_with_large_stack(
+            "cli-list-record-knowledge-relations-test",
+            assert_cli_lists_record_knowledge_relations,
+        );
+    }
+
+    fn assert_cli_lists_record_knowledge_relations() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -56071,6 +62002,13 @@ mod tests {
 
     #[test]
     fn cli_shows_record_knowledge_relation() {
+        run_cli_test_with_large_stack(
+            "cli-show-record-knowledge-relation-test",
+            assert_cli_shows_record_knowledge_relation,
+        );
+    }
+
+    fn assert_cli_shows_record_knowledge_relation() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -56203,6 +62141,13 @@ mod tests {
 
     #[test]
     fn cli_removes_record_knowledge_relation() {
+        run_cli_test_with_large_stack(
+            "cli-remove-record-knowledge-relation-test",
+            assert_cli_removes_record_knowledge_relation,
+        );
+    }
+
+    fn assert_cli_removes_record_knowledge_relation() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -56316,6 +62261,13 @@ mod tests {
 
     #[test]
     fn cli_restores_record_knowledge_relation() {
+        run_cli_test_with_large_stack(
+            "cli-restore-record-knowledge-relation-test",
+            assert_cli_restores_record_knowledge_relation,
+        );
+    }
+
+    fn assert_cli_restores_record_knowledge_relation() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -57648,6 +63600,316 @@ mod tests {
         .expect("parse missing merge list by runtime"))
         .expect("list missing merges by runtime");
         assert_eq!(value(&missing_by_runtime, "merges"), "0");
+    }
+
+    fn cli_receipt_digest(label: &str) -> String {
+        Digest::domain_separated("workvcs.test.cli-receipt", label.as_bytes()).to_string()
+    }
+
+    fn cli_receipt_manifest(goal_output: &str, key: &str, action: &str) -> String {
+        format!(
+            r#"{{
+  "schema_version": 1,
+  "idempotency_key": "{key}",
+  "expected_head_commit_id": "{expected_head_commit_id}",
+  "expected_state_digest": "{expected_state_digest}",
+  "target": {{
+    "entity_id": "{target_entity_id}",
+    "entity_kind": "goal",
+    "expected_version_id": "{target_entity_version_id}",
+    "expected_state_digest": "{target_state_digest}"
+  }},
+  "action": "{action}",
+  "contract_digest_domain": "work-governance/action-contract/v1",
+  "contract_digest": "{contract_digest}",
+  "authority_ref": {{
+    "kind": "user-session",
+    "ref": "user:session/ref-original",
+    "authority_digest": "{authority_digest}"
+  }},
+  "rationale": {{"why":"cli receipt binding test"}}
+}}"#,
+            expected_head_commit_id = value(goal_output, "commit_id"),
+            expected_state_digest = value(goal_output, "work_state_digest"),
+            target_entity_id = value(goal_output, "goal_entity_id"),
+            target_entity_version_id = value(goal_output, "goal_entity_version_id"),
+            target_state_digest = value(goal_output, "goal_state_digest"),
+            contract_digest = cli_receipt_digest("contract"),
+            authority_digest = cli_receipt_digest("authority"),
+        )
+    }
+
+    fn write_cli_receipt_manifest(path: &Path, goal_output: &str, key: &str, action: &str) {
+        fs::write(path, cli_receipt_manifest(goal_output, key, action)).expect("write manifest");
+    }
+
+    fn write_cli_receipt_consume_manifest(
+        path: &Path,
+        goal_output: &str,
+        issued: &str,
+        key: &str,
+        action: &str,
+    ) {
+        fs::write(path, format!(r#"{{
+"schema_version":1,"idempotency_key":"{key}","expected_head_commit_id":"{head}","expected_state_digest":"{state}",
+"receipt_record_entity_id":"{receipt}","expected_receipt_entity_version_id":"{receipt_version}","expected_receipt_state_digest":"{receipt_digest}",
+"target":{{"entity_id":"{target}","entity_kind":"goal","expected_version_id":"{target_version}","expected_state_digest":"{target_digest}"}},
+"action":"{action}","contract_digest":"{contract}","contract_digest_domain":"work-governance/action-contract/v1","rationale":{{"why":"cli consume"}}
+}}"#,
+            head = value(issued, "commit_id"), state = value(issued, "work_state_digest"),
+            receipt = value(issued, "receipt_entity_id"), receipt_version = value(issued, "receipt_entity_version_id"),
+            receipt_digest = value(issued, "receipt_state_digest"), target = value(goal_output, "goal_entity_id"),
+            target_version = value(goal_output, "goal_entity_version_id"), target_digest = value(goal_output, "goal_state_digest"),
+            contract = cli_receipt_digest("contract"),
+        )).expect("write consume manifest");
+    }
+
+    fn create_cli_receipt_goal(store: &str, branch: &str, head: &str) -> String {
+        run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            store,
+            "--branch",
+            branch,
+            "--head",
+            head,
+            "--description",
+            "CLI receipt target",
+        ])
+        .expect("parse receipt target goal"))
+        .expect("create receipt target goal")
+    }
+
+    #[test]
+    fn cli_receipt_issue_show_list_explicit_store_redacts_authority_ref() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store_path = tempdir.path().join("workvcs.sqlite");
+        let store = path_text(&store_path);
+
+        run(
+            Cli::try_parse_from(["workvcs", "init", &store, "--display-name", "cli-store"])
+                .expect("parse init"),
+        )
+        .expect("run init");
+        let workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            &store,
+            "--display-name",
+            "workspace",
+        ])
+        .expect("parse workspace"))
+        .expect("create workspace");
+        let branch = value(&workspace, "branch_id");
+        let goal =
+            create_cli_receipt_goal(&store, &branch, &value(&workspace, "genesis_commit_id"));
+        let manifest_path = tempdir.path().join("receipt.json");
+        write_cli_receipt_manifest(&manifest_path, &goal, "cli-explicit-receipt", "deploy");
+        let manifest = path_text(&manifest_path);
+
+        let issued = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "issue",
+            &store,
+            "--branch",
+            &branch,
+            "--manifest",
+            &manifest,
+        ])
+        .expect("parse receipt issue"))
+        .expect("issue receipt");
+        assert_eq!(value(&issued, "outcome"), "created");
+        assert_eq!(value(&issued, "reused"), "false");
+        assert_eq!(value(&issued, "receipt_status"), "active");
+        assert_eq!(value(&issued, "action"), "deploy");
+        assert_eq!(value(&issued, "authority_ref_redacted"), "true");
+        assert!(!issued.contains("user:session/ref-original"));
+
+        let consume_path = tempdir.path().join("receipt-consume.json");
+        write_cli_receipt_consume_manifest(
+            &consume_path,
+            &goal,
+            &issued,
+            "cli-explicit-consume",
+            "deploy",
+        );
+        let consumed = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "consume",
+            &store,
+            "--branch",
+            &branch,
+            "--manifest",
+            &path_text(&consume_path),
+        ])
+        .expect("parse receipt consume"))
+        .expect("consume receipt");
+        assert_eq!(value(&consumed, "receipt_status"), "consumed");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "show",
+            &store,
+            "--commit",
+            &value(&issued, "commit_id"),
+            "--receipt",
+            &value(&issued, "receipt_entity_id"),
+        ])
+        .expect("parse receipt show"))
+        .expect("show receipt");
+        assert_eq!(
+            value(&shown, "receipt_entity_id"),
+            value(&issued, "receipt_entity_id")
+        );
+        assert_eq!(value(&shown, "receipt_status"), "active");
+        assert_eq!(value(&shown, "authority_ref_redacted"), "true");
+        assert!(!shown.contains("user:session/ref-original"));
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "list",
+            &store,
+            "--commit",
+            &value(&issued, "commit_id"),
+            "--status",
+            "active",
+            "--target",
+            &value(&goal, "goal_entity_id"),
+            "--action",
+            "deploy",
+            "--expected-receipts",
+            "1",
+        ])
+        .expect("parse receipt list"))
+        .expect("list receipts");
+        assert_eq!(value(&listed, "receipts"), "1");
+        assert_eq!(value(&listed, "receipts_match_expected"), "true");
+        assert_eq!(
+            value(&listed, "receipt.0.receipt_entity_id"),
+            value(&issued, "receipt_entity_id")
+        );
+        assert_eq!(value(&listed, "receipt.0.authority_ref_redacted"), "true");
+        assert!(!listed.contains("user:session/ref-original"));
+    }
+
+    #[test]
+    fn cli_receipt_issue_show_list_cwd_binding_uses_bound_branch() {
+        let fixture = create_project_binding_fixture(false);
+        let branch_head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse initial branch head"))
+        .expect("initial branch head");
+        let goal = create_cli_receipt_goal(
+            &fixture.store,
+            &fixture.branch,
+            &value(&branch_head, "head_commit_id"),
+        );
+        let manifest_path = fixture._tempdir.path().join("receipt-cwd.json");
+        write_cli_receipt_manifest(&manifest_path, &goal, "cli-cwd-receipt", "ship");
+        let manifest = path_text(&manifest_path);
+
+        let issued = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "issue",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &manifest,
+        ])
+        .expect("parse cwd receipt issue"))
+        .expect("issue cwd receipt");
+        assert_eq!(value(&issued, "outcome"), "created");
+        assert_eq!(value(&issued, "branch_id"), fixture.branch);
+        assert_eq!(value(&issued, "action"), "ship");
+        assert_eq!(value(&issued, "authority_ref_redacted"), "true");
+        assert!(!issued.contains("user:session/ref-original"));
+
+        let consume_path = fixture._tempdir.path().join("receipt-cwd-consume.json");
+        write_cli_receipt_consume_manifest(
+            &consume_path,
+            &goal,
+            &issued,
+            "cli-cwd-consume",
+            "ship",
+        );
+        let consumed = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "consume",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&consume_path),
+        ])
+        .expect("parse cwd receipt consume"))
+        .expect("consume cwd receipt");
+        assert_eq!(value(&consumed, "receipt_status"), "consumed");
+
+        let shown = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "show",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--receipt",
+            &value(&issued, "receipt_entity_id"),
+        ])
+        .expect("parse cwd receipt show"))
+        .expect("show cwd receipt");
+        assert_eq!(
+            value(&shown, "receipt_entity_id"),
+            value(&issued, "receipt_entity_id")
+        );
+        assert_eq!(value(&shown, "action"), "ship");
+        assert_eq!(value(&shown, "authority_ref_redacted"), "true");
+        assert!(!shown.contains("user:session/ref-original"));
+
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "list",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--status",
+            "consumed",
+            "--target",
+            &value(&goal, "goal_entity_id"),
+            "--action",
+            "ship",
+            "--expected-receipts",
+            "1",
+        ])
+        .expect("parse cwd receipt list"))
+        .expect("list cwd receipts");
+        assert_eq!(value(&listed, "receipts"), "1");
+        assert_eq!(value(&listed, "receipts_match_expected"), "true");
+        assert_eq!(
+            value(&listed, "receipt.0.receipt_entity_id"),
+            value(&issued, "receipt_entity_id")
+        );
+        assert_eq!(value(&listed, "receipt.0.authority_ref_redacted"), "true");
+        assert!(!listed.contains("user:session/ref-original"));
     }
 
     fn value(output: &str, key: &str) -> String {

@@ -3,44 +3,49 @@ use crate::error::Result;
 use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
     AcceptanceCriterionEffectiveStatus, AcceptanceCriterionRevisionCommit,
-    AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot, BranchForkOptions,
-    BranchForkResult, BranchHead, BranchProjectionRefreshOptions, BranchProjectionRefreshResult,
-    BranchProjectionSnapshot, BundleExportManifest, BundleExportOptions, BundleImportApplyOptions,
-    BundleImportApplyResult, BundleImportAttemptListOptions, BundleImportAttemptListResult,
-    BundleImportAttemptOptions, BundleImportAttemptResult, BundleImportAttemptSnapshot,
-    BundleImportPreflightOptions, BundleImportPreflightResult, BundleManifestValidationOptions,
-    BundleManifestValidationResult, BundlePayloadExport, BundlePayloadExportOptions,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, ChangeOperationListResult,
-    ChangeSetCausalAnchorListResult, ChangeSetSnapshot, CheckpointCreateOptions,
-    CheckpointCreateResult, CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions,
-    CheckpointListResult, CheckpointSnapshot, CheckpointValidationResult, CommitSnapshot,
-    EntityTransitionCommit, EntityTransitionOptions, EventListOptions, EventListResult,
-    EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceListOptions,
-    EvidenceListResult, EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
-    GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
-    IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeListOptions,
-    KnowledgeListResult, KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions,
-    KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
-    KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    AcceptanceCriterionRevisionOptions, AcceptanceCriterionSnapshot,
+    AuthorizationReceiptConsumeOptions, AuthorizationReceiptConsumeResult,
+    AuthorizationReceiptIssueOptions, AuthorizationReceiptIssueResult,
+    AuthorizationReceiptListOptions, AuthorizationReceiptListResult, AuthorizationReceiptSnapshot,
+    BranchForkOptions, BranchForkResult, BranchHead, BranchProjectionRefreshOptions,
+    BranchProjectionRefreshResult, BranchProjectionSnapshot, BundleExportManifest,
+    BundleExportOptions, BundleImportApplyOptions, BundleImportApplyResult,
+    BundleImportAttemptListOptions, BundleImportAttemptListResult, BundleImportAttemptOptions,
+    BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
+    BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
+    BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadValidationOptions,
+    BundlePayloadValidationResult, ChangeOperationListResult, ChangeSetCausalAnchorListResult,
+    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
+    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
+    CheckpointValidationResult, CommitSnapshot, EntityTransitionCommit, EntityTransitionOptions,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions,
+    GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
+    HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
+    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
+    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
     KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
-    KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanCreateCommit, PlanCreateOptions,
-    PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions, PrimaryContainmentCreateCommit,
-    PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot, RecordCreateCommit,
-    RecordCreateOptions, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
-    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
-    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
-    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
-    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
-    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
-    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
-    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
-    RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions, ReplayedState,
-    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
-    ResourceListOptions, ResourceListResult, ResourceObservationCreateOptions,
-    ResourceObservationCreateResult, ResourceObservationListOptions, ResourceObservationListResult,
-    ResourceObservationSnapshot, ResourceSnapshot, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanAdmissionOptions,
+    PlanAdmissionResult, PlanCreateCommit, PlanCreateOptions, PlanEvolutionOptions,
+    PlanEvolutionResult, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
+    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
+    RecordCreateCommit, RecordCreateOptions, RecordKnowledgeRelationCreateCommit,
+    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
+    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
+    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
+    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
+    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
+    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
+    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
+    RecordRelationSnapshot, RecordSnapshot, RecordTransitionCommit, RecordTransitionOptions,
+    ReplayedState, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
+    ResourceCreateResult, ResourceListOptions, ResourceListResult,
+    ResourceObservationCreateOptions, ResourceObservationCreateResult,
+    ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
+    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheListOptions, VerificationApplicabilityCacheListResult,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
@@ -113,11 +118,12 @@ use crate::{
     BranchId, ClaimId, CommitId, EntityId, EventId, EvidenceId, ImportId, ResourceId,
     ResourceObservationId, SessionDiffId, SessionId, WorkVcsError, WorkspaceId, history, runtime,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) struct Store {
     connection: StoreConnection,
     info: StoreInfo,
+    path: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,13 +144,31 @@ impl Store {
             debug_assert_eq!(validated, info);
             validated
         })?;
-        Ok(Self { connection, info })
+        Ok(Self {
+            connection,
+            info,
+            path: path.to_path_buf(),
+        })
     }
 
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let connection = StoreConnection::open(path)?;
         let info = validate_bootstrap(&connection)?;
-        Ok(Self { connection, info })
+        Ok(Self {
+            connection,
+            info,
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub(crate) fn open_readonly(path: &Path) -> Result<Self> {
+        let connection = StoreConnection::open_readonly(path)?;
+        let info = validate_bootstrap(&connection)?;
+        Ok(Self {
+            connection,
+            info,
+            path: path.to_path_buf(),
+        })
     }
 
     pub(crate) fn migrate_context_packet_snapshot_schema(
@@ -190,6 +214,10 @@ impl Store {
         Ok(current)
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn create_workspace(
         &mut self,
         options: &WorkspaceInitOptions,
@@ -197,6 +225,61 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::create_workspace(&mut self.connection, current.store_id, options)
+    }
+
+    pub(crate) fn admit_plan(
+        &mut self,
+        options: &PlanAdmissionOptions,
+    ) -> Result<PlanAdmissionResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::admit_plan(&mut self.connection, options)
+    }
+
+    pub(crate) fn evolve_plan(
+        &mut self,
+        options: &PlanEvolutionOptions,
+    ) -> Result<PlanEvolutionResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::evolve_plan(&mut self.connection, options)
+    }
+
+    pub(crate) fn issue_authorization_receipt(
+        &mut self,
+        options: &AuthorizationReceiptIssueOptions,
+    ) -> Result<AuthorizationReceiptIssueResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::issue_authorization_receipt(&mut self.connection, options)
+    }
+
+    pub(crate) fn consume_authorization_receipt(
+        &mut self,
+        options: &AuthorizationReceiptConsumeOptions,
+    ) -> Result<AuthorizationReceiptConsumeResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::consume_authorization_receipt(&mut self.connection, options)
+    }
+
+    pub(crate) fn authorization_receipt_at(
+        &self,
+        commit_id: CommitId,
+        receipt_entity_id: EntityId,
+    ) -> Result<AuthorizationReceiptSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::authorization_receipt_at(&self.connection, commit_id, receipt_entity_id)
+    }
+
+    pub(crate) fn authorization_receipts_at(
+        &self,
+        options: &AuthorizationReceiptListOptions,
+    ) -> Result<AuthorizationReceiptListResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::authorization_receipts_at(&self.connection, options)
     }
 
     pub(crate) fn workspace_info(&self, workspace_id: WorkspaceId) -> Result<WorkspaceInfo> {

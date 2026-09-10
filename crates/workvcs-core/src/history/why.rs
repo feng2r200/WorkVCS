@@ -23,10 +23,10 @@ use super::{
     RecordKnowledgeRelationListOptions, RecordRelationListOptions, RecordRelationType,
     StructuralReferenceEndpointKind, VerificationTarget, acceptance_criterion_at, branch_head,
     changeset_operations, evidence, knowledge_exposure, knowledge_relations_at,
-    primary_containment_relations_at, query_history, record_knowledge_relations_at,
-    record_relations_at, state_at, structural_references_at, task_at, task_scheduling_relations_at,
-    verification_evidence_relations_at, verification_relations_at, verification_requirement_at,
-    verifications_at,
+    plan_supersedes_relations_at, primary_containment_relations_at, query_history,
+    record_knowledge_relations_at, record_relations_at, state_at, structural_references_at,
+    task_at, task_scheduling_relations_at, verification_evidence_relations_at,
+    verification_relations_at, verification_requirement_at, verifications_at,
 };
 use crate::canonical::CanonicalValue;
 use crate::error::{Result, WorkVcsError};
@@ -234,6 +234,7 @@ pub enum WhyRelationKind {
     TaskOrderedBefore,
     KnowledgeExposureDerivedFrom,
     KnowledgeSupersedes,
+    PlanSupersedes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -415,6 +416,26 @@ pub(crate) fn explain_why(
         {
             relation_edges.push(WhyRelationEdge {
                 relation_kind: WhyRelationKind::PrimaryContainment,
+                direction: relation_direction(options.subject(), source, target),
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                relation_label: None,
+                source,
+                target,
+                state_digest: relation.state_digest,
+            });
+        }
+    }
+    for relation in plan_supersedes_relations_at(connection, resolved.target.commit_id)? {
+        let source =
+            WhyRelationEndpoint::entity(relation.replacement_plan_entity_id, WhyEntityKind::Plan);
+        let target =
+            WhyRelationEndpoint::entity(relation.prior_plan_entity_id, WhyEntityKind::Plan);
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
+        {
+            relation_edges.push(WhyRelationEdge {
+                relation_kind: WhyRelationKind::PlanSupersedes,
                 direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
@@ -1145,6 +1166,32 @@ fn why_direct_relation_operation_subject_detail(
             }
         }
     }
+    for relation in plan_supersedes_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.replacement_plan_entity_id,
+                WhyEntityKind::Plan,
+            );
+            let target =
+                WhyRelationEndpoint::entity(relation.prior_plan_entity_id, WhyEntityKind::Plan);
+            if endpoint_matches_subject(subject, source)
+                || endpoint_matches_subject(subject, target)
+            {
+                return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                    WhyEvolutionSubjectRelationDetail {
+                        relation_kind: WhyRelationKind::PlanSupersedes,
+                        relation_version_id: relation.relation_version_id,
+                        relation_label: None,
+                        source,
+                        target,
+                        state_digest: relation.state_digest,
+                    },
+                )));
+            }
+        }
+    }
     if let Some(relation) = load_record_relation_version(
         connection,
         resolved.target.workspace_id,
@@ -1344,6 +1391,28 @@ fn why_evolution_relation_subject_detail(
             return Ok(Some(WhyEvolutionSubjectDetail::Relation(
                 WhyEvolutionSubjectRelationDetail {
                     relation_kind: WhyRelationKind::PrimaryContainment,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in plan_supersedes_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.replacement_plan_entity_id,
+                WhyEntityKind::Plan,
+            );
+            let target =
+                WhyRelationEndpoint::entity(relation.prior_plan_entity_id, WhyEntityKind::Plan);
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::PlanSupersedes,
                     relation_version_id: relation.relation_version_id,
                     relation_label: None,
                     source,

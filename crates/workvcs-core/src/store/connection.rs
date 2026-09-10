@@ -1,5 +1,5 @@
 use crate::error::{Result, WorkVcsError, storage_error};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 
 pub(crate) struct StoreConnection {
@@ -12,6 +12,17 @@ impl StoreConnection {
         let handle = Self { connection };
         handle.enable_foreign_keys()?;
         handle.verify_foreign_keys()?;
+        Ok(handle)
+    }
+
+    pub(crate) fn open_readonly(path: &Path) -> Result<Self> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(storage_error)?;
+        let handle = Self { connection };
+        handle.enable_foreign_keys()?;
+        handle.verify_foreign_keys()?;
+        handle.enable_query_only()?;
+        handle.verify_query_only()?;
         Ok(handle)
     }
 
@@ -35,9 +46,23 @@ impl StoreConnection {
         Ok(enabled == 1)
     }
 
+    pub(crate) fn query_only_enabled(&self) -> Result<bool> {
+        let enabled = self
+            .connection
+            .pragma_query_value(None, "query_only", |row| row.get::<_, i64>(0))
+            .map_err(storage_error)?;
+        Ok(enabled == 1)
+    }
+
     fn enable_foreign_keys(&self) -> Result<()> {
         self.connection
             .pragma_update(None, "foreign_keys", "ON")
+            .map_err(storage_error)
+    }
+
+    fn enable_query_only(&self) -> Result<()> {
+        self.connection
+            .pragma_update(None, "query_only", "ON")
             .map_err(storage_error)
     }
 
@@ -48,6 +73,16 @@ impl StoreConnection {
             Err(WorkVcsError::StoreBootstrapInvalid(
                 "SQLite foreign-key enforcement is not enabled for this Engine connection"
                     .to_owned(),
+            ))
+        }
+    }
+
+    fn verify_query_only(&self) -> Result<()> {
+        if self.query_only_enabled()? {
+            Ok(())
+        } else {
+            Err(WorkVcsError::StoreBootstrapInvalid(
+                "SQLite query_only is not enabled for this read-only Engine connection".to_owned(),
             ))
         }
     }
@@ -68,5 +103,21 @@ mod tests {
                 .foreign_keys_enabled()
                 .expect("foreign key pragma")
         );
+    }
+
+    #[test]
+    fn readonly_opens_with_foreign_keys_and_query_only_enabled() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("store.sqlite");
+        drop(StoreConnection::open(&path).expect("connection"));
+
+        let connection = StoreConnection::open_readonly(&path).expect("readonly connection");
+
+        assert!(
+            connection
+                .foreign_keys_enabled()
+                .expect("foreign key pragma")
+        );
+        assert!(connection.query_only_enabled().expect("query only pragma"));
     }
 }

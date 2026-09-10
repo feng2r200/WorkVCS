@@ -1,5 +1,60 @@
 # Versioning Engine
 
+## P0 cutover entry boundary
+
+P0-1 project bind/discover and read-only `resume --cwd` are entry projections
+around the versioning engine. Binding uses the Git common directory and an
+external registry selected by `--registry PATH` or the `WORKVCS_HOME` default;
+the registry and Store are outside the project/repository. Complete Store
+integrity validation is required before use. Useful pre-admission discovery can
+be inherited, while ambiguous active Session state fails closed. Discovery and
+resume are read-only and No-Plan usage is zero-write.
+
+P0-2a `workvcs plan admit` reads a manifest and creates its declared Goal, Plan,
+Task, containment, optional prior findings/decisions/questions/constraints,
+and evidence in one atomic, idempotent transition. The target is `STORE` plus
+`--branch`, or `--cwd` plus the bound branch. Expected head/state and
+idempotency are manifest fields; there is no `--expected-head` CLI flag.
+Registry updates use cross-process mutual exclusion and atomic replacement;
+Store use requires complete identity, format, and integrity validation before
+the admitted state is used.
+
+P0-2b `workvcs plan evolve` with manifest `mode=in_place` is one atomic,
+idempotent transition. It updates only explicitly supplied Plan fields,
+preserves omitted fields, and atomically appends Tasks with AC/VR, Records, and
+Evidence without implicitly deleting or replacing omitted state. Expected
+guards and target Plan identity/version/digest are manifest fields. The
+implemented `mode=supersede` path transitions old active→superseded and creates
+a new active Plan under the same Goal, retaining the old `contains`, adding the
+new `contains`, and creating a machine `new_plan→old_plan` `supersedes`
+relation. Constraints require explicit `carry_all` or `replace`; old Tasks,
+Records, and Evidence are not migrated. Expected IDs, versions, digests, and
+branch head provide CAS guards for the one idempotent transaction.
+P0-3a `receipt issue`, `receipt show`, and `receipt list` are current mechanical
+capabilities using a dedicated AuthorizationReceipt Record subtype. Issue is
+transactional, idempotent, branch/target/action/contract bound, and guarded by
+target versions/digests. Only authority-ref type/digest and a redacted marker
+are exposed. The structured `authority_ref.ref` input is automatically
+redacted and is not persisted or emitted from scope, payload, CLI/show/list, or
+debug output; this is not a full-manifest secret scan. Receipt `rationale` is
+persisted, so callers must not put credentials, tokens, or other secrets in it.
+P0-3b `receipt consume` is current as a
+branch-scoped single-use transition. Idempotent replay may reuse only a
+committed `workstate_commit` result; an orphan ChangeSet must never yield
+`reused`. No Store-global lock across restore histories is promised, and
+consume is not atomic with an external action. Receipt revoke remains accepted
+deferred, and receipt projection into `context`/`why` is not current; these do
+not block the current P0 surface.
+P0-4 `closeout inspect` is current. It requires explicit target kind/id and
+`--cwd` or `STORE` plus `--branch`/`--commit`; it opens OS/query-only, expands
+only the target's direct scope, uses budget 50 with hard maximum 200 and
+stable truncation/omitted reporting, aggregates exact-target runtime state,
+and proves before/after branch/source/target/Store main-WAL-SHM state. It does
+not dereference arbitrary Evidence paths or emit policy conclusions.
+WorkVCS does not evaluate authorization policy.
+This cutover does not provide `workctl`, schema-v3/v4/v5, or `.work-governance`
+compatibility.
+
 ## Versioned object
 
 The engine versions a Workspace's Work State, not source files,

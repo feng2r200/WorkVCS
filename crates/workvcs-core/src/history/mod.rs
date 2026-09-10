@@ -1,3 +1,4 @@
+mod admission;
 mod branch;
 mod bundle;
 mod checkpoint;
@@ -17,6 +18,7 @@ mod migration;
 mod plan;
 mod projection;
 mod query;
+mod receipt;
 mod record;
 mod reference;
 mod replay;
@@ -25,6 +27,20 @@ mod restore;
 mod task;
 mod why;
 
+pub use admission::{
+    PlanAdmissionAcceptanceCriterionManifest, PlanAdmissionAcceptanceCriterionResult,
+    PlanAdmissionEntityResult, PlanAdmissionEvidenceManifest, PlanAdmissionEvidenceResult,
+    PlanAdmissionGoalManifest, PlanAdmissionGoalResult, PlanAdmissionManifest,
+    PlanAdmissionOptions, PlanAdmissionOutcome, PlanAdmissionPlanManifest,
+    PlanAdmissionRecordManifest, PlanAdmissionRecordResult, PlanAdmissionResult,
+    PlanAdmissionTaskManifest, PlanAdmissionTaskResult,
+    PlanAdmissionVerificationRequirementManifest, PlanAdmissionVerificationRequirementResult,
+    PlanEvolutionInPlaceManifest, PlanEvolutionManifest, PlanEvolutionOptions,
+    PlanEvolutionOutcome, PlanEvolutionPlanResult, PlanEvolutionPlanUpdateManifest,
+    PlanEvolutionRelationResult, PlanEvolutionResult, PlanEvolutionSupersedeConstraintsManifest,
+    PlanEvolutionSupersedeManifest, PlanEvolutionSupersedePlanManifest,
+    PlanSupersedesRelationSnapshot,
+};
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
     BundleAcceptanceCriterionIdentityRef, BundleBranchHeadPreflightDetail, BundleBranchHeadRef,
@@ -117,6 +133,16 @@ pub use query::{
     EventListTarget, EventSnapshot, HistoryEntry, HistoryQueryOptions, HistoryQueryResult,
     HistoryStart,
 };
+pub use receipt::{
+    AuthorizationReceiptAuthorityRefManifest, AuthorizationReceiptBinding,
+    AuthorizationReceiptConsumeManifest, AuthorizationReceiptConsumeOptions,
+    AuthorizationReceiptConsumeOutcome, AuthorizationReceiptConsumeResult,
+    AuthorizationReceiptIssueManifest, AuthorizationReceiptIssueOptions,
+    AuthorizationReceiptIssueResult, AuthorizationReceiptListOptions,
+    AuthorizationReceiptListResult, AuthorizationReceiptOutcome,
+    AuthorizationReceiptRelationResult, AuthorizationReceiptRelationSnapshot,
+    AuthorizationReceiptResult, AuthorizationReceiptSnapshot, AuthorizationReceiptTargetManifest,
+};
 pub use record::{
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, KnowledgeRelationCreateCommit,
     KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
@@ -179,6 +205,7 @@ pub use why::{
     WhyVerificationClosureChain,
 };
 
+pub(crate) use admission::{admit_plan, evolve_plan, plan_supersedes_relations_at};
 pub(crate) use branch::{fork_branch, list_branches};
 pub(crate) use bundle::{
     apply_bundle_import, bundle_import_attempt, bundle_import_attempts, export_bundle_manifest,
@@ -217,6 +244,10 @@ pub(crate) use projection::{
 pub(crate) use query::{
     branch_head, changeset, changeset_causal_anchors, changeset_operations, commit, event,
     query_events, query_history,
+};
+pub(crate) use receipt::{
+    authorization_receipt_at, authorization_receipts_at, consume_authorization_receipt,
+    issue_authorization_receipt,
 };
 pub(crate) use record::{
     create_knowledge_relation, create_record, create_record_knowledge_relation,

@@ -22,6 +22,49 @@ versioned entities inside their own Work State.
 families. It does not make every registered object an Entity. Store and
 Workspace use their own container identities above that registry.
 
+### P0 cutover entry state
+
+Project binding is an external entry projection, not a new Work-State entity.
+It identifies a project by the Git repository common directory and resolves a
+Store through an external registry (`--registry PATH`, or the `WORKVCS_HOME`
+default). The registry is not repository-local. Discovery is followed by a
+second Store identity/integrity validation. Useful discovery may be inherited
+by first admission, while ambiguous active Session selection fails closed.
+
+P0-1 project bind/discover and read-only `resume --cwd` are implemented.
+P0-2a `plan admit` is implemented as one atomic, idempotent transition from a
+manifest. Its target is `STORE` plus `--branch`, or `--cwd` plus the bound
+branch; expected head/state and idempotency are manifest fields. The manifest
+may carry prior findings, decisions, questions, constraints, and evidence.
+P0-2b `plan evolve mode=in_place` is implemented as one atomic, idempotent
+transition. It updates only explicit Plan fields, preserves omitted fields,
+and appends Tasks with AC/VR, Records, and Evidence without implicit deletion
+or replacement. P0-2b2 `mode=supersede` is current: the old active Plan becomes
+superseded, a new Plan becomes active under the same Goal, both `contains`
+relations remain, and `new_plan→old_plan` is a machine `supersedes` relation.
+Constraints require explicit `carry_all` or `replace`; old Tasks, Records, and
+Evidence are not migrated. P0-3a AuthorizationReceipt issue/show/list are
+current mechanical capabilities. The structured `authority_ref.ref` input is
+automatically redacted and is not persisted or emitted from scope, payload,
+CLI/show/list, or debug output; only type/digest and a redacted marker are
+exposed. This is not a full-manifest secret scan. Receipt `rationale` is
+persisted, so callers must not put credentials, tokens, or other secrets in it.
+P0-3b consume is branch-scoped single-use;
+idempotent replay may reuse only a committed `workstate_commit` result, never
+an orphan ChangeSet. No Store-global lock across restore histories is promised,
+and consume is not atomic with an external action. Receipt revoke and receipt
+projection into context/why remain deferred and are not current entity
+capabilities; they do not block the current P0 surface.
+P0-4 `closeout inspect` is current and read-only: it uses an explicit
+goal/plan/task target, bounded direct projections, exact-target runtime
+aggregates, and before/after source proofs without creating a closeout entity
+or state.
+Registry updates must be cross-process mutually exclusive and atomically
+replaced; Store use requires complete integrity validation. The entry
+projection and all read-only inspection are no-write operations. No-Plan usage
+is zero-write.
+WorkVCS does not own authorization policy.
+
 KnowledgeExposure history is an additional Store-local federation surface
 outside any Workspace Work State: Exposure source bindings are immutable,
 while current availability and source-stale status are projections or explicit

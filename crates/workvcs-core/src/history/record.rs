@@ -59,6 +59,7 @@ const RECORD_DECISION_SUPERSEDE_EVENT_KIND: &str = "record.decision.superseded";
 pub enum RecordKind {
     Assumption,
     Attempt,
+    AuthorizationReceipt,
     Decision,
     Finding,
     Handoff,
@@ -71,6 +72,7 @@ impl RecordKind {
         match self {
             Self::Assumption => "assumption",
             Self::Attempt => "attempt",
+            Self::AuthorizationReceipt => "authorization_receipt",
             Self::Decision => "decision",
             Self::Finding => "finding",
             Self::Handoff => "handoff",
@@ -79,10 +81,11 @@ impl RecordKind {
         }
     }
 
-    fn parse(value: &str) -> Result<Self> {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
         match value {
             "assumption" => Ok(Self::Assumption),
             "attempt" => Ok(Self::Attempt),
+            "authorization_receipt" => Ok(Self::AuthorizationReceipt),
             "decision" => Ok(Self::Decision),
             "finding" => Ok(Self::Finding),
             "handoff" => Ok(Self::Handoff),
@@ -104,6 +107,7 @@ impl fmt::Display for RecordKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordStatus {
     Active,
+    Consumed,
     Failed,
     Inconclusive,
     Invalidated,
@@ -119,6 +123,7 @@ impl RecordStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
+            Self::Consumed => "consumed",
             Self::Failed => "failed",
             Self::Inconclusive => "inconclusive",
             Self::Invalidated => "invalidated",
@@ -131,9 +136,10 @@ impl RecordStatus {
         }
     }
 
-    fn parse(value: &str) -> Result<Self> {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
         match value {
             "active" => Ok(Self::Active),
+            "consumed" => Ok(Self::Consumed),
             "failed" => Ok(Self::Failed),
             "inconclusive" => Ok(Self::Inconclusive),
             "invalidated" => Ok(Self::Invalidated),
@@ -5442,15 +5448,6 @@ pub(crate) fn load_record_relation_version(
     let Some(relation_type) = RecordRelationType::parse(&relation_type) else {
         return Ok(None);
     };
-    let relation_label = match relation_type {
-        RecordRelationType::RelatedTo => Some(normalize_relation_label(&relation_discriminator)?),
-        _ if relation_discriminator.is_empty() => None,
-        _ => {
-            return Err(WorkVcsError::RecordInvalid(format!(
-                "record relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
-            )));
-        }
-    };
     let source_record_entity_id = decode_entity_id("relation.source_object_id", source_object_id)?;
     let target_record_entity_id = decode_entity_id("relation.target_object_id", target_object_id)?;
     if !matches!(
@@ -5462,6 +5459,15 @@ pub(crate) fn load_record_relation_version(
     ) {
         return Ok(None);
     }
+    let relation_label = match relation_type {
+        RecordRelationType::RelatedTo => Some(normalize_relation_label(&relation_discriminator)?),
+        _ if relation_discriminator.is_empty() => None,
+        _ => {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
+            )));
+        }
+    };
     if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
         return Err(WorkVcsError::RecordInvalid(format!(
             "record relation {relation_id} version {relation_version_id} has state schema version {state_schema_version}"
@@ -5730,11 +5736,6 @@ pub(crate) fn load_knowledge_relation_version(
     if relation_type != RecordRelationType::Supersedes {
         return Ok(None);
     }
-    if !relation_discriminator.is_empty() {
-        return Err(WorkVcsError::KnowledgeInvalid(format!(
-            "knowledge relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
-        )));
-    }
     let replacement_knowledge_entity_id =
         decode_entity_id("relation.source_object_id", source_object_id)?;
     let prior_knowledge_entity_id =
@@ -5747,6 +5748,11 @@ pub(crate) fn load_knowledge_relation_version(
         Some(KNOWLEDGE_ENTITY_KIND)
     ) {
         return Ok(None);
+    }
+    if !relation_discriminator.is_empty() {
+        return Err(WorkVcsError::KnowledgeInvalid(format!(
+            "knowledge relation {relation_id} has non-empty discriminator {relation_discriminator:?}"
+        )));
     }
     if state_schema_version != RELATION_STATE_SCHEMA_VERSION {
         return Err(WorkVcsError::KnowledgeInvalid(format!(
@@ -5803,7 +5809,7 @@ fn load_entity_kind(connection: &StoreConnection, entity_id: EntityId) -> Result
         .map_err(storage_error)
 }
 
-fn parse_record_state(value: CanonicalValue) -> Result<RecordState> {
+pub(crate) fn parse_record_state(value: CanonicalValue) -> Result<RecordState> {
     let CanonicalValue::Object(entries) = value else {
         return Err(WorkVcsError::RecordInvalid(
             "record state must be a canonical object".to_owned(),
@@ -5923,6 +5929,7 @@ fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Re
             RecordKind::Decision,
             RecordStatus::Active | RecordStatus::Superseded | RecordStatus::Withdrawn,
         )
+        | (RecordKind::AuthorizationReceipt, RecordStatus::Active | RecordStatus::Consumed)
         | (
             RecordKind::Attempt,
             RecordStatus::Running

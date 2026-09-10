@@ -7,6 +7,65 @@ This guide is for a local operator or Agent using the current WorkVCS CLI from
 this repository. It describes runnable local commands and the local
 package/install helper, not a public release.
 
+## P0 Cutover Entry
+
+The implemented P0 entrypoint binds and discovers a project from the working
+directory, exposes read-only `resume --cwd`, and provides atomic/idempotent
+`workvcs plan admit` plus `plan evolve mode=in_place` and `mode=supersede`.
+Use `--registry PATH` to select the external registry
+explicitly; otherwise the locator defaults under `WORKVCS_HOME`. The registry
+and Store are forced outside the project/repository. Git identity is derived
+from the repository common directory, and the discovered Store receives
+complete integrity validation before use.
+
+Useful discovery from before the first admission is retained. If active
+Session selection is zero, multiple, or otherwise ambiguous, stop and recover
+explicitly; the entrypoint fails closed. `workvcs plan admit` takes a required
+manifest and exactly one target: `STORE` plus `--branch`, or `--cwd` plus its
+bound branch. `--registry` is valid with `--cwd`. Expected head/state and
+idempotency are manifest fields, not CLI flags. The manifest may carry prior
+findings, decisions, questions, constraints, and evidence; the admission is
+one atomic transition and same-key replay is idempotent.
+
+`workvcs plan evolve` requires a manifest with `mode=in_place` or
+`mode=supersede`. In-place mode updates only explicitly supplied Plan fields,
+preserves omitted fields, and atomically
+appends Tasks with AC/VR, Records, and Evidence without implicit deletion or
+replacement. Expected guards, target Plan identity/version/digest, and
+idempotency are manifest fields. `mode=supersede` is current: it transitions
+old active→superseded and creates a new active Plan under the same Goal,
+retaining the old `contains`, adding the new `contains`, and creating the
+`new_plan→old_plan` `supersedes` relation. Constraints require explicit
+`carry_all` or `replace`; old Tasks, Records, and Evidence are not migrated.
+`workvcs receipt issue`, `receipt show`, `receipt list`, and `receipt consume`
+are current P0-3a/P0-3b commands. They expose only mechanical binding plus
+authority-ref type/digest and a redacted marker. The structured
+`authority_ref.ref` input is automatically redacted and is not persisted or
+emitted in scope, payload, CLI/show/list, or debug output; this is not a
+full-manifest secret scan. Receipt `rationale` is persisted, so callers must
+not put credentials, tokens, or other secrets in it. Consume is branch-scoped single-use;
+idempotent replay may reuse only a committed `workstate_commit` result, never
+an orphan ChangeSet, and no Store-global lock across restore histories is
+promised. It is not atomic with an external action. `revoke`, plus receipt
+projection into `context`/`why`, remain deferred and are not current commands;
+they do not block the current P0 surface.
+
+`workvcs closeout inspect` is current and requires explicit
+`--target-kind goal|plan|task` plus `--target`, using either `--cwd PATH` or
+`STORE` with `--branch BRANCH`/`--commit COMMIT`. It is fully read-only,
+defaults to 50 items with a hard maximum of 200, reports stable ordering and
+truncation/omitted counts, expands only the documented direct target scope,
+and emits before/after branch/source/target/Store main-WAL-SHM proof. It reports
+mechanical state only; it does not conclude authorization, quality, readiness,
+completion, push, or deployment.
+
+No-Plan usage is zero-write: discovery and resume do not create a Plan,
+Session, Claim, receipt, or other WorkVCS state.
+
+This cutover does not provide compatibility for `workctl`, schema-v3/v4/v5,
+or `.work-governance`. WorkVCS reports mechanical state; it does not decide
+authorization policy.
+
 ## Current Boundary
 
 WorkVCS currently runs as a local Rust CLI over a local SQLite Store. The Store

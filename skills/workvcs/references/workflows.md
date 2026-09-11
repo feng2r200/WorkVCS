@@ -63,9 +63,10 @@ a testing ritual.
 ## Recall and retrospective
 
 `brief` is for immediate active context. `handoff` starts from active work and
-includes semantic relations needed by another Agent. `retrospective` prioritizes
-Records, Knowledge, semantic relations, and Store-wide Evidence metadata before
-terminal Goal/Plan/Task summaries, so a small budget preserves reasoning rather
-than being consumed by task inventory. If evidence body matters, inspect the
-item and extract its persisted content separately; do not place arbitrary large
-bodies into every recall response.
+includes semantic relations needed by another Agent. `retrospective` samples
+the newest Records, Knowledge, semantic relations, and Store-wide Evidence
+metadata across categories before remaining semantic history and terminal
+Goal/Plan/Task summaries. A bounded projection therefore cannot be consumed by
+one large category alone. If evidence body matters, inspect the item and extract
+its persisted content separately; do not place arbitrary large bodies into
+every recall response.

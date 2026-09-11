@@ -710,7 +710,7 @@ enum Command {
     },
     #[command(
         about = "Read bounded project context without requiring a Session or Plan",
-        long_about = "Read a verified project binding and bounded WorkVCS context without writing the registry or Store. brief shows active context, handoff adds semantic relations, and retrospective prioritizes Records, Knowledge, relations, and Evidence metadata before terminal work inventory."
+        long_about = "Read a verified project binding and bounded WorkVCS context without writing the registry or Store. brief shows active context, handoff adds semantic relations, and retrospective samples the newest items across Records, Knowledge, relations, and Evidence metadata before remaining semantic history and terminal work inventory."
     )]
     Recall {
         #[arg(
@@ -15550,28 +15550,28 @@ fn run_recall(
         });
     }
 
-    let record_relations = if profile == RecallProfileArg::Brief {
+    let mut record_relations = if profile == RecallProfileArg::Brief {
         Vec::new()
     } else {
         engine
             .record_relations_at(RecordRelationListOptions::new(commit_id))?
             .relations
     };
-    let record_knowledge_relations = if profile == RecallProfileArg::Brief {
+    let mut record_knowledge_relations = if profile == RecallProfileArg::Brief {
         Vec::new()
     } else {
         engine
             .record_knowledge_relations_at(RecordKnowledgeRelationListOptions::new(commit_id))?
             .relations
     };
-    let knowledge_relations = if profile == RecallProfileArg::Retrospective {
+    let mut knowledge_relations = if profile == RecallProfileArg::Retrospective {
         engine
             .knowledge_relations_at(KnowledgeRelationListOptions::new(commit_id))?
             .relations
     } else {
         Vec::new()
     };
-    let evidence = if profile == RecallProfileArg::Retrospective {
+    let mut evidence = if profile == RecallProfileArg::Retrospective {
         engine.evidences(EvidenceListOptions::all())?.evidences
     } else {
         Vec::new()
@@ -15625,20 +15625,73 @@ fn run_recall(
 
     let mut ordered = Vec::with_capacity(total_items);
     if profile == RecallProfileArg::Retrospective {
-        ordered.extend(records.iter().map(RecallItem::Record));
-        ordered.extend(knowledge.iter().map(RecallItem::Knowledge));
-        ordered.extend(record_relations.iter().map(RecallItem::RecordRelation));
+        records.reverse();
+        knowledge.reverse();
+        record_relations.reverse();
+        record_knowledge_relations.reverse();
+        knowledge_relations.reverse();
+        evidence.reverse();
+
+        // Preserve category diversity under a small budget before one large
+        // history category can consume the entire retrospective projection.
+        const CATEGORY_RESERVE: usize = 2;
+        for index in 0..CATEGORY_RESERVE {
+            if let Some(record) = records.get(index) {
+                ordered.push(RecallItem::Record(record));
+            }
+            if let Some(knowledge) = knowledge.get(index) {
+                ordered.push(RecallItem::Knowledge(knowledge));
+            }
+            if let Some(evidence) = evidence.get(index) {
+                ordered.push(RecallItem::Evidence(evidence));
+            }
+            if let Some(relation) = record_knowledge_relations.get(index) {
+                ordered.push(RecallItem::RecordKnowledgeRelation(relation));
+            }
+            if let Some(relation) = record_relations.get(index) {
+                ordered.push(RecallItem::RecordRelation(relation));
+            }
+            if let Some(relation) = knowledge_relations.get(index) {
+                ordered.push(RecallItem::KnowledgeRelation(relation));
+            }
+        }
+
+        ordered.extend(
+            records
+                .iter()
+                .skip(CATEGORY_RESERVE)
+                .map(RecallItem::Record),
+        );
+        ordered.extend(
+            knowledge
+                .iter()
+                .skip(CATEGORY_RESERVE)
+                .map(RecallItem::Knowledge),
+        );
+        ordered.extend(
+            evidence
+                .iter()
+                .skip(CATEGORY_RESERVE)
+                .map(RecallItem::Evidence),
+        );
         ordered.extend(
             record_knowledge_relations
                 .iter()
+                .skip(CATEGORY_RESERVE)
                 .map(RecallItem::RecordKnowledgeRelation),
+        );
+        ordered.extend(
+            record_relations
+                .iter()
+                .skip(CATEGORY_RESERVE)
+                .map(RecallItem::RecordRelation),
         );
         ordered.extend(
             knowledge_relations
                 .iter()
+                .skip(CATEGORY_RESERVE)
                 .map(RecallItem::KnowledgeRelation),
         );
-        ordered.extend(evidence.iter().map(RecallItem::Evidence));
         ordered.extend(goals.iter().map(RecallItem::Goal));
         ordered.extend(plans.iter().map(RecallItem::Plan));
         ordered.extend(tasks.iter().map(RecallItem::Task));
@@ -65186,10 +65239,30 @@ mod tests {
         assert_eq!(value(&recalled, "records_total"), "2");
         assert_eq!(value(&recalled, "knowledge_total"), "1");
         assert_eq!(value(&recalled, "item.0.category"), "record");
-        assert_eq!(value(&recalled, "item.1.category"), "record");
-        assert_eq!(value(&recalled, "item.2.category"), "knowledge");
+        assert_eq!(value(&recalled, "item.1.category"), "knowledge");
+        assert_eq!(value(&recalled, "item.2.category"), "record_relation");
+        assert_eq!(value(&recalled, "item.3.category"), "record");
         assert_eq!(value(&recalled, "item.4.category"), "goal");
         assert_eq!(value(&recalled, "read_only"), "true");
+
+        let bounded = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "retrospective",
+            "--budget-items",
+            "3",
+        ])
+        .expect("parse bounded recall"))
+        .expect("bounded recall");
+        assert_eq!(value(&bounded, "item.0.category"), "record");
+        assert_eq!(value(&bounded, "item.1.category"), "knowledge");
+        assert_eq!(value(&bounded, "item.2.category"), "record_relation");
+        assert_eq!(value(&bounded, "truncated"), "true");
         assert_eq!(
             fs::read(&fixture.registry_path).expect("registry after recall"),
             registry_before

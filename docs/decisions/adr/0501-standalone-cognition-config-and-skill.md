@@ -43,6 +43,9 @@ existing objects remain dedicated guarded operations.
 `recall --profile brief|handoff|retrospective` is bounded and read-only. It
 does not require a Session or Plan. The profiles progressively expose active
 context, relations useful for continuation, and terminal/retrospective context.
+The retrospective profile starts with recent samples across semantic categories
+so a large Record history cannot hide Knowledge, relations, or Evidence under a
+small item budget.
 
 A later No-Plan-to-Plan transition records why planning became valuable and
 carries forward still-relevant cognition. Plan admission remains a governance

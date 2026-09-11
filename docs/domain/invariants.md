@@ -15,9 +15,12 @@ project identities.
 
 ### INV-082 — Store discovery is external and double-validated
 
-The registry is selected by explicit `--registry PATH` or the `WORKVCS_HOME`
-default and is not stored in the repository. A discovered Store undergoes a
-second identity/format/integrity validation before use.
+The registry is selected, in order, by explicit `--registry PATH`, the
+`WORKVCS_HOME` environment variable, or the versioned XDG config file at
+`$XDG_CONFIG_HOME/workvcs/config.toml` (falling back to
+`$HOME/.config/workvcs/config.toml`). It is not stored in the repository. A
+discovered Store undergoes a second identity/format/integrity validation
+before use.
 
 ### INV-083 — Ambiguous active Session state fails closed
 
@@ -26,9 +29,9 @@ selected by project bind, resume, admission, or closeout inspection.
 
 ### INV-084 — Read-only entrypoints do not write
 
-Project discovery, `resume --cwd`, and current `closeout inspect` must not
-create or mutate WorkVCS state, receipts, Sessions, Claims, or Work-State
-commits.
+Configuration inspection, project discovery/audit, `recall`, `resume --cwd`,
+and current `closeout inspect` must not create or mutate WorkVCS state,
+receipts, Sessions, Claims, or Work-State commits.
 
 ### INV-085 — Plan admission is atomic and idempotent
 
@@ -93,6 +96,21 @@ target's documented direct scope, uses a default budget of 50 and hard maximum
 of 200 with stable truncation/omitted reporting, aggregates exact-target
 runtime state, and proves before/after source state and Store main-WAL-SHM
 metadata without creating state or making policy conclusions.
+
+### INV-093 — Plan admission and durable cognition are independent
+
+WorkVCS may atomically and idempotently capture Records, Knowledge, Evidence
+metadata, and valid semantic relations without creating or requiring a Goal,
+Plan, Task, Session, or Claim. “No-Plan” describes the planning decision; it
+does not prohibit valuable durable cognition. A later Plan admission carries
+forward still-relevant prior cognition and records why planning became useful.
+
+### INV-094 — Raw Evidence content is verifiable and recoverable
+
+Raw bytes supplied to Evidence creation are stored in the local
+content-addressed object area, linked through `content_storage_location`, and
+verified by size and digest when read. Digest-only content remains a valid
+external reference and is not falsely reported as locally recoverable.
 
 ## State and ownership
 

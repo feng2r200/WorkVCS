@@ -1,6 +1,7 @@
 mod admission;
 mod branch;
 mod bundle;
+mod capture;
 mod checkpoint;
 mod containment;
 mod diff;
@@ -57,6 +58,13 @@ pub use bundle::{
     BundleRelationMembershipChangeRef, BundleRelationVersionRef,
     BundleVerificationRequirementIdentityRef,
 };
+pub(crate) use capture::capture_cognition;
+pub use capture::{
+    CognitionCaptureEntityResult, CognitionCaptureEvidenceResult,
+    CognitionCaptureKnowledgeManifest, CognitionCaptureManifest, CognitionCaptureOptions,
+    CognitionCaptureOutcome, CognitionCaptureRelationManifest, CognitionCaptureRelationResult,
+    CognitionCaptureResult,
+};
 pub use checkpoint::{
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
@@ -71,9 +79,11 @@ pub use diff::{
     WorkStateDiffChangeKind, WorkStateDiffOptions, WorkStateDiffTarget,
 };
 pub use entity::{EntityTransitionCommit, EntityTransitionOptions};
+pub(crate) use evidence::LOCAL_CONTENT_STORAGE_BACKEND;
 pub use evidence::{
-    EvidenceContentInput, EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot,
+    ContentStorageLocationSnapshot, EvidenceContentInput, EvidenceContentReadResult,
+    EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceListOptions,
+    EvidenceListResult, EvidenceSnapshot,
 };
 pub use external::{
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,

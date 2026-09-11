@@ -12,11 +12,14 @@ package/install helper, not a public release.
 The implemented P0 entrypoint binds and discovers a project from the working
 directory, exposes read-only `resume --cwd`, and provides atomic/idempotent
 `workvcs plan admit` plus `plan evolve mode=in_place` and `mode=supersede`.
-Use `--registry PATH` to select the external registry
-explicitly; otherwise the locator defaults under `WORKVCS_HOME`. The registry
-and Store are forced outside the project/repository. Git identity is derived
-from the repository common directory, and the discovered Store receives
-complete integrity validation before use.
+Use `--registry PATH` to select the external registry explicitly. Otherwise
+WorkVCS checks `WORKVCS_HOME`, then
+`$XDG_CONFIG_HOME/workvcs/config.toml` (or
+`$HOME/.config/workvcs/config.toml`). Run `workvcs config show` to inspect the
+effective locator and `workvcs project list --require-valid` to audit every
+binding. The registry and Store are forced outside the project/repository. Git
+identity is derived from the repository common directory, and the discovered
+Store receives complete integrity validation before use.
 
 Useful discovery from before the first admission is retained. If active
 Session selection is zero, multiple, or otherwise ambiguous, stop and recover
@@ -59,8 +62,17 @@ and emits before/after branch/source/target/Store main-WAL-SHM proof. It reports
 mechanical state only; it does not conclude authorization, quality, readiness,
 completion, push, or deployment.
 
-No-Plan usage is zero-write: discovery and resume do not create a Plan,
-Session, Claim, receipt, or other WorkVCS state.
+No-Plan means no Plan is invented. Discovery, audit, recall, and resume remain
+read-only, while `workvcs capture` may explicitly persist valuable standalone
+Records, Knowledge, Evidence, and relations without a Goal, Plan, Task,
+Session, or Claim.
+
+Use `workvcs recall --cwd <path> --profile brief|handoff|retrospective` for a
+bounded project projection that does not require an active Session. Use
+`workvcs capture --cwd <path> --manifest <file>` for one atomic, idempotent
+standalone cognition change. Raw Evidence content supplied by `--content` or
+`--content-file` is stored in the local content-addressed object area; inspect
+it with `evidence show` and recover it with `evidence extract`.
 
 This cutover does not provide compatibility for `workctl`, schema-v3/v4/v5,
 or `.work-governance`. WorkVCS reports mechanical state; it does not decide
@@ -83,10 +95,14 @@ rationale. Automatic stale detection remains Open.
 From the repository root:
 
 ```bash
-cargo test --workspace --quiet
-cargo install --path crates/workvcs-cli --locked
+RUST_MIN_STACK=33554432 cargo test --workspace --quiet
+scripts/package-workvcs.sh --install --bin-dir /usr/local/bin
 workvcs --help
 ```
+
+The larger test-thread stack is required by the current monolithic CLI test
+binary. Focused tests for the new entrypoints run with the default stack; a
+future CLI dispatcher split should remove this full-suite requirement.
 
 For local packaging without installing:
 

@@ -225,7 +225,19 @@ fn evidence_can_be_metadata_only_or_reference_raw_byte_content() {
         object(vec![("encoding", string("utf-8"))])
     );
     assert_eq!(count_rows(&connection, "workstate_commit"), 0);
-    assert_eq!(count_rows(&connection, "content_storage_location"), 0);
+    assert_eq!(count_rows(&connection, "content_storage_location"), 1);
+    assert_eq!(snapshot.contents[0].storage_locations.len(), 1);
+    assert_eq!(
+        snapshot.contents[0].storage_locations[0].storage_backend,
+        "workvcs.local-object-v1"
+    );
+    assert_eq!(
+        engine
+            .read_evidence_content(evidence.evidence_id, 0)
+            .expect("read persisted evidence content")
+            .raw_bytes,
+        raw_output
+    );
 
     let metadata_only = engine
         .create_evidence(

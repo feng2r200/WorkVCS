@@ -75,8 +75,9 @@ that authorization is sufficient, quality is sufficient, work is ready,
 complete, safe to push, safe to deploy, or otherwise approved by policy.
 Those judgments remain work-governance responsibilities.
 
-No-Plan use is zero-write: running the inspection creates no Plan, Session,
-Claim, receipt, Handoff, checkpoint, event, or other WorkVCS state.
+Running the inspection is zero-write: it creates no Plan, Session, Claim,
+receipt, Handoff, checkpoint, event, or other WorkVCS state. ADR-0501 defines
+the broader distinction between No-Plan and standalone cognition capture.
 
 ## Current capability boundary
 

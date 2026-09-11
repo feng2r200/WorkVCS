@@ -2,6 +2,7 @@ use super::admission::{
     ADMISSION_OPERATION_SCHEMA_VERSION, ADMISSION_OPERATION_TYPE,
     EVOLUTION_OPERATION_SCHEMA_VERSION, EVOLUTION_OPERATION_TYPE,
 };
+use super::capture::{CAPTURE_OPERATION_SCHEMA_VERSION, CAPTURE_OPERATION_TYPE};
 use super::containment::PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE;
 use super::entity::{
     ENTITY_TRANSITION_OPERATION_SCHEMA_VERSION, ENTITY_TRANSITION_OPERATION_TYPE,
@@ -621,6 +622,13 @@ fn validate_entity_transition_changeset(
                 )));
             }
         }
+        CAPTURE_OPERATION_TYPE => {
+            if operation_schema_version != CAPTURE_OPERATION_SCHEMA_VERSION {
+                return Err(WorkVcsError::ReplayUnsupported(format!(
+                    "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
+                )));
+            }
+        }
         PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE => {
             if operation_schema_version != PRIMARY_CONTAINMENT_CREATE_OPERATION_SCHEMA_VERSION {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
@@ -687,6 +695,7 @@ fn uses_summary_changeset_payload(operation_type: &str) -> bool {
         operation_type,
         ADMISSION_OPERATION_TYPE
             | EVOLUTION_OPERATION_TYPE
+            | CAPTURE_OPERATION_TYPE
             | AUTHORIZATION_RECEIPT_CONSUME_OPERATION_TYPE
             | MERGE_CONTINUE_OPERATION_TYPE
             | RESTORE_OPERATION_TYPE

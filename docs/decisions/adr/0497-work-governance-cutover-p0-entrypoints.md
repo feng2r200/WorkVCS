@@ -1,6 +1,6 @@
 # ADR-0497: Work-Governance Cutover P0 Entrypoints
 
-Status: Accepted
+Status: Accepted; configuration and No-Plan recording clauses superseded by ADR-0501
 Date: 2026-09-10
 
 ## Context
@@ -14,7 +14,8 @@ contract.
 
 The project binding must be independent of repository-local governance files.
 Git identity therefore comes from the repository common directory, while the
-Store is located through an explicit registry or the `WORKVCS_HOME` default.
+Store is located through an explicit registry or configured locator. ADR-0501
+adds XDG configuration and defines the current precedence.
 The registry is external to the repository. A second Store validation is
 required after locating the candidate, and ambiguity must fail closed rather
 than silently selecting an active Session.
@@ -61,8 +62,9 @@ policy. WorkVCS records and exposes mechanical state; work-governance remains
 responsible for admission judgment, confirmation gates, policy, validation
 strength, and completion claims.
 
-No-Plan work is zero-write: it may use discovery and `resume --cwd` without
-creating a Plan, Session, Claim, receipt, or other WorkVCS state.
+Discovery and `resume --cwd` are zero-write. ADR-0501 supersedes the broader
+No-Plan rule: No-Plan creates no Plan but may explicitly capture standalone
+cognition.
 
 Project binding and Store discovery use these rules:
 

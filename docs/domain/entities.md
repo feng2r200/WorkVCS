@@ -26,10 +26,11 @@ Workspace use their own container identities above that registry.
 
 Project binding is an external entry projection, not a new Work-State entity.
 It identifies a project by the Git repository common directory and resolves a
-Store through an external registry (`--registry PATH`, or the `WORKVCS_HOME`
-default). The registry is not repository-local. Discovery is followed by a
-second Store identity/integrity validation. Useful discovery may be inherited
-by first admission, while ambiguous active Session selection fails closed.
+Store through an external registry selected by explicit `--registry PATH`,
+`WORKVCS_HOME`, or the XDG config file. The registry is not repository-local.
+Discovery is followed by a second Store identity/integrity validation. Useful
+prior cognition may be inherited by first admission, while ambiguous active
+Session selection fails closed.
 
 P0-1 project bind/discover and read-only `resume --cwd` are implemented.
 P0-2a `plan admit` is implemented as one atomic, idempotent transition from a
@@ -61,8 +62,9 @@ aggregates, and before/after source proofs without creating a closeout entity
 or state.
 Registry updates must be cross-process mutually exclusive and atomically
 replaced; Store use requires complete integrity validation. The entry
-projection and all read-only inspection are no-write operations. No-Plan usage
-is zero-write.
+projection and all read-only inspection are no-write operations. No-Plan does
+not create a Plan, but it may independently capture valuable Records,
+Knowledge, Evidence, and semantic relations.
 WorkVCS does not own authorization policy.
 
 KnowledgeExposure history is an additional Store-local federation surface
@@ -553,7 +555,9 @@ Evidence need not invent a local blob.
 **Owned state:** ObjectIdentity-backed Evidence identity, capture/provenance
 metadata, external references, and zero or more links to digest-identified
 ContentObjects. ContentObject storage location is separate from its digest
-metadata.
+metadata. Raw bytes supplied locally are stored content-addressably and remain
+extractable after digest verification; digest-only references need not have a
+local storage location.
 
 **Relations:** A Verification or another semantic object may be `evidenced_by`
 Evidence. A Finding or other semantic claim may independently `support` a

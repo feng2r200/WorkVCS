@@ -59,6 +59,9 @@ Unclear rather than promoting it to Confirmed.
 - Trace every promoted statement to the narrowest user confirmation. If the
   evidence confirms a requirement but not its implementation mechanism,
   preserve the requirement and leave the mechanism outside confirmed docs.
+- Any change to WorkVCS configuration discovery, environment variables, or
+  locator precedence must update `config.toml.example`, operator documentation,
+  and focused configuration tests in the same change.
 
 ## Delivery Boundary
 

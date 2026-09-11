@@ -275,6 +275,11 @@ Recent repository-level CLI smoke gates:
 - [ADR-0494: Phase 4OG Task Why Resource Basis Closure](decisions/adr/0494-phase-4og-task-why-resource-basis-closure.md)
 - [ADR-0495: Phase 4OK Plan Why Direct Task Closure](decisions/adr/0495-phase-4ok-plan-why-direct-task-closure.md)
 - [ADR-0496: Phase 4PE Compact Read-Only Resume Query](decisions/adr/0496-phase-4pe-compact-read-only-resume-query.md)
+- [ADR-0497: Work-Governance Cutover P0 Entrypoints](decisions/adr/0497-work-governance-cutover-p0-entrypoints.md)
+- [ADR-0498: Plan Evolve Supersede](decisions/adr/0498-plan-evolve-supersede.md)
+- [ADR-0499: Mechanical Authorization Receipts](decisions/adr/0499-mechanical-authorization-receipts.md)
+- [ADR-0500: Read-Only Closeout Inspection Projection](decisions/adr/0500-closeout-inspect-readonly-projection.md)
+- [ADR-0501: Stable Configuration, Standalone Cognition, and Skill Distribution](decisions/adr/0501-standalone-cognition-config-and-skill.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

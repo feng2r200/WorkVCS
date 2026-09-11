@@ -1,4 +1,4 @@
-use crate::canonical::CanonicalValue;
+use crate::canonical::{CanonicalValue, content_object_digest};
 use crate::error::Result;
 use crate::history::{
     AcceptanceCriterionCreateCommit, AcceptanceCriterionCreateOptions,
@@ -17,8 +17,9 @@ use crate::history::{
     BundlePayloadValidationResult, ChangeOperationListResult, ChangeSetCausalAnchorListResult,
     ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, CommitSnapshot, EntityTransitionCommit, EntityTransitionOptions,
-    EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
+    CheckpointValidationResult, CognitionCaptureOptions, CognitionCaptureResult, CommitSnapshot,
+    EntityTransitionCommit, EntityTransitionOptions, EventListOptions, EventListResult,
+    EventSnapshot, EvidenceContentReadResult, EvidenceCreateOptions, EvidenceCreateResult,
     EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions,
     GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
     HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
@@ -109,21 +110,165 @@ use crate::runtime::{
     SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use crate::store::bootstrap::{
-    STORE_FORMAT_VERSION, StoreInfo, StoreInitOptions, ensure_empty_database, initialize_manifest,
-    load_store_info, validate_application_id, validate_bootstrap,
+    STORE_FORMAT_VERSION, StoreInfo, StoreInitOptions, current_epoch_micros, ensure_empty_database,
+    initialize_manifest, load_store_info, validate_application_id, validate_bootstrap,
 };
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
 use crate::{
     BranchId, ClaimId, CommitId, EntityId, EventId, EvidenceId, ImportId, ResourceId,
-    ResourceObservationId, SessionDiffId, SessionId, WorkVcsError, WorkspaceId, history, runtime,
+    ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkVcsError, WorkspaceId, history,
+    runtime,
 };
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) struct Store {
     connection: StoreConnection,
     info: StoreInfo,
     path: PathBuf,
+}
+
+const LOCAL_CONTENT_OBJECT_DIR: &str = ".workvcs-objects";
+
+fn persist_local_content_object(
+    store_path: &Path,
+    store_id: StoreId,
+    content_digest: crate::Digest,
+    size_bytes: i64,
+    raw_bytes: &[u8],
+) -> Result<String> {
+    if i64::try_from(raw_bytes.len()).ok() != Some(size_bytes) {
+        return Err(WorkVcsError::EvidenceInvalid(format!(
+            "raw content size {} does not match declared size {size_bytes}",
+            raw_bytes.len()
+        )));
+    }
+    let actual_digest = content_object_digest(raw_bytes);
+    if actual_digest != content_digest {
+        return Err(WorkVcsError::EvidenceInvalid(format!(
+            "raw content digest {actual_digest} does not match declared digest {content_digest}"
+        )));
+    }
+    let store_parent = store_path.parent().ok_or_else(|| {
+        WorkVcsError::EvidenceInvalid(format!(
+            "Store path {} has no parent for local content storage",
+            store_path.display()
+        ))
+    })?;
+    let digest_text = content_digest.to_string();
+    let relative_path = local_content_relative_path(store_id, content_digest);
+    let object_path = store_parent.join(&relative_path);
+    if object_path.is_file() {
+        verify_local_content_file(&object_path, content_digest, size_bytes)?;
+        return relative_path_to_locator(&relative_path);
+    }
+    let object_parent = object_path.parent().ok_or_else(|| {
+        WorkVcsError::EvidenceInvalid("local content object path has no parent".to_owned())
+    })?;
+    fs::create_dir_all(object_parent).map_err(|error| {
+        WorkVcsError::EvidenceInvalid(format!(
+            "cannot create local content directory {}: {error}",
+            object_parent.display()
+        ))
+    })?;
+    let temp_path = object_parent.join(format!(
+        ".{}.{}.{}.tmp",
+        digest_text,
+        std::process::id(),
+        current_epoch_micros()?
+    ));
+    let write_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| {
+                WorkVcsError::EvidenceInvalid(format!(
+                    "cannot create local content temporary file {}: {error}",
+                    temp_path.display()
+                ))
+            })?;
+        file.write_all(raw_bytes).map_err(|error| {
+            WorkVcsError::EvidenceInvalid(format!(
+                "cannot write local content temporary file {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            WorkVcsError::EvidenceInvalid(format!(
+                "cannot sync local content temporary file {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        fs::rename(&temp_path, &object_path).map_err(|error| {
+            WorkVcsError::EvidenceInvalid(format!(
+                "cannot publish local content object {}: {error}",
+                object_path.display()
+            ))
+        })?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result?;
+    verify_local_content_file(&object_path, content_digest, size_bytes)?;
+    relative_path_to_locator(&relative_path)
+}
+
+fn local_content_relative_path(store_id: StoreId, content_digest: crate::Digest) -> PathBuf {
+    let digest_text = content_digest.to_string();
+    PathBuf::from(LOCAL_CONTENT_OBJECT_DIR)
+        .join(store_id.to_string())
+        .join("sha256")
+        .join(&digest_text[..2])
+        .join(digest_text)
+}
+
+fn verify_local_content_file(
+    path: &Path,
+    expected_digest: crate::Digest,
+    expected_size_bytes: i64,
+) -> Result<Vec<u8>> {
+    let mut file = OpenOptions::new().read(true).open(path).map_err(|error| {
+        WorkVcsError::EvidenceInvalid(format!(
+            "cannot open local content object {}: {error}",
+            path.display()
+        ))
+    })?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| {
+        WorkVcsError::EvidenceInvalid(format!(
+            "cannot read local content object {}: {error}",
+            path.display()
+        ))
+    })?;
+    if i64::try_from(bytes.len()).ok() != Some(expected_size_bytes) {
+        return Err(WorkVcsError::EvidenceInvalid(format!(
+            "local content object {} size {} does not match {expected_size_bytes}",
+            path.display(),
+            bytes.len()
+        )));
+    }
+    let actual_digest = content_object_digest(&bytes);
+    if actual_digest != expected_digest {
+        return Err(WorkVcsError::EvidenceInvalid(format!(
+            "local content object {} digest {actual_digest} does not match {expected_digest}",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
+fn relative_path_to_locator(path: &Path) -> Result<String> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        WorkVcsError::EvidenceInvalid(format!(
+            "local content locator {} is not valid UTF-8",
+            path.display()
+        ))
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,6 +379,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::admit_plan(&mut self.connection, options)
+    }
+
+    pub(crate) fn capture_cognition(
+        &mut self,
+        options: &CognitionCaptureOptions,
+    ) -> Result<CognitionCaptureResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::capture_cognition(&mut self.connection, options)
     }
 
     pub(crate) fn evolve_plan(
@@ -753,11 +907,25 @@ impl Store {
 
     pub(crate) fn create_evidence(
         &mut self,
-        options: &EvidenceCreateOptions,
+        mut options: EvidenceCreateOptions,
     ) -> Result<EvidenceCreateResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
-        history::create_evidence(&mut self.connection, options)
+        let observed_at_us = current_epoch_micros()?;
+        for content in options.contents_mut() {
+            let Some(raw_bytes) = content.raw_bytes() else {
+                continue;
+            };
+            let locator = persist_local_content_object(
+                &self.path,
+                current.store_id,
+                content.content_digest(),
+                content.size_bytes(),
+                raw_bytes,
+            )?;
+            content.set_local_storage_location(locator, observed_at_us)?;
+        }
+        history::create_evidence(&mut self.connection, &options)
     }
 
     pub(crate) fn evidence(&self, evidence_id: EvidenceId) -> Result<EvidenceSnapshot> {
@@ -766,10 +934,84 @@ impl Store {
         history::evidence(&self.connection, evidence_id)
     }
 
+    pub(crate) fn read_evidence_content(
+        &self,
+        evidence_id: EvidenceId,
+        ordinal: usize,
+    ) -> Result<EvidenceContentReadResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        let evidence = history::evidence(&self.connection, evidence_id)?;
+        let content = evidence
+            .contents
+            .into_iter()
+            .find(|item| item.ordinal == ordinal)
+            .ok_or_else(|| {
+                WorkVcsError::EvidenceInvalid(format!(
+                    "evidence {evidence_id} does not have content ordinal {ordinal}"
+                ))
+            })?;
+        let expected_relative_path =
+            local_content_relative_path(current.store_id, content.content_digest);
+        let expected_locator = relative_path_to_locator(&expected_relative_path)?;
+        let location = content
+            .storage_locations
+            .iter()
+            .find(|location| {
+                location.storage_backend == history::LOCAL_CONTENT_STORAGE_BACKEND
+                    && location.locator == expected_locator
+                    && location.availability_state == "available"
+            })
+            .ok_or_else(|| {
+                WorkVcsError::EvidenceInvalid(format!(
+                    "evidence {evidence_id} content ordinal {ordinal} has no available local WorkVCS object"
+                ))
+            })?;
+        let store_parent = self.path.parent().ok_or_else(|| {
+            WorkVcsError::EvidenceInvalid(format!(
+                "Store path {} has no parent for local content storage",
+                self.path.display()
+            ))
+        })?;
+        let object_path = store_parent.join(&expected_relative_path);
+        let raw_bytes =
+            verify_local_content_file(&object_path, content.content_digest, content.size_bytes)?;
+        Ok(EvidenceContentReadResult {
+            evidence_id,
+            ordinal,
+            role: content.role,
+            content_digest: content.content_digest,
+            size_bytes: content.size_bytes,
+            media_type: content.media_type,
+            storage_backend: location.storage_backend.clone(),
+            locator: location.locator.clone(),
+            raw_bytes,
+        })
+    }
+
     pub(crate) fn evidences(&self, options: &EvidenceListOptions) -> Result<EvidenceListResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::evidences(&self.connection, options)
+    }
+
+    pub(crate) fn validate_local_content_storage(&self) -> Result<usize> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        let evidences = history::evidences(&self.connection, &EvidenceListOptions::all())?;
+        let mut verified = 0_usize;
+        for evidence in evidences.evidences {
+            for content in evidence.contents {
+                if content.storage_locations.iter().any(|location| {
+                    location.storage_backend == history::LOCAL_CONTENT_STORAGE_BACKEND
+                        && location.availability_state == "available"
+                }) {
+                    self.read_evidence_content(evidence.evidence_id, content.ordinal)?;
+                    verified += 1;
+                }
+            }
+        }
+        Ok(verified)
     }
 
     pub(crate) fn create_knowledge(

@@ -1,0 +1,11 @@
+# WorkVCS reads this file from $XDG_CONFIG_HOME/workvcs/config.toml.
+# When XDG_CONFIG_HOME is unset, the conventional path is
+# $HOME/.config/workvcs/config.toml.
+version = 1
+
+# Choose exactly one locator. `home` places project-bindings.json under this
+# directory and is the recommended form for a normal local installation.
+home = "~/.codex/workvcs"
+
+# Alternatively, point directly at a registry file:
+# registry = "/absolute/path/to/project-bindings.json"

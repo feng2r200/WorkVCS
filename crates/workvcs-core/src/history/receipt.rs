@@ -769,8 +769,8 @@ fn prepare_issue(options: &AuthorizationReceiptIssueOptions) -> Result<PreparedI
     let relation = PreparedRelation {
         relation_id: RelationId::new_v7(),
         relation_version_id: RelationVersionId::new_v7(),
-        relation_type: AUTHORIZATION_RECEIPT_RELATION_TYPE,
-        relation_discriminator: AUTHORIZATION_RECEIPT_RELATION_DISCRIMINATOR,
+        relation_type: AUTHORIZATION_RECEIPT_RELATION_TYPE.to_owned(),
+        relation_discriminator: AUTHORIZATION_RECEIPT_RELATION_DISCRIMINATOR.to_owned(),
         source_entity_id: receipt_entity_id,
         target_entity_id: binding.target_entity_id,
         state_json: canonical_json_string(&relation_state)?,

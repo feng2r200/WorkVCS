@@ -10,14 +10,14 @@ task, and what should remain in work-governance?"
 
 ## P0 Cutover Entrypoint
 
-The implemented P0 surface is project bind/discover, read-only `resume --cwd`,
-atomic/idempotent `plan admit`, and `plan evolve` with manifest mode
-`in_place|supersede`. Binding uses the Git common-directory
-identity and discovers an external Store registry through explicit
-`--registry PATH`, or the default locator under `WORKVCS_HOME`. The registry
-and Store are forced outside the project/repository; complete Store integrity
-validation is required before use, and ambiguous active Session state fails
-closed.
+The implemented entry surface includes configuration inspection, project
+bind/discover/list audit, bounded read-only `recall`, read-only `resume --cwd`,
+atomic/idempotent standalone `capture`, atomic/idempotent `plan admit`, and
+`plan evolve` with manifest mode `in_place|supersede`. Binding uses the Git
+common-directory identity and discovers an external Store registry through
+explicit `--registry PATH`, `WORKVCS_HOME`, or the XDG config file. The
+registry and Store are forced outside the project/repository; complete Store
+integrity validation is required before use.
 
 The live admit syntax is:
 
@@ -62,9 +62,9 @@ ChangeSet, and no Store-global lock across restore histories is promised. It is
 not atomic with an external action. `revoke`, plus receipt projection into
 `context`/`why`, remain deferred and are not current capabilities; they do not
 block the current P0 surface.
-No-Plan usage is zero-write:
-discovery and resume do not create a Plan, Session, Claim, receipt, or other
-WorkVCS state.
+No-Plan means no Plan is invented. Discovery, audit, recall, and resume are
+no-write entrypoints. A caller may still explicitly persist standalone
+cognition with `capture`; this creates no Goal, Plan, Task, Session, or Claim.
 
 `workvcs closeout inspect` is current. It requires explicit
 `--target-kind goal|plan|task` and `--target`, using either `--cwd PATH` or
@@ -94,16 +94,17 @@ query explicit work state: Goals, Plans, Tasks, acceptance and verification
 records, evidence, Resources, Sessions, Claims, Handoffs, context packets,
 history, diffs, restores, Bundles, Checkpoints, and Merges.
 
-For work-governance integration, WorkVCS should carry the durable execution
-state. work-governance should still own policy and judgment: intake, Plan
-admission, demand contracts, confirmation gates, high-impact boundaries, Git
-change governance, validation strength, completion claims, and user-facing
-handoff wording.
+WorkVCS carries durable cognition and execution state. A governance layer, when
+present, still owns policy and judgment: goal discovery, Plan admission,
+demand contracts, confirmation gates, high-impact boundaries, Git change
+governance, validation strength, completion claims, and user-facing reporting.
+WorkVCS does not require that governance layer and the governance layer must
+remain usable without WorkVCS.
 
-WorkVCS must not add routine process friction. If a task is truly small,
-single-step, and has no handoff or recovery value, do not force a WorkVCS Plan.
-Use WorkVCS when durable state reduces drift, preserves evidence, or makes a
-future continuation cheaper.
+WorkVCS must not add routine process friction. If a task is small or
+single-step, do not force a WorkVCS Plan. Still capture a valuable finding,
+decision, risk, evidence item, or reusable Knowledge when it would improve
+later work or review.
 
 ## Current Authority
 
@@ -148,10 +149,10 @@ Default package-only mode:
 scripts/package-workvcs.sh
 ```
 
-This builds the current checkout's `workvcs` binary, copies it to
-`target/package/workvcs-<target>-<git-head>-<timestamp>/bin/workvcs`, writes a
-`manifest.txt`, creates a `.tar.gz` archive, and validates the packaged binary
-with `workvcs --help`.
+This builds the current checkout's `workvcs` binary, packages it with
+`skills/workvcs`, writes a manifest containing binary and Skill-entry digests,
+creates a `.tar.gz` archive, and validates the packaged binary with
+`workvcs --help`.
 
 System-level install or overwrite is explicit:
 
@@ -162,12 +163,14 @@ workvcs --help
 ```
 
 The dry-run command is the safe first check: it does not build or write, and it
-reports the planned `/usr/local/bin/workvcs` overwrite. The install command
-creates the target directory if needed, overwrites through a temporary file,
-verifies the installed command with `workvcs --help`, and checks that the
-installed digest matches the packaged binary. If the destination directory is
-not writable, the script uses `sudo` for the directory creation or overwrite
-step.
+reports the planned binary and Skill destinations. The install command creates
+the target directory if needed, overwrites through a temporary file, verifies
+the installed command with `workvcs --help`, checks that the installed digest
+matches the packaged binary, and atomically installs the Skill under
+`$HOME/.agents/skills/workvcs` by default. Use `--skills-dir` to select another
+Agent Skills root or `--no-install-skill` for a binary-only installation. If
+the binary destination directory is not writable, the script uses `sudo` for
+that binary step; the selected Skill directory must be writable.
 
 For validation without touching a system path:
 
@@ -182,7 +185,7 @@ still needs current user authorization before running a real global
 installation, overwrite, release, tag, push, deploy, remote, production, or
 credential operation.
 
-## Responsibility Split With work-governance
+## Responsibility Split With Policy Skills
 
 WorkVCS is responsible for durable work memory:
 
@@ -194,21 +197,19 @@ WorkVCS is responsible for durable work memory:
 - Session focus, Claims, Handoffs, and continuation context;
 - historical state, diffs, why explanations, and recovery packets.
 
-work-governance remains responsible for process control:
+An optional policy layer, including work-governance when installed, remains
+responsible for judgment:
 
-- deciding whether a request needs governed Plan control or can stay No-Plan;
-- defining the demand contract, scope, exclusions, and stop triggers;
-- asking for user confirmation when authority is insufficient;
-- guarding high-impact actions, remote state, production, credentials, release,
-  global installation, destructive cleanup, and substantive rollback;
-- selecting validation strength and reporting residual risk;
-- making completion, commit-ready, release-ready, or route-complete claims.
+- discovering the goal and deciding whether a Plan adds value;
+- defining scope, exclusions, stop or revision conditions, and authority;
+- choosing validation strength and interpreting whether evidence proves a claim;
+- deciding when cognition should be promoted into project authority;
+- reporting completion, residual risk, and useful next work.
 
-The intended integration pattern is to keep long execution memory in WorkVCS
-IDs, digests, and context packets. work-governance should keep only the
-governance receipt needed to explain why the task was admitted, what authority
-exists, what gates remain, and which WorkVCS Store/Workspace/Branch/Goal/Plan
-or Task is authoritative.
+WorkVCS and work-governance are independently usable. When combined, the
+WorkVCS Skill owns configuration and command mechanics while policy Skills own
+meaning and judgment. WorkVCS records, including receipts, do not authorize the
+underlying external or high-impact action.
 
 ## Current Capability Surface
 
@@ -222,7 +223,8 @@ The current top-level CLI exposes these command families:
 | Resources and drift | `resource`, `projection`, `verification cache-refresh` | Resource registration, observations, applicability, stale/drift/unavailable/error projections, and explicit foreground refresh. |
 | Runtime coordination | `session`, `claim`, `handoff`, `next`, `runnable` | Agent Sessions, focus, exclusive/shared Claims, Claim transfer/takeover, focused Handoffs, runnable Task projection, and next-work selection. |
 | Authorization receipts | `receipt issue`, `receipt show`, `receipt list`, `receipt consume` | Current P0-3a/P0-3b mechanical AuthorizationReceipt issue, redacted inspection/listing, and branch-scoped single-use consume; revoke is not current. |
-| Query and explanation | `resume`, `closeout inspect`, `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Compact continuation and closeout summaries, bounded mechanical inspection, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
+| Entry, capture, and recall | `config`, `project`, `capture`, `recall`, `resume` | Stable registry discovery, binding audit, standalone cognition, profile-prioritized bounded project context, and Session-aware recovery. |
+| Query and explanation | `closeout inspect`, `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Closeout summaries, bounded mechanical inspection, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
 | Portability and branching | `checkpoint`, `bundle`, `restore`, `merge` | Checkpoints, local Bundle export/validate/apply flows, restore-as-new-commit semantics, and three-way Work Branch merge lifecycle. |
 | Error handling | `--error-format key-value|json` plus command stderr | Script-readable error code, category, retryability, optional JSON output, and actionable recovery boundaries. |
 

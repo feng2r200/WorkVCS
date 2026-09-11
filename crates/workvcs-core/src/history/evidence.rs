@@ -16,15 +16,19 @@ pub struct EvidenceContentInput {
     size_bytes: i64,
     media_type: Option<String>,
     format_metadata: CanonicalValue,
+    raw_bytes: Option<Vec<u8>>,
+    storage_location: Option<PreparedContentStorageLocation>,
 }
 
 impl EvidenceContentInput {
     pub fn from_raw_bytes(role: impl Into<String>, raw_bytes: impl AsRef<[u8]>) -> Result<Self> {
-        let raw_bytes = raw_bytes.as_ref();
+        let raw_bytes = raw_bytes.as_ref().to_vec();
         let size_bytes = i64::try_from(raw_bytes.len()).map_err(|_| {
             WorkVcsError::EvidenceInvalid("content is too large for SQLite size_bytes".to_owned())
         })?;
-        Self::from_digest(role, content_object_digest(raw_bytes), size_bytes)
+        let mut input = Self::from_digest(role, content_object_digest(&raw_bytes), size_bytes)?;
+        input.raw_bytes = Some(raw_bytes);
+        Ok(input)
     }
 
     pub fn from_digest(
@@ -45,6 +49,8 @@ impl EvidenceContentInput {
             size_bytes,
             media_type: None,
             format_metadata: CanonicalValue::object(Vec::new())?,
+            raw_bytes: None,
+            storage_location: None,
         })
     }
 
@@ -60,6 +66,45 @@ impl EvidenceContentInput {
         self.format_metadata = format_metadata;
         Ok(self)
     }
+
+    pub(crate) fn raw_bytes(&self) -> Option<&[u8]> {
+        self.raw_bytes.as_deref()
+    }
+
+    pub(crate) fn content_digest(&self) -> Digest {
+        self.content_digest
+    }
+
+    pub(crate) fn size_bytes(&self) -> i64 {
+        self.size_bytes
+    }
+
+    pub(crate) fn set_local_storage_location(
+        &mut self,
+        locator: String,
+        observed_at_us: i64,
+    ) -> Result<()> {
+        validate_stored_text("content storage locator", &locator)?;
+        self.storage_location = Some(PreparedContentStorageLocation {
+            storage_backend: LOCAL_CONTENT_STORAGE_BACKEND.to_owned(),
+            locator,
+            availability_state: "available".to_owned(),
+            observed_at_us,
+            metadata: CanonicalValue::object(Vec::new())?,
+        });
+        Ok(())
+    }
+}
+
+pub(crate) const LOCAL_CONTENT_STORAGE_BACKEND: &str = "workvcs.local-object-v1";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedContentStorageLocation {
+    storage_backend: String,
+    locator: String,
+    availability_state: String,
+    observed_at_us: i64,
+    metadata: CanonicalValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +156,10 @@ impl EvidenceCreateOptions {
 
     pub fn contents(&self) -> &[EvidenceContentInput] {
         &self.contents
+    }
+
+    pub(crate) fn contents_mut(&mut self) -> &mut [EvidenceContentInput] {
+        &mut self.contents
     }
 }
 
@@ -184,6 +233,29 @@ pub struct EvidenceContentSnapshot {
     pub size_bytes: i64,
     pub media_type: Option<String>,
     pub format_metadata: CanonicalValue,
+    pub storage_locations: Vec<ContentStorageLocationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContentStorageLocationSnapshot {
+    pub storage_backend: String,
+    pub locator: String,
+    pub availability_state: String,
+    pub observed_at_us: i64,
+    pub metadata: CanonicalValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvidenceContentReadResult {
+    pub evidence_id: EvidenceId,
+    pub ordinal: usize,
+    pub role: String,
+    pub content_digest: Digest,
+    pub size_bytes: i64,
+    pub media_type: Option<String>,
+    pub storage_backend: String,
+    pub locator: String,
+    pub raw_bytes: Vec<u8>,
 }
 
 pub(crate) fn create_evidence(
@@ -434,6 +506,7 @@ fn write_evidence(
 
     for (ordinal, content) in options.contents().iter().enumerate() {
         ensure_content_object(transaction, content)?;
+        ensure_content_storage_location(transaction, content)?;
         transaction
             .execute(
                 "INSERT INTO evidence_content(
@@ -456,6 +529,106 @@ fn write_evidence(
             )
             .map_err(storage_error)?;
     }
+    Ok(())
+}
+
+fn ensure_content_storage_location(
+    transaction: &Transaction<'_>,
+    content: &EvidenceContentInput,
+) -> Result<()> {
+    let Some(location) = &content.storage_location else {
+        return Ok(());
+    };
+    validate_stored_text("content storage backend", &location.storage_backend)?;
+    validate_stored_text("content storage locator", &location.locator)?;
+    validate_stored_text(
+        "content storage availability_state",
+        &location.availability_state,
+    )?;
+    if location.observed_at_us < 0 {
+        return Err(WorkVcsError::EvidenceInvalid(
+            "content storage observed_at_us must be non-negative".to_owned(),
+        ));
+    }
+    let metadata_json = canonical_object_json("content storage metadata", &location.metadata)?;
+    let existing = transaction
+        .query_row(
+            "SELECT availability_state, observed_at_us, metadata_json
+             FROM content_storage_location
+             WHERE content_digest = ?1
+               AND storage_backend = ?2
+               AND locator = ?3",
+            params![
+                &content.content_digest.as_bytes()[..],
+                location.storage_backend,
+                location.locator,
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some((availability_state, observed_at_us, stored_metadata_json)) = existing {
+        let stored_metadata = parse_canonical_object_json(
+            "content_storage_location.metadata_json",
+            &stored_metadata_json,
+        )?;
+        if availability_state != location.availability_state || stored_metadata != location.metadata
+        {
+            return Err(WorkVcsError::EvidenceInvalid(format!(
+                "content storage location {} {} already exists with different metadata",
+                location.storage_backend, location.locator
+            )));
+        }
+        if observed_at_us > location.observed_at_us {
+            return Err(WorkVcsError::EvidenceInvalid(format!(
+                "content storage location {} {} has a newer observation",
+                location.storage_backend, location.locator
+            )));
+        }
+        transaction
+            .execute(
+                "UPDATE content_storage_location
+                 SET observed_at_us = ?4
+                 WHERE content_digest = ?1
+                   AND storage_backend = ?2
+                   AND locator = ?3",
+                params![
+                    &content.content_digest.as_bytes()[..],
+                    location.storage_backend,
+                    location.locator,
+                    location.observed_at_us,
+                ],
+            )
+            .map_err(storage_error)?;
+        return Ok(());
+    }
+    transaction
+        .execute(
+            "INSERT INTO content_storage_location(
+                content_digest,
+                storage_backend,
+                locator,
+                availability_state,
+                observed_at_us,
+                metadata_json
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &content.content_digest.as_bytes()[..],
+                location.storage_backend,
+                location.locator,
+                location.availability_state,
+                location.observed_at_us,
+                metadata_json,
+            ],
+        )
+        .map_err(storage_error)?;
     Ok(())
 }
 
@@ -586,9 +759,63 @@ fn load_evidence_contents(
             size_bytes,
             media_type,
             format_metadata,
+            storage_locations: load_content_storage_locations(connection, content_digest)?,
         });
     }
     Ok(contents)
+}
+
+fn load_content_storage_locations(
+    connection: &StoreConnection,
+    content_digest: Digest,
+) -> Result<Vec<ContentStorageLocationSnapshot>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT storage_backend,
+                    locator,
+                    availability_state,
+                    observed_at_us,
+                    metadata_json
+             FROM content_storage_location
+             WHERE content_digest = ?1
+             ORDER BY storage_backend, locator",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![&content_digest.as_bytes()[..]], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(storage_error)?;
+    rows.map(|row| {
+        let (storage_backend, locator, availability_state, observed_at_us, metadata_json) =
+            row.map_err(storage_error)?;
+        validate_stored_text("content storage backend", &storage_backend)?;
+        validate_stored_text("content storage locator", &locator)?;
+        validate_stored_text("content storage availability_state", &availability_state)?;
+        if observed_at_us < 0 {
+            return Err(WorkVcsError::EvidenceInvalid(
+                "content storage observed_at_us must be non-negative".to_owned(),
+            ));
+        }
+        Ok(ContentStorageLocationSnapshot {
+            storage_backend,
+            locator,
+            availability_state,
+            observed_at_us,
+            metadata: parse_canonical_object_json(
+                "content_storage_location.metadata_json",
+                &metadata_json,
+            )?,
+        })
+    })
+    .collect()
 }
 
 fn validate_evidence_contents(contents: &[EvidenceContentInput]) -> Result<()> {

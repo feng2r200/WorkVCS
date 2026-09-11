@@ -16,6 +16,8 @@ dest_path=""
 install_requested="0"
 dry_run="0"
 use_locked="1"
+install_skill="1"
+skills_dir="${WORKVCS_SKILLS_DIR:-${AGENTS_HOME:-${HOME:?HOME is required}}/.agents/skills}"
 
 usage() {
     cat <<EOF
@@ -31,6 +33,9 @@ Options:
   --bin-dir DIR         Install directory for --install (default: /usr/local/bin).
   --prefix DIR          Install under DIR/bin for --install.
   --dest PATH           Exact install destination; basename must be workvcs.
+  --skills-dir DIR      Install WorkVCS Skill under DIR/workvcs
+                        (default: \$WORKVCS_SKILLS_DIR or \$HOME/.agents/skills).
+  --no-install-skill    Do not install the packaged Skill with --install.
   --package-dir DIR     Artifact output directory (default: target/package).
   --profile PROFILE     Cargo profile: release or debug (default: release).
   --target TRIPLE       Optional path-safe cargo target triple.
@@ -127,6 +132,14 @@ while [[ "$#" -gt 0 ]]; do
             package_dir="$(absolute_path "$2")"
             shift
             ;;
+        --skills-dir)
+            [[ "$#" -ge 2 ]] || die "--skills-dir requires a value"
+            skills_dir="$(absolute_path "$2")"
+            shift
+            ;;
+        --no-install-skill)
+            install_skill="0"
+            ;;
         --profile)
             [[ "$#" -ge 2 ]] || die "--profile requires a value"
             profile="$2"
@@ -192,6 +205,9 @@ fi
 artifact_name="workvcs-${artifact_target}-${git_head}-${timestamp}"
 artifact_root="$package_dir/$artifact_name"
 package_binary="$artifact_root/bin/workvcs"
+source_skill="$repo_root/skills/workvcs"
+package_skill="$artifact_root/skills/workvcs"
+install_skill_path="$skills_dir/workvcs"
 manifest_path="$artifact_root/manifest.txt"
 archive_path="$package_dir/$artifact_name.tar.gz"
 
@@ -236,6 +252,11 @@ if [[ "$dry_run" == "1" ]]; then
             printf 'workvcs_install_would_overwrite=false\n'
         fi
         printf 'workvcs_install_system_path=%s\n' "$([[ "$install_path" == /usr/local/bin/workvcs ]] && printf true || printf false)"
+        printf 'workvcs_skill_install_requested=%s\n' "$install_skill"
+        if [[ "$install_skill" == "1" ]]; then
+            printf 'workvcs_skill_install_would_write=%s\n' "$install_skill_path"
+            printf 'workvcs_skill_install_would_overwrite=%s\n' "$([[ -e "$install_skill_path" ]] && printf true || printf false)"
+        fi
     else
         printf 'workvcs_install_requested=false\n'
     fi
@@ -245,13 +266,17 @@ fi
 step "build workvcs"
 (cd "$repo_root" && "$cargo_bin" "${cargo_args[@]}")
 [[ -x "$built_binary" ]] || die "missing built workvcs binary at $built_binary"
+[[ -f "$source_skill/SKILL.md" ]] || die "missing WorkVCS Skill at $source_skill/SKILL.md"
 
 step "create package artifact"
 mkdir -p "$artifact_root/bin"
 install -m 0755 "$built_binary" "$package_binary"
+mkdir -p "$artifact_root/skills"
+cp -R "$source_skill" "$package_skill"
 
 binary_sha256="$(file_sha256 "$package_binary")"
 binary_size="$(wc -c < "$package_binary" | tr -d ' ')"
+skill_entry_sha256="$(file_sha256 "$package_skill/SKILL.md")"
 
 cat > "$manifest_path" <<EOF
 name=workvcs
@@ -266,6 +291,9 @@ built_at_utc=$timestamp
 binary_path=bin/workvcs
 binary_sha256=$binary_sha256
 binary_size_bytes=$binary_size
+skill_path=skills/workvcs
+skill_entry_sha256=$skill_entry_sha256
+default_skill_install_path=\$HOME/.agents/skills/workvcs
 default_install_path=/usr/local/bin/workvcs
 install_mode=explicit_only
 EOF
@@ -288,6 +316,8 @@ printf 'workvcs_package_manifest=%s\n' "$manifest_path"
 printf 'workvcs_package_binary=%s\n' "$package_binary"
 printf 'workvcs_package_binary_sha256=%s\n' "$binary_sha256"
 printf 'workvcs_package_binary_verified=%s\n' "$package_binary_verified"
+printf 'workvcs_package_skill=%s\n' "$package_skill"
+printf 'workvcs_package_skill_entry_sha256=%s\n' "$skill_entry_sha256"
 
 install_atomically() {
     local source_path="$1"
@@ -319,6 +349,35 @@ install_atomically() {
     fi
 }
 
+install_skill_atomically() {
+    local source_path="$1"
+    local final_path="$2"
+    local final_dir
+    local temp_path
+    local backup_path
+
+    final_dir="$(dirname "$final_path")"
+    mkdir -p "$final_dir"
+    [[ -w "$final_dir" ]] || die "Skill install directory is not writable: $final_dir"
+    temp_path="$(mktemp -d "$final_dir/.workvcs-skill.tmp.XXXXXX")"
+    backup_path="$final_dir/.workvcs-skill.backup.$$"
+    cp -R "$source_path/." "$temp_path/"
+    [[ -f "$temp_path/SKILL.md" ]] || die "packaged Skill copy is incomplete"
+    if [[ -e "$final_path" ]]; then
+        [[ ! -e "$backup_path" ]] || die "Skill backup path already exists: $backup_path"
+        mv "$final_path" "$backup_path"
+    fi
+    if mv "$temp_path" "$final_path"; then
+        rm -rf "$backup_path"
+    else
+        rm -rf "$temp_path"
+        if [[ -e "$backup_path" ]]; then
+            mv "$backup_path" "$final_path"
+        fi
+        die "failed to install WorkVCS Skill at $final_path"
+    fi
+}
+
 if [[ "$install_requested" == "1" ]]; then
     step "install workvcs"
     install_atomically "$package_binary" "$install_path"
@@ -329,4 +388,13 @@ if [[ "$install_requested" == "1" ]]; then
     printf 'workvcs_install_path=%s\n' "$install_path"
     printf 'workvcs_install_sha256=%s\n' "$installed_sha256"
     printf 'workvcs_install_verified=true\n'
+    if [[ "$install_skill" == "1" ]]; then
+        step "install WorkVCS Skill"
+        install_skill_atomically "$package_skill" "$install_skill_path"
+        installed_skill_sha256="$(file_sha256 "$install_skill_path/SKILL.md")"
+        [[ "$installed_skill_sha256" == "$skill_entry_sha256" ]] || die "installed Skill digest mismatch"
+        printf 'workvcs_skill_install_path=%s\n' "$install_skill_path"
+        printf 'workvcs_skill_install_sha256=%s\n' "$installed_skill_sha256"
+        printf 'workvcs_skill_install_verified=true\n'
+    fi
 fi

@@ -4,11 +4,13 @@
 
 P0-1 project bind/discover and read-only `resume --cwd` are entry projections
 around the versioning engine. Binding uses the Git common directory and an
-external registry selected by `--registry PATH` or the `WORKVCS_HOME` default;
+external registry selected by `--registry PATH`, `WORKVCS_HOME`, or the XDG
+config file;
 the registry and Store are outside the project/repository. Complete Store
 integrity validation is required before use. Useful pre-admission discovery can
 be inherited, while ambiguous active Session state fails closed. Discovery and
-resume are read-only and No-Plan usage is zero-write.
+resume and recall are read-only. No-Plan creates no Plan, but standalone
+cognition may still be recorded explicitly.
 
 P0-2a `workvcs plan admit` reads a manifest and creates its declared Goal, Plan,
 Task, containment, optional prior findings/decisions/questions/constraints,

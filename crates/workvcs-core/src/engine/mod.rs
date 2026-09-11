@@ -40,16 +40,16 @@ use crate::history::{
     BundlePayloadValidationResult, ChangeOperationListResult, ChangeSetCausalAnchorListResult,
     ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, CommitSnapshot, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, EntityTransitionCommit, EntityTransitionOptions,
-    EventListOptions, EventListResult, EventSnapshot, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions,
-    GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
-    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
-    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureDerivedFromRelationCreateCommit,
+    CheckpointValidationResult, CognitionCaptureOptions, CognitionCaptureResult, CommitSnapshot,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
+    EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
+    EvidenceContentReadResult, EvidenceCreateOptions, EvidenceCreateResult, EvidenceListOptions,
+    EvidenceListResult, EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
+    GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
+    IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
+    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureListOptions,
     KnowledgeExposureListResult, KnowledgeExposureRefreshSourceStatusOptions,
     KnowledgeExposureRefreshSourceStatusResult, KnowledgeExposureSnapshot,
@@ -174,6 +174,13 @@ impl Engine {
 
     pub fn admit_plan(&mut self, options: PlanAdmissionOptions) -> Result<PlanAdmissionResult> {
         self.store.admit_plan(&options)
+    }
+
+    pub fn capture_cognition(
+        &mut self,
+        options: CognitionCaptureOptions,
+    ) -> Result<CognitionCaptureResult> {
+        self.store.capture_cognition(&options)
     }
 
     pub fn evolve_plan(&mut self, options: PlanEvolutionOptions) -> Result<PlanEvolutionResult> {
@@ -582,15 +589,27 @@ impl Engine {
         &mut self,
         options: EvidenceCreateOptions,
     ) -> Result<EvidenceCreateResult> {
-        self.store.create_evidence(&options)
+        self.store.create_evidence(options)
     }
 
     pub fn evidence(&self, evidence_id: EvidenceId) -> Result<EvidenceSnapshot> {
         self.store.evidence(evidence_id)
     }
 
+    pub fn read_evidence_content(
+        &self,
+        evidence_id: EvidenceId,
+        ordinal: usize,
+    ) -> Result<EvidenceContentReadResult> {
+        self.store.read_evidence_content(evidence_id, ordinal)
+    }
+
     pub fn evidences(&self, options: EvidenceListOptions) -> Result<EvidenceListResult> {
         self.store.evidences(&options)
+    }
+
+    pub fn validate_local_content_storage(&self) -> Result<usize> {
+        self.store.validate_local_content_storage()
     }
 
     pub fn create_knowledge(

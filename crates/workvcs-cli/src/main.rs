@@ -1,5 +1,6 @@
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::{MatchOptions, Pattern, glob_with};
+use serde::Deserialize;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -40,21 +41,22 @@ use workvcs_core::{
     CloseoutInspectSource, CloseoutInspectSourceKind, CloseoutInspectStoreFileKind,
     CloseoutInspectStoreFileMetadata, CloseoutInspectTargetDigestStatus, CloseoutInspectTargetKind,
     CloseoutInspectTargetResolution, CloseoutInspectTaskProjection,
-    CloseoutInspectVerificationTargetKind, CommitId, CommitSnapshot, ContextItemCategory,
-    ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketId,
-    ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
-    ContextPacketSaveResult, ContextPacketSnapshot, ContextPacketSnapshotSchemaMigrationResult,
-    ContextProfile, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine,
-    EntityId, EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId,
-    EventListOptions, EventListResult, EventSnapshot, EvidenceContentInput,
-    EvidenceContentSnapshot, EvidenceCreateOptions, EvidenceCreateResult, EvidenceId,
-    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId,
-    ExternalObjectId, ExternalObjectRefListOptions, ExternalObjectRefListResult,
-    ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult, ExternalObjectRefSnapshot,
-    ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId, GoalCreateCommit,
-    GoalCreateOptions, GoalSnapshot, GoalStatus, GoalTransitionCommit, GoalTransitionOptions,
-    HistoryEntry, HistoryQueryOptions, ImportId, IntegrityReport, KnowledgeCreateCommit,
-    KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    CloseoutInspectVerificationTargetKind, CognitionCaptureManifest, CognitionCaptureOptions,
+    CognitionCaptureResult, CommitId, CommitSnapshot, ContextItemCategory, ContextOverview,
+    ContextOverviewOptions, ContextPacket, ContextPacketId, ContextPacketListOptions,
+    ContextPacketListResult, ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot,
+    ContextPacketSnapshotSchemaMigrationResult, ContextProfile, DecisionRecordSupersedeCommit,
+    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityTransitionCommit,
+    EntityTransitionOptions, EntityVersionId, EventId, EventListOptions, EventListResult,
+    EventSnapshot, EvidenceContentInput, EvidenceContentReadResult, EvidenceContentSnapshot,
+    EvidenceCreateOptions, EvidenceCreateResult, EvidenceId, EvidenceListOptions,
+    EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
+    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
+    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
+    ExternalRefId, ExternalVersionId, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
+    GoalStatus, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry, HistoryQueryOptions,
+    ImportId, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
+    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
     KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
     KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
     KnowledgeExposureDerivedFromRelationCreateCommit,
@@ -143,7 +145,8 @@ Commands:
   canonical     Encode and digest canonical JSON values
   id            Generate and validate typed WorkVCS identifiers
   store         Inspect Store metadata, lineage, and migrations
-  project       Bind and discover project Store entrypoints
+  config        Inspect effective WorkVCS configuration
+  project       Bind, discover, and audit project Store entrypoints
   history       List commit history from a branch or commit
   changeset     Inspect changesets and change operations
   commit        Inspect commit metadata and causal anchors
@@ -172,6 +175,8 @@ Commands:
   claim         Claim and release runtime work
   context       Show the current session context
   resume        Show compact read-only recovery context
+  capture       Atomically record standalone cognition without requiring a Session or Plan
+  recall        Read bounded project context without requiring a Session or Plan
   context-packet  Save and inspect context packet snapshots
   next          Select next runnable work for a session
   runnable      Inspect runnable task projections
@@ -191,6 +196,9 @@ Options:
 const RESUME_DEFAULT_BUDGET_ITEMS: usize = 12;
 const PROJECT_REGISTRY_ENV: &str = "WORKVCS_HOME";
 const PROJECT_REGISTRY_FILE: &str = "project-bindings.json";
+const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
+const WORKVCS_CONFIG_DIR: &str = "workvcs";
+const WORKVCS_CONFIG_FILE: &str = "config.toml";
 #[cfg(not(test))]
 const PROJECT_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
@@ -234,6 +242,23 @@ struct Cli {
 enum ErrorOutputFormat {
     KeyValue,
     Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum RecallProfileArg {
+    Brief,
+    Handoff,
+    Retrospective,
+}
+
+impl RecallProfileArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Brief => "brief",
+            Self::Handoff => "handoff",
+            Self::Retrospective => "retrospective",
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -309,7 +334,12 @@ enum Command {
         #[command(subcommand)]
         command: StoreCommand,
     },
-    #[command(about = "Bind and discover project Store entrypoints")]
+    #[command(about = "Inspect effective WorkVCS configuration")]
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    #[command(about = "Bind, discover, and audit project Store entrypoints")]
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
@@ -652,6 +682,61 @@ enum Command {
         #[arg(long)]
         expected_state_digest: Option<String>,
     },
+    #[command(
+        about = "Atomically record standalone cognition without requiring a Session or Plan",
+        long_about = "Atomically and idempotently create Records, Knowledge, Evidence metadata, and valid semantic relations from a JSON manifest. This command does not require or create a Goal, Plan, Task, Session, or Claim."
+    )]
+    Capture {
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Project checkout or worktree used to resolve its verified binding"
+        )]
+        cwd: PathBuf,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "One-command registry override; otherwise use WorkVCS configuration precedence"
+        )]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "JSON capture manifest containing standalone cognition and semantic relations"
+        )]
+        manifest: PathBuf,
+    },
+    #[command(
+        about = "Read bounded project context without requiring a Session or Plan",
+        long_about = "Read a verified project binding and bounded WorkVCS context without writing the registry or Store. brief shows active context, handoff adds semantic relations, and retrospective prioritizes Records, Knowledge, relations, and Evidence metadata before terminal work inventory."
+    )]
+    Recall {
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Project checkout or worktree used to resolve its verified binding"
+        )]
+        cwd: PathBuf,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "One-command registry override; otherwise use WorkVCS configuration precedence"
+        )]
+        registry: Option<PathBuf>,
+
+        #[arg(long, value_enum, default_value_t = RecallProfileArg::Brief, help = "Projection purpose: active work, Agent handoff, or reasoning-first retrospective")]
+        profile: RecallProfileArg,
+
+        #[arg(
+            long,
+            default_value_t = 20,
+            help = "Maximum projected items to return (1..=200)"
+        )]
+        budget_items: usize,
+    },
     ContextPacket {
         #[command(subcommand)]
         command: ContextPacketCommand,
@@ -712,6 +797,19 @@ enum Command {
     Merge {
         #[command(subcommand)]
         command: MergeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    #[command(about = "Show the effective registry path and the source that selected it")]
+    Show {
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "One-command registry override whose precedence should be inspected"
+        )]
+        registry: Option<PathBuf>,
     },
 }
 
@@ -1502,28 +1600,51 @@ enum StoreCommand {
 enum ProjectCommand {
     #[command(about = "Bind a project cwd to a Store workspace and branch")]
     Bind {
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Project checkout or worktree to identify"
+        )]
         cwd: PathBuf,
 
-        #[arg(long, value_name = "PATH")]
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
         registry: Option<PathBuf>,
 
-        #[arg(long, value_name = "STORE")]
+        #[arg(
+            long,
+            value_name = "STORE",
+            help = "Existing Store outside the project repository"
+        )]
         store: PathBuf,
 
-        #[arg(long)]
+        #[arg(long, help = "Workspace identity inside the Store")]
         workspace: String,
 
-        #[arg(long)]
+        #[arg(long, help = "Work Branch identity inside that Workspace")]
         branch: String,
     },
     #[command(about = "Discover and verify the Store binding for a project cwd")]
     Discover {
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Project checkout or worktree whose binding should be verified"
+        )]
         cwd: PathBuf,
 
-        #[arg(long, value_name = "PATH")]
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
         registry: Option<PathBuf>,
+    },
+    #[command(about = "List and verify every project binding in the selected registry")]
+    List {
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            help = "Fail if any binding, Store identity, project identity, or local Evidence object is invalid"
+        )]
+        require_valid: bool,
     },
 }
 
@@ -3525,6 +3646,37 @@ enum EvidenceCommand {
         #[arg(long)]
         expected_content_digest: Option<String>,
     },
+    #[command(about = "Verify and extract a persisted evidence content object")]
+    Extract {
+        #[arg(
+            value_name = "STORE",
+            help = "Store whose local content object should be read"
+        )]
+        store: PathBuf,
+
+        #[arg(long, help = "Evidence identity that owns the content reference")]
+        evidence: String,
+
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Zero-based content ordinal inside the Evidence item"
+        )]
+        ordinal: usize,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Destination file for the digest-verified raw bytes"
+        )]
+        output: PathBuf,
+
+        #[arg(long, help = "Allow replacing an existing destination file")]
+        overwrite: bool,
+
+        #[arg(long, help = "Optional expected SHA-256 content digest")]
+        expected_content_digest: Option<String>,
+    },
     List {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3743,6 +3895,7 @@ struct RecordArgs {
 
 #[derive(Debug, Subcommand)]
 enum RecordCommand {
+    #[command(about = "Show one semantic Record at a Branch or Commit")]
     #[command(group(
         ArgGroup::new("record-show-target")
             .required(true)
@@ -3771,6 +3924,9 @@ enum RecordCommand {
             .multiple(false)
             .args(["branch", "commit"])
     ))]
+    #[command(
+        about = "List and filter Assumptions, Attempts, Decisions, Findings, Handoffs, Questions, and Risks"
+    )]
     List {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3799,6 +3955,7 @@ enum RecordCommand {
         #[arg(long)]
         expected_records: Option<usize>,
     },
+    #[command(about = "Record that a Finding invalidates an Assumption")]
     LinkInvalidates {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3818,6 +3975,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record that a Finding invalidates a Knowledge statement")]
     LinkInvalidatesKnowledge {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3837,6 +3995,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record that a Finding validates an Assumption")]
     LinkValidates {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3856,6 +4015,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record that a Finding validates a Knowledge statement")]
     LinkValidatesKnowledge {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3875,6 +4035,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record that a Finding supports a Decision")]
     LinkSupports {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3894,6 +4055,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record that a Finding supports a Knowledge statement")]
     LinkSupportsKnowledge {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3913,6 +4075,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record that a Finding contradicts a Decision")]
     LinkContradicts {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3932,6 +4095,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record that a Finding contradicts a Knowledge statement")]
     LinkContradictsKnowledge {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3951,6 +4115,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record that one semantic Record was derived from another")]
     LinkDerivedFrom {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3970,6 +4135,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Create a labeled non-causal relation between Records")]
     LinkRelatedTo {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -3992,6 +4158,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Replace an active Decision while preserving guarded ancestry")]
     SupersedeDecision {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4023,6 +4190,7 @@ enum RecordCommand {
             .multiple(false)
             .args(["branch", "commit"])
     ))]
+    #[command(about = "List current Record-to-Record semantic relations")]
     RelationList {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4057,6 +4225,7 @@ enum RecordCommand {
             .multiple(false)
             .args(["branch", "commit"])
     ))]
+    #[command(about = "List current Record-to-Knowledge semantic relations")]
     KnowledgeRelationList {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4088,6 +4257,7 @@ enum RecordCommand {
             .multiple(false)
             .args(["branch", "commit"])
     ))]
+    #[command(about = "Show one Record-to-Knowledge semantic relation")]
     KnowledgeRelationShow {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4104,6 +4274,9 @@ enum RecordCommand {
         #[arg(long)]
         expected_state_digest: Option<String>,
     },
+    #[command(
+        about = "Remove a Record-to-Knowledge relation from current state while preserving history"
+    )]
     KnowledgeRelationRemove {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4123,6 +4296,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Restore a historically removed Record-to-Knowledge relation")]
     KnowledgeRelationRestore {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4148,6 +4322,7 @@ enum RecordCommand {
             .multiple(false)
             .args(["branch", "commit"])
     ))]
+    #[command(about = "Show one Record-to-Record semantic relation")]
     RelationShow {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4164,6 +4339,9 @@ enum RecordCommand {
         #[arg(long)]
         expected_state_digest: Option<String>,
     },
+    #[command(
+        about = "Remove a Record-to-Record relation from current state while preserving history"
+    )]
     RelationRemove {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4183,6 +4361,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Restore a historically removed Record-to-Record relation")]
     RelationRestore {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4202,6 +4381,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record a provisional belief that may need validation")]
     Assumption {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4218,6 +4398,7 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    #[command(about = "Record a tried route, experiment, or failed approach")]
     Attempt {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4234,6 +4415,7 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    #[command(about = "Finish an active Attempt as succeeded, failed, or abandoned")]
     AttemptStatus {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4256,6 +4438,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Validate or invalidate an Assumption with rationale")]
     AssumptionStatus {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4278,6 +4461,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record a selected choice and its scoped tradeoff")]
     Decision {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4294,6 +4478,7 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    #[command(about = "Retire or supersede a Decision with rationale")]
     DecisionStatus {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4316,6 +4501,7 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(about = "Record an observed fact or analysis result")]
     Finding {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4332,6 +4518,7 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    #[command(about = "Record concise continuation context for another Session or Agent")]
     Handoff {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4348,6 +4535,7 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    #[command(about = "Record an unresolved question or unknown")]
     Question {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4364,6 +4552,7 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    #[command(about = "Record a scoped possibility that could affect the outcome")]
     Risk {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -6445,6 +6634,9 @@ fn run(cli: Cli) -> Result<String> {
                 Ok(output)
             }
         },
+        Command::Config { command } => match command {
+            ConfigCommand::Show { registry } => show_effective_config(registry),
+        },
         Command::Project { command } => match command {
             ProjectCommand::Bind {
                 cwd,
@@ -6457,6 +6649,10 @@ fn run(cli: Cli) -> Result<String> {
                 let discovery = discover_project(cwd, registry)?;
                 Ok(render_project_discovery(&discovery))
             }
+            ProjectCommand::List {
+                registry,
+                require_valid,
+            } => list_project_bindings(registry, require_valid),
         },
         Command::Closeout { command } => match command {
             CloseoutCommand::Inspect {
@@ -9526,6 +9722,31 @@ fn run(cli: Cli) -> Result<String> {
         }
         Command::Evidence {
             command:
+                EvidenceCommand::Extract {
+                    store,
+                    evidence,
+                    ordinal,
+                    output,
+                    overwrite,
+                    expected_content_digest,
+                },
+        } => {
+            let engine = Engine::open_readonly(store)?;
+            let content =
+                engine.read_evidence_content(EvidenceId::parse_canonical(&evidence)?, ordinal)?;
+            if let Some(expected_content_digest) = expected_content_digest {
+                let expected_content_digest = Digest::from_hex(&expected_content_digest)?;
+                if content.content_digest != expected_content_digest {
+                    return Err(WorkVcsError::DigestInvalid(format!(
+                        "evidence content digest {} does not match expected {expected_content_digest}",
+                        content.content_digest
+                    )));
+                }
+            }
+            write_extracted_evidence_content(&output, &content, overwrite)
+        }
+        Command::Evidence {
+            command:
                 EvidenceCommand::List {
                     store,
                     kind,
@@ -11337,6 +11558,17 @@ fn run(cli: Cli) -> Result<String> {
             scope_path_prefix,
             expected_state_digest,
         ),
+        Command::Capture {
+            cwd,
+            registry,
+            manifest,
+        } => run_cognition_capture(cwd, registry, manifest),
+        Command::Recall {
+            cwd,
+            registry,
+            profile,
+            budget_items,
+        } => run_recall(cwd, registry, profile, budget_items),
         Command::ContextPacket { command } => match command {
             ContextPacketCommand::Save {
                 store,
@@ -13832,6 +14064,201 @@ fn render_store_info(info: &StoreInfo) -> Result<String> {
     ))
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkVcsFileConfig {
+    version: i64,
+    home: Option<PathBuf>,
+    registry: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct EffectiveRegistryConfig {
+    registry_path: PathBuf,
+    source: &'static str,
+    config_path: PathBuf,
+    config_exists: bool,
+    config_version: Option<i64>,
+    configured_home: Option<PathBuf>,
+}
+
+fn show_effective_config(registry: Option<PathBuf>) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    Ok(format!(
+        "config_path={}\nconfig_exists={}\nconfig_version={}\nregistry_path={}\nregistry_source={}\nconfigured_home={}\n",
+        effective.config_path.display(),
+        effective.config_exists,
+        effective
+            .config_version
+            .map(|version| version.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        registry_path.display(),
+        effective.source,
+        effective
+            .configured_home
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+    ))
+}
+
+fn effective_registry_config(registry: Option<PathBuf>) -> Result<EffectiveRegistryConfig> {
+    let config_path = workvcs_config_path()?;
+    let config_exists = config_path.is_file();
+    if let Some(registry_path) = registry {
+        return Ok(EffectiveRegistryConfig {
+            registry_path,
+            source: "cli",
+            config_path,
+            config_exists,
+            config_version: None,
+            configured_home: None,
+        });
+    }
+
+    if let Some(home) = std::env::var_os(PROJECT_REGISTRY_ENV) {
+        if home.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{PROJECT_REGISTRY_ENV} must not be empty"
+            )));
+        }
+        let home = expand_config_home_path("WORKVCS_HOME", PathBuf::from(home))?;
+        return Ok(EffectiveRegistryConfig {
+            registry_path: home.join(PROJECT_REGISTRY_FILE),
+            source: "environment",
+            config_path,
+            config_exists,
+            config_version: None,
+            configured_home: Some(home),
+        });
+    }
+
+    let Some(config) = load_workvcs_file_config(&config_path)? else {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project registry requires --registry PATH, {PROJECT_REGISTRY_ENV}, or {}",
+            config_path.display()
+        )));
+    };
+    if config.version != 1 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "WorkVCS config {} has unsupported version {}",
+            config_path.display(),
+            config.version
+        )));
+    }
+    if config.home.is_some() == config.registry.is_some() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "WorkVCS config {} requires exactly one of home or registry",
+            config_path.display()
+        )));
+    }
+    let configured_home = config
+        .home
+        .map(|path| expand_config_home_path("config home", path))
+        .transpose()?;
+    let registry_path = match (configured_home.as_ref(), config.registry) {
+        (Some(home), None) => home.join(PROJECT_REGISTRY_FILE),
+        (None, Some(path)) => expand_config_home_path("config registry", path)?,
+        _ => unreachable!("validated exactly one WorkVCS config locator"),
+    };
+    Ok(EffectiveRegistryConfig {
+        registry_path,
+        source: if configured_home.is_some() {
+            "xdg_config.home"
+        } else {
+            "xdg_config.registry"
+        },
+        config_path,
+        config_exists: true,
+        config_version: Some(config.version),
+        configured_home,
+    })
+}
+
+fn workvcs_config_path() -> Result<PathBuf> {
+    let root = match std::env::var_os(XDG_CONFIG_HOME_ENV) {
+        Some(value) if value.is_empty() => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{XDG_CONFIG_HOME_ENV} must not be empty"
+            )));
+        }
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "{XDG_CONFIG_HOME_ENV} must be an absolute path"
+                )));
+            }
+            path
+        }
+        None => {
+            let home = std::env::var_os("HOME").ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "WorkVCS config discovery requires HOME when XDG_CONFIG_HOME is unset"
+                        .to_owned(),
+                )
+            })?;
+            if home.is_empty() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "HOME must not be empty for WorkVCS config discovery".to_owned(),
+                ));
+            }
+            PathBuf::from(home).join(".config")
+        }
+    };
+    Ok(root.join(WORKVCS_CONFIG_DIR).join(WORKVCS_CONFIG_FILE))
+}
+
+fn load_workvcs_file_config(path: &Path) -> Result<Option<WorkVcsFileConfig>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "cannot read WorkVCS config {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    toml::from_str(&text).map(Some).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "WorkVCS config {} is not valid TOML: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn expand_config_home_path(label: &str, path: PathBuf) -> Result<PathBuf> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| WorkVcsError::QueryInvalid(format!("{label} path is not valid UTF-8")))?;
+    if text == "~" || text.starts_with("~/") {
+        let home = std::env::var_os("HOME").ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!("{label} uses ~ but HOME is unavailable"))
+        })?;
+        if home.is_empty() {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} uses ~ but HOME is empty"
+            )));
+        }
+        let mut expanded = PathBuf::from(home);
+        if text.len() > 2 {
+            expanded.push(&text[2..]);
+        }
+        return Ok(expanded);
+    }
+    if !path.is_absolute() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be an absolute path or start with ~/"
+        )));
+    }
+    Ok(path)
+}
+
 #[derive(Clone, Debug)]
 struct ProjectIdentity {
     kind: String,
@@ -14087,6 +14514,116 @@ fn render_project_discovery(discovery: &ProjectDiscovery) -> String {
         discovery.binding.workspace_id,
         discovery.binding.branch_id,
     )
+}
+
+fn list_project_bindings(registry: Option<PathBuf>, require_valid: bool) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path)?,
+        false,
+    )?;
+    let bindings = load_project_registry(&registry_path, false)?;
+    let mut output = format!(
+        "registry_path={}\nregistry_source={}\nbindings={}\n",
+        registry_path.display(),
+        effective.source,
+        bindings.len()
+    );
+    let mut invalid = 0_usize;
+    for (index, binding) in bindings.iter().enumerate() {
+        writeln!(
+            output,
+            "binding.{index}.identity_kind={}",
+            binding.identity_kind
+        )
+        .expect("write to String");
+        writeln!(output, "binding.{index}.identity={}", binding.identity).expect("write to String");
+        writeln!(output, "binding.{index}.root={}", binding.root).expect("write to String");
+        writeln!(output, "binding.{index}.store_path={}", binding.store_path)
+            .expect("write to String");
+        writeln!(output, "binding.{index}.store_id={}", binding.store_id).expect("write to String");
+        writeln!(
+            output,
+            "binding.{index}.workspace_id={}",
+            binding.workspace_id
+        )
+        .expect("write to String");
+        writeln!(output, "binding.{index}.branch_id={}", binding.branch_id)
+            .expect("write to String");
+        let duplicate_identity = bindings.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && other.identity_kind == binding.identity_kind
+                && other.identity == binding.identity
+        });
+        let verification = if duplicate_identity {
+            Err(WorkVcsError::QueryInvalid(format!(
+                "duplicate {} identity {}",
+                binding.identity_kind, binding.identity
+            )))
+        } else {
+            verify_registry_binding_readonly(binding)
+        };
+        match verification {
+            Ok(local_content_objects_verified) => {
+                writeln!(output, "binding.{index}.verified=true").expect("write to String");
+                writeln!(output, "binding.{index}.verification_error=none")
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "binding.{index}.local_content_objects_verified={local_content_objects_verified}"
+                )
+                .expect("write to String");
+            }
+            Err(error) => {
+                invalid += 1;
+                writeln!(output, "binding.{index}.verified=false").expect("write to String");
+                writeln!(
+                    output,
+                    "binding.{index}.verification_error={}",
+                    escape_key_value(&error.to_string())
+                )
+                .expect("write to String");
+            }
+        }
+    }
+    writeln!(output, "valid_bindings={}", bindings.len() - invalid).expect("write to String");
+    writeln!(output, "invalid_bindings={invalid}").expect("write to String");
+    if require_valid && invalid != 0 {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project registry {} has {invalid} invalid binding(s)",
+            registry_path.display()
+        )));
+    }
+    Ok(output)
+}
+
+fn verify_registry_binding_readonly(binding: &ProjectBinding) -> Result<usize> {
+    let store_path =
+        canonical_existing_path("project binding store", Path::new(&binding.store_path))?;
+    let canonical_store_path = store_path.display().to_string();
+    if canonical_store_path != binding.store_path {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding store path drifted from {} to {}",
+            binding.store_path, canonical_store_path
+        )));
+    }
+    let engine = open_verified_store_readonly(&store_path)?;
+    let store_info = engine.store_info()?;
+    if store_info.store_id != binding.store_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding store id {} does not match opened store {}",
+            binding.store_id, store_info.store_id
+        )));
+    }
+    engine.workspace_info(binding.workspace_id)?;
+    let branch_head = engine.branch_head(binding.branch_id)?;
+    if branch_head.workspace_id != binding.workspace_id {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding branch {} belongs to workspace {}, not {}",
+            binding.branch_id, branch_head.workspace_id, binding.workspace_id
+        )));
+    }
+    engine.validate_local_content_storage()
 }
 
 fn render_closeout_inspect_task_projection(projection: &CloseoutInspectTaskProjection) -> String {
@@ -14972,6 +15509,339 @@ fn run_resume(
     Ok(output)
 }
 
+fn run_recall(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    profile: RecallProfileArg,
+    budget_items: usize,
+) -> Result<String> {
+    if budget_items == 0 || budget_items > 200 {
+        return Err(WorkVcsError::QueryInvalid(
+            "recall --budget-items must be between 1 and 200".to_owned(),
+        ));
+    }
+    let discovery = discover_project_readonly(cwd, registry)?;
+    let engine = open_verified_store_readonly(Path::new(&discovery.binding.store_path))?;
+    let head = engine.branch_head(discovery.binding.branch_id)?;
+    let commit_id = head.head_commit_id;
+
+    let mut goals = engine.goals_at(commit_id)?;
+    let mut plans = engine.plans_at(commit_id)?;
+    let mut tasks = engine.tasks_at(commit_id)?;
+    let mut records = engine
+        .records_at(RecordListOptions::new(commit_id))?
+        .records;
+    let mut knowledge = engine
+        .knowledges_at(KnowledgeListOptions::new(commit_id))?
+        .knowledge;
+
+    if profile != RecallProfileArg::Retrospective {
+        goals.retain(|goal| goal.state.status == GoalStatus::Active);
+        plans.retain(|plan| plan.state.status == PlanStatus::Active);
+        tasks.retain(|task| !task.state.status.is_terminal());
+        knowledge.retain(|item| item.state.status == KnowledgeStatus::Active);
+    }
+    if profile == RecallProfileArg::Brief {
+        records.retain(|record| {
+            matches!(
+                record.state.status,
+                RecordStatus::Active | RecordStatus::Running | RecordStatus::Unverified
+            )
+        });
+    }
+
+    let record_relations = if profile == RecallProfileArg::Brief {
+        Vec::new()
+    } else {
+        engine
+            .record_relations_at(RecordRelationListOptions::new(commit_id))?
+            .relations
+    };
+    let record_knowledge_relations = if profile == RecallProfileArg::Brief {
+        Vec::new()
+    } else {
+        engine
+            .record_knowledge_relations_at(RecordKnowledgeRelationListOptions::new(commit_id))?
+            .relations
+    };
+    let knowledge_relations = if profile == RecallProfileArg::Retrospective {
+        engine
+            .knowledge_relations_at(KnowledgeRelationListOptions::new(commit_id))?
+            .relations
+    } else {
+        Vec::new()
+    };
+    let evidence = if profile == RecallProfileArg::Retrospective {
+        engine.evidences(EvidenceListOptions::all())?.evidences
+    } else {
+        Vec::new()
+    };
+
+    let total_items = goals.len()
+        + plans.len()
+        + tasks.len()
+        + records.len()
+        + knowledge.len()
+        + record_relations.len()
+        + record_knowledge_relations.len()
+        + knowledge_relations.len()
+        + evidence.len();
+    let mut output = format!(
+        "recall_profile={}\nregistry_path={}\nproject_identity={}\nproject_root={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\nstate_digest={}\nbudget_items={}\ntotal_items={}\ngoals_total={}\nplans_total={}\ntasks_total={}\nrecords_total={}\nknowledge_total={}\nrecord_relations_total={}\nrecord_knowledge_relations_total={}\nknowledge_relations_total={}\nevidence_total={}\nevidence_scope={}\n",
+        profile.as_str(),
+        discovery.registry_path.display(),
+        discovery.current_identity.identity,
+        discovery.current_identity.root,
+        discovery.binding.store_path,
+        discovery.binding.store_id,
+        discovery.binding.workspace_id,
+        discovery.binding.branch_id,
+        commit_id,
+        head.state_digest,
+        budget_items,
+        total_items,
+        goals.len(),
+        plans.len(),
+        tasks.len(),
+        records.len(),
+        knowledge.len(),
+        record_relations.len(),
+        record_knowledge_relations.len(),
+        knowledge_relations.len(),
+        evidence.len(),
+        if evidence.is_empty() { "none" } else { "store" },
+    );
+    enum RecallItem<'a> {
+        Goal(&'a GoalSnapshot),
+        Plan(&'a PlanSnapshot),
+        Task(&'a TaskSnapshot),
+        Record(&'a RecordSnapshot),
+        Knowledge(&'a KnowledgeSnapshot),
+        RecordRelation(&'a RecordRelationSnapshot),
+        RecordKnowledgeRelation(&'a RecordKnowledgeRelationSnapshot),
+        KnowledgeRelation(&'a KnowledgeRelationSnapshot),
+        Evidence(&'a EvidenceSnapshot),
+    }
+
+    let mut ordered = Vec::with_capacity(total_items);
+    if profile == RecallProfileArg::Retrospective {
+        ordered.extend(records.iter().map(RecallItem::Record));
+        ordered.extend(knowledge.iter().map(RecallItem::Knowledge));
+        ordered.extend(record_relations.iter().map(RecallItem::RecordRelation));
+        ordered.extend(
+            record_knowledge_relations
+                .iter()
+                .map(RecallItem::RecordKnowledgeRelation),
+        );
+        ordered.extend(
+            knowledge_relations
+                .iter()
+                .map(RecallItem::KnowledgeRelation),
+        );
+        ordered.extend(evidence.iter().map(RecallItem::Evidence));
+        ordered.extend(goals.iter().map(RecallItem::Goal));
+        ordered.extend(plans.iter().map(RecallItem::Plan));
+        ordered.extend(tasks.iter().map(RecallItem::Task));
+    } else {
+        ordered.extend(goals.iter().map(RecallItem::Goal));
+        ordered.extend(plans.iter().map(RecallItem::Plan));
+        ordered.extend(tasks.iter().map(RecallItem::Task));
+        ordered.extend(records.iter().map(RecallItem::Record));
+        ordered.extend(knowledge.iter().map(RecallItem::Knowledge));
+        ordered.extend(record_relations.iter().map(RecallItem::RecordRelation));
+        ordered.extend(
+            record_knowledge_relations
+                .iter()
+                .map(RecallItem::RecordKnowledgeRelation),
+        );
+    }
+
+    let emitted = ordered.len().min(budget_items);
+    for (index, item) in ordered.into_iter().take(budget_items).enumerate() {
+        match item {
+            RecallItem::Goal(goal) => {
+                writeln!(output, "item.{index}.category=goal").expect("write to String");
+                writeln!(output, "item.{index}.id={}", goal.goal_entity_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.status={}", goal.state.status)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.statement_json={}",
+                    canonical_text_json("recall goal description", &goal.state.description)?
+                )
+                .expect("write to String");
+            }
+            RecallItem::Plan(plan) => {
+                writeln!(output, "item.{index}.category=plan").expect("write to String");
+                writeln!(output, "item.{index}.id={}", plan.plan_entity_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.status={}", plan.state.status)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.statement_json={}",
+                    canonical_text_json("recall plan description", &plan.state.description)?
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.strategy_json={}",
+                    canonical_text_json("recall plan strategy", &plan.state.strategy)?
+                )
+                .expect("write to String");
+            }
+            RecallItem::Task(task) => {
+                writeln!(output, "item.{index}.category=task").expect("write to String");
+                writeln!(output, "item.{index}.id={}", task.task_entity_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.status={}", task.state.status)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.statement_json={}",
+                    canonical_text_json("recall task description", &task.state.description)?
+                )
+                .expect("write to String");
+            }
+            RecallItem::Record(record) => {
+                writeln!(output, "item.{index}.category=record").expect("write to String");
+                writeln!(output, "item.{index}.subtype={}", record.state.kind)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.id={}", record.record_entity_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.status={}", record.state.status)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.statement_json={}",
+                    canonical_text_json("recall record statement", &record.state.statement)?
+                )
+                .expect("write to String");
+            }
+            RecallItem::Knowledge(knowledge) => {
+                writeln!(output, "item.{index}.category=knowledge").expect("write to String");
+                writeln!(output, "item.{index}.id={}", knowledge.knowledge_entity_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.status={}", knowledge.state.status)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.statement_json={}",
+                    canonical_text_json("recall knowledge statement", &knowledge.state.statement)?
+                )
+                .expect("write to String");
+            }
+            RecallItem::RecordRelation(relation) => {
+                writeln!(output, "item.{index}.category=record_relation").expect("write to String");
+                writeln!(output, "item.{index}.id={}", relation.relation_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.subtype={}", relation.relation_type)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.source={}",
+                    relation.source_record_entity_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.target={}",
+                    relation.target_record_entity_id
+                )
+                .expect("write to String");
+            }
+            RecallItem::RecordKnowledgeRelation(relation) => {
+                writeln!(output, "item.{index}.category=record_knowledge_relation")
+                    .expect("write to String");
+                writeln!(output, "item.{index}.id={}", relation.relation_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.subtype={}", relation.relation_type)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.source={}",
+                    relation.source_record_entity_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.target={}",
+                    relation.target_knowledge_entity_id
+                )
+                .expect("write to String");
+            }
+            RecallItem::KnowledgeRelation(relation) => {
+                writeln!(output, "item.{index}.category=knowledge_relation")
+                    .expect("write to String");
+                writeln!(output, "item.{index}.id={}", relation.relation_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.subtype={}", relation.relation_type)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.source={}",
+                    relation.replacement_knowledge_entity_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.target={}",
+                    relation.prior_knowledge_entity_id
+                )
+                .expect("write to String");
+            }
+            RecallItem::Evidence(evidence) => {
+                writeln!(output, "item.{index}.category=evidence").expect("write to String");
+                writeln!(output, "item.{index}.id={}", evidence.evidence_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.subtype={}", evidence.evidence_kind)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.metadata_json={}",
+                    canonical_cli_json("recall evidence metadata", &evidence.metadata)?
+                )
+                .expect("write to String");
+            }
+        }
+    }
+    writeln!(output, "returned_items={emitted}").expect("write to String");
+    writeln!(
+        output,
+        "omitted_items={}",
+        total_items.saturating_sub(emitted)
+    )
+    .expect("write to String");
+    writeln!(output, "truncated={}", emitted < total_items).expect("write to String");
+    writeln!(output, "read_only=true").expect("write to String");
+    Ok(output)
+}
+
+fn run_cognition_capture(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    manifest_path: PathBuf,
+) -> Result<String> {
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read cognition capture manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest = CognitionCaptureManifest::from_json_bytes(&manifest_bytes)?;
+    let discovery = discover_project(cwd, registry)?;
+    let mut engine = open_verified_store(Path::new(&discovery.binding.store_path))?;
+    let head = engine.branch_head(discovery.binding.branch_id)?;
+    let result = engine.capture_cognition(CognitionCaptureOptions::new(
+        discovery.binding.branch_id,
+        head.head_commit_id,
+        head.state_digest,
+        manifest,
+    ))?;
+    Ok(render_cognition_capture(&result))
+}
+
 fn resolve_resume_session(
     engine: &Engine,
     discovery: &ProjectDiscovery,
@@ -15575,22 +16445,7 @@ fn project_registry_path(
     for_write: bool,
     identity: &ProjectIdentity,
 ) -> Result<PathBuf> {
-    let raw_path = match registry {
-        Some(path) => path,
-        None => {
-            let home = std::env::var_os(PROJECT_REGISTRY_ENV).ok_or_else(|| {
-                WorkVcsError::QueryInvalid(format!(
-                    "project registry requires --registry PATH or {PROJECT_REGISTRY_ENV}"
-                ))
-            })?;
-            if home.is_empty() {
-                return Err(WorkVcsError::QueryInvalid(format!(
-                    "{PROJECT_REGISTRY_ENV} must not be empty"
-                )));
-            }
-            PathBuf::from(home).join(PROJECT_REGISTRY_FILE)
-        }
-    };
+    let raw_path = effective_registry_config(registry)?.registry_path;
     let absolute_path = absolute_cli_path("project registry", raw_path)?;
     reject_project_local_unresolved_path("project registry", &absolute_path, identity)?;
     let registry_path = canonical_registry_path(absolute_path, for_write)?;
@@ -18584,6 +19439,81 @@ fn canonical_string_array_json(label: &str, values: &[String]) -> Result<String>
     knowledge_value_json(label, &value)
 }
 
+fn render_cognition_capture(result: &CognitionCaptureResult) -> String {
+    let mut output = format!(
+        "capture_status={}\nreused={}\nworkspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\nidempotency_key={}\npayload_digest={}\nwork_state_digest={}\nrecords={}\nknowledge={}\nevidence={}\nrelations={}\n",
+        result.outcome.as_str(),
+        matches!(
+            result.outcome,
+            workvcs_core::CognitionCaptureOutcome::Reused
+        ),
+        result.workspace_id,
+        result.branch_id,
+        result.previous_head_commit_id,
+        result.commit_id,
+        result.changeset_id,
+        result.idempotency_key,
+        result.payload_digest,
+        result.work_state_digest,
+        result.records.len(),
+        result.knowledge.len(),
+        result.evidence.len(),
+        result.relations.len(),
+    );
+    for (index, item) in result.records.iter().enumerate() {
+        writeln!(output, "record.{index}.local_id={}", item.local_id).expect("write to String");
+        writeln!(output, "record.{index}.kind={}", item.kind).expect("write to String");
+        writeln!(output, "record.{index}.entity_id={}", item.entity_id).expect("write to String");
+        writeln!(
+            output,
+            "record.{index}.entity_version_id={}",
+            item.entity_version_id
+        )
+        .expect("write to String");
+        writeln!(output, "record.{index}.state_digest={}", item.state_digest)
+            .expect("write to String");
+    }
+    for (index, item) in result.knowledge.iter().enumerate() {
+        writeln!(output, "knowledge.{index}.local_id={}", item.local_id).expect("write to String");
+        writeln!(output, "knowledge.{index}.entity_id={}", item.entity_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "knowledge.{index}.entity_version_id={}",
+            item.entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "knowledge.{index}.state_digest={}",
+            item.state_digest
+        )
+        .expect("write to String");
+    }
+    for (index, item) in result.evidence.iter().enumerate() {
+        writeln!(output, "evidence.{index}.local_id={}", item.local_id).expect("write to String");
+        writeln!(output, "evidence.{index}.evidence_id={}", item.evidence_id)
+            .expect("write to String");
+    }
+    for (index, item) in result.relations.iter().enumerate() {
+        writeln!(output, "relation.{index}.local_id={}", item.local_id).expect("write to String");
+        writeln!(output, "relation.{index}.type={}", item.relation_type).expect("write to String");
+        writeln!(output, "relation.{index}.relation_id={}", item.relation_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "relation.{index}.relation_version_id={}",
+            item.relation_version_id
+        )
+        .expect("write to String");
+        writeln!(output, "relation.{index}.source={}", item.source_entity_id)
+            .expect("write to String");
+        writeln!(output, "relation.{index}.target={}", item.target_entity_id)
+            .expect("write to String");
+    }
+    output
+}
+
 fn render_plan_admission(result: &PlanAdmissionResult) -> String {
     let mut output = format!(
         "admission_status={}\nreused={}\nworkspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\nidempotency_key={}\npayload_digest={}\nwork_state_digest={}\ngoal_created={}\ngoal_entity_id={}\ngoal_entity_version_id={}\nplan_entity_id={}\nplan_entity_version_id={}\nplan_state_digest={}\ntasks={}\nrecords={}\nevidence={}\n",
@@ -20390,6 +21320,117 @@ fn render_evidence_list(result: &EvidenceListResult) -> Result<String> {
     Ok(output)
 }
 
+fn write_extracted_evidence_content(
+    output_path: &Path,
+    content: &EvidenceContentReadResult,
+    overwrite: bool,
+) -> Result<String> {
+    let output_path = absolute_cli_path("evidence content output", output_path.to_path_buf())?;
+    let parent = output_path.parent().ok_or_else(|| {
+        WorkVcsError::EvidenceInvalid(format!(
+            "evidence content output {} has no parent",
+            output_path.display()
+        ))
+    })?;
+    if !parent.is_dir() {
+        return Err(WorkVcsError::EvidenceInvalid(format!(
+            "evidence content output directory {} does not exist",
+            parent.display()
+        )));
+    }
+    if !overwrite {
+        let write_result = (|| -> Result<()> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&output_path)
+                .map_err(|error| {
+                    WorkVcsError::EvidenceInvalid(format!(
+                        "cannot create evidence content output {}: {error}",
+                        output_path.display()
+                    ))
+                })?;
+            file.write_all(&content.raw_bytes).map_err(|error| {
+                WorkVcsError::EvidenceInvalid(format!(
+                    "cannot write evidence content output {}: {error}",
+                    output_path.display()
+                ))
+            })?;
+            file.sync_all().map_err(|error| {
+                WorkVcsError::EvidenceInvalid(format!(
+                    "cannot sync evidence content output {}: {error}",
+                    output_path.display()
+                ))
+            })?;
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&output_path);
+        }
+        write_result?;
+    } else {
+        let file_name = output_path.file_name().ok_or_else(|| {
+            WorkVcsError::EvidenceInvalid("evidence content output has no file name".to_owned())
+        })?;
+        let temp_path = parent.join(format!(
+            ".{}.{}.{}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| WorkVcsError::EvidenceInvalid(format!("clock error: {error}")))?
+                .as_micros()
+        ));
+        let write_result = (|| -> Result<()> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)
+                .map_err(|error| {
+                    WorkVcsError::EvidenceInvalid(format!(
+                        "cannot create evidence content temporary output {}: {error}",
+                        temp_path.display()
+                    ))
+                })?;
+            file.write_all(&content.raw_bytes).map_err(|error| {
+                WorkVcsError::EvidenceInvalid(format!(
+                    "cannot write evidence content temporary output {}: {error}",
+                    temp_path.display()
+                ))
+            })?;
+            file.sync_all().map_err(|error| {
+                WorkVcsError::EvidenceInvalid(format!(
+                    "cannot sync evidence content temporary output {}: {error}",
+                    temp_path.display()
+                ))
+            })?;
+            fs::rename(&temp_path, &output_path).map_err(|error| {
+                WorkVcsError::EvidenceInvalid(format!(
+                    "cannot publish evidence content output {}: {error}",
+                    output_path.display()
+                ))
+            })?;
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        write_result?;
+    }
+    Ok(format!(
+        "evidence_id={}\nordinal={}\nrole={}\ncontent_digest={}\nsize_bytes={}\nmedia_type={}\nstorage_backend={}\nstorage_locator={}\noutput={}\ncontent_verified=true\n",
+        content.evidence_id,
+        content.ordinal,
+        content.role,
+        content.content_digest,
+        content.size_bytes,
+        render_optional_display_or_none(content.media_type.as_ref()),
+        content.storage_backend,
+        content.locator,
+        output_path.display(),
+    ))
+}
+
 fn evidence_matches_content_filters(
     evidence: &EvidenceSnapshot,
     content_digest: Option<Digest>,
@@ -20441,6 +21482,44 @@ fn write_evidence_content_fields(
             canonical_cli_json("evidence content format metadata", &content.format_metadata)?
         )
         .expect("write to String");
+        writeln!(
+            output,
+            "content.{index}.storage_locations={}",
+            content.storage_locations.len()
+        )
+        .expect("write to String");
+        for (location_index, location) in content.storage_locations.iter().enumerate() {
+            writeln!(
+                output,
+                "content.{index}.storage.{location_index}.backend={}",
+                location.storage_backend
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "content.{index}.storage.{location_index}.locator={}",
+                location.locator
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "content.{index}.storage.{location_index}.availability={}",
+                location.availability_state
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "content.{index}.storage.{location_index}.observed_at_us={}",
+                location.observed_at_us
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "content.{index}.storage.{location_index}.metadata_json={}",
+                canonical_cli_json("content storage metadata", &location.metadata)?
+            )
+            .expect("write to String");
+        }
     }
     Ok(())
 }
@@ -26885,6 +27964,35 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    struct EnvVarRestore {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarRestore {
+        fn set(key: &'static str, value: Option<&OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            unsafe {
+                match self.previous.take() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
     fn run_cli_test_with_large_stack(name: &str, test: fn()) {
         let result = std::thread::Builder::new()
             .name(name.to_owned())
@@ -27038,6 +28146,7 @@ mod tests {
                 "canonical",
                 "id",
                 "store",
+                "config",
                 "project",
                 "history",
                 "changeset",
@@ -27067,6 +28176,8 @@ mod tests {
                 "claim",
                 "context",
                 "resume",
+                "capture",
+                "recall",
                 "context-packet",
                 "next",
                 "runnable",
@@ -27101,7 +28212,11 @@ mod tests {
             ("canonical", "Encode and digest canonical JSON values"),
             ("id", "Generate and validate typed WorkVCS identifiers"),
             ("store", "Inspect Store metadata, lineage, and migrations"),
-            ("project", "Bind and discover project Store entrypoints"),
+            ("config", "Inspect effective WorkVCS configuration"),
+            (
+                "project",
+                "Bind, discover, and audit project Store entrypoints",
+            ),
             ("history", "List commit history from a branch or commit"),
             ("changeset", "Inspect changesets and change operations"),
             ("commit", "Inspect commit metadata and causal anchors"),
@@ -27142,6 +28257,14 @@ mod tests {
             ("claim", "Claim and release runtime work"),
             ("context", "Show the current session context"),
             ("resume", "Show compact read-only recovery context"),
+            (
+                "capture",
+                "Atomically record standalone cognition without requiring a Session or Plan",
+            ),
+            (
+                "recall",
+                "Read bounded project context without requiring a Session or Plan",
+            ),
             (
                 "context-packet",
                 "Save and inspect context packet snapshots",
@@ -27196,7 +28319,7 @@ mod tests {
         let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
             .expect_err("project help should render through clap DisplayHelp")
             .to_string();
-        assert!(project_help.contains("Bind and discover project Store entrypoints"));
+        assert!(project_help.contains("Bind, discover, and audit project Store entrypoints"));
         assert!(project_help.contains("bind"));
         assert!(project_help.contains("discover"));
 
@@ -57987,6 +59110,13 @@ mod tests {
 
     #[test]
     fn cli_lists_record_workflow() {
+        run_cli_test_with_large_stack(
+            "cli-lists-record-workflow",
+            assert_cli_lists_record_workflow,
+        );
+    }
+
+    fn assert_cli_lists_record_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -63910,6 +65040,250 @@ mod tests {
         );
         assert_eq!(value(&listed, "receipt.0.authority_ref_redacted"), "true");
         assert!(!listed.contains("user:session/ref-original"));
+    }
+
+    #[test]
+    fn cli_xdg_config_selects_registry_and_audits_all_bindings() {
+        let fixture = create_project_binding_fixture(false);
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let xdg_root = fixture._tempdir.path().join("xdg");
+        let config_dir = xdg_root.join("workvcs");
+        fs::create_dir_all(&config_dir).expect("create config dir");
+        fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                "version = 1\nregistry = {:?}\n",
+                fixture.registry_path.display().to_string()
+            ),
+        )
+        .expect("write config");
+        let _home = EnvVarRestore::set(PROJECT_REGISTRY_ENV, None);
+        let _xdg = EnvVarRestore::set(XDG_CONFIG_HOME_ENV, Some(xdg_root.as_os_str()));
+
+        let config =
+            run(Cli::try_parse_from(["workvcs", "config", "show"]).expect("parse config show"))
+                .expect("config show");
+        assert_eq!(value(&config, "registry_source"), "xdg_config.registry");
+        assert_eq!(
+            value(&config, "registry_path"),
+            fs::canonicalize(&fixture.registry_path)
+                .expect("canonical registry")
+                .display()
+                .to_string()
+        );
+
+        let discovered = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+        ])
+        .expect("parse config-backed discover"))
+        .expect("config-backed discover");
+        assert_eq!(value(&discovered, "binding_verified"), "true");
+
+        let listed = run(
+            Cli::try_parse_from(["workvcs", "project", "list", "--require-valid"])
+                .expect("parse project list"),
+        )
+        .expect("project list");
+        assert_eq!(value(&listed, "bindings"), "1");
+        assert_eq!(value(&listed, "valid_bindings"), "1");
+        assert_eq!(value(&listed, "invalid_bindings"), "0");
+    }
+
+    #[test]
+    fn cli_capture_and_recall_work_without_plan_or_session() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse branch head"))
+        .expect("branch head");
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&head, "head_commit_id"),
+            "--description",
+            "Keep retrospective ordering honest",
+        ])
+        .expect("parse goal create"))
+        .expect("create goal");
+        let manifest_path = fixture._tempdir.path().join("capture.json");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "idempotency_key": "cli-standalone-cognition",
+  "expected_head_commit_id": "{}",
+  "expected_state_digest": "{}",
+  "records": [
+    {{"local_id":"finding","kind":"finding","statement":"No-Plan work produced a finding","scope":{{}}}},
+    {{"local_id":"decision","kind":"decision","statement":"Persist cognition without inventing a Plan","scope":{{}}}}
+  ],
+  "knowledge": [
+    {{"local_id":"knowledge","statement":"Plan admission and knowledge capture are independent","scope":{{}},"provenance":{{}}}}
+  ],
+  "evidence": [],
+  "relations": [
+    {{"local_id":"supports","type":"supports","source_local_id":"finding","target_local_id":"decision","rationale":"Finding supports decision"}}
+  ],
+  "rationale": {{"source":"cli-test"}}
+}}"#,
+                value(&goal, "commit_id"),
+                value(&goal, "work_state_digest"),
+            ),
+        )
+        .expect("write capture manifest");
+        let manifest_text = path_text(&manifest_path);
+
+        let captured = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &manifest_text,
+        ])
+        .expect("parse capture"))
+        .expect("capture");
+        assert_eq!(value(&captured, "capture_status"), "created");
+        assert_eq!(value(&captured, "records"), "2");
+        assert_eq!(value(&captured, "knowledge"), "1");
+
+        let registry_before = fs::read(&fixture.registry_path).expect("registry before recall");
+        let recalled = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "retrospective",
+            "--budget-items",
+            "20",
+        ])
+        .expect("parse recall"))
+        .expect("recall");
+        assert_eq!(value(&recalled, "goals_total"), "1");
+        assert_eq!(value(&recalled, "plans_total"), "0");
+        assert_eq!(value(&recalled, "tasks_total"), "0");
+        assert_eq!(value(&recalled, "records_total"), "2");
+        assert_eq!(value(&recalled, "knowledge_total"), "1");
+        assert_eq!(value(&recalled, "item.0.category"), "record");
+        assert_eq!(value(&recalled, "item.1.category"), "record");
+        assert_eq!(value(&recalled, "item.2.category"), "knowledge");
+        assert_eq!(value(&recalled, "item.4.category"), "goal");
+        assert_eq!(value(&recalled, "read_only"), "true");
+        assert_eq!(
+            fs::read(&fixture.registry_path).expect("registry after recall"),
+            registry_before
+        );
+    }
+
+    #[test]
+    fn cli_evidence_extract_round_trips_persisted_raw_content() {
+        let fixture = create_project_binding_fixture(false);
+        let created = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "create",
+            &fixture.store,
+            "--kind",
+            "command-output",
+            "--content-role",
+            "stdout",
+            "--content",
+            "focused validation passed",
+            "--media-type",
+            "text/plain",
+        ])
+        .expect("parse evidence create"))
+        .expect("create evidence");
+        let evidence_id = value(&created, "evidence_id");
+        assert_eq!(value(&created, "content.0.storage_locations"), "1");
+
+        let output_path = fixture._tempdir.path().join("evidence.txt");
+        let extracted = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "extract",
+            &fixture.store,
+            "--evidence",
+            &evidence_id,
+            "--output",
+            &path_text(&output_path),
+        ])
+        .expect("parse evidence extract"))
+        .expect("extract evidence");
+        assert_eq!(value(&extracted, "content_verified"), "true");
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read extracted output"),
+            "focused validation passed"
+        );
+
+        let refused_overwrite = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "extract",
+            &fixture.store,
+            "--evidence",
+            &evidence_id,
+            "--output",
+            &path_text(&output_path),
+        ])
+        .expect("parse duplicate extraction"));
+        assert!(refused_overwrite.is_err());
+
+        let audited = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "list",
+            "--registry",
+            &fixture.registry,
+            "--require-valid",
+        ])
+        .expect("parse content storage audit"))
+        .expect("content storage audit");
+        assert_eq!(
+            value(&audited, "binding.0.local_content_objects_verified"),
+            "1"
+        );
+
+        let object_path = fixture
+            .store_path
+            .parent()
+            .expect("store parent")
+            .join(value(&created, "content.0.storage.0.locator"));
+        fs::remove_file(&object_path).expect("remove local object for drift probe");
+        let drift = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "list",
+            "--registry",
+            &fixture.registry,
+            "--require-valid",
+        ])
+        .expect("parse failed content storage audit"));
+        assert!(matches!(
+            drift,
+            Err(WorkVcsError::QueryInvalid(message)) if message.contains("invalid binding")
+        ));
     }
 
     fn value(output: &str, key: &str) -> String {

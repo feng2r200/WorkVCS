@@ -572,8 +572,8 @@ pub(super) struct PreparedEvidence {
 pub(super) struct PreparedRelation {
     pub(super) relation_id: RelationId,
     pub(super) relation_version_id: RelationVersionId,
-    pub(super) relation_type: &'static str,
-    pub(super) relation_discriminator: &'static str,
+    pub(super) relation_type: String,
+    pub(super) relation_discriminator: String,
     pub(super) source_entity_id: EntityId,
     pub(super) target_entity_id: EntityId,
     pub(super) state_json: String,
@@ -1062,8 +1062,8 @@ fn prepare_supersede_evolution(
     let goal_contains_relation = PreparedRelation {
         relation_id: RelationId::new_v7(),
         relation_version_id: RelationVersionId::new_v7(),
-        relation_type: CONTAINS_RELATION_TYPE,
-        relation_discriminator: PRIMARY_CONTAINMENT_DISCRIMINATOR,
+        relation_type: CONTAINS_RELATION_TYPE.to_owned(),
+        relation_discriminator: PRIMARY_CONTAINMENT_DISCRIMINATOR.to_owned(),
         source_entity_id: expected_goal_entity_id,
         target_entity_id: new_plan.entity_id,
         state_json: relation_state_json.clone(),
@@ -1072,8 +1072,8 @@ fn prepare_supersede_evolution(
     let supersedes_relation = PreparedRelation {
         relation_id: RelationId::new_v7(),
         relation_version_id: RelationVersionId::new_v7(),
-        relation_type: PLAN_SUPERSEDES_RELATION_TYPE,
-        relation_discriminator: PLAN_SUPERSEDES_RELATION_DISCRIMINATOR,
+        relation_type: PLAN_SUPERSEDES_RELATION_TYPE.to_owned(),
+        relation_discriminator: PLAN_SUPERSEDES_RELATION_DISCRIMINATOR.to_owned(),
         source_entity_id: new_plan.entity_id,
         target_entity_id: target_plan_entity_id,
         state_json: relation_state_json,
@@ -1370,8 +1370,8 @@ fn prepare_relations(
     let mut relations = vec![PreparedRelation {
         relation_id: RelationId::new_v7(),
         relation_version_id: RelationVersionId::new_v7(),
-        relation_type: CONTAINS_RELATION_TYPE,
-        relation_discriminator: PRIMARY_CONTAINMENT_DISCRIMINATOR,
+        relation_type: CONTAINS_RELATION_TYPE.to_owned(),
+        relation_discriminator: PRIMARY_CONTAINMENT_DISCRIMINATOR.to_owned(),
         source_entity_id: goal_entity_id,
         target_entity_id: prepared.plan.entity_id,
         state_json: state_json.to_owned(),
@@ -1381,8 +1381,8 @@ fn prepare_relations(
         relations.push(PreparedRelation {
             relation_id: RelationId::new_v7(),
             relation_version_id: RelationVersionId::new_v7(),
-            relation_type: CONTAINS_RELATION_TYPE,
-            relation_discriminator: PRIMARY_CONTAINMENT_DISCRIMINATOR,
+            relation_type: CONTAINS_RELATION_TYPE.to_owned(),
+            relation_discriminator: PRIMARY_CONTAINMENT_DISCRIMINATOR.to_owned(),
             source_entity_id: prepared.plan.entity_id,
             target_entity_id: task.entity.entity_id,
             state_json: state_json.to_owned(),
@@ -1413,8 +1413,8 @@ fn prepare_evolution_relations(
     relations.extend(tasks.iter().map(|task| PreparedRelation {
         relation_id: RelationId::new_v7(),
         relation_version_id: RelationVersionId::new_v7(),
-        relation_type: CONTAINS_RELATION_TYPE,
-        relation_discriminator: PRIMARY_CONTAINMENT_DISCRIMINATOR,
+        relation_type: CONTAINS_RELATION_TYPE.to_owned(),
+        relation_discriminator: PRIMARY_CONTAINMENT_DISCRIMINATOR.to_owned(),
         source_entity_id: task_parent_plan_entity_id,
         target_entity_id: task.entity.entity_id,
         state_json: state_json.to_owned(),
@@ -2035,10 +2035,10 @@ pub(super) fn write_relation(
             params![
                 &relation_id_bytes[..],
                 &workspace_id_bytes[..],
-                relation.relation_type,
+                relation.relation_type.as_str(),
                 &relation.source_entity_id.raw_bytes()[..],
                 &relation.target_entity_id.raw_bytes()[..],
-                relation.relation_discriminator
+                relation.relation_discriminator.as_str()
             ],
         )
         .map_err(storage_error)?;

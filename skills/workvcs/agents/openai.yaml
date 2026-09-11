@@ -1,0 +1,7 @@
+interface:
+  display_name: "WorkVCS"
+  short_description: "Durable project cognition and work-state recall"
+  default_prompt: "Use WorkVCS as an optional durable memory layer: recall bounded context, record meaningful cognition without forcing a Plan, and preserve inspectable evidence."
+
+policy:
+  allow_implicit_invocation: true

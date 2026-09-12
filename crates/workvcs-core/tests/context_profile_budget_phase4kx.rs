@@ -10,9 +10,10 @@ use workvcs_core::{
     ResourceCreateOptions, ResourceObservationCreateOptions, RunnableTasksOptions,
     SessionFocusOptions, SessionId, SessionStartOptions, StoreInitOptions,
     StructuralReferenceCreateOptions, TaskCreateOptions, TaskSchedulingRelationCreateOptions,
-    VerificationCreateOptions, VerificationRequirementCreateOptions, VerificationResourceBasis,
-    VerificationResult, VerificationTarget, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions,
-    canonical_bytes, content_object_digest,
+    TaskStatus, TaskTransitionOptions, VerificationCreateOptions,
+    VerificationRequirementCreateOptions, VerificationResourceBasis, VerificationResult,
+    VerificationTarget, WorkVcsError, WorkspaceInfo, WorkspaceInitOptions, canonical_bytes,
+    content_object_digest,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -3676,6 +3677,95 @@ fn context_packet_budget_preserves_runnable_order_within_current_tasks() {
                     && bucket.omitted == 1
             )
     );
+}
+
+#[test]
+fn brief_context_excludes_unfocused_terminal_tasks_but_keeps_a_terminal_focus() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let completed = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "historical completed task",
+            )
+            .expect("completed task options"),
+        )
+        .expect("create completed task");
+    let completed = engine
+        .transition_task(
+            TaskTransitionOptions::new(
+                workspace.initial_branch_id,
+                completed.commit_id,
+                completed.task_entity_id,
+                completed.task_entity_version_id,
+                TaskStatus::Done,
+            )
+            .expect("complete task options")
+            .with_outcome("completed before the current work")
+            .expect("completed task outcome")
+            .with_rationale(object(vec![(
+                "reason",
+                string("terminal task context regression"),
+            )])),
+        )
+        .expect("complete task");
+    let pending = engine
+        .create_task(
+            TaskCreateOptions::new(
+                workspace.initial_branch_id,
+                completed.commit_id,
+                "current pending task",
+            )
+            .expect("pending task options"),
+        )
+        .expect("create pending task");
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start session");
+
+    let packet = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+        )
+        .expect("unfocused brief packet");
+    let current_tasks = packet
+        .items
+        .iter()
+        .filter(|item| item.category == ContextItemCategory::CurrentTask)
+        .collect::<Vec<_>>();
+    assert_eq!(current_tasks.len(), 1);
+    assert_eq!(
+        current_tasks[0].subject.as_ref_string(),
+        format!("task:{}", pending.task_entity_id)
+    );
+    assert!(
+        !packet
+            .items
+            .iter()
+            .any(|item| item.summary.contains("historical completed task"))
+    );
+
+    engine
+        .set_session_focus(SessionFocusOptions::new(
+            session.session_id,
+            completed.task_entity_id,
+        ))
+        .expect("focus terminal task");
+    let focused = engine
+        .context_packet(
+            ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+        )
+        .expect("focused terminal packet");
+    assert!(focused.items.iter().any(|item| {
+        item.category == ContextItemCategory::CurrentTask
+            && item.subject.as_ref_string() == format!("task:{}", completed.task_entity_id)
+            && item.summary.contains("historical completed task")
+    }));
 }
 
 #[test]

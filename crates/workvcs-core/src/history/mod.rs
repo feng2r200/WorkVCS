@@ -289,3 +289,4 @@ pub(crate) use task::{
     verification_requirement_at, verification_requirements_at, verifications_at,
 };
 pub(crate) use why::explain_why;
+pub(crate) use why::knowledge_exposure_relation_edges_for_entities;

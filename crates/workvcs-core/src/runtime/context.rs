@@ -1,4 +1,7 @@
-use super::runnable::{self, RunnableTasksOptions, RunnableTasksProjection};
+use super::runnable::{
+    self, RunnableTaskCandidate, RunnableTaskClaimCoordination, RunnableTasksOptions,
+    RunnableTasksProjection,
+};
 use super::session::{self, SessionLifecycleState, SessionSnapshot};
 use crate::canonical::{CanonicalValue, canonical_bytes, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
@@ -11,8 +14,7 @@ use crate::history::{
     RecordListOptions, RecordListResult, RecordRelationListOptions, RecordRelationListResult,
     RecordRelationSnapshot, RecordSnapshot, RecordStatus, StructuralReferenceEndpointKind,
     StructuralReferenceSnapshot, TaskSnapshot, VerificationRequirementSnapshot,
-    VerificationSnapshot, VerificationTarget, WhyQueryOptions, WhyQueryTarget, WhyRelationEdge,
-    WhyRelationKind,
+    VerificationSnapshot, VerificationTarget, WhyRelationEdge, WhyRelationKind,
 };
 use crate::identity::{
     BranchId, ChangeSetId, CommitId, ContextPacketId, Digest, EntityId, RelationId, SessionId,
@@ -1460,6 +1462,9 @@ fn collect_context_items(
         ),
     );
     for candidate in &context.runnable_tasks.candidates {
+        if !context_candidate_is_current(candidate, session) {
+            continue;
+        }
         push_context_item(
             &mut items,
             profile,
@@ -3250,30 +3255,40 @@ fn knowledge_exposure_relations_for_context(
     branch: &BranchHead,
     knowledge: &KnowledgeListResult,
 ) -> Result<Vec<WhyRelationEdge>> {
-    let mut relations = Vec::new();
-    for knowledge in &knowledge.knowledge {
-        let why = history::explain_why(
-            connection,
-            &WhyQueryOptions::for_entity(
-                WhyQueryTarget::commit(branch.head_commit_id),
-                knowledge.knowledge_entity_id,
-            ),
-        )?;
-        relations.extend(
-            why.relation_edges
-                .into_iter()
-                .filter(|edge| edge.relation_kind == WhyRelationKind::KnowledgeExposureDerivedFrom),
-        );
+    let knowledge_entity_ids = knowledge
+        .knowledge
+        .iter()
+        .map(|knowledge| knowledge.knowledge_entity_id)
+        .collect::<Vec<_>>();
+    history::knowledge_exposure_relation_edges_for_entities(
+        connection,
+        branch.head_commit_id,
+        &knowledge_entity_ids,
+    )
+}
+
+fn context_candidate_is_current(
+    candidate: &RunnableTaskCandidate,
+    session: &SessionSnapshot,
+) -> bool {
+    if !candidate.task.state.status.is_terminal() {
+        return true;
     }
-    relations.sort_by(|left, right| {
-        left.relation_kind
-            .cmp(&right.relation_kind)
-            .then_with(|| left.direction.cmp(&right.direction))
-            .then_with(|| left.source.cmp(&right.source))
-            .then_with(|| left.target.cmp(&right.target))
-            .then_with(|| left.relation_id.cmp(&right.relation_id))
-    });
-    Ok(relations)
+    if session
+        .focus
+        .as_ref()
+        .is_some_and(|focus| focus.focus_entity_id == candidate.task.task_entity_id)
+    {
+        return true;
+    }
+    matches!(
+        candidate.claim_coordination,
+        RunnableTaskClaimCoordination::ClaimedBySession { .. }
+            | RunnableTaskClaimCoordination::Shared {
+                claimed_by_session: true,
+                ..
+            }
+    )
 }
 
 fn ensure_active_session(session: &SessionSnapshot) -> Result<()> {

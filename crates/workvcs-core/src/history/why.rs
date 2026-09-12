@@ -681,6 +681,56 @@ pub(crate) fn explain_why(
     })
 }
 
+pub(crate) fn knowledge_exposure_relation_edges_for_entities(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    knowledge_entity_ids: &[EntityId],
+) -> Result<Vec<WhyRelationEdge>> {
+    let included = knowledge_entity_ids.iter().copied().collect::<HashSet<_>>();
+    if included.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let replayed = state_at(connection, commit_id)?;
+    let resolved = ResolvedWhyTargetWithState {
+        target: ResolvedWhyQueryTarget {
+            target: WhyQueryTarget::commit(commit_id),
+            workspace_id: replayed.workspace_id,
+            commit_id,
+            state_digest: replayed.state_digest,
+        },
+        state: replayed.state,
+    };
+    let mut relations = Vec::new();
+    for relation in knowledge_exposure_derived_from_relations_at(connection, &resolved)? {
+        if !included.contains(&relation.source_knowledge_entity_id) {
+            continue;
+        }
+        relations.push(WhyRelationEdge {
+            relation_kind: WhyRelationKind::KnowledgeExposureDerivedFrom,
+            direction: WhyRelationDirection::Outgoing,
+            relation_id: relation.relation_id,
+            relation_version_id: relation.relation_version_id,
+            relation_label: None,
+            source: WhyRelationEndpoint::entity(
+                relation.source_knowledge_entity_id,
+                WhyEntityKind::Knowledge,
+            ),
+            target: WhyRelationEndpoint::knowledge_exposure(relation.exposure_id),
+            state_digest: relation.state_digest,
+        });
+    }
+    relations.sort_by(|left, right| {
+        left.relation_kind
+            .cmp(&right.relation_kind)
+            .then_with(|| left.direction.cmp(&right.direction))
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.target.cmp(&right.target))
+            .then_with(|| left.relation_id.cmp(&right.relation_id))
+    });
+    Ok(relations)
+}
+
 fn why_verification_closure_chains(
     connection: &StoreConnection,
     resolved: &ResolvedWhyTargetWithState,

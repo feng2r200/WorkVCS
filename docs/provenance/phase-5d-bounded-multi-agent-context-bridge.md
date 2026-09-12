@@ -132,6 +132,15 @@ behavioral regression showing that a specific instruction is redundant. The
 current bridge pilot supports bounded Recall, explicit identity handoff, and
 single-writer persistence as the lower-friction operating contract.
 
+A separate fresh-process Plugin activation probe reinforces that boundary. A
+`gpt-5.6-sol` run at max reasoning received a short read-only request, loaded
+the newly installed 3,980-byte SubAgent Skill from the expected cache path, and
+returned the requested two-line result. Codex reported 25,786 aggregate tokens
+for the run. That total is useful evidence that tiny visible task text does not
+imply a tiny aggregate context, but it still cannot partition base
+instructions, tool schemas, Skill discovery, Skill text, caching, or reasoning.
+It is therefore not evidence that any one governance file caused the total.
+
 ## Evidence boundary
 
 This is one local, bounded multi-Agent case. It proves useful recovery and two

@@ -138,6 +138,10 @@ impl VerifyOptions {
         self.cache_detail = cache_detail;
         Ok(self)
     }
+
+    pub(crate) fn evidence_mut(&mut self) -> &mut EvidenceCreateOptions {
+        &mut self.evidence
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,7 +213,10 @@ pub(crate) fn verify(
     })
 }
 
-fn preflight_verify(connection: &StoreConnection, options: &VerifyOptions) -> Result<()> {
+pub(crate) fn preflight_verify(
+    connection: &StoreConnection,
+    options: &VerifyOptions,
+) -> Result<()> {
     if options.resource_observation.is_none()
         && options.cache_detail != CanonicalValue::object(Vec::new())?
     {

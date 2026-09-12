@@ -58,4 +58,4 @@ pub(crate) use session::{
     clear_session_focus, end_session, mark_session_potentially_stale, session_diff,
     session_snapshot, sessions, set_session_focus, start_session, switch_session,
 };
-pub(crate) use verify::verify;
+pub(crate) use verify::{preflight_verify, verify};

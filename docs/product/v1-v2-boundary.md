@@ -38,7 +38,7 @@ Rust, `rusqlite`, the `workvcs-jcs-v1` canonical JSON profile, and the initial
 Store/bootstrap implementation boundary are closed by the implementation ADRs
 and [Implementation Contract v0.1](../architecture/implementation-contract-v0.1.md).
 The current V1-local Bundle directory profile is closed by
-[Bundle Local Directory Profile v0.1](../architecture/bundle-local-profile-v0.1.md);
+[Bundle Local Directory Profile v0.2](../architecture/bundle-local-profile-v0.2.md);
 packaged Bundle archive/container details remain Open.
 
 The confirmed logical persistence model is commit/delta-based: immutable

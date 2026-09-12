@@ -97,7 +97,7 @@ fn bundle_import_attempt_show_reads_recorded_outcome_detail() {
     assert_eq!(snapshot.bundle_digest, recorded.bundle_digest);
     assert_eq!(
         snapshot.import_profile,
-        "workvcs-local-payload-directory-v1"
+        "workvcs-local-payload-directory-v2"
     );
     assert_eq!(
         snapshot.started_at_us,

@@ -121,7 +121,7 @@ V1 need not implement automatic distributed merge or live synchronization.
 Imported objects are deduplicated by declared content hash and accepted only
 when the bytes match that hash. V1 Store content/state digest uses BLAKE3-256.
 The current local directory profile is defined in
-[Bundle Local Directory Profile v0.1](bundle-local-profile-v0.1.md); packaged
+[Bundle Local Directory Profile v0.2](bundle-local-profile-v0.2.md); packaged
 archive/container encoding remains Open.
 
 ### Resource bindings

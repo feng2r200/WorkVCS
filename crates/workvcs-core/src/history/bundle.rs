@@ -1,4 +1,4 @@
-use super::evidence::EVIDENCE_OBJECT_KIND;
+use super::evidence::{EVIDENCE_OBJECT_KIND, LOCAL_CONTENT_STORAGE_BACKEND};
 use super::knowledge::KNOWLEDGE_ENTITY_KIND;
 use super::resource::{RESOURCE_OBJECT_KIND, RESOURCE_OBSERVATION_OBJECT_KIND};
 use super::task::{
@@ -16,17 +16,22 @@ use crate::identity::{
     RelationId, RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId,
     StoreId, WorkspaceId,
 };
-use crate::store::{StoreConnection, StoreInfo, StoreManifest, current_epoch_micros};
+use crate::store::{
+    StoreConnection, StoreInfo, StoreManifest, current_epoch_micros, local_content_relative_path,
+    persist_local_content_object, relative_path_to_locator, verify_local_content_file,
+};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::Path;
 use uuid::Uuid;
 
-const BUNDLE_EXPORT_MANIFEST_PROFILE: &str = "workvcs-local-export-manifest-v1";
-const BUNDLE_EXPORT_MANIFEST_VERSION: i64 = 1;
-const BUNDLE_PAYLOAD_INDEX_PROFILE: &str = "workvcs-local-payload-index-v1";
-const BUNDLE_PAYLOAD_INDEX_VERSION: i64 = 1;
-const BUNDLE_PAYLOAD_MEDIA_TYPE: &str = "application/json";
-const BUNDLE_IMPORT_PROFILE: &str = "workvcs-local-payload-directory-v1";
+const BUNDLE_EXPORT_MANIFEST_PROFILE: &str = "workvcs-local-export-manifest-v2";
+const BUNDLE_EXPORT_MANIFEST_VERSION: i64 = 2;
+const BUNDLE_PAYLOAD_INDEX_PROFILE: &str = "workvcs-local-payload-index-v2";
+const BUNDLE_PAYLOAD_INDEX_VERSION: i64 = 2;
+const BUNDLE_JSON_PAYLOAD_MEDIA_TYPE: &str = "application/json";
+const BUNDLE_OBJECT_PAYLOAD_MEDIA_TYPE: &str = "application/octet-stream";
+const BUNDLE_IMPORT_PROFILE: &str = "workvcs-local-payload-directory-v2";
 const EVIDENCED_BY_RELATION_TYPE: &str = "evidenced_by";
 const RELATION_OBJECT_KIND: &str = "relation";
 const SESSION_OBJECT_KIND: &str = "session";
@@ -264,6 +269,7 @@ pub struct BundleExportManifest {
     pub session_diffs: Vec<BundleSessionDiffRef>,
     pub evidences: Vec<BundleEvidenceRef>,
     pub evidence_contents: Vec<BundleEvidenceContentRef>,
+    pub portable_evidence_contents: Vec<BundlePortableEvidenceContentRef>,
     pub resources: Vec<BundleResourceRef>,
     pub resource_observations: Vec<BundleResourceObservationRef>,
     pub verification_bases: Vec<BundleVerificationBasisRef>,
@@ -362,11 +368,6 @@ impl BundlePayloadInput {
         let relative_path = relative_path.into();
         validate_payload_relative_path(&relative_path)?;
         let bytes = bytes.into();
-        if bytes.is_empty() {
-            return Err(WorkVcsError::QueryInvalid(
-                "bundle payload bytes cannot be empty".to_owned(),
-            ));
-        }
         Ok(Self {
             relative_path,
             bytes,
@@ -405,6 +406,7 @@ pub struct BundleImportPreflightResult {
     pub payload_index_digest: Digest,
     pub payload_files: usize,
     pub payload_references: usize,
+    pub portable_evidence_contents: usize,
     pub exported_branch_heads: usize,
     pub branch_heads_already_present: usize,
     pub branch_heads_missing: usize,
@@ -455,6 +457,7 @@ pub struct BundleImportApplyResult {
     pub imported_acceptance_criterion_identities: usize,
     pub imported_verification_requirement_identities: usize,
     pub imported_content_objects: usize,
+    pub imported_content_storage_locations: usize,
     pub imported_sessions: usize,
     pub imported_session_diffs: usize,
     pub imported_evidences: usize,
@@ -693,6 +696,14 @@ pub struct BundleEvidenceContentRef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundlePortableEvidenceContentRef {
+    pub evidence_id: EvidenceId,
+    pub ordinal: i64,
+    pub content_digest: Digest,
+    pub size_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleResourceRef {
     pub resource_id: ResourceId,
     pub resource_kind: String,
@@ -852,6 +863,8 @@ struct BundleCommitParentRef {
 struct BundlePayloadCandidate {
     role: String,
     owner: CanonicalValue,
+    relative_path: String,
+    media_type: String,
     bytes: Vec<u8>,
 }
 
@@ -870,6 +883,7 @@ struct BundleManifestSummary {
     commits: Vec<BundleCommitSummary>,
     exported_branch_heads: Vec<BundleBranchHeadSummary>,
     changeset_causal_anchors: Vec<BundleChangeSetCausalAnchorRef>,
+    portable_evidence_contents: Vec<BundlePortableEvidenceContentRef>,
     same_store_apply_supported: bool,
 }
 
@@ -909,7 +923,7 @@ struct BundlePayloadIndexSummary {
     commit_id: CommitId,
     state_digest: Digest,
     payloads: Vec<BundlePayloadFileRef>,
-    reference_count: usize,
+    references: Vec<BundlePayloadReference>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -937,6 +951,7 @@ struct BundleSameStoreApplyDocument {
     session_diffs: Vec<BundleSessionDiffRef>,
     evidences: Vec<BundleEvidenceRef>,
     evidence_contents: Vec<BundleEvidenceContentRef>,
+    portable_evidence_contents: Vec<BundlePortableEvidenceContentRef>,
     resources: Vec<BundleResourceRef>,
     resource_observations: Vec<BundleResourceObservationRef>,
     verification_bases: Vec<BundleVerificationBasisRef>,
@@ -985,6 +1000,7 @@ struct BundleImportApplyCounts {
     imported_acceptance_criterion_identities: usize,
     imported_verification_requirement_identities: usize,
     imported_content_objects: usize,
+    imported_content_storage_locations: usize,
     imported_sessions: usize,
     imported_session_diffs: usize,
     imported_evidences: usize,
@@ -1028,6 +1044,7 @@ struct CheckedBundleDirectory {
 pub(crate) fn export_bundle_manifest(
     connection: &StoreConnection,
     store_info: &StoreInfo,
+    store_path: &Path,
     options: BundleExportOptions,
 ) -> Result<BundleExportManifest> {
     connection.verify_foreign_keys()?;
@@ -1135,6 +1152,13 @@ pub(crate) fn export_bundle_manifest(
         &session_diffs,
         &checkpoint_candidates,
     )?;
+    let portable_evidence_contents = portable_evidence_content_refs(
+        connection,
+        store_path,
+        store_info.store_id,
+        &evidence_contents,
+        &content_objects,
+    )?;
 
     let manifest = manifest_value(BundleManifestValueInput {
         store_info,
@@ -1150,6 +1174,7 @@ pub(crate) fn export_bundle_manifest(
         session_diffs: &session_diffs,
         evidences: &evidences,
         evidence_contents: &evidence_contents,
+        portable_evidence_contents: &portable_evidence_contents,
         resources: &resources,
         resource_observations: &resource_observations,
         verification_bases: &verification_bases,
@@ -1192,6 +1217,7 @@ pub(crate) fn export_bundle_manifest(
         session_diffs,
         evidences,
         evidence_contents,
+        portable_evidence_contents,
         resources,
         resource_observations,
         verification_bases,
@@ -1214,12 +1240,14 @@ pub(crate) fn export_bundle_manifest(
 pub(crate) fn validate_bundle_manifest(
     connection: &StoreConnection,
     store_info: &StoreInfo,
+    store_path: &Path,
     options: BundleManifestValidationOptions,
 ) -> Result<BundleManifestValidationResult> {
     connection.verify_foreign_keys()?;
     let expected = export_bundle_manifest(
         connection,
         store_info,
+        store_path,
         BundleExportOptions::for_commit(options.commit_id()),
     )?;
     let actual_manifest_digest = content_object_digest(options.manifest_bytes());
@@ -1239,12 +1267,14 @@ pub(crate) fn validate_bundle_manifest(
 pub(crate) fn export_bundle_payloads(
     connection: &StoreConnection,
     store_info: &StoreInfo,
+    store_path: &Path,
     options: BundlePayloadExportOptions,
 ) -> Result<BundlePayloadExport> {
     connection.verify_foreign_keys()?;
     let manifest = export_bundle_manifest(
         connection,
         store_info,
+        store_path,
         BundleExportOptions::for_commit(options.commit_id()),
     )?;
     let manifest_bytes = canonical_bytes(&manifest.manifest)?;
@@ -1285,6 +1315,14 @@ pub(crate) fn export_bundle_payloads(
     }
     for evidence in &manifest.evidences {
         load_evidence_payload_candidate(connection, evidence, &mut candidates)?;
+    }
+    for content in &manifest.portable_evidence_contents {
+        load_evidence_content_body_payload_candidate(
+            store_path,
+            store_info.store_id,
+            content,
+            &mut candidates,
+        )?;
     }
     for observation in &manifest.resource_observations {
         load_resource_observation_payload_candidate(connection, observation, &mut candidates)?;
@@ -1329,12 +1367,14 @@ pub(crate) fn export_bundle_payloads(
 pub(crate) fn validate_bundle_payloads(
     connection: &StoreConnection,
     store_info: &StoreInfo,
+    store_path: &Path,
     options: BundlePayloadValidationOptions,
 ) -> Result<BundlePayloadValidationResult> {
     connection.verify_foreign_keys()?;
     let expected = export_bundle_payloads(
         connection,
         store_info,
+        store_path,
         BundlePayloadExportOptions::for_commit(options.commit_id()),
     )?;
     let actual_manifest_digest = content_object_digest(options.manifest_bytes());
@@ -1384,6 +1424,7 @@ pub(crate) fn preflight_bundle_import(
                 payload_index_digest,
                 payload_files,
                 payload_references: 0,
+                portable_evidence_contents: 0,
                 exported_branch_heads: 0,
                 branch_heads_already_present: 0,
                 branch_heads_missing: 0,
@@ -1420,7 +1461,8 @@ pub(crate) fn preflight_bundle_import(
             manifest_digest,
             payload_index_digest,
             payload_files,
-            payload_references: checked.payload_index.reference_count,
+            payload_references: checked.payload_index.references.len(),
+            portable_evidence_contents: checked.manifest.portable_evidence_contents.len(),
             exported_branch_heads: branch_preflight.exported_branch_heads,
             branch_heads_already_present: branch_preflight.already_present,
             branch_heads_missing: branch_preflight.missing,
@@ -1473,7 +1515,8 @@ pub(crate) fn preflight_bundle_import(
         manifest_digest,
         payload_index_digest,
         payload_files,
-        payload_references: checked.payload_index.reference_count,
+        payload_references: checked.payload_index.references.len(),
+        portable_evidence_contents: checked.manifest.portable_evidence_contents.len(),
         exported_branch_heads: branch_preflight.exported_branch_heads,
         branch_heads_already_present: branch_preflight.already_present,
         branch_heads_missing: branch_preflight.missing,
@@ -1579,6 +1622,7 @@ pub(crate) fn record_bundle_import_attempt(
 pub(crate) fn apply_bundle_import(
     connection: &mut StoreConnection,
     store_info: &StoreInfo,
+    store_path: &Path,
     options: BundleImportApplyOptions,
 ) -> Result<BundleImportApplyResult> {
     connection.verify_foreign_keys()?;
@@ -1606,6 +1650,7 @@ pub(crate) fn apply_bundle_import(
             imported_acceptance_criterion_identities: 0,
             imported_verification_requirement_identities: 0,
             imported_content_objects: 0,
+            imported_content_storage_locations: 0,
             imported_sessions: 0,
             imported_session_diffs: 0,
             imported_evidences: 0,
@@ -1649,6 +1694,12 @@ pub(crate) fn apply_bundle_import(
             "applicable bundle manifest target changed after preflight".to_owned(),
         ));
     }
+    let prepared_content_locations = prepare_portable_evidence_content_objects(
+        store_path,
+        store_info.store_id,
+        &document,
+        &payload_lookup,
+    )?;
     let import_id = ImportId::new_v7();
     let now_us = current_epoch_micros()?;
     let transaction = connection
@@ -1664,6 +1715,11 @@ pub(crate) fn apply_bundle_import(
         apply_verification_requirement_identities(&transaction, &document)?;
     let imported_sessions = apply_sessions(&transaction, &document, &payload_lookup)?;
     let imported_content_objects = apply_content_objects(&transaction, &document, &payload_lookup)?;
+    let imported_content_storage_locations = apply_portable_content_storage_locations(
+        &transaction,
+        &prepared_content_locations,
+        now_us,
+    )?;
     let imported_session_diffs = apply_session_diffs(&transaction, &document, &payload_lookup)?;
     let imported_resources = apply_resources(&transaction, &document)?;
     let imported_resource_observations =
@@ -1691,6 +1747,7 @@ pub(crate) fn apply_bundle_import(
         imported_acceptance_criterion_identities,
         imported_verification_requirement_identities,
         imported_content_objects,
+        imported_content_storage_locations,
         imported_sessions,
         imported_session_diffs,
         imported_evidences,
@@ -1743,6 +1800,7 @@ pub(crate) fn apply_bundle_import(
         imported_verification_requirement_identities: counts
             .imported_verification_requirement_identities,
         imported_content_objects: counts.imported_content_objects,
+        imported_content_storage_locations: counts.imported_content_storage_locations,
         imported_sessions: counts.imported_sessions,
         imported_session_diffs: counts.imported_session_diffs,
         imported_evidences: counts.imported_evidences,
@@ -3032,6 +3090,102 @@ fn content_object_closure_refs(
         .collect()
 }
 
+fn portable_evidence_content_refs(
+    connection: &StoreConnection,
+    store_path: &Path,
+    store_id: StoreId,
+    evidence_contents: &[BundleEvidenceContentRef],
+    content_objects: &[BundleContentObjectRef],
+) -> Result<Vec<BundlePortableEvidenceContentRef>> {
+    let content_sizes = content_objects
+        .iter()
+        .map(|content| (content.content_digest, content.size_bytes))
+        .collect::<BTreeMap<_, _>>();
+    let mut portable = Vec::new();
+
+    for content in evidence_contents {
+        let size_bytes = *content_sizes.get(&content.content_digest).ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "Evidence {} content ordinal {} has no ContentObject in the Bundle closure",
+                content.evidence_id, content.ordinal
+            ))
+        })?;
+        let relative_path = local_content_relative_path(store_id, content.content_digest);
+        let expected_locator = relative_path_to_locator(&relative_path)?;
+        let mut statement = connection
+            .inner()
+            .prepare(
+                "SELECT locator
+                 FROM content_storage_location
+                 WHERE content_digest = ?1
+                   AND storage_backend = ?2
+                   AND availability_state = 'available'
+                 ORDER BY locator",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(
+                params![
+                    &content.content_digest.as_bytes()[..],
+                    LOCAL_CONTENT_STORAGE_BACKEND
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(storage_error)?;
+        let mut available_locators = Vec::new();
+        for row in rows {
+            available_locators.push(row.map_err(storage_error)?);
+        }
+        if available_locators.is_empty() {
+            continue;
+        }
+        if available_locators
+            .iter()
+            .any(|locator| locator != &expected_locator)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "Evidence {} content ordinal {} claims available local WorkVCS storage at a non-contract locator",
+                content.evidence_id, content.ordinal
+            )));
+        }
+        read_local_content_object_for_bundle(
+            store_path,
+            store_id,
+            content.content_digest,
+            size_bytes,
+        )?;
+        portable.push(BundlePortableEvidenceContentRef {
+            evidence_id: content.evidence_id,
+            ordinal: content.ordinal,
+            content_digest: content.content_digest,
+            size_bytes,
+        });
+    }
+
+    portable.sort_by_key(|content| (content.evidence_id.raw_bytes(), content.ordinal));
+    Ok(portable)
+}
+
+fn read_local_content_object_for_bundle(
+    store_path: &Path,
+    store_id: StoreId,
+    content_digest: Digest,
+    size_bytes: i64,
+) -> Result<Vec<u8>> {
+    let store_parent = store_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "Store path {} has no parent for local content storage",
+            store_path.display()
+        ))
+    })?;
+    let object_path = store_parent.join(local_content_relative_path(store_id, content_digest));
+    verify_local_content_file(&object_path, content_digest, size_bytes).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "portable Evidence content {content_digest} is not readable: {error}"
+        ))
+    })
+}
+
 fn load_content_object_ref(
     connection: &StoreConnection,
     content_digest: Digest,
@@ -4288,6 +4442,28 @@ fn load_evidence_payload_candidate(
     )
 }
 
+fn load_evidence_content_body_payload_candidate(
+    store_path: &Path,
+    store_id: StoreId,
+    content: &BundlePortableEvidenceContentRef,
+    candidates: &mut Vec<BundlePayloadCandidate>,
+) -> Result<()> {
+    let bytes = read_local_content_object_for_bundle(
+        store_path,
+        store_id,
+        content.content_digest,
+        content.size_bytes,
+    )?;
+    candidates.push(BundlePayloadCandidate {
+        role: "evidence_content_body".to_owned(),
+        owner: portable_evidence_content_owner(content)?,
+        relative_path: format!("objects/{}.bin", content.content_digest),
+        media_type: BUNDLE_OBJECT_PAYLOAD_MEDIA_TYPE.to_owned(),
+        bytes,
+    });
+    Ok(())
+}
+
 fn load_resource_observation_payload_candidate(
     connection: &StoreConnection,
     observation: &BundleResourceObservationRef,
@@ -4635,10 +4811,14 @@ fn push_canonical_payload(
     json: String,
 ) -> Result<()> {
     validate_canonical_json_value(label, &json)?;
+    let bytes = json.into_bytes();
+    let content_digest = content_object_digest(&bytes);
     candidates.push(BundlePayloadCandidate {
         role: role.to_owned(),
         owner,
-        bytes: json.into_bytes(),
+        relative_path: format!("payloads/{content_digest}.json"),
+        media_type: BUNDLE_JSON_PAYLOAD_MEDIA_TYPE.to_owned(),
+        bytes,
     });
     Ok(())
 }
@@ -4648,41 +4828,48 @@ fn build_payload_export(
     manifest_bytes: Vec<u8>,
     candidates: Vec<BundlePayloadCandidate>,
 ) -> Result<BundlePayloadExport> {
-    let mut payload_files_by_digest: BTreeMap<Digest, BundlePayloadFile> = BTreeMap::new();
+    let mut payload_files_by_path: BTreeMap<String, BundlePayloadFile> = BTreeMap::new();
     let mut payload_references = Vec::new();
 
     for candidate in candidates {
         let content_digest = content_object_digest(&candidate.bytes);
         let size_bytes = usize_to_i64("bundle payload size", candidate.bytes.len())?;
-        let relative_path = format!("payloads/{content_digest}.json");
-        if let Some(existing) = payload_files_by_digest.get(&content_digest) {
-            if existing.bytes != candidate.bytes {
+        let path_digest = payload_digest_from_relative_path(&candidate.relative_path)?;
+        if path_digest != content_digest {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "bundle payload path {} does not match its content digest",
+                candidate.relative_path
+            )));
+        }
+        if let Some(existing) = payload_files_by_path.get(&candidate.relative_path) {
+            if existing.bytes != candidate.bytes || existing.media_type != candidate.media_type {
                 return Err(WorkVcsError::QueryInvalid(format!(
-                    "bundle payload digest collision at {content_digest}"
+                    "bundle payload collision at {}",
+                    candidate.relative_path
                 )));
             }
         } else {
-            payload_files_by_digest.insert(
-                content_digest,
+            payload_files_by_path.insert(
+                candidate.relative_path.clone(),
                 BundlePayloadFile {
-                    relative_path: relative_path.clone(),
+                    relative_path: candidate.relative_path.clone(),
                     content_digest,
                     size_bytes,
-                    media_type: BUNDLE_PAYLOAD_MEDIA_TYPE.to_owned(),
+                    media_type: candidate.media_type.clone(),
                     bytes: candidate.bytes.clone(),
                 },
             );
         }
         payload_references.push(BundlePayloadReference {
             role: candidate.role,
-            relative_path,
+            relative_path: candidate.relative_path,
             content_digest,
             size_bytes,
             owner: candidate.owner,
         });
     }
 
-    let payload_files = payload_files_by_digest.into_values().collect::<Vec<_>>();
+    let payload_files = payload_files_by_path.into_values().collect::<Vec<_>>();
     let payload_index = payload_index_value(
         &manifest,
         &manifest_bytes,
@@ -4817,7 +5004,9 @@ fn validate_bundle_directory_artifact(
                 payload.relative_path
             ));
         }
-        if payload.media_type != BUNDLE_PAYLOAD_MEDIA_TYPE {
+        let expected_media_type = payload_media_type_for_relative_path(&payload.relative_path)
+            .map_err(|error| error.to_string())?;
+        if payload.media_type != expected_media_type {
             return Err(format!(
                 "bundle payload path {} has unsupported media type {}",
                 payload.relative_path, payload.media_type
@@ -4866,16 +5055,103 @@ fn validate_bundle_directory_artifact(
                 payload.relative_path
             ));
         }
-        parse_fixed_point_canonical_json("bundle payload", &payload.bytes)?;
+        if expected_payload.media_type == BUNDLE_JSON_PAYLOAD_MEDIA_TYPE {
+            parse_fixed_point_canonical_json("bundle payload", &payload.bytes)?;
+        }
     }
     if let Some(missing_path) = expected_by_path.keys().next() {
         return Err(format!("bundle payload path {missing_path} is missing"));
     }
+    validate_portable_evidence_payload_references(
+        &manifest.portable_evidence_contents,
+        &payload_index,
+    )?;
 
     Ok(CheckedBundleDirectory {
         manifest,
         payload_index,
     })
+}
+
+fn validate_portable_evidence_payload_references(
+    portable: &[BundlePortableEvidenceContentRef],
+    payload_index: &BundlePayloadIndexSummary,
+) -> std::result::Result<(), String> {
+    let expected = portable
+        .iter()
+        .map(|content| {
+            canonical_bytes(
+                &portable_evidence_content_owner(content).map_err(|error| error.to_string())?,
+            )
+            .map(|owner| (owner, content))
+            .map_err(|error| error.to_string())
+        })
+        .collect::<std::result::Result<BTreeMap<_, _>, _>>()?;
+    let payloads = payload_index
+        .payloads
+        .iter()
+        .map(|payload| (payload.relative_path.as_str(), payload))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeSet::new();
+    let mut referenced_object_paths = BTreeSet::new();
+
+    for reference in payload_index
+        .references
+        .iter()
+        .filter(|reference| reference.role == "evidence_content_body")
+    {
+        let owner_bytes = canonical_bytes(&reference.owner).map_err(|error| error.to_string())?;
+        let content = expected.get(&owner_bytes).ok_or_else(|| {
+            "bundle payload index has an evidence_content_body reference not declared by the manifest"
+                .to_owned()
+        })?;
+        if !seen.insert(owner_bytes) {
+            return Err(format!(
+                "bundle payload index repeats Evidence {} content ordinal {} body",
+                content.evidence_id, content.ordinal
+            ));
+        }
+        let expected_path = format!("objects/{}.bin", content.content_digest);
+        if reference.relative_path != expected_path
+            || reference.content_digest != content.content_digest
+            || reference.size_bytes != content.size_bytes
+        {
+            return Err(format!(
+                "bundle payload index Evidence {} content ordinal {} body does not match the manifest",
+                content.evidence_id, content.ordinal
+            ));
+        }
+        let payload = payloads
+            .get(reference.relative_path.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "bundle payload index Evidence {} content ordinal {} body file is missing",
+                    content.evidence_id, content.ordinal
+                )
+            })?;
+        if payload.media_type != BUNDLE_OBJECT_PAYLOAD_MEDIA_TYPE {
+            return Err(format!(
+                "bundle payload index Evidence {} content ordinal {} body has unsupported media type",
+                content.evidence_id, content.ordinal
+            ));
+        }
+        referenced_object_paths.insert(reference.relative_path.as_str());
+    }
+
+    if seen.len() != expected.len() {
+        return Err("bundle payload index is missing a manifest portable Evidence body".to_owned());
+    }
+    for payload in &payload_index.payloads {
+        if payload.relative_path.starts_with("objects/")
+            && !referenced_object_paths.contains(payload.relative_path.as_str())
+        {
+            return Err(format!(
+                "bundle object payload {} has no evidence_content_body reference",
+                payload.relative_path
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn bundle_manifest_validation_problem(
@@ -4917,6 +5193,7 @@ struct BundleManifestValueInput<'a> {
     session_diffs: &'a [BundleSessionDiffRef],
     evidences: &'a [BundleEvidenceRef],
     evidence_contents: &'a [BundleEvidenceContentRef],
+    portable_evidence_contents: &'a [BundlePortableEvidenceContentRef],
     resources: &'a [BundleResourceRef],
     resource_observations: &'a [BundleResourceObservationRef],
     verification_bases: &'a [BundleVerificationBasisRef],
@@ -5082,6 +5359,16 @@ fn manifest_value(input: BundleManifestValueInput<'_>) -> Result<CanonicalValue>
                     .evidence_contents
                     .iter()
                     .map(evidence_content_ref_value)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        ),
+        (
+            "portable_evidence_contents".to_owned(),
+            CanonicalValue::Array(
+                input
+                    .portable_evidence_contents
+                    .iter()
+                    .map(portable_evidence_content_ref_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
         ),
@@ -5552,6 +5839,23 @@ fn evidence_content_ref_value(content: &BundleEvidenceContentRef) -> Result<Cano
         string_field("content_digest", content.content_digest.to_string()),
         string_field("role", content.role.clone()),
     ])
+}
+
+fn portable_evidence_content_ref_value(
+    content: &BundlePortableEvidenceContentRef,
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        string_field("evidence_id", content.evidence_id.to_string()),
+        integer_field("ordinal", content.ordinal)?,
+        string_field("content_digest", content.content_digest.to_string()),
+        integer_field("size_bytes", content.size_bytes)?,
+    ])
+}
+
+fn portable_evidence_content_owner(
+    content: &BundlePortableEvidenceContentRef,
+) -> Result<CanonicalValue> {
+    portable_evidence_content_ref_value(content)
 }
 
 fn resource_ref_value(resource: &BundleResourceRef) -> Result<CanonicalValue> {
@@ -6119,6 +6423,13 @@ fn bundle_import_apply_detail_json(
             usize_to_i64("imported_content_objects", counts.imported_content_objects)?,
         )?,
         integer_field(
+            "imported_content_storage_locations",
+            usize_to_i64(
+                "imported_content_storage_locations",
+                counts.imported_content_storage_locations,
+            )?,
+        )?,
+        integer_field(
             "imported_sessions",
             usize_to_i64("imported_sessions", counts.imported_sessions)?,
         )?,
@@ -6449,6 +6760,116 @@ fn apply_content_objects(
         )?;
         if ensure_content_object_row(transaction, content, &format_metadata_json)? {
             imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+fn prepare_portable_evidence_content_objects(
+    store_path: &Path,
+    store_id: StoreId,
+    document: &BundleSameStoreApplyDocument,
+    payload_lookup: &BundlePayloadLookup,
+) -> Result<BTreeMap<Digest, String>> {
+    let mut prepared = BTreeMap::new();
+    for content in &document.portable_evidence_contents {
+        let bytes = payload_lookup.required_bytes(
+            "evidence_content_body",
+            portable_evidence_content_owner(content)?,
+            Some(content.content_digest),
+            Some(content.size_bytes),
+        )?;
+        let locator = persist_local_content_object(
+            store_path,
+            store_id,
+            content.content_digest,
+            content.size_bytes,
+            &bytes,
+        )?;
+        if let Some(existing) = prepared.insert(content.content_digest, locator.clone())
+            && existing != locator
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "portable Evidence content {} resolved to inconsistent target locators",
+                content.content_digest
+            )));
+        }
+    }
+    Ok(prepared)
+}
+
+fn apply_portable_content_storage_locations(
+    transaction: &Transaction<'_>,
+    prepared: &BTreeMap<Digest, String>,
+    observed_at_us: i64,
+) -> Result<usize> {
+    let mut imported = 0;
+    for (content_digest, locator) in prepared {
+        let existing = transaction
+            .query_row(
+                "SELECT availability_state, metadata_json
+                 FROM content_storage_location
+                 WHERE content_digest = ?1
+                   AND storage_backend = ?2
+                   AND locator = ?3",
+                params![
+                    &content_digest.as_bytes()[..],
+                    LOCAL_CONTENT_STORAGE_BACKEND,
+                    locator,
+                ],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        match existing {
+            Some((_availability_state, metadata_json)) => {
+                require_canonical_object_json(
+                    "content_storage_location.metadata_json",
+                    &metadata_json,
+                )?;
+                if metadata_json != "{}" {
+                    return Err(WorkVcsError::ImmutableImportInvalid(format!(
+                        "local content storage location {locator} has unexpected metadata"
+                    )));
+                }
+                transaction
+                    .execute(
+                        "UPDATE content_storage_location
+                         SET availability_state = 'available', observed_at_us = ?4
+                         WHERE content_digest = ?1
+                           AND storage_backend = ?2
+                           AND locator = ?3",
+                        params![
+                            &content_digest.as_bytes()[..],
+                            LOCAL_CONTENT_STORAGE_BACKEND,
+                            locator,
+                            observed_at_us,
+                        ],
+                    )
+                    .map_err(storage_error)?;
+            }
+            None => {
+                transaction
+                    .execute(
+                        "INSERT INTO content_storage_location(
+                            content_digest,
+                            storage_backend,
+                            locator,
+                            availability_state,
+                            observed_at_us,
+                            metadata_json
+                         )
+                         VALUES (?1, ?2, ?3, 'available', ?4, '{}')",
+                        params![
+                            &content_digest.as_bytes()[..],
+                            LOCAL_CONTENT_STORAGE_BACKEND,
+                            locator,
+                            observed_at_us,
+                        ],
+                    )
+                    .map_err(storage_error)?;
+                imported += 1;
+            }
         }
     }
     Ok(imported)
@@ -9781,6 +10202,15 @@ fn parse_bundle_manifest_summary(
                 parse_bundle_changeset_causal_anchor_ref(anchor).map_err(|error| error.to_string())
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
+    let portable_evidence_contents =
+        array_field_ref(value, "bundle manifest", "portable_evidence_contents")?
+            .iter()
+            .map(|content| {
+                parse_bundle_portable_evidence_content_ref(content)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+    validate_portable_evidence_manifest_refs(value, &portable_evidence_contents)?;
     let same_store_apply_supported =
         bundle_manifest_supports_same_store_apply(value, &changeset_causal_anchors)?;
     let manifest = BundleManifestSummary {
@@ -9811,10 +10241,78 @@ fn parse_bundle_manifest_summary(
         commits,
         exported_branch_heads,
         changeset_causal_anchors,
+        portable_evidence_contents,
         same_store_apply_supported,
     };
     validate_bundle_manifest_summary_integrity(&manifest)?;
     Ok(manifest)
+}
+
+fn validate_portable_evidence_manifest_refs(
+    value: &CanonicalValue,
+    portable: &[BundlePortableEvidenceContentRef],
+) -> std::result::Result<(), String> {
+    let evidence_contents = array_field_ref(value, "bundle manifest", "evidence_contents")?
+        .iter()
+        .map(|content| {
+            parse_bundle_evidence_content_ref(content).map_err(|error| error.to_string())
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let content_objects = array_field_ref(value, "bundle manifest", "content_objects")?
+        .iter()
+        .map(|content| parse_bundle_content_object_ref(content).map_err(|error| error.to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut evidence_content_digests = BTreeMap::new();
+    for content in evidence_contents {
+        if evidence_content_digests
+            .insert(
+                (content.evidence_id, content.ordinal),
+                content.content_digest,
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "bundle manifest Evidence {} content ordinal {} appears more than once",
+                content.evidence_id, content.ordinal
+            ));
+        }
+    }
+    let mut content_sizes = BTreeMap::new();
+    for content in content_objects {
+        if content_sizes
+            .insert(content.content_digest, content.size_bytes)
+            .is_some()
+        {
+            return Err(format!(
+                "bundle manifest ContentObject {} appears more than once",
+                content.content_digest
+            ));
+        }
+    }
+    let mut portable_keys = BTreeSet::new();
+    for content in portable {
+        let key = (content.evidence_id, content.ordinal);
+        if !portable_keys.insert(key) {
+            return Err(format!(
+                "bundle manifest portable Evidence {} content ordinal {} appears more than once",
+                content.evidence_id, content.ordinal
+            ));
+        }
+        if evidence_content_digests.get(&key) != Some(&content.content_digest) {
+            return Err(format!(
+                "bundle manifest portable Evidence {} content ordinal {} does not match evidence_contents",
+                content.evidence_id, content.ordinal
+            ));
+        }
+        if content_sizes.get(&content.content_digest) != Some(&content.size_bytes) {
+            return Err(format!(
+                "bundle manifest portable Evidence {} content ordinal {} does not match its ContentObject",
+                content.evidence_id, content.ordinal
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn bundle_manifest_supports_same_store_apply(
@@ -10556,6 +11054,10 @@ fn parse_bundle_payload_index_summary(
         .iter()
         .map(parse_bundle_payload_file_ref)
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let references = array_field_ref(value, "bundle payload index", "references")?
+        .iter()
+        .map(parse_bundle_payload_reference)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let reference_count = usize::try_from(integer_field_value(
         value,
         "bundle payload index",
@@ -10571,8 +11073,7 @@ fn parse_bundle_payload_index_summary(
     if payload_count != payloads.len() {
         return Err("bundle payload index payload_count does not match payload array".to_owned());
     }
-    let reference_array_count = array_field_ref(value, "bundle payload index", "references")?.len();
-    if reference_count != reference_array_count {
+    if reference_count != references.len() {
         return Err(
             "bundle payload index reference_count does not match reference array".to_owned(),
         );
@@ -10592,7 +11093,29 @@ fn parse_bundle_payload_index_summary(
         commit_id: parse_commit_id_field(target, "bundle payload index target", "commit_id")?,
         state_digest: parse_digest_field(target, "bundle payload index target", "state_digest")?,
         payloads,
-        reference_count,
+        references,
+    })
+}
+
+fn parse_bundle_payload_reference(
+    value: &CanonicalValue,
+) -> std::result::Result<BundlePayloadReference, String> {
+    let role = string_field_value(value, "bundle payload reference", "role")?.to_owned();
+    validate_portable_text("bundle payload reference role", &role)?;
+    let relative_path = string_field_value(value, "bundle payload reference", "path")?.to_owned();
+    validate_payload_relative_path(&relative_path).map_err(|error| error.to_string())?;
+    let size_bytes = integer_field_value(value, "bundle payload reference", "size_bytes")?;
+    if size_bytes < 0 {
+        return Err(format!(
+            "bundle payload reference {role} size_bytes cannot be negative"
+        ));
+    }
+    Ok(BundlePayloadReference {
+        role,
+        relative_path,
+        content_digest: parse_digest_field(value, "bundle payload reference", "content_digest")?,
+        size_bytes,
+        owner: object_field_ref(value, "bundle payload reference", "owner")?.clone(),
     })
 }
 
@@ -10678,6 +11201,21 @@ impl BundlePayloadLookup {
         expected_digest: Option<Digest>,
         expected_size_bytes: Option<i64>,
     ) -> Result<String> {
+        let bytes = self.required_bytes(role, owner, expected_digest, expected_size_bytes)?;
+        String::from_utf8(bytes).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "bundle payload reference {role} was not UTF-8: {error}"
+            ))
+        })
+    }
+
+    fn required_bytes(
+        &self,
+        role: &str,
+        owner: CanonicalValue,
+        expected_digest: Option<Digest>,
+        expected_size_bytes: Option<i64>,
+    ) -> Result<Vec<u8>> {
         let owner_bytes = canonical_bytes(&owner)?;
         let entry = self
             .by_role_owner
@@ -10720,12 +11258,7 @@ impl BundlePayloadLookup {
                 entry.relative_path
             )));
         }
-        String::from_utf8(bytes.clone()).map_err(|error| {
-            WorkVcsError::CanonicalEncodingInvalid(format!(
-                "bundle payload {} was not UTF-8: {error}",
-                entry.relative_path
-            ))
-        })
+        Ok(bytes.clone())
     }
 }
 
@@ -10793,6 +11326,12 @@ fn parse_bundle_same_store_apply_document(
         .iter()
         .map(parse_bundle_evidence_content_ref)
         .collect::<Result<Vec<_>>>()?;
+    let portable_evidence_contents =
+        array_field_ref(value, "bundle manifest", "portable_evidence_contents")
+            .map_err(WorkVcsError::QueryInvalid)?
+            .iter()
+            .map(parse_bundle_portable_evidence_content_ref)
+            .collect::<Result<Vec<_>>>()?;
     let resources = optional_array_field_ref(value, "bundle manifest", "resources")
         .map_err(WorkVcsError::QueryInvalid)?
         .iter()
@@ -10903,6 +11442,7 @@ fn parse_bundle_same_store_apply_document(
         session_diffs,
         evidences,
         evidence_contents,
+        portable_evidence_contents,
         resources,
         resource_observations,
         verification_bases,
@@ -12293,6 +12833,44 @@ fn parse_bundle_evidence_content_ref(value: &CanonicalValue) -> Result<BundleEvi
     })
 }
 
+fn parse_bundle_portable_evidence_content_ref(
+    value: &CanonicalValue,
+) -> Result<BundlePortableEvidenceContentRef> {
+    let ordinal = integer_field_value(
+        value,
+        "bundle manifest portable evidence content",
+        "ordinal",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64("bundle manifest portable evidence content ordinal", ordinal)?;
+    let size_bytes = integer_field_value(
+        value,
+        "bundle manifest portable evidence content",
+        "size_bytes",
+    )
+    .map_err(WorkVcsError::QueryInvalid)?;
+    validate_nonnegative_i64(
+        "bundle manifest portable evidence content size_bytes",
+        size_bytes,
+    )?;
+    Ok(BundlePortableEvidenceContentRef {
+        evidence_id: parse_evidence_id_field(
+            value,
+            "bundle manifest portable evidence content",
+            "evidence_id",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        ordinal,
+        content_digest: parse_digest_field(
+            value,
+            "bundle manifest portable evidence content",
+            "content_digest",
+        )
+        .map_err(WorkVcsError::QueryInvalid)?,
+        size_bytes,
+    })
+}
+
 fn parse_bundle_resource_ref(value: &CanonicalValue) -> Result<BundleResourceRef> {
     let resource_kind = string_field_value(value, "bundle manifest resource", "resource_kind")
         .map_err(WorkVcsError::QueryInvalid)?
@@ -13669,17 +14247,32 @@ fn validate_payload_relative_path(relative_path: &str) -> Result<()> {
 }
 
 fn payload_digest_from_relative_path(relative_path: &str) -> Result<Digest> {
-    let Some(digest_hex) = relative_path
+    let digest_hex = relative_path
         .strip_prefix("payloads/")
         .and_then(|value| value.strip_suffix(".json"))
-    else {
-        return Err(WorkVcsError::QueryInvalid(
-            "bundle payload path must match payloads/<digest>.json".to_owned(),
-        ));
-    };
+        .or_else(|| {
+            relative_path
+                .strip_prefix("objects/")
+                .and_then(|value| value.strip_suffix(".bin"))
+        })
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(
+                "bundle payload path must match payloads/<digest>.json or objects/<digest>.bin"
+                    .to_owned(),
+            )
+        })?;
     Digest::from_hex(digest_hex).map_err(|error| {
         WorkVcsError::QueryInvalid(format!("bundle payload path digest is invalid: {error}"))
     })
+}
+
+fn payload_media_type_for_relative_path(relative_path: &str) -> Result<&'static str> {
+    validate_payload_relative_path(relative_path)?;
+    if relative_path.starts_with("payloads/") {
+        Ok(BUNDLE_JSON_PAYLOAD_MEDIA_TYPE)
+    } else {
+        Ok(BUNDLE_OBJECT_PAYLOAD_MEDIA_TYPE)
+    }
 }
 
 fn bundle_format_compatible(store_info: &StoreInfo, manifest: &BundleManifestSummary) -> bool {

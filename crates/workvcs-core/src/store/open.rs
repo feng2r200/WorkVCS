@@ -132,7 +132,29 @@ pub(crate) struct Store {
 
 const LOCAL_CONTENT_OBJECT_DIR: &str = ".workvcs-objects";
 
-fn persist_local_content_object(
+fn prepare_local_evidence_content_locations(
+    store_path: &Path,
+    store_id: StoreId,
+    options: &mut EvidenceCreateOptions,
+) -> Result<()> {
+    let observed_at_us = current_epoch_micros()?;
+    for content in options.contents_mut() {
+        let Some(raw_bytes) = content.raw_bytes() else {
+            continue;
+        };
+        let locator = persist_local_content_object(
+            store_path,
+            store_id,
+            content.content_digest(),
+            content.size_bytes(),
+            raw_bytes,
+        )?;
+        content.set_local_storage_location(locator, observed_at_us)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn persist_local_content_object(
     store_path: &Path,
     store_id: StoreId,
     content_digest: crate::Digest,
@@ -218,7 +240,10 @@ fn persist_local_content_object(
     relative_path_to_locator(&relative_path)
 }
 
-fn local_content_relative_path(store_id: StoreId, content_digest: crate::Digest) -> PathBuf {
+pub(crate) fn local_content_relative_path(
+    store_id: StoreId,
+    content_digest: crate::Digest,
+) -> PathBuf {
     let digest_text = content_digest.to_string();
     PathBuf::from(LOCAL_CONTENT_OBJECT_DIR)
         .join(store_id.to_string())
@@ -227,7 +252,7 @@ fn local_content_relative_path(store_id: StoreId, content_digest: crate::Digest)
         .join(digest_text)
 }
 
-fn verify_local_content_file(
+pub(crate) fn verify_local_content_file(
     path: &Path,
     expected_digest: crate::Digest,
     expected_size_bytes: i64,
@@ -262,7 +287,7 @@ fn verify_local_content_file(
     Ok(bytes)
 }
 
-fn relative_path_to_locator(path: &Path) -> Result<String> {
+pub(crate) fn relative_path_to_locator(path: &Path) -> Result<String> {
     path.to_str().map(str::to_owned).ok_or_else(|| {
         WorkVcsError::EvidenceInvalid(format!(
             "local content locator {} is not valid UTF-8",
@@ -605,7 +630,7 @@ impl Store {
     ) -> Result<BundleExportManifest> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
-        history::export_bundle_manifest(&self.connection, &current, options)
+        history::export_bundle_manifest(&self.connection, &current, &self.path, options)
     }
 
     pub(crate) fn validate_bundle_manifest(
@@ -614,7 +639,7 @@ impl Store {
     ) -> Result<BundleManifestValidationResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
-        history::validate_bundle_manifest(&self.connection, &current, options)
+        history::validate_bundle_manifest(&self.connection, &current, &self.path, options)
     }
 
     pub(crate) fn export_bundle_payloads(
@@ -623,7 +648,7 @@ impl Store {
     ) -> Result<BundlePayloadExport> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
-        history::export_bundle_payloads(&self.connection, &current, options)
+        history::export_bundle_payloads(&self.connection, &current, &self.path, options)
     }
 
     pub(crate) fn validate_bundle_payloads(
@@ -632,7 +657,7 @@ impl Store {
     ) -> Result<BundlePayloadValidationResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
-        history::validate_bundle_payloads(&self.connection, &current, options)
+        history::validate_bundle_payloads(&self.connection, &current, &self.path, options)
     }
 
     pub(crate) fn preflight_bundle_import(
@@ -659,7 +684,7 @@ impl Store {
     ) -> Result<BundleImportApplyResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
-        history::apply_bundle_import(&mut self.connection, &current, options)
+        history::apply_bundle_import(&mut self.connection, &current, &self.path, options)
     }
 
     pub(crate) fn bundle_import_attempt(
@@ -911,20 +936,7 @@ impl Store {
     ) -> Result<EvidenceCreateResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
-        let observed_at_us = current_epoch_micros()?;
-        for content in options.contents_mut() {
-            let Some(raw_bytes) = content.raw_bytes() else {
-                continue;
-            };
-            let locator = persist_local_content_object(
-                &self.path,
-                current.store_id,
-                content.content_digest(),
-                content.size_bytes(),
-                raw_bytes,
-            )?;
-            content.set_local_storage_location(locator, observed_at_us)?;
-        }
+        prepare_local_evidence_content_locations(&self.path, current.store_id, &mut options)?;
         history::create_evidence(&mut self.connection, &options)
     }
 
@@ -2106,7 +2118,14 @@ impl Store {
     pub(crate) fn verify(&mut self, options: &VerifyOptions) -> Result<VerifyResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
-        runtime::verify(&mut self.connection, options)
+        runtime::preflight_verify(&self.connection, options)?;
+        let mut options = options.clone();
+        prepare_local_evidence_content_locations(
+            &self.path,
+            current.store_id,
+            options.evidence_mut(),
+        )?;
+        runtime::verify(&mut self.connection, &options)
     }
 }
 

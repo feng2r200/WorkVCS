@@ -596,10 +596,13 @@ workvcs bundle validate-dir "$SOURCE_STORE" \
   --require-valid
 ```
 
-The current V1-local directory profile emits `manifest.json`,
-`payload-index.json`, and content-addressed payload files. The payload index
-profile is `workvcs-local-payload-index-v1` with version `1`; packaged archive
-or exchange containers remain Open.
+The current local directory profile emits `manifest.json`,
+`payload-index.json`, canonical JSON files under `payloads/`, and portable raw
+Evidence objects under `objects/`. The payload index profile is
+`workvcs-local-payload-index-v2` with version `2`. Digest-only Evidence remains
+metadata-only; a manifest `portable_evidence_contents` entry proves that the
+corresponding raw body is required and validated. Packaged archive or exchange
+containers remain Open.
 
 Before applying to a target Store, preflight and require that the target can
 apply the Bundle:

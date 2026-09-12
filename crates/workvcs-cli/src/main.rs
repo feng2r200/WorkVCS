@@ -26520,7 +26520,7 @@ fn render_branch_projection_snapshot(snapshot: &BranchProjectionSnapshot) -> Str
 
 fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
     let mut output = format!(
-        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nacceptance_criterion_identities={}\nverification_requirement_identities={}\nrelation_versions={}\ncontent_objects={}\nsessions={}\nsession_diffs={}\nevidences={}\nevidence_contents={}\nresources={}\nresource_observations={}\nverification_bases={}\nverification_resource_bases={}\nverification_semantic_dependencies={}\nevents={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\nchangeset_causal_anchors={}\ncheckpoint_candidates={}\n",
+        "bundle_manifest_profile={}\nbundle_manifest_version={}\nstore_id={}\nworkspace_id={}\ncommit_id={}\nstate_digest={}\nmanifest_digest={}\nmanifest_size_bytes={}\ncommits={}\nexported_branch_heads={}\nentities={}\nrelations={}\nentity_versions={}\nacceptance_criterion_identities={}\nverification_requirement_identities={}\nrelation_versions={}\ncontent_objects={}\nsessions={}\nsession_diffs={}\nevidences={}\nevidence_contents={}\nportable_evidence_contents={}\nresources={}\nresource_observations={}\nverification_bases={}\nverification_resource_bases={}\nverification_semantic_dependencies={}\nevents={}\nknowledge_spaces={}\nknowledge_exposures={}\nknowledge_exposure_local_sources={}\nknowledge_exposure_transitions={}\nknowledge_exposure_source_statuses={}\nentity_membership_changes={}\nrelation_membership_changes={}\nchangeset_causal_anchors={}\ncheckpoint_candidates={}\n",
         manifest.manifest_profile,
         manifest.manifest_version,
         manifest.store_id,
@@ -26542,6 +26542,7 @@ fn render_bundle_export_manifest(manifest: &BundleExportManifest) -> String {
         manifest.session_diffs.len(),
         manifest.evidences.len(),
         manifest.evidence_contents.len(),
+        manifest.portable_evidence_contents.len(),
         manifest.resources.len(),
         manifest.resource_observations.len(),
         manifest.verification_bases.len(),
@@ -26640,12 +26641,14 @@ fn write_bundle_payload_export_directory(
         output_dir.join("payload-index.json"),
         &export.payload_index_bytes,
     )?;
-    fs::create_dir_all(output_dir.join("payloads")).map_err(|error| {
-        WorkVcsError::QueryInvalid(format!(
-            "failed to create bundle payload directory {}: {error}",
-            output_dir.join("payloads").display()
-        ))
-    })?;
+    for directory in ["payloads", "objects"] {
+        fs::create_dir_all(output_dir.join(directory)).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "failed to create bundle payload directory {}: {error}",
+                output_dir.join(directory).display()
+            ))
+        })?;
+    }
     for payload in &export.payload_files {
         write_new_file(output_dir.join(&payload.relative_path), &payload.bytes)?;
     }
@@ -26676,42 +26679,44 @@ fn read_bundle_file(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn read_bundle_payload_inputs(input_dir: &Path) -> Result<Vec<BundlePayloadInput>> {
-    let payload_dir = input_dir.join("payloads");
-    let entries = fs::read_dir(&payload_dir).map_err(|error| {
-        WorkVcsError::QueryInvalid(format!(
-            "failed to read bundle payload directory {}: {error}",
-            payload_dir.display()
-        ))
-    })?;
     let mut payloads = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
+    for directory in ["payloads", "objects"] {
+        let payload_dir = input_dir.join(directory);
+        let entries = fs::read_dir(&payload_dir).map_err(|error| {
             WorkVcsError::QueryInvalid(format!(
-                "failed to read bundle payload directory entry {}: {error}",
+                "failed to read bundle payload directory {}: {error}",
                 payload_dir.display()
             ))
         })?;
-        let file_type = entry.file_type().map_err(|error| {
-            WorkVcsError::QueryInvalid(format!(
-                "failed to inspect bundle payload file {}: {error}",
-                entry.path().display()
-            ))
-        })?;
-        if !file_type.is_file() {
-            return Err(WorkVcsError::QueryInvalid(format!(
-                "bundle payload path {} is not a file",
-                entry.path().display()
-            )));
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "failed to read bundle payload directory entry {}: {error}",
+                    payload_dir.display()
+                ))
+            })?;
+            let file_type = entry.file_type().map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "failed to inspect bundle payload file {}: {error}",
+                    entry.path().display()
+                ))
+            })?;
+            if !file_type.is_file() {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "bundle payload path {} is not a file",
+                    entry.path().display()
+                )));
+            }
+            let file_name = entry.file_name().into_string().map_err(|_| {
+                WorkVcsError::QueryInvalid(format!(
+                    "bundle payload file name {} is not valid UTF-8",
+                    entry.path().display()
+                ))
+            })?;
+            let relative_path = format!("{directory}/{file_name}");
+            let bytes = read_bundle_file(&entry.path())?;
+            payloads.push(BundlePayloadInput::new(relative_path, bytes)?);
         }
-        let file_name = entry.file_name().into_string().map_err(|_| {
-            WorkVcsError::QueryInvalid(format!(
-                "bundle payload file name {} is not valid UTF-8",
-                entry.path().display()
-            ))
-        })?;
-        let relative_path = format!("payloads/{file_name}");
-        let bytes = read_bundle_file(&entry.path())?;
-        payloads.push(BundlePayloadInput::new(relative_path, bytes)?);
     }
     payloads.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(payloads)
@@ -26719,16 +26724,17 @@ fn read_bundle_payload_inputs(input_dir: &Path) -> Result<Vec<BundlePayloadInput
 
 fn render_bundle_payload_export(export: &BundlePayloadExport, output_dir: &Path) -> String {
     format!(
-        "bundle_payload_export_profile={}\nbundle_payload_index_version={}\noutput_dir={}\ncommit_id={}\nmanifest_digest={}\npayload_index_digest={}\npayload_index_size_bytes={}\npayload_files={}\npayload_references={}\n",
-        "workvcs-local-payload-index-v1",
-        1,
+        "bundle_payload_export_profile={}\nbundle_payload_index_version={}\noutput_dir={}\ncommit_id={}\nmanifest_digest={}\npayload_index_digest={}\npayload_index_size_bytes={}\npayload_files={}\npayload_references={}\nportable_evidence_contents={}\n",
+        "workvcs-local-payload-index-v2",
+        2,
         output_dir.display(),
         export.manifest.commit_id,
         export.manifest.manifest_digest,
         export.payload_index_digest,
         export.payload_index_size_bytes,
         export.payload_files.len(),
-        export.payload_references.len()
+        export.payload_references.len(),
+        export.manifest.portable_evidence_contents.len()
     )
 }
 
@@ -27018,7 +27024,7 @@ fn write_branch_head_preflight_details(
 
 fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> String {
     let mut output = format!(
-        "valid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\naction={}\nmanifest_digest={}\npayload_index_digest={}\npayload_files={}\npayload_references={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nproblem={}\n",
+        "valid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\naction={}\nmanifest_digest={}\npayload_index_digest={}\npayload_files={}\npayload_references={}\nportable_evidence_contents={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nproblem={}\n",
         result.valid,
         result.format_compatible,
         result
@@ -27046,6 +27052,7 @@ fn render_bundle_import_preflight(result: &BundleImportPreflightResult) -> Strin
         result.payload_index_digest,
         result.payload_files,
         result.payload_references,
+        result.portable_evidence_contents,
         result.exported_branch_heads,
         result.branch_heads_already_present,
         result.branch_heads_missing,
@@ -27090,7 +27097,7 @@ fn render_bundle_import_attempt(result: &BundleImportAttemptResult) -> String {
 
 fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
     let mut output = format!(
-        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nimported_content_objects={}\nimported_sessions={}\nimported_session_diffs={}\nimported_evidences={}\nimported_resources={}\nimported_resource_observations={}\nimported_verification_bases={}\nimported_events={}\nimported_knowledge_spaces={}\nimported_knowledge_exposures={}\nimported_knowledge_exposure_local_sources={}\nimported_knowledge_exposure_transitions={}\nimported_knowledge_exposure_source_statuses={}\nimported_relation_versions={}\nimported_changeset_causal_anchors={}\nimported_checkpoints={}\nimported_checkpoint_statuses={}\nupdated_branch_heads={}\nproblem={}\n",
+        "applied={}\nimport_id={}\nbundle_digest={}\nimport_profile={}\nstarted_at_us={}\ncompleted_at_us={}\noutcome={}\nvalid={}\nformat_compatible={}\nsource_store_id={}\ntarget_workspace_id={}\ntarget_commit_id={}\ntarget_state_digest={}\nsource_store_relation={}\nincoming_commit_present={}\nimport_required={}\ncan_apply={}\nportable_evidence_contents={}\nexported_branch_heads={}\nbranch_heads_already_present={}\nbranch_heads_missing={}\nbranch_heads_fast_forward={}\nbranch_heads_diverged={}\nimported_commits={}\nimported_entity_versions={}\nimported_acceptance_criterion_identities={}\nimported_verification_requirement_identities={}\nimported_content_objects={}\nimported_content_storage_locations={}\nimported_sessions={}\nimported_session_diffs={}\nimported_evidences={}\nimported_resources={}\nimported_resource_observations={}\nimported_verification_bases={}\nimported_events={}\nimported_knowledge_spaces={}\nimported_knowledge_exposures={}\nimported_knowledge_exposure_local_sources={}\nimported_knowledge_exposure_transitions={}\nimported_knowledge_exposure_source_statuses={}\nimported_relation_versions={}\nimported_changeset_causal_anchors={}\nimported_checkpoints={}\nimported_checkpoint_statuses={}\nupdated_branch_heads={}\nproblem={}\n",
         result.applied,
         render_optional_display_or_none(result.import_id.as_ref()),
         result.bundle_digest,
@@ -27108,6 +27115,7 @@ fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
         result.preflight.incoming_commit_present,
         result.preflight.import_required,
         result.preflight.can_apply,
+        result.preflight.portable_evidence_contents,
         result.preflight.exported_branch_heads,
         result.preflight.branch_heads_already_present,
         result.preflight.branch_heads_missing,
@@ -27118,6 +27126,7 @@ fn render_bundle_import_apply(result: &BundleImportApplyResult) -> String {
         result.imported_acceptance_criterion_identities,
         result.imported_verification_requirement_identities,
         result.imported_content_objects,
+        result.imported_content_storage_locations,
         result.imported_sessions,
         result.imported_session_diffs,
         result.imported_evidences,
@@ -36451,9 +36460,9 @@ mod tests {
         .expect("export bundle manifest");
         assert_eq!(
             value(&exported, "bundle_manifest_profile"),
-            "workvcs-local-export-manifest-v1"
+            "workvcs-local-export-manifest-v2"
         );
-        assert_eq!(value(&exported, "bundle_manifest_version"), "1");
+        assert_eq!(value(&exported, "bundle_manifest_version"), "2");
         assert_eq!(value(&exported, "commit_id"), genesis);
         assert_eq!(value(&exported, "commits"), "1");
         assert_eq!(value(&exported, "exported_branch_heads"), "1");
@@ -36682,9 +36691,9 @@ mod tests {
         .expect("export bundle directory");
         assert_eq!(
             value(&exported_dir, "bundle_payload_export_profile"),
-            "workvcs-local-payload-index-v1"
+            "workvcs-local-payload-index-v2"
         );
-        assert_eq!(value(&exported_dir, "bundle_payload_index_version"), "1");
+        assert_eq!(value(&exported_dir, "bundle_payload_index_version"), "2");
         assert_eq!(value(&exported_dir, "commit_id"), genesis);
         assert_eq!(value(&exported_dir, "payload_files"), "3");
         assert_eq!(value(&exported_dir, "payload_references"), "5");
@@ -36931,7 +36940,7 @@ mod tests {
         assert_ne!(value(&import_attempt, "import_id"), "none");
         assert_eq!(
             value(&import_attempt, "import_profile"),
-            "workvcs-local-payload-directory-v1"
+            "workvcs-local-payload-directory-v2"
         );
         assert_eq!(value(&import_attempt, "outcome"), "already_present");
         assert_eq!(value(&import_attempt, "valid"), "true");
@@ -49000,6 +49009,12 @@ mod tests {
             "cli-smoke",
             "--evidence-kind",
             "cli-smoke",
+            "--evidence-content-role",
+            "stdout",
+            "--evidence-content",
+            "verify raw Evidence body",
+            "--evidence-media-type",
+            "text/plain",
             "--resource",
             &resource_id,
             "--adapter-kind",
@@ -49060,6 +49075,26 @@ mod tests {
         assert_eq!(value(&verified, "resource_basis_match_expected"), "true");
         assert_eq!(value(&verified, "applicability_matches_expected"), "true");
         assert_eq!(value(&verified, "reason_code_matches_expected"), "true");
+
+        let evidence_id = value(&verified, "evidence_id");
+        let extracted_path = tempdir.path().join("verify-evidence.txt");
+        let extracted = run(Cli::try_parse_from([
+            "workvcs",
+            "evidence",
+            "extract",
+            store,
+            "--evidence",
+            &evidence_id,
+            "--output",
+            extracted_path.to_str().expect("extracted path text"),
+        ])
+        .expect("parse verify Evidence extraction"))
+        .expect("extract verify Evidence");
+        assert_eq!(value(&extracted, "content_verified"), "true");
+        assert_eq!(
+            fs::read_to_string(extracted_path).expect("read verify Evidence"),
+            "verify raw Evidence body"
+        );
     }
 
     fn assert_cli_verify_rejects_deterministic_expectation_before_writing() {

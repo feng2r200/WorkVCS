@@ -171,6 +171,20 @@ fn verify_wrapper_records_resource_observation_verification_and_applicable_cache
         .expect("applicability cache");
     assert_eq!(result.evidence.evidence_kind, "command_output");
     assert_eq!(result.evidence.contents.len(), 1);
+    assert_eq!(result.evidence.contents[0].storage_locations.len(), 1);
+    assert_eq!(
+        engine
+            .read_evidence_content(result.evidence.evidence_id, 0)
+            .expect("read verification evidence content")
+            .raw_bytes,
+        b"cargo test: ok"
+    );
+    assert_eq!(
+        engine
+            .validate_local_content_storage()
+            .expect("validate local evidence content"),
+        1
+    );
     assert_eq!(observation.resource_id, resource.resource_id);
     assert_eq!(observation.state.fingerprint, fingerprint);
     assert_eq!(

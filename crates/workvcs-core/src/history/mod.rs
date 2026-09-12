@@ -55,7 +55,7 @@ pub use bundle::{
     BundleKnowledgeSpaceRef, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput,
     BundlePayloadReference, BundlePayloadValidationOptions, BundlePayloadValidationResult,
-    BundleRelationMembershipChangeRef, BundleRelationVersionRef,
+    BundlePortableEvidenceContentRef, BundleRelationMembershipChangeRef, BundleRelationVersionRef,
     BundleVerificationRequirementIdentityRef,
 };
 pub(crate) use capture::capture_cognition;

@@ -63,7 +63,7 @@ pub use history::{
     BundleKnowledgeSpaceRef, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadFile, BundlePayloadInput,
     BundlePayloadReference, BundlePayloadValidationOptions, BundlePayloadValidationResult,
-    BundleRelationMembershipChangeRef, BundleRelationVersionRef,
+    BundlePortableEvidenceContentRef, BundleRelationMembershipChangeRef, BundleRelationVersionRef,
     BundleVerificationRequirementIdentityRef, ChangeOperationListResult, ChangeOperationSnapshot,
     ChangeOperationSubject, ChangeSetCausalAnchorListResult, ChangeSetCausalAnchorSnapshot,
     ChangeSetCommitSnapshot, ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult,

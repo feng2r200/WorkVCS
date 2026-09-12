@@ -97,8 +97,8 @@ fn bundle_manifest_validation_rejects_manifest_content_drift() {
     let mut json = String::from_utf8(canonical_bytes(&export.manifest).expect("manifest bytes"))
         .expect("manifest text");
     json = json.replace(
-        "workvcs-local-export-manifest-v1",
         "workvcs-local-export-manifest-v2",
+        "workvcs-local-export-manifest-v3",
     );
 
     let validation = engine

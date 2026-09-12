@@ -87,9 +87,9 @@ fn bundle_export_manifest_includes_commit_closure_and_checkpoint_candidate() {
 
     assert_eq!(
         manifest.manifest_profile,
-        "workvcs-local-export-manifest-v1"
+        "workvcs-local-export-manifest-v2"
     );
-    assert_eq!(manifest.manifest_version, 1);
+    assert_eq!(manifest.manifest_version, 2);
     assert_eq!(manifest.workspace_id, workspace.workspace_id);
     assert_eq!(manifest.commit_id, task.commit_id);
     assert_eq!(manifest.state_digest, task.work_state_digest);

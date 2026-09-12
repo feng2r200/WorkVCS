@@ -125,7 +125,7 @@ The confirmed baseline contains:
 - [Verification and resource drift](architecture/verification-and-resource-drift.md)
 - [Versioned-state persistence model](architecture/persistence-model.md)
 - [Knowledge federation and Store portability](architecture/knowledge-federation-and-portability.md)
-- [Bundle Local Directory Profile v0.1](architecture/bundle-local-profile-v0.1.md)
+- [Bundle Local Directory Profile v0.2](architecture/bundle-local-profile-v0.2.md)
 - [Logical schema boundaries](architecture/logical-schema-boundaries.md)
 - [Physical Schema v0.1 contract](architecture/physical-schema-v0.1.md)
 - [Implementation Contract v0.1](architecture/implementation-contract-v0.1.md)
@@ -283,6 +283,8 @@ Recent repository-level CLI smoke gates:
 - [ADR-0502: Mutating CLI Result Assertions](decisions/adr/0502-mutating-cli-result-assertions.md)
 - [ADR-0503: Bounded Recall Recovery Truth](decisions/adr/0503-bounded-recall-recovery-truth.md)
 - [ADR-0504: WorkVCS Skill Tree Install Integrity](decisions/adr/0504-skill-tree-install-integrity.md)
+- [ADR-0505: Finding Currentness And Correction Lifecycle](decisions/adr/0505-finding-currentness-and-correction-lifecycle.md)
+- [ADR-0506: Bundle Portable Evidence Content](decisions/adr/0506-bundle-portable-evidence-content.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

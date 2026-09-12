@@ -107,7 +107,7 @@ fn bundle_import_attempt_records_valid_same_store_preflight_outcome() {
         .expect("record bundle import attempt");
 
     assert!(result.recorded);
-    assert_eq!(result.import_profile, "workvcs-local-payload-directory-v1");
+    assert_eq!(result.import_profile, "workvcs-local-payload-directory-v2");
     assert_eq!(result.outcome, "already_present");
     assert_eq!(result.bundle_digest, result.preflight.payload_index_digest);
     assert_eq!(
@@ -147,7 +147,7 @@ fn bundle_import_attempt_records_valid_same_store_preflight_outcome() {
         .expect("import attempt row");
     assert_eq!(row.0, export.manifest.store_id.raw_bytes());
     assert_eq!(digest_from_blob(row.1), result.bundle_digest);
-    assert_eq!(row.2, "workvcs-local-payload-directory-v1");
+    assert_eq!(row.2, "workvcs-local-payload-directory-v2");
     assert_eq!(Some(row.3), result.started_at_us);
 
     let outcome = connection

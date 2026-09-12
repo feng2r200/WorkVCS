@@ -1,6 +1,6 @@
 # ADR-0431: Phase 4LP Bundle Profile Contract
 
-Status: Accepted
+Status: Superseded by ADR-0506
 Date: 2026-09-01
 
 ## Context

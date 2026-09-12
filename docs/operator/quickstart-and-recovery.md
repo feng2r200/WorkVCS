@@ -96,9 +96,12 @@ workvcs record invalidate-finding "$STORE" \
 
 `record attempt` starts an Attempt in `running`; finish it with
 `record attempt-status --status succeeded|failed|inconclusive` as soon as its
-result is known. Brief Recall contains current Records only. Handoff Recall
-also retains terminal Attempts so another Agent does not repeat them.
-Retrospective Recall preserves terminal Findings and their relations, while
+result is known. Likewise, close a Question with
+`record question-status --status answered|deferred|withdrawn` and a Risk with
+`record risk-status --status mitigated|invalidated|withdrawn` when its
+currentness changes. Brief Recall contains current Records only. Handoff
+Recall also retains terminal Attempts so another Agent does not repeat them.
+Retrospective Recall preserves terminal cognition and its relations, while
 ordering current cognition first.
 
 This cutover does not provide compatibility for `workctl`, schema-v3/v4/v5,

@@ -70,7 +70,7 @@ be explicitly reopened with rationale. A superseded Plan requires
 supersession-aware resolution. Goal replacement is expressed through a
 relation rather than adding a mandatory Goal `superseded` state.
 
-### Finding, Assumption, Attempt, and Decision
+### Finding, Assumption, Attempt, Decision, Question, and Risk
 
 ```text
 Finding:
@@ -86,6 +86,12 @@ Attempt:
 
 Decision:
   active -> superseded | withdrawn
+
+Question:
+  active -> answered | deferred | withdrawn
+
+Risk:
+  active -> mitigated | invalidated | withdrawn
 ```
 
 Finding supersession atomically moves the prior Finding to `superseded` and
@@ -101,6 +107,12 @@ an earlier choice creates a new Decision that supersedes the currently active
 Decision. Explicit Decision supersession does not require identical
 `scope+subject`, and matching `scope+subject` does not itself imply
 supersession.
+
+An answered, deferred, or withdrawn Question is no longer a current unknown;
+reopening the inquiry creates a new Question. A mitigated, invalidated, or
+withdrawn Risk is no longer a current exposure; changed conditions create a
+new Risk. The terminal transition rationale records why the currentness
+changed without rewriting the original statement.
 
 Major transitions carry rationale text, a causal Entity reference, or both as
 defined by their semantic contract. Coordination `force` cannot bypass a

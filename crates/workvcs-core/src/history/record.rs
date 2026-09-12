@@ -112,10 +112,13 @@ impl fmt::Display for RecordKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordStatus {
     Active,
+    Answered,
     Consumed,
+    Deferred,
     Failed,
     Inconclusive,
     Invalidated,
+    Mitigated,
     Running,
     Succeeded,
     Superseded,
@@ -128,10 +131,13 @@ impl RecordStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
+            Self::Answered => "answered",
             Self::Consumed => "consumed",
+            Self::Deferred => "deferred",
             Self::Failed => "failed",
             Self::Inconclusive => "inconclusive",
             Self::Invalidated => "invalidated",
+            Self::Mitigated => "mitigated",
             Self::Running => "running",
             Self::Succeeded => "succeeded",
             Self::Superseded => "superseded",
@@ -144,10 +150,13 @@ impl RecordStatus {
     pub(crate) fn parse(value: &str) -> Result<Self> {
         match value {
             "active" => Ok(Self::Active),
+            "answered" => Ok(Self::Answered),
             "consumed" => Ok(Self::Consumed),
+            "deferred" => Ok(Self::Deferred),
             "failed" => Ok(Self::Failed),
             "inconclusive" => Ok(Self::Inconclusive),
             "invalidated" => Ok(Self::Invalidated),
+            "mitigated" => Ok(Self::Mitigated),
             "running" => Ok(Self::Running),
             "succeeded" => Ok(Self::Succeeded),
             "superseded" => Ok(Self::Superseded),
@@ -343,6 +352,40 @@ impl RecordState {
         Ok(next)
     }
 
+    fn transition_question(&self, next_status: RecordStatus, rationale_text: &str) -> Result<Self> {
+        if self.kind != RecordKind::Question {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record kind {:?} does not use the Question lifecycle",
+                self.kind
+            )));
+        }
+        validate_transition_rationale(rationale_text)?;
+        validate_question_lifecycle_transition(self.status, next_status)?;
+        Ok(Self {
+            kind: self.kind,
+            statement: self.statement.clone(),
+            scope: self.scope.clone(),
+            status: next_status,
+        })
+    }
+
+    fn transition_risk(&self, next_status: RecordStatus, rationale_text: &str) -> Result<Self> {
+        if self.kind != RecordKind::Risk {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record kind {:?} does not use the Risk lifecycle",
+                self.kind
+            )));
+        }
+        validate_transition_rationale(rationale_text)?;
+        validate_risk_lifecycle_transition(self.status, next_status)?;
+        Ok(Self {
+            kind: self.kind,
+            statement: self.statement.clone(),
+            scope: self.scope.clone(),
+            status: next_status,
+        })
+    }
+
     fn transition_finding(&self, next_status: RecordStatus, rationale_text: &str) -> Result<Self> {
         if self.kind != RecordKind::Finding {
             return Err(WorkVcsError::RecordInvalid(format!(
@@ -500,6 +543,108 @@ impl RecordTransitionOptions {
         )
     }
 
+    pub fn answer_question(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::question_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Answered,
+            rationale,
+        )
+    }
+
+    pub fn defer_question(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::question_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Deferred,
+            rationale,
+        )
+    }
+
+    pub fn withdraw_question(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::question_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Withdrawn,
+            rationale,
+        )
+    }
+
+    pub fn mitigate_risk(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::risk_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Mitigated,
+            rationale,
+        )
+    }
+
+    pub fn invalidate_risk(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::risk_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Invalidated,
+            rationale,
+        )
+    }
+
+    pub fn withdraw_risk(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::risk_transition(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            RecordStatus::Withdrawn,
+            rationale,
+        )
+    }
+
     fn assumption_transition(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
@@ -522,6 +667,63 @@ impl RecordTransitionOptions {
     }
 
     fn decision_transition(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        next_status: RecordStatus,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale_text = rationale.into();
+        validate_transition_rationale(&rationale_text)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            next_status,
+            rationale: rationale_value(&rationale_text)?,
+            rationale_text,
+        })
+    }
+
+    fn question_transition(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        next_status: RecordStatus,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::transition_common(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            next_status,
+            rationale,
+        )
+    }
+
+    fn risk_transition(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        record_entity_id: EntityId,
+        expected_record_entity_version_id: EntityVersionId,
+        next_status: RecordStatus,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::transition_common(
+            branch_id,
+            expected_head_commit_id,
+            record_entity_id,
+            expected_record_entity_version_id,
+            next_status,
+            rationale,
+        )
+    }
+
+    fn transition_common(
         branch_id: BranchId,
         expected_head_commit_id: CommitId,
         record_entity_id: EntityId,
@@ -1923,6 +2125,12 @@ pub(crate) fn transition_record(
         RecordKind::Decision => current
             .state
             .transition_decision(options.next_status, &options.rationale_text)?,
+        RecordKind::Question => current
+            .state
+            .transition_question(options.next_status, &options.rationale_text)?,
+        RecordKind::Risk => current
+            .state
+            .transition_risk(options.next_status, &options.rationale_text)?,
         kind => {
             return Err(WorkVcsError::RecordInvalid(format!(
                 "record kind {kind:?} does not use a transition lifecycle in this slice"
@@ -6367,6 +6575,30 @@ fn validate_decision_lifecycle_transition(current: RecordStatus, next: RecordSta
     }
 }
 
+fn validate_question_lifecycle_transition(current: RecordStatus, next: RecordStatus) -> Result<()> {
+    match (current, next) {
+        (
+            RecordStatus::Active,
+            RecordStatus::Answered | RecordStatus::Deferred | RecordStatus::Withdrawn,
+        ) => Ok(()),
+        (current, next) => Err(WorkVcsError::RecordInvalid(format!(
+            "question transition {current:?} -> {next:?} is not allowed"
+        ))),
+    }
+}
+
+fn validate_risk_lifecycle_transition(current: RecordStatus, next: RecordStatus) -> Result<()> {
+    match (current, next) {
+        (
+            RecordStatus::Active,
+            RecordStatus::Mitigated | RecordStatus::Invalidated | RecordStatus::Withdrawn,
+        ) => Ok(()),
+        (current, next) => Err(WorkVcsError::RecordInvalid(format!(
+            "risk transition {current:?} -> {next:?} is not allowed"
+        ))),
+    }
+}
+
 fn validate_finding_lifecycle_transition(current: RecordStatus, next: RecordStatus) -> Result<()> {
     match (current, next) {
         (RecordStatus::Active, RecordStatus::Superseded | RecordStatus::Invalidated) => Ok(()),
@@ -6378,7 +6610,21 @@ fn validate_finding_lifecycle_transition(current: RecordStatus, next: RecordStat
 
 fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
     match (kind, status) {
-        (RecordKind::Handoff | RecordKind::Question | RecordKind::Risk, RecordStatus::Active)
+        (RecordKind::Handoff, RecordStatus::Active)
+        | (
+            RecordKind::Question,
+            RecordStatus::Active
+            | RecordStatus::Answered
+            | RecordStatus::Deferred
+            | RecordStatus::Withdrawn,
+        )
+        | (
+            RecordKind::Risk,
+            RecordStatus::Active
+            | RecordStatus::Mitigated
+            | RecordStatus::Invalidated
+            | RecordStatus::Withdrawn,
+        )
         | (
             RecordKind::Finding,
             RecordStatus::Active | RecordStatus::Superseded | RecordStatus::Invalidated,

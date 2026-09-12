@@ -285,6 +285,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0504: WorkVCS Skill Tree Install Integrity](decisions/adr/0504-skill-tree-install-integrity.md)
 - [ADR-0505: Finding Currentness And Correction Lifecycle](decisions/adr/0505-finding-currentness-and-correction-lifecycle.md)
 - [ADR-0506: Bundle Portable Evidence Content](decisions/adr/0506-bundle-portable-evidence-content.md)
+- [ADR-0507: Question And Risk Currentness Lifecycle](decisions/adr/0507-question-risk-currentness-lifecycle.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

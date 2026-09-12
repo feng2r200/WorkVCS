@@ -1748,10 +1748,13 @@ fn claim_mode_str(mode: ClaimMode) -> &'static str {
 fn record_status_str(status: RecordStatus) -> &'static str {
     match status {
         RecordStatus::Active => "active",
+        RecordStatus::Answered => "answered",
         RecordStatus::Consumed => "consumed",
+        RecordStatus::Deferred => "deferred",
         RecordStatus::Failed => "failed",
         RecordStatus::Inconclusive => "inconclusive",
         RecordStatus::Invalidated => "invalidated",
+        RecordStatus::Mitigated => "mitigated",
         RecordStatus::Running => "running",
         RecordStatus::Succeeded => "succeeded",
         RecordStatus::Superseded => "superseded",

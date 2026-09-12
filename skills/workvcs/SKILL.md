@@ -54,6 +54,12 @@ corrected or disproved, do not leave two contradictory Findings current: use
 the guarded Finding correction command that preserves the prior statement and
 creates its justified evolution relation.
 
+When a Question becomes answered, deliberately deferred, or irrelevant, close
+it with `record question-status`. When a Risk is mitigated, disproved, or no
+longer tracked, close it with `record risk-status`. Do not leave resolved
+unknowns or exposures current merely because retrospective history should be
+preserved.
+
 ## Evidence must remain inspectable
 
 Prefer raw content input when WorkVCS should preserve the evidence body. Check
@@ -68,6 +74,11 @@ semantic slice—normally the parent Agent or an explicitly designated recorder.
 Use Claims for contested executable Tasks, not for every read or every record.
 Handoffs should reference stable IDs and current head/digest instead of copying
 an unbounded conversation.
+
+If delegated work depends on proving a predecessor's exact terminal outcome,
+provide its stable Task/Evidence identity or a focused Handoff. Generic bounded
+Recall is optimized for current work and does not promise that an arbitrary
+terminal Task will fit in the projection.
 
 ## Do not confuse records with authority
 

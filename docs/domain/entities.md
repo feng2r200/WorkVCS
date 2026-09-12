@@ -336,9 +336,12 @@ Attempt, ordinary decision, Risk, and Handoff. A Finding begins `active` and
 may become `superseded` by a correcting Finding or `invalidated` by a Finding
 that disproves it. An Attempt begins `running` and may become `succeeded`,
 `failed`, or `inconclusive`; a small Attempt may instead be recorded in one
-operation with its approach and result. V1 records are created explicitly by
-an Agent semantic operation, not inferred from a transcript. An important
-ordinary decision can be promoted to a Decision without erasing its origin.
+operation with its approach and result. A Question begins `active` and may
+become `answered`, `deferred`, or `withdrawn`. A Risk begins `active` and may
+become `mitigated`, `invalidated`, or `withdrawn`. V1 records are created
+explicitly by an Agent semantic operation, not inferred from a transcript. An
+important ordinary decision can be promoted to a Decision without erasing its
+origin.
 
 Whether `Blocker`, `Review`, or `Note` should be distinct V1 Record kinds is
 Open; no current confirmed requirement makes them distinct V1 kinds.
@@ -347,9 +350,11 @@ An Assumption may move `unverified -> validated`, `unverified -> invalidated`,
 or `validated -> invalidated`; an invalidated Assumption is not ordinarily
 revalidated. Terminal Findings and Attempts are never reopened or corrected
 again: changed conditions create a new Finding and another try creates a new
-Attempt. One Session may create zero or more Handoff Records, but each Handoff
-belongs to exactly one Workspace and Work Branch and may bind a Focus/context
-path.
+Attempt. Answered/deferred/withdrawn Questions and
+mitigated/invalidated/withdrawn Risks are likewise terminal; a renewed unknown
+or exposure is a new Record. One Session may create zero or more Handoff
+Records, but each Handoff belongs to exactly one Workspace and Work Branch and
+may bind a Focus/context path.
 
 **Owned state:** Kind, statement, scope, lifecycle fields appropriate to the
 kind, and provenance.

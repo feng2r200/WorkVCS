@@ -54,6 +54,14 @@ Finding currentness is not inferred from recency or text similarity:
 - terminal Findings remain available to retrospective and causal queries but
   are not current facts and cannot transition again.
 
+Question and Risk currentness is also explicit:
+
+- Question: `active -> answered | deferred | withdrawn`;
+- Risk: `active -> mitigated | invalidated | withdrawn`;
+- terminal Questions and Risks remain available to retrospective queries but
+  are not current unknowns or exposures; renewed conditions create new
+  Records.
+
 `record attempt` starts a `running` Attempt. Once the route has a known result,
 finish it with `record attempt-status` as `succeeded`, `failed`, or
 `inconclusive`; do not leave a completed experiment mechanically running.

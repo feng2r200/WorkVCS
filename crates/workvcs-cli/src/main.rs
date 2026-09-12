@@ -4604,6 +4604,29 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
+    #[command(about = "Finish an active Question as answered, deferred, or withdrawn")]
+    QuestionStatus {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        record: String,
+
+        #[arg(long)]
+        record_version: String,
+
+        #[arg(long, help = "Terminal result: answered, deferred, or withdrawn")]
+        status: String,
+
+        #[arg(long)]
+        rationale: String,
+    },
     #[command(about = "Record a scoped possibility that could affect the outcome")]
     Risk {
         #[arg(value_name = "STORE")]
@@ -4620,6 +4643,29 @@ enum RecordCommand {
 
         #[arg(long)]
         scope_json: Option<String>,
+    },
+    #[command(about = "Finish an active Risk as mitigated, invalidated, or withdrawn")]
+    RiskStatus {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long)]
+        record: String,
+
+        #[arg(long)]
+        record_version: String,
+
+        #[arg(long, help = "Terminal result: mitigated, invalidated, or withdrawn")]
+        status: String,
+
+        #[arg(long)]
+        rationale: String,
     },
 }
 
@@ -13369,6 +13415,51 @@ fn run_record(args: Vec<String>) -> Result<String> {
             let record = engine.create_record(options)?;
             Ok(render_record_create(&record))
         }
+        RecordCommand::QuestionStatus {
+            store,
+            branch,
+            head,
+            record,
+            record_version,
+            status,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let record_id = EntityId::parse_canonical(&record)?;
+            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
+            let options = match parse_question_record_status(&status)? {
+                RecordStatus::Answered => RecordTransitionOptions::answer_question(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Deferred => RecordTransitionOptions::defer_question(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Withdrawn => RecordTransitionOptions::withdraw_question(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                _ => {
+                    return Err(WorkVcsError::RecordInvalid(format!(
+                        "question status {status:?} is not a transition target"
+                    )));
+                }
+            };
+            let record = engine.transition_record(options)?;
+            Ok(render_record_transition(&record))
+        }
         RecordCommand::Risk {
             store,
             branch,
@@ -13387,6 +13478,51 @@ fn run_record(args: Vec<String>) -> Result<String> {
             }
             let record = engine.create_record(options)?;
             Ok(render_record_create(&record))
+        }
+        RecordCommand::RiskStatus {
+            store,
+            branch,
+            head,
+            record,
+            record_version,
+            status,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let head_id = CommitId::parse_canonical(&head)?;
+            let record_id = EntityId::parse_canonical(&record)?;
+            let record_version_id = EntityVersionId::parse_canonical(&record_version)?;
+            let options = match parse_risk_record_status(&status)? {
+                RecordStatus::Mitigated => RecordTransitionOptions::mitigate_risk(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Invalidated => RecordTransitionOptions::invalidate_risk(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                RecordStatus::Withdrawn => RecordTransitionOptions::withdraw_risk(
+                    branch_id,
+                    head_id,
+                    record_id,
+                    record_version_id,
+                    rationale,
+                )?,
+                _ => {
+                    return Err(WorkVcsError::RecordInvalid(format!(
+                        "risk status {status:?} is not a transition target"
+                    )));
+                }
+            };
+            let record = engine.transition_record(options)?;
+            Ok(render_record_transition(&record))
         }
     }
 }
@@ -14019,6 +14155,28 @@ fn parse_decision_record_status(value: &str) -> Result<RecordStatus> {
     }
 }
 
+fn parse_question_record_status(value: &str) -> Result<RecordStatus> {
+    match value {
+        "answered" => Ok(RecordStatus::Answered),
+        "deferred" => Ok(RecordStatus::Deferred),
+        "withdrawn" => Ok(RecordStatus::Withdrawn),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "question status {other:?} is not in the CLI transition vocabulary"
+        ))),
+    }
+}
+
+fn parse_risk_record_status(value: &str) -> Result<RecordStatus> {
+    match value {
+        "mitigated" => Ok(RecordStatus::Mitigated),
+        "invalidated" => Ok(RecordStatus::Invalidated),
+        "withdrawn" => Ok(RecordStatus::Withdrawn),
+        other => Err(WorkVcsError::RecordInvalid(format!(
+            "risk status {other:?} is not in the CLI transition vocabulary"
+        ))),
+    }
+}
+
 fn resolve_record_query_commit(
     engine: &Engine,
     branch: Option<String>,
@@ -14128,9 +14286,12 @@ fn parse_record_kind(value: &str) -> Result<RecordKind> {
 fn parse_record_status(value: &str) -> Result<RecordStatus> {
     match value {
         "active" => Ok(RecordStatus::Active),
+        "answered" => Ok(RecordStatus::Answered),
+        "deferred" => Ok(RecordStatus::Deferred),
         "failed" => Ok(RecordStatus::Failed),
         "inconclusive" => Ok(RecordStatus::Inconclusive),
         "invalidated" => Ok(RecordStatus::Invalidated),
+        "mitigated" => Ok(RecordStatus::Mitigated),
         "running" => Ok(RecordStatus::Running),
         "succeeded" => Ok(RecordStatus::Succeeded),
         "superseded" => Ok(RecordStatus::Superseded),
@@ -29591,6 +29752,8 @@ mod tests {
         assert!(record_help.contains("Record and inspect semantic work notes"));
         assert!(record_help.contains("Usage: workvcs record <COMMAND>"));
         assert!(record_help.contains("assumption"));
+        assert!(record_help.contains("question-status"));
+        assert!(record_help.contains("risk-status"));
 
         let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
             .expect_err("project help should render through clap DisplayHelp")
@@ -59645,6 +59808,135 @@ mod tests {
         );
     }
 
+    fn assert_cli_closes_questions_and_risks_without_losing_retrospective_history() {
+        let fixture = create_project_binding_fixture(false);
+        let question = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "question",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &fixture.genesis_commit_id,
+            "--statement",
+            "Does the bounded probe answer the open question?",
+        ])
+        .expect("parse question"))
+        .expect("create question");
+        let answered = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "question-status",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&question, "commit_id"),
+            "--record",
+            &value(&question, "record_entity_id"),
+            "--record-version",
+            &value(&question, "record_entity_version_id"),
+            "--status",
+            "answered",
+            "--rationale",
+            "The bounded probe produced a conclusive result",
+        ])
+        .expect("parse question status"))
+        .expect("answer question");
+        let risk = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "risk",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&answered, "commit_id"),
+            "--statement",
+            "Could stale state still appear current?",
+        ])
+        .expect("parse risk"))
+        .expect("create risk");
+        let mitigated = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "risk-status",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&risk, "commit_id"),
+            "--record",
+            &value(&risk, "record_entity_id"),
+            "--record-version",
+            &value(&risk, "record_entity_version_id"),
+            "--status",
+            "mitigated",
+            "--rationale",
+            "Explicit lifecycle state removes the stale exposure from current Recall",
+        ])
+        .expect("parse risk status"))
+        .expect("mitigate risk");
+        assert_eq!(value(&mitigated, "record_status"), "mitigated");
+
+        let brief = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "20",
+        ])
+        .expect("parse brief recall"))
+        .expect("brief recall");
+        assert_eq!(value(&brief, "records_total"), "0");
+        assert!(!brief.contains("Does the bounded probe answer the open question?"));
+        assert!(!brief.contains("Could stale state still appear current?"));
+
+        let retrospective = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "retrospective",
+            "--budget-items",
+            "20",
+        ])
+        .expect("parse retrospective recall"))
+        .expect("retrospective recall");
+        assert_eq!(value(&retrospective, "records_total"), "2");
+        assert!(retrospective.contains("Does the bounded probe answer the open question?"));
+        assert!(retrospective.contains("Could stale state still appear current?"));
+        assert!(retrospective.contains("status=answered"));
+        assert!(retrospective.contains("status=mitigated"));
+        assert!(retrospective.contains("temporal_scope=historical_or_terminal"));
+
+        let doctor =
+            run(
+                Cli::try_parse_from(["workvcs", "doctor", &fixture.store, "--require-valid"])
+                    .expect("parse doctor"),
+            )
+            .expect("doctor after Question and Risk transitions");
+        assert!(doctor.starts_with("ok "));
+        assert_eq!(value(&doctor, "valid_required"), "true");
+    }
+
+    #[test]
+    fn cli_closes_questions_and_risks_without_losing_retrospective_history() {
+        run_cli_test_with_large_stack(
+            "cli-question-risk-recall-currentness-test",
+            assert_cli_closes_questions_and_risks_without_losing_retrospective_history,
+        );
+    }
+
     #[test]
     fn cli_runs_record_assumption_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -60724,6 +61016,30 @@ mod tests {
         assert!(question.contains("record_kind=question"));
         assert!(question.contains("record_status=active"));
 
+        let answered = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "question-status",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&question, "commit_id"),
+            "--record",
+            &value(&question, "record_entity_id"),
+            "--record-version",
+            &value(&question, "record_entity_version_id"),
+            "--status",
+            "answered",
+            "--rationale",
+            "The bounded probe answered the question",
+        ])
+        .expect("parse question status"))
+        .expect("answer question record");
+        assert!(answered.contains("record_kind=question"));
+        assert!(answered.contains("previous_record_status=active"));
+        assert!(answered.contains("record_status=answered"));
+
         let risk = run(Cli::try_parse_from([
             "workvcs",
             "record",
@@ -60732,7 +61048,7 @@ mod tests {
             "--branch",
             &branch,
             "--head",
-            &value(&question, "commit_id"),
+            &value(&answered, "commit_id"),
             "--statement",
             "Manual ordering remains unresolved",
         ])
@@ -60740,6 +61056,30 @@ mod tests {
         .expect("create risk record");
         assert!(risk.contains("record_kind=risk"));
         assert!(risk.contains("record_status=active"));
+
+        let mitigated = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "risk-status",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&risk, "commit_id"),
+            "--record",
+            &value(&risk, "record_entity_id"),
+            "--record-version",
+            &value(&risk, "record_entity_version_id"),
+            "--status",
+            "mitigated",
+            "--rationale",
+            "The ordered resolver removed the risk",
+        ])
+        .expect("parse risk status"))
+        .expect("mitigate risk record");
+        assert!(mitigated.contains("record_kind=risk"));
+        assert!(mitigated.contains("previous_record_status=active"));
+        assert!(mitigated.contains("record_status=mitigated"));
     }
 
     #[test]

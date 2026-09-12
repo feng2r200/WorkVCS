@@ -80,6 +80,11 @@ Recall preserves terminal Findings and other history, but prioritizes current
 Records and Knowledge so historical statements do not masquerade as live
 project truth.
 
+Bounded Recall does not guarantee that a particular terminal Task appears. If
+continuation depends on an exact predecessor outcome, pass the stable Task or
+Evidence id in the delegation contract, or create a focused Handoff and query
+that object directly.
+
 Use each item's `temporal_scope`, version/state digest,
 `snapshot_commit_id`, Record scope, and Knowledge scope/provenance to
 distinguish current Work State, live Runtime Coordination, and historical Store

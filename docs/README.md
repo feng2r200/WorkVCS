@@ -106,6 +106,7 @@ index is:
 - [Phase 4OW Structural Reference Nested Plan Target Context Resource Probe Evidence](provenance/phase-4ow-structural-reference-nested-plan-target-context-resource-probe.md)
 - [Phase 4OY Structural Reference Two-Level Nested Plan Target Context Resource Recovery Evidence](provenance/phase-4oy-structural-reference-two-level-nested-plan-target-context-resource-recovery.md)
 - [Phase 4PE Compact Read-Only Resume Query Evidence](provenance/phase-4pe-compact-read-only-resume-query.md)
+- [Phase 5D Bounded Multi-Agent Context Bridge Evidence](provenance/phase-5d-bounded-multi-agent-context-bridge.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.

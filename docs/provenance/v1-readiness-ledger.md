@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-12 by Phase 5C maintained-Store resume bounding
+Last refreshed: 2026-09-12 by Phase 5D bounded multi-Agent bridge dogfood
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -91,6 +91,24 @@ items from 114 to 34, preserves all four active Task paths and their AC/VR
 requirements, and omits nothing within the requested budget. Focused tests,
 the complete default-stack workspace suite, formatting, diff checks, and the
 globally installed binary dogfood pass at code commit `90d8260`.
+
+Phase 5D tests WorkVCS as a bounded context bridge with two fresh
+`gpt-5.6-terra` Agents that inherited no parent turns and could read only the
+installed Skill and maintained WorkVCS Store. Budgets 20 and 40 returned 20/27
+and 27/27 available items in 2.27 and 2.36 seconds; both recovered current Goal,
+Task, Claim, and priority order, while neither could prove an arbitrary prior
+Task's exact terminal state without a stable reference. The larger projection
+added 3,596 output bytes and another directed query without resolving that
+contract ambiguity. Independent rechecks exposed and drove two targeted
+corrections: guarded Question/Risk terminal lifecycles, and same-Store Bundle
+apply support for the existing Record entity family. Installed-binary dogfood
+then retired the stale raw-Evidence Risk and round-tripped four Record commits
+into a copied Store with `answered` and `mitigated` preserved and doctor valid.
+The pilot provides no platform telemetry for hidden base instructions, tool
+schemas, model reasoning, caching, or billing, so it justifies stable identity
+handoff rather than speculative prompt trimming or a larger default Recall
+budget. Detailed evidence is in
+[`phase-5d-bounded-multi-agent-context-bridge.md`](phase-5d-bounded-multi-agent-context-bridge.md).
 
 ## Classification
 

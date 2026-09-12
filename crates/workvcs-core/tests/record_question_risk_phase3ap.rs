@@ -1,8 +1,10 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
-    Engine, RecordCreateOptions, RecordKind, RecordStatus, RecordTransitionOptions,
-    StoreInitOptions, WorkspaceInfo, WorkspaceInitOptions,
+    BundleImportApplyOptions, BundleImportPreflightOptions, BundlePayloadExport,
+    BundlePayloadExportOptions, BundlePayloadInput, Engine, RecordCreateOptions, RecordKind,
+    RecordStatus, RecordTransitionOptions, StoreInitOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -25,6 +27,17 @@ fn create_workspace(path: &Path) -> (Engine, WorkspaceInfo) {
         .create_workspace(WorkspaceInitOptions::new("workspace").expect("workspace options"))
         .expect("create workspace");
     (engine, workspace)
+}
+
+fn bundle_payload_inputs(export: &BundlePayloadExport) -> Vec<BundlePayloadInput> {
+    export
+        .payload_files
+        .iter()
+        .map(|payload| {
+            BundlePayloadInput::new(payload.relative_path.clone(), payload.bytes.clone())
+                .expect("payload input")
+        })
+        .collect()
 }
 
 #[test]
@@ -207,4 +220,109 @@ fn question_and_risk_reject_wrong_kind_status_and_preserve_history() {
     );
     assert_eq!(RecordStatus::Answered.as_str(), "answered");
     assert_eq!(RecordStatus::Mitigated.as_str(), "mitigated");
+}
+
+#[test]
+fn same_store_bundle_round_trip_preserves_terminal_question_and_risk() {
+    let (tempdir, source_path) = store_path();
+    let target_path = tempdir.path().join("target.sqlite");
+    let (source, workspace) = create_workspace(&source_path);
+    drop(source);
+    fs::copy(&source_path, &target_path).expect("copy baseline Store");
+
+    let mut source = Engine::open(&source_path).expect("open source Store");
+    let question = source
+        .create_record(
+            RecordCreateOptions::question(
+                workspace.initial_branch_id,
+                workspace.genesis_commit_id,
+                "Is terminal cognition portable?",
+            )
+            .expect("question options"),
+        )
+        .expect("create question");
+    let answered = source
+        .transition_record(
+            RecordTransitionOptions::answer_question(
+                workspace.initial_branch_id,
+                question.commit_id,
+                question.record_entity_id,
+                question.record_entity_version_id,
+                "The copied-target round trip answers it",
+            )
+            .expect("answer options"),
+        )
+        .expect("answer question");
+    let risk = source
+        .create_record(
+            RecordCreateOptions::risk(
+                workspace.initial_branch_id,
+                answered.commit_id,
+                "Terminal status might be lost during Bundle apply",
+            )
+            .expect("risk options"),
+        )
+        .expect("create risk");
+    let mitigated = source
+        .transition_record(
+            RecordTransitionOptions::mitigate_risk(
+                workspace.initial_branch_id,
+                risk.commit_id,
+                risk.record_entity_id,
+                risk.record_entity_version_id,
+                "The exact Bundle round trip preserves it",
+            )
+            .expect("mitigate options"),
+        )
+        .expect("mitigate risk");
+    let export = source
+        .export_bundle_payloads(BundlePayloadExportOptions::for_commit(mitigated.commit_id))
+        .expect("export Bundle");
+    let payloads = bundle_payload_inputs(&export);
+
+    let mut target = Engine::open(&target_path).expect("open copied target Store");
+    let preflight = target
+        .preflight_bundle_import(
+            BundleImportPreflightOptions::from_parts(
+                export.manifest_bytes.clone(),
+                export.payload_index_bytes.clone(),
+                payloads.clone(),
+            )
+            .expect("preflight options"),
+        )
+        .expect("preflight Bundle");
+    assert_eq!(preflight.action, "same_store_fast_forward_ready");
+    assert!(preflight.can_apply);
+
+    let applied = target
+        .apply_bundle_import(
+            BundleImportApplyOptions::from_parts(
+                export.manifest_bytes,
+                export.payload_index_bytes,
+                payloads,
+            )
+            .expect("apply options"),
+        )
+        .expect("apply Bundle");
+    assert_eq!(applied.outcome, "same_store_fast_forward_applied");
+    assert_eq!(applied.imported_commits, 4);
+    assert_eq!(applied.imported_entity_versions, 4);
+
+    assert_eq!(
+        target
+            .record_at(mitigated.commit_id, question.record_entity_id)
+            .expect("imported Question")
+            .state
+            .status,
+        RecordStatus::Answered
+    );
+    assert_eq!(
+        target
+            .record_at(mitigated.commit_id, risk.record_entity_id)
+            .expect("imported Risk")
+            .state
+            .status,
+        RecordStatus::Mitigated
+    );
+    target.validate_integrity().expect("target Store integrity");
 }

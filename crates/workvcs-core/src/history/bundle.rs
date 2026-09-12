@@ -1,5 +1,6 @@
 use super::evidence::{EVIDENCE_OBJECT_KIND, LOCAL_CONTENT_STORAGE_BACKEND};
 use super::knowledge::KNOWLEDGE_ENTITY_KIND;
+use super::record::RECORD_ENTITY_KIND;
 use super::resource::{RESOURCE_OBJECT_KIND, RESOURCE_OBSERVATION_OBJECT_KIND};
 use super::task::{
     ACCEPTANCE_CRITERION_ENTITY_KIND, TASK_ENTITY_KIND, VERIFICATION_ENTITY_KIND,
@@ -6660,6 +6661,7 @@ fn same_store_entity_kind_supported(entity_kind: &str) -> bool {
             | VERIFICATION_REQUIREMENT_ENTITY_KIND
             | VERIFICATION_ENTITY_KIND
             | KNOWLEDGE_ENTITY_KIND
+            | RECORD_ENTITY_KIND
     )
 }
 
@@ -10357,7 +10359,7 @@ fn bundle_manifest_supports_same_store_apply(
             VERIFICATION_ENTITY_KIND => {
                 expected_verification_ids.insert(entity_version.entity_id);
             }
-            KNOWLEDGE_ENTITY_KIND => {}
+            KNOWLEDGE_ENTITY_KIND | RECORD_ENTITY_KIND => {}
             _ => return Ok(false),
         }
     }
@@ -11702,7 +11704,7 @@ fn validate_same_store_apply_identity_coverage(
             VERIFICATION_ENTITY_KIND => {
                 expected_verification_ids.insert(entity_version.entity_id);
             }
-            KNOWLEDGE_ENTITY_KIND => {}
+            KNOWLEDGE_ENTITY_KIND | RECORD_ENTITY_KIND => {}
             _ => {
                 return Err(WorkVcsError::QueryInvalid(format!(
                     "bundle entity {} kind {} is outside same-Store typed-entity apply scope",

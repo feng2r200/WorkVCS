@@ -92,11 +92,11 @@ with compare-and-swap. Existing identical immutable rows are no-ops; content or
 identity conflicts fail closed.
 
 The supported same-Store closure families include the canonical Commit closure,
-ChangeSet and ChangeOperation payloads, Task and other typed entity identity
-rows added by accepted Bundle ADRs, RelationVersion and relation membership
-rows, Verification object-family rows, stable ended Session provenance,
-KnowledgeExposure local-source closure, changeset causal anchors, and
-Checkpoint candidate metadata/status.
+ChangeSet and ChangeOperation payloads, Task, Record, and other typed entity
+identity rows added by accepted Bundle ADRs, RelationVersion and relation
+membership rows, Verification object-family rows, stable ended Session
+provenance, KnowledgeExposure local-source closure, changeset causal anchors,
+and Checkpoint candidate metadata/status.
 
 Checkpoint raw payload bytes are not stored by the v0.1 schema and are not
 added by this profile. Checkpoints remain rebuildable acceleration metadata;

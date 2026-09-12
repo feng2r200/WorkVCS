@@ -239,9 +239,9 @@ fn public_debug_surfaces_redact_authority_reference() {
     let surfaces = vec![
         (
             "authority_ref_manifest",
-            format!("{:?}", &manifest.authority_ref),
+            format!("{:?}", manifest.authority_ref),
         ),
-        ("target_manifest", format!("{:?}", &manifest.target)),
+        ("target_manifest", format!("{:?}", manifest.target)),
         ("issue_manifest", format!("{manifest:?}")),
         (
             "issue_options",

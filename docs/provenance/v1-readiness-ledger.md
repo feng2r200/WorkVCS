@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-12 by Phase 5D bounded multi-Agent bridge dogfood
+Last refreshed: 2026-09-12 by Phase 5E default-stack CLI validation
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -39,8 +39,8 @@ live Runtime reads separately from historical commit projections; and package
 installation verifies the complete WorkVCS Skill tree fail-closed. Focused
 regressions, full workspace validation, independent review, and real global
 installation evidence govern this row. Phase 5B closes raw Evidence Bundle
-portability; the monolithic CLI test stack requirement remains post-Wave-A
-work rather than being silently treated as complete.
+portability. Phase 5E removes the caller-facing 32 MiB test-stack requirement
+after default-stack diagnosis and complete-suite validation.
 
 Phase 5A adds explicit Finding currentness after installed-binary dogfood
 proved that a precise correction and its inaccurate predecessor could both
@@ -109,6 +109,18 @@ schemas, model reasoning, caching, or billing, so it justifies stable identity
 handoff rather than speculative prompt trimming or a larger default Recall
 budget. Detailed evidence is in
 [`phase-5d-bounded-multi-agent-context-bridge.md`](phase-5d-bounded-multi-agent-context-bridge.md).
+
+Phase 5E closes the remaining global CLI test-stack workaround. Default-stack
+probes showed that source-file splitting would not change Rust's per-test
+thread stack, and boxing the nested Record command did not change the failure.
+Ten unwrapped full-parser workflows now use the test harness's existing 16 MiB
+isolated-thread boundary. The complete CLI and workspace suites run without a
+caller-supplied `RUST_MIN_STACK`; current operator instructions use the ordinary
+Cargo command. Historical validation documents keep their original commands.
+The public CLI and production runtime are unchanged. Detailed evidence is in
+[`phase-5e-default-stack-cli-validation.md`](phase-5e-default-stack-cli-validation.md),
+and the decision is recorded in
+[`ADR-0509`](../decisions/adr/0509-parser-heavy-cli-test-stack-isolation.md).
 
 ## Classification
 

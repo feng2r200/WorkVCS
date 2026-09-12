@@ -101,10 +101,8 @@ fn assert_store_file_metadata_matches(
         CloseoutInspectStoreFileKind::Wal,
         CloseoutInspectStoreFileKind::Shm,
     ];
-    for ((actual, (expected_path, expected_snapshot)), expected_kind) in actual
-        .iter()
-        .zip(expected.iter())
-        .zip(expected_kinds.into_iter())
+    for ((actual, (expected_path, expected_snapshot)), expected_kind) in
+        actual.iter().zip(expected.iter()).zip(expected_kinds)
     {
         assert_eq!(actual.kind, expected_kind);
         assert_eq!(actual.path, expected_path.display().to_string());

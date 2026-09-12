@@ -59591,6 +59591,13 @@ mod tests {
 
     #[test]
     fn cli_runs_record_finding_workflow() {
+        run_cli_test_with_large_stack(
+            "cli-record-finding-workflow-test",
+            assert_cli_runs_record_finding_workflow,
+        );
+    }
+
+    fn assert_cli_runs_record_finding_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -59939,6 +59946,13 @@ mod tests {
 
     #[test]
     fn cli_runs_record_assumption_workflow() {
+        run_cli_test_with_large_stack(
+            "cli-record-assumption-workflow-test",
+            assert_cli_runs_record_assumption_workflow,
+        );
+    }
+
+    fn assert_cli_runs_record_assumption_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -60006,6 +60020,13 @@ mod tests {
 
     #[test]
     fn cli_runs_record_decision_workflow() {
+        run_cli_test_with_large_stack(
+            "cli-record-decision-workflow-test",
+            assert_cli_runs_record_decision_workflow,
+        );
+    }
+
+    fn assert_cli_runs_record_decision_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -60052,6 +60073,13 @@ mod tests {
 
     #[test]
     fn cli_runs_record_decision_lifecycle_workflow() {
+        run_cli_test_with_large_stack(
+            "cli-record-decision-lifecycle-workflow-test",
+            assert_cli_runs_record_decision_lifecycle_workflow,
+        );
+    }
+
+    fn assert_cli_runs_record_decision_lifecycle_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -60129,6 +60157,13 @@ mod tests {
 
     #[test]
     fn cli_supersedes_decision_record_atomically() {
+        run_cli_test_with_large_stack(
+            "cli-supersedes-decision-record-atomically-test",
+            assert_cli_supersedes_decision_record_atomically,
+        );
+    }
+
+    fn assert_cli_supersedes_decision_record_atomically() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -60977,6 +61012,13 @@ mod tests {
 
     #[test]
     fn cli_runs_question_and_risk_record_workflows() {
+        run_cli_test_with_large_stack(
+            "cli-question-and-risk-record-workflows-test",
+            assert_cli_runs_question_and_risk_record_workflows,
+        );
+    }
+
+    fn assert_cli_runs_question_and_risk_record_workflows() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -61275,6 +61317,13 @@ mod tests {
 
     #[test]
     fn cli_shows_record_workflow() {
+        run_cli_test_with_large_stack(
+            "cli-shows-record-workflow-test",
+            assert_cli_shows_record_workflow,
+        );
+    }
+
+    fn assert_cli_shows_record_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -61390,6 +61439,13 @@ mod tests {
 
     #[test]
     fn cli_runs_attempt_record_workflow() {
+        run_cli_test_with_large_stack(
+            "cli-attempt-record-workflow-test",
+            assert_cli_runs_attempt_record_workflow,
+        );
+    }
+
+    fn assert_cli_runs_attempt_record_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -61502,6 +61558,13 @@ mod tests {
 
     #[test]
     fn cli_runs_handoff_record_workflow() {
+        run_cli_test_with_large_stack(
+            "cli-handoff-record-workflow-test",
+            assert_cli_runs_handoff_record_workflow,
+        );
+    }
+
+    fn assert_cli_runs_handoff_record_workflow() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");
@@ -61927,6 +61990,14 @@ mod tests {
 
     #[test]
     fn cli_why_reports_operation_local_entity_detail_for_multiple_direct_assumption_changes() {
+        run_cli_test_with_large_stack(
+            "cli-why-multiple-direct-assumption-changes-test",
+            assert_cli_why_reports_operation_local_entity_detail_for_multiple_direct_assumption_changes,
+        );
+    }
+
+    fn assert_cli_why_reports_operation_local_entity_detail_for_multiple_direct_assumption_changes()
+    {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("workvcs.sqlite");
         let store = path.to_str().expect("path text");

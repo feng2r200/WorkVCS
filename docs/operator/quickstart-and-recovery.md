@@ -125,14 +125,15 @@ rationale. Automatic stale detection remains Open.
 From the repository root:
 
 ```bash
-RUST_MIN_STACK=33554432 cargo test --workspace --quiet
+cargo test --workspace --quiet
 scripts/package-workvcs.sh --install --bin-dir /usr/local/bin
 workvcs --help
 ```
 
-The larger test-thread stack is required by the current monolithic CLI test
-binary. Focused tests for the new entrypoints run with the default stack; a
-future CLI dispatcher split should remove this full-suite requirement.
+The complete workspace suite runs without a caller-supplied
+`RUST_MIN_STACK`. Parser-heavy CLI test bodies that exceed Rust's default test
+thread stack are isolated by the test harness itself; ordinary callers and CI
+do not need to manage a global stack override.
 
 For local packaging without installing:
 

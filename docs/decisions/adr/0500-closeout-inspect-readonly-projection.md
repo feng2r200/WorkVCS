@@ -38,7 +38,7 @@ The projection expands only the target's direct mechanical neighborhood:
   Verification judgments, and Evidence;
 - a Plan expands direct Tasks while child Plans remain non-expanded;
 - a Goal expands direct Plans and Tasks while child Goals remain non-expanded;
-- active Sessions, Claims, Handoffs, and mechanical receipt states are
+- live Sessions (active or potentially stale), Claims, Handoffs, and mechanical receipt states are
   aggregated as bounded runtime/provenance summaries.
 
 The projection does not recursively expand unrelated descendants or infer
@@ -47,11 +47,12 @@ semantic completion. The default item budget is 50 and the hard maximum is
 result reports `truncated` and omitted-category/count information rather than
 silently dropping items.
 
-Runtime summaries are exact-target aggregates for active Sessions, Claims,
-focused Handoff v1, and mechanical receipt states. If the selected commit is
-not the current source for runtime coordination, current Sessions and Claims
-are not projected as if historical; the result reports the corresponding
-source gap. Receipt status is evaluated using the source commit time.
+Runtime summaries are exact-target aggregates for live Sessions (active or
+potentially stale), Claims, focused Handoff v1, and mechanical receipt states.
+A Branch inspection projects current Runtime Coordination and evaluates receipt
+status at read time. If an explicit Commit is selected, current Sessions and
+Claims are not projected as if historical; the result reports the corresponding
+source gap and evaluates receipt status at that source commit's time.
 
 The output includes before/after proof captured around the inspection:
 

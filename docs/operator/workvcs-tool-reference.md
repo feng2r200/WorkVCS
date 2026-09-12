@@ -150,9 +150,9 @@ scripts/package-workvcs.sh
 ```
 
 This builds the current checkout's `workvcs` binary, packages it with
-`skills/workvcs`, writes a manifest containing binary and Skill-entry digests,
-creates a `.tar.gz` archive, and validates the packaged binary with
-`workvcs --help`.
+`skills/workvcs`, writes a manifest containing binary, Skill-entry, and complete
+Skill-tree digests, creates a `.tar.gz` archive, and validates the packaged
+binary plus every regular file in the Skill tree.
 
 System-level install or overwrite is explicit:
 
@@ -171,6 +171,11 @@ matches the packaged binary, and atomically installs the Skill under
 Agent Skills root or `--no-install-skill` for a binary-only installation. If
 the binary destination directory is not writable, the script uses `sudo` for
 that binary step; the selected Skill directory must be writable.
+The packaged `skill-tree.sha256` is deterministic and catches missing, modified,
+or extra regular files. It also fails closed for unreadable files, unsupported
+special entries, and paths containing control characters.
+`scripts/workvcs-skill-tree.sh verify SKILL_DIR MANIFEST` provides the same
+check independently.
 
 For validation without touching a system path:
 

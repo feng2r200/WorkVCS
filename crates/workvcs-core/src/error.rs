@@ -72,6 +72,7 @@ pub enum ErrorCode {
     IntegrityInvalid,
     KnowledgeInvalid,
     KnowledgeNotFound,
+    MutationPostconditionFailed,
     CommitNotFound,
     BranchHeadConflict,
     BranchNotFound,
@@ -118,6 +119,7 @@ impl ErrorCode {
             Self::IntegrityInvalid => "integrity_invalid",
             Self::KnowledgeInvalid => "knowledge_invalid",
             Self::KnowledgeNotFound => "knowledge_not_found",
+            Self::MutationPostconditionFailed => "mutation_postcondition_failed",
             Self::CommitNotFound => "commit_not_found",
             Self::BranchHeadConflict => "branch_head_conflict",
             Self::BranchNotFound => "branch_not_found",
@@ -188,6 +190,13 @@ pub enum WorkVcsError {
 
     #[error("knowledge not found: {0}")]
     KnowledgeNotFound(String),
+
+    #[error("mutation {operation} completed before result assertion failed: {message}")]
+    MutationPostconditionFailed {
+        operation: String,
+        result: String,
+        message: String,
+    },
 
     #[error("commit not found: {0}")]
     CommitNotFound(String),
@@ -298,6 +307,7 @@ impl WorkVcsError {
             Self::IntegrityInvalid(_) => ErrorCode::IntegrityInvalid,
             Self::KnowledgeInvalid(_) => ErrorCode::KnowledgeInvalid,
             Self::KnowledgeNotFound(_) => ErrorCode::KnowledgeNotFound,
+            Self::MutationPostconditionFailed { .. } => ErrorCode::MutationPostconditionFailed,
             Self::CommitNotFound(_) => ErrorCode::CommitNotFound,
             Self::BranchHeadConflict(_) => ErrorCode::BranchHeadConflict,
             Self::BranchNotFound(_) => ErrorCode::BranchNotFound,
@@ -341,7 +351,8 @@ impl WorkVcsError {
             Self::ImmutableImportInvalid(_) => ErrorCategory::Import,
             Self::IntegrityInvalid(_) => ErrorCategory::Integrity,
             Self::KnowledgeInvalid(_) | Self::KnowledgeNotFound(_) => ErrorCategory::Knowledge,
-            Self::BranchHeadConflict(_)
+            Self::MutationPostconditionFailed { .. }
+            | Self::BranchHeadConflict(_)
             | Self::BranchNotFound(_)
             | Self::EntityNotFound(_)
             | Self::EntityTransitionInvalid(_) => ErrorCategory::Mutation,
@@ -398,6 +409,10 @@ mod tests {
             ErrorCode::StoreCompatibilityUnsupported.as_str(),
             "store_compatibility_unsupported"
         );
+        assert_eq!(
+            ErrorCode::MutationPostconditionFailed.as_str(),
+            "mutation_postcondition_failed"
+        );
     }
 
     #[test]
@@ -418,5 +433,17 @@ mod tests {
         assert_eq!(conflict.code().as_str(), "branch_head_conflict");
         assert_eq!(conflict.category().as_str(), "mutation");
         assert!(conflict.retryable());
+
+        let postcondition = WorkVcsError::MutationPostconditionFailed {
+            operation: "claim.next".to_owned(),
+            result: "selected=true\n".to_owned(),
+            message: "expected selected false".to_owned(),
+        };
+        assert_eq!(
+            postcondition.code().as_str(),
+            "mutation_postcondition_failed"
+        );
+        assert_eq!(postcondition.category().as_str(), "mutation");
+        assert!(!postcondition.retryable());
     }
 }

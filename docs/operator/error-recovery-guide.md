@@ -31,6 +31,19 @@ message=<ESCAPED_MESSAGE>
 Route automation by `error_code`, `error_category`, and `retryable`.
 `message` is display-only context. Do not parse it for control flow.
 
+`mutation_postcondition_failed` adds stable fields that distinguish a completed
+mutation from a rejected precondition:
+
+```text
+operation_completed=true
+operation=<COMMAND_FAMILY>
+operation_result=<ESCAPED_RENDERED_RESULT>
+recovery_hint=inspect_operation_result_before_retry
+```
+
+Read `operation_result` and current state before deciding whether a compensating
+action is required. Replaying the original command can duplicate intent.
+
 For JSON stderr, pass `--error-format json`. WorkVCS business errors render one
 JSON object:
 
@@ -78,6 +91,7 @@ through current CLI output.
 | `knowledge_not_found` | `knowledge` | `false` | Re-check the Knowledge id at the selected branch/head. Use current list/show output before deciding whether new Knowledge should be created. |
 | `commit_not_found` | `replay` | `false` | Confirm the commit id belongs to this Store lineage and selected branch. If it came from a Bundle or copied Store, validate the import/export boundary before retrying. |
 | `branch_head_conflict` | `mutation` | `true` | Refresh the branch head, inspect the intervening history, then rerun only if the mutation still represents the operator intent against the new head. Never force a stale expected head. |
+| `mutation_postcondition_failed` | `mutation` | `false` | The write completed and only a result-dependent expectation failed. Inspect `operation`, `operation_result`, and current state before any new action; never blindly replay the original mutation. Caller-known deterministic expectations fail before writing and do not use this code. |
 | `branch_not_found` | `mutation` | `false` | Check the branch id and Store. Create or import the branch only if that is the intended state transition. |
 | `claim_invalid` | `runtime` | `false` | Fix Claim mode, actor/session binding, expected head, or transition inputs. Use `claim guard` when the failure concerns protected mutation readiness. |
 | `claim_not_found` | `runtime` | `false` | Re-check the Claim id and current branch head. If another operator released or transferred it, follow the handoff/claim recovery flow before mutating. |
@@ -113,6 +127,8 @@ through current CLI output.
 ## Recovery Boundaries
 
 - A non-retryable code can still be resolved, but not by blind replay.
+- `mutation_postcondition_failed` is not a failed write. Preserve its rendered
+  result and reconcile current state before choosing a follow-up.
 - `branch_head_conflict` recovery must refresh and re-evaluate intent before
   retrying.
 - Resource unavailable/error states should be recorded explicitly when they are

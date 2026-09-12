@@ -11,8 +11,8 @@ use workvcs_core::{
     CloseoutInspectOptions, CloseoutInspectRuntimeGapCategory, Digest, Engine, EntityId,
     GoalCreateCommit, GoalCreateOptions, PlanCreateCommit, PlanCreateOptions,
     PrimaryContainmentCreateOptions, RecordCreateOptions, SessionFocusOptions, SessionId,
-    SessionStartOptions, StoreInitOptions, TaskCreateCommit, TaskCreateOptions, WorkspaceInfo,
-    WorkspaceInitOptions,
+    SessionMarkStaleOptions, SessionStartOptions, StoreInitOptions, TaskCreateCommit,
+    TaskCreateOptions, WorkspaceInfo, WorkspaceInitOptions,
 };
 
 fn store_path() -> (TempDir, PathBuf) {
@@ -464,28 +464,25 @@ fn task_runtime_summary_reports_exact_runtime_links_and_redacted_receipts() {
         stable_receipts
     );
 
+    let branch_evaluation_lower_bound = now_us();
     let projection = readonly
         .closeout_inspect_task(CloseoutInspectOptions::for_task_on_branch(
             workspace.initial_branch_id,
             task.task_entity_id,
         ))
         .expect("inspect task runtime summary");
+    let branch_evaluation_upper_bound = now_us();
     let runtime = &projection.runtime_summary;
-    let branch_head = readonly
-        .branch_head(workspace.initial_branch_id)
-        .expect("branch head");
-    let branch_head_commit = readonly
-        .commit(branch_head.head_commit_id)
-        .expect("branch head commit");
-    assert_eq!(
-        runtime.receipt_evaluation_at_us,
-        branch_head_commit.committed_at_us
-    );
+    assert!(runtime.receipt_evaluation_at_us >= branch_evaluation_lower_bound);
+    assert!(runtime.receipt_evaluation_at_us <= branch_evaluation_upper_bound);
 
     assert_eq!(runtime.counts.sessions_total, 1);
     assert_eq!(runtime.sessions.len(), 1);
     assert_eq!(runtime.sessions[0].session_id, focused_session.session_id);
-    assert_eq!(runtime.sessions[0].focus_entity_id, task.task_entity_id);
+    assert_eq!(
+        runtime.sessions[0].focus_entity_id,
+        Some(task.task_entity_id)
+    );
     assert_eq!(runtime.sessions[0].focus_path_len, 1);
     assert_eq!(runtime.counts.claims_total, 1);
     assert_eq!(runtime.claims.len(), 1);
@@ -507,7 +504,7 @@ fn task_runtime_summary_reports_exact_runtime_links_and_redacted_receipts() {
         runtime
             .authorization_receipts
             .iter()
-            .all(|receipt| receipt.evaluated_at_us == branch_head_commit.committed_at_us)
+            .all(|receipt| receipt.evaluated_at_us == runtime.receipt_evaluation_at_us)
     );
     let statuses = runtime
         .authorization_receipts
@@ -535,7 +532,67 @@ fn task_runtime_summary_reports_exact_runtime_links_and_redacted_receipts() {
 }
 
 #[test]
-fn receipt_runtime_status_uses_source_commit_time_and_marks_stale_digest() {
+fn task_runtime_summary_includes_potentially_stale_claim_without_session_focus() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let task = create_task(
+        &mut engine,
+        &workspace,
+        workspace.genesis_commit_id,
+        "Claimed task without focus",
+    );
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("start unfocused session");
+    let claim = engine
+        .claim_task(ClaimTaskOptions::new(
+            session.session_id,
+            task.task_entity_id,
+        ))
+        .expect("claim task without focus");
+    engine
+        .mark_session_potentially_stale(
+            SessionMarkStaleOptions::new(session.session_id, "recovery probe")
+                .expect("stale options"),
+        )
+        .expect("mark session potentially stale");
+    drop(engine);
+
+    let readonly = Engine::open_readonly(&path).expect("open readonly");
+    let projection = readonly
+        .closeout_inspect_task(CloseoutInspectOptions::for_task_on_branch(
+            workspace.initial_branch_id,
+            task.task_entity_id,
+        ))
+        .expect("inspect claimed task without focus");
+
+    assert_eq!(projection.runtime_summary.counts.sessions_total, 1);
+    assert_eq!(projection.runtime_summary.counts.claims_total, 1);
+    assert_eq!(
+        projection.runtime_summary.sessions[0].session_id,
+        session.session_id
+    );
+    assert_eq!(
+        projection.runtime_summary.sessions[0].lifecycle_state,
+        "potentially_stale"
+    );
+    assert_eq!(projection.runtime_summary.sessions[0].focus_entity_id, None);
+    assert_eq!(projection.runtime_summary.sessions[0].focus_path_len, 0);
+    assert_eq!(
+        projection.runtime_summary.claims[0].claim_id,
+        claim.claim_id
+    );
+    assert_eq!(
+        projection.runtime_summary.claims[0].task_entity_id,
+        task.task_entity_id
+    );
+}
+
+#[test]
+fn receipt_runtime_status_uses_read_time_for_branch_and_marks_stale_digest() {
     let (_tempdir, path) = store_path();
     let (mut engine, workspace) = create_workspace(&path);
     let task = create_task(
@@ -565,7 +622,7 @@ fn receipt_runtime_status_uses_source_commit_time_and_marks_stale_digest() {
             )),
         ))
         .expect("issue stale candidate receipt");
-    let criterion = create_acceptance_criterion(
+    let _criterion = create_acceptance_criterion(
         &mut engine,
         &workspace,
         task.task_entity_id,
@@ -576,20 +633,17 @@ fn receipt_runtime_status_uses_source_commit_time_and_marks_stale_digest() {
     drop(engine);
 
     let readonly = Engine::open_readonly(&path).expect("open readonly");
+    let evaluation_lower_bound = now_us();
     let projection = readonly
         .closeout_inspect_task(CloseoutInspectOptions::for_task_on_branch(
             workspace.initial_branch_id,
             task.task_entity_id,
         ))
         .expect("inspect stale branch");
-    let head_commit = readonly
-        .commit(criterion.commit_id)
-        .expect("criterion commit timestamp");
+    let evaluation_upper_bound = now_us();
 
-    assert_eq!(
-        projection.runtime_summary.receipt_evaluation_at_us,
-        head_commit.committed_at_us
-    );
+    assert!(projection.runtime_summary.receipt_evaluation_at_us >= evaluation_lower_bound);
+    assert!(projection.runtime_summary.receipt_evaluation_at_us <= evaluation_upper_bound);
     assert_eq!(
         projection
             .runtime_summary
@@ -597,7 +651,7 @@ fn receipt_runtime_status_uses_source_commit_time_and_marks_stale_digest() {
             .first()
             .expect("stale receipt")
             .evaluated_at_us,
-        head_commit.committed_at_us
+        projection.runtime_summary.receipt_evaluation_at_us
     );
     assert_eq!(
         projection.runtime_summary.authorization_receipts[0].mechanical_status,

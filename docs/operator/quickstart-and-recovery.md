@@ -110,10 +110,12 @@ For local packaging without installing:
 scripts/package-workvcs.sh
 ```
 
-The script builds `workvcs`, copies it into a version-agnostic package directory
-under `target/package/`, writes a `manifest.txt`, creates a `.tar.gz` archive,
-and validates the packaged binary with `workvcs --help`. Package mode is the
-default and does not write to `/usr/local/bin`.
+The script builds `workvcs`, copies it into a unique package directory under
+`target/package/`, writes `manifest.txt` plus a deterministic source-generated
+SHA-256 manifest for every regular file in `skills/workvcs`, rejects symlinks or
+special entries, creates a `.tar.gz`
+archive, and validates both the packaged binary and complete Skill tree.
+Package mode is the default and does not write to `/usr/local/bin`.
 
 To preview the system-level install/overwrite action without writing:
 
@@ -139,7 +141,12 @@ workvcs --help
 
 If `/usr/local/bin` is not writable, the script uses `sudo` for the directory
 creation or final overwrite step. The destination basename must be `workvcs`,
-and the installed binary digest must match the packaged binary.
+the installed binary digest must match the packaged binary, and the installed
+Skill must match the package's full-tree manifest with no missing, modified, or
+extra regular files. Unreadable files, unsupported special entries, and paths
+containing control characters fail closed. `scripts/workvcs-skill-tree.sh
+verify` can independently recheck a Skill directory against a packaged
+`skill-tree.sha256`.
 
 For one-off local use without installing:
 

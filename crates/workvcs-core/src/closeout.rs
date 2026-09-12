@@ -414,7 +414,7 @@ pub struct CloseoutInspectSessionItem {
     pub last_activity_at_us: Option<i64>,
     pub active_workspace_id: Option<crate::WorkspaceId>,
     pub active_branch_id: Option<BranchId>,
-    pub focus_entity_id: EntityId,
+    pub focus_entity_id: Option<EntityId>,
     pub focus_path_len: usize,
     pub session_diff_id: Option<SessionDiffId>,
 }
@@ -1259,34 +1259,32 @@ fn runtime_summary(
     let mut sessions = Vec::new();
     let mut claims = Vec::new();
     let (mut handoffs, mut gaps) = handoff_items(engine, source.commit_id, target)?;
-    let receipt_evaluation_at_us = source_commit_evaluation_at_us(engine, source.commit_id)?;
+    let receipt_evaluation_at_us = runtime_evaluation_at_us(engine, source)?;
     let mut authorization_receipts =
         authorization_receipt_items(engine, source, target, receipt_evaluation_at_us)?;
 
     if let Some(branch_id) = source.branch_id {
-        let session_result = engine.sessions(
-            SessionListOptions::all()
-                .with_lifecycle_state(SessionLifecycleState::Active)
-                .with_active_branch_id(branch_id),
-        )?;
+        let session_result =
+            engine.sessions(SessionListOptions::all().with_active_branch_id(branch_id))?;
         for session in session_result.sessions {
-            let Some(focus) = &session.focus else {
-                continue;
-            };
-            if focus.focus_entity_id != target.entity_id {
-                continue;
-            }
+            let mut session_matches = session
+                .focus
+                .as_ref()
+                .is_some_and(|focus| focus.focus_entity_id == target.entity_id);
             if target.kind == CloseoutInspectTargetKind::Task {
                 let claim_result = engine.active_claims_for_session(
                     crate::ClaimListOptions::for_session(session.session_id),
                 )?;
                 for claim in claim_result.claims {
                     if claim.task_entity_id == target.entity_id {
+                        session_matches = true;
                         claims.push(claim_item(&claim));
                     }
                 }
             }
-            sessions.push(session_item(&session));
+            if session_matches {
+                sessions.push(session_item(&session));
+            }
         }
     } else {
         gaps.push(runtime_gap(
@@ -1355,10 +1353,6 @@ fn budget_runtime_summary(
 }
 
 fn session_item(session: &SessionSnapshot) -> CloseoutInspectSessionItem {
-    let focus = session
-        .focus
-        .as_ref()
-        .expect("session_item requires exact focus");
     CloseoutInspectSessionItem {
         session_id: session.session_id,
         lifecycle_state: session_lifecycle_state_str(session.lifecycle_state).to_owned(),
@@ -1366,8 +1360,12 @@ fn session_item(session: &SessionSnapshot) -> CloseoutInspectSessionItem {
         last_activity_at_us: session.last_activity_at_us,
         active_workspace_id: session.active_workspace_id,
         active_branch_id: session.active_branch_id,
-        focus_entity_id: focus.focus_entity_id,
-        focus_path_len: focus.path.len(),
+        focus_entity_id: session.focus.as_ref().map(|focus| focus.focus_entity_id),
+        focus_path_len: session
+            .focus
+            .as_ref()
+            .map(|focus| focus.path.len())
+            .unwrap_or(0),
         session_diff_id: session.session_diff_id,
     }
 }
@@ -1457,6 +1455,28 @@ fn authorization_receipt_items(
 
 fn source_commit_evaluation_at_us(engine: &Engine, commit_id: CommitId) -> Result<i64> {
     Ok(engine.commit(commit_id)?.committed_at_us)
+}
+
+fn runtime_evaluation_at_us(
+    engine: &Engine,
+    source: &CloseoutInspectResolvedSource,
+) -> Result<i64> {
+    if source.branch_id.is_some() {
+        current_epoch_micros()
+    } else {
+        source_commit_evaluation_at_us(engine, source.commit_id)
+    }
+}
+
+fn current_epoch_micros() -> Result<i64> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            WorkVcsError::StorageFailure(format!("system clock precedes Unix epoch: {error}"))
+        })?;
+    i64::try_from(duration.as_micros()).map_err(|_| {
+        WorkVcsError::StorageFailure("system time exceeds supported microsecond range".to_owned())
+    })
 }
 
 fn authorization_receipt_item(

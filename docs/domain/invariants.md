@@ -112,6 +112,28 @@ content-addressed object area, linked through `content_storage_location`, and
 verified by size and digest when read. Digest-only content remains a valid
 external reference and is not falsely reported as locally recoverable.
 
+### INV-095 — Mutating result assertions expose completed operations
+
+Deterministic expected values for mutating commands are validated before the
+write. Assertions that depend on a generated or committed result may run after
+the operation, but any mismatch must explicitly report that the operation
+completed, expose its rendered result, and direct the caller to inspect that
+result before retrying. Atomic Engine guards remain inside their transition.
+
+### INV-096 — Bounded Recall prioritizes current recoverable truth
+
+Recall reserves the current Goal/Plan/Task spine and orders semantic categories
+newest-first before filling historical context. It exposes the scope/provenance
+needed to follow source identifiers. Branch-based current projections evaluate
+Runtime Coordination at read time; historical commit projections label and use
+their historical cutoff explicitly.
+
+### INV-097 — Skill installation verifies the complete tree
+
+WorkVCS packaging and installation compare a deterministic manifest of every
+regular file in `skills/workvcs`. Missing, modified, or extra files must fail
+verification; checking only `SKILL.md` is insufficient.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

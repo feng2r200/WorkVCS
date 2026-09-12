@@ -80,39 +80,39 @@ use workvcs_core::{
     MergeContinueResult, MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeId,
     MergeItemId, MergeItemResolutionSnapshot, MergeItemSnapshot, MergeItemSubject,
     MergeListOptions, MergeListResult, MergeOutcomeSnapshot, MergeResolutionKind,
-    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, MigrationId,
-    NextWorkOptions, NextWorkResult, OperationId, PlanAdmissionManifest, PlanAdmissionOptions,
-    PlanAdmissionOutcome, PlanAdmissionResult, PlanCreateCommit, PlanCreateOptions,
-    PlanEvolutionManifest, PlanEvolutionOptions, PlanEvolutionOutcome, PlanEvolutionResult,
-    PlanSnapshot, PlanStatus, PlanTransitionCommit, PlanTransitionOptions,
-    PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    RecordCreateCommit, RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
-    RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
-    RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
-    RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
-    RecordKnowledgeRelationRestoreOptions, RecordKnowledgeRelationSnapshot, RecordListOptions,
-    RecordListResult, RecordRelationCreateCommit, RecordRelationCreateOptions,
-    RecordRelationListOptions, RecordRelationListResult, RecordRelationRemoveCommit,
-    RecordRelationRemoveOptions, RecordRelationRestoreCommit, RecordRelationRestoreOptions,
-    RecordRelationSnapshot, RecordRelationType, RecordSnapshot, RecordStatus,
-    RecordTransitionCommit, RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState,
-    ResolvedWhyQuerySubject, ResourceBindOptions, ResourceBindResult, ResourceCreateOptions,
-    ResourceCreateResult, ResourceId, ResourceListOptions, ResourceListResult,
-    ResourceObservationCreateOptions, ResourceObservationCreateResult,
-    ResourceObservationDetailInput, ResourceObservationId, ResourceObservationListOptions,
-    ResourceObservationListResult, ResourceObservationSnapshot, ResourceSnapshot, Result,
-    RunnableTaskBlockedReason, RunnableTaskCandidate, RunnableTaskClaimCoordination,
-    RunnableTasksOptions, RunnableTasksProjection, SessionDiffId, SessionDiffSnapshot,
-    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
-    SessionLifecycleState, SessionListOptions, SessionListResult, SessionMarkStaleOptions,
-    SessionMarkStaleResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInfo, StoreInitOptions,
-    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, StoreMigrationAttemptSnapshot,
-    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    MergeResolveOptions, MergeResolveResult, MergeRuntimeState, MergeStartOptions,
+    MergeStartResult, MigrationId, NextWorkOptions, NextWorkResult, OperationId,
+    PlanAdmissionManifest, PlanAdmissionOptions, PlanAdmissionOutcome, PlanAdmissionResult,
+    PlanCreateCommit, PlanCreateOptions, PlanEvolutionManifest, PlanEvolutionOptions,
+    PlanEvolutionOutcome, PlanEvolutionResult, PlanSnapshot, PlanStatus, PlanTransitionCommit,
+    PlanTransitionOptions, PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
+    PrimaryContainmentSnapshot, RecordCreateCommit, RecordCreateOptions, RecordKind,
+    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
+    RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
+    RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
+    RecordKnowledgeRelationSnapshot, RecordListOptions, RecordListResult,
+    RecordRelationCreateCommit, RecordRelationCreateOptions, RecordRelationListOptions,
+    RecordRelationListResult, RecordRelationRemoveCommit, RecordRelationRemoveOptions,
+    RecordRelationRestoreCommit, RecordRelationRestoreOptions, RecordRelationSnapshot,
+    RecordRelationType, RecordSnapshot, RecordStatus, RecordTransitionCommit,
+    RecordTransitionOptions, RelationId, RelationVersionId, ReplayedState, ResolvedWhyQuerySubject,
+    ResourceBindOptions, ResourceBindResult, ResourceCreateOptions, ResourceCreateResult,
+    ResourceId, ResourceListOptions, ResourceListResult, ResourceObservationCreateOptions,
+    ResourceObservationCreateResult, ResourceObservationDetailInput, ResourceObservationId,
+    ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
+    ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection, SessionDiffId,
+    SessionDiffSnapshot, SessionEndOptions, SessionEndResult, SessionFocusOptions,
+    SessionFocusUpdateResult, SessionId, SessionLifecycleState, SessionListOptions,
+    SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
+    StoreInfo, StoreInitOptions, StoreLineageListOptions, StoreLineageListResult,
+    StoreLineageRecordOptions, StoreLineageRecordResult, StoreLineageSnapshot, StoreManifest,
+    StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
+    StoreMigrationRecordOptions, StoreMigrationRecordResult, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, VerificationApplicability, VerificationApplicabilityCacheListOptions,
     VerificationApplicabilityCacheListResult, VerificationApplicabilityCacheSnapshot,
@@ -5502,17 +5502,52 @@ fn render_workvcs_error_key_value(error: &WorkVcsError) -> String {
     let _ = writeln!(output, "error_code={}", error.code());
     let _ = writeln!(output, "error_category={}", error.category());
     let _ = writeln!(output, "retryable={}", error.retryable());
+    if let WorkVcsError::MutationPostconditionFailed {
+        operation, result, ..
+    } = error
+    {
+        output.push_str("operation_completed=true\n");
+        let _ = writeln!(output, "operation={}", escape_key_value(operation));
+        let _ = writeln!(output, "operation_result={}", escape_key_value(result));
+        output.push_str("recovery_hint=inspect_operation_result_before_retry\n");
+    }
     let _ = writeln!(output, "message={}", escape_key_value(&error.to_string()));
     output
 }
 
 fn render_workvcs_error_json(error: &WorkVcsError) -> String {
-    render_json_error(serde_json::json!({
+    let mut value = serde_json::json!({
         "error_code": error.code().as_str(),
         "error_category": error.category().as_str(),
         "retryable": error.retryable(),
         "message": error.to_string(),
-    }))
+    });
+    if let WorkVcsError::MutationPostconditionFailed {
+        operation, result, ..
+    } = error
+    {
+        value["operation_completed"] = serde_json::Value::Bool(true);
+        value["operation"] = serde_json::Value::String(operation.clone());
+        value["operation_result"] = serde_json::Value::String(result.clone());
+        value["recovery_hint"] =
+            serde_json::Value::String("inspect_operation_result_before_retry".to_owned());
+    }
+    render_json_error(value)
+}
+
+fn validate_committed_result(
+    operation: &str,
+    mut output: String,
+    validate: impl FnOnce(&mut String) -> Result<()>,
+) -> Result<String> {
+    match validate(&mut output) {
+        Ok(()) => Ok(output),
+        Err(error) => Err(WorkVcsError::MutationPostconditionFailed {
+            operation: operation.to_owned(),
+            result: output,
+            message: error.to_string(),
+        }),
+    }
 }
 
 fn render_json_error(value: serde_json::Value) -> String {
@@ -5567,61 +5602,64 @@ fn run(cli: Cli) -> Result<String> {
             expected_digest_algorithm,
             expected_canonical_json_profile,
         } => {
+            let manifest = StoreManifest::current();
+            let mut expectation_output = String::new();
+            append_expected_text_match(
+                &mut expectation_output,
+                "init display name",
+                &display_name,
+                expected_display_name.as_deref(),
+                "display_name_match_expected",
+            )?;
+            append_expected_i64_match(
+                &mut expectation_output,
+                "init store format version",
+                manifest.store_format_version,
+                expected_store_format_version,
+                "store_format_version_match_expected",
+            )?;
+            append_expected_i64_match(
+                &mut expectation_output,
+                "init schema version",
+                manifest.schema_version,
+                expected_schema_version,
+                "schema_version_match_expected",
+            )?;
+            append_expected_i64_match(
+                &mut expectation_output,
+                "init object store format version",
+                manifest.object_store_format_version,
+                expected_object_store_format_version,
+                "object_store_format_version_match_expected",
+            )?;
+            append_expected_text_match(
+                &mut expectation_output,
+                "init id scheme",
+                &manifest.id_scheme,
+                expected_id_scheme.as_deref(),
+                "id_scheme_match_expected",
+            )?;
+            append_expected_text_match(
+                &mut expectation_output,
+                "init digest algorithm",
+                &manifest.digest_algorithm,
+                expected_digest_algorithm.as_deref(),
+                "digest_algorithm_match_expected",
+            )?;
+            append_expected_text_match(
+                &mut expectation_output,
+                "init canonical JSON profile",
+                &manifest.canonical_json_profile,
+                expected_canonical_json_profile.as_deref(),
+                "canonical_json_profile_match_expected",
+            )?;
             let engine = Engine::init(store, StoreInitOptions::new(display_name)?)?;
             let info = engine.store_info()?;
             let mut output = format!(
                 "initialized store_id={} schema_version={}\n",
                 info.store_id, info.manifest.schema_version
             );
-            append_expected_text_match(
-                &mut output,
-                "init display name",
-                &info.display_name,
-                expected_display_name.as_deref(),
-                "display_name_match_expected",
-            )?;
-            append_expected_i64_match(
-                &mut output,
-                "init store format version",
-                info.manifest.store_format_version,
-                expected_store_format_version,
-                "store_format_version_match_expected",
-            )?;
-            append_expected_i64_match(
-                &mut output,
-                "init schema version",
-                info.manifest.schema_version,
-                expected_schema_version,
-                "schema_version_match_expected",
-            )?;
-            append_expected_i64_match(
-                &mut output,
-                "init object store format version",
-                info.manifest.object_store_format_version,
-                expected_object_store_format_version,
-                "object_store_format_version_match_expected",
-            )?;
-            append_expected_text_match(
-                &mut output,
-                "init id scheme",
-                &info.manifest.id_scheme,
-                expected_id_scheme.as_deref(),
-                "id_scheme_match_expected",
-            )?;
-            append_expected_text_match(
-                &mut output,
-                "init digest algorithm",
-                &info.manifest.digest_algorithm,
-                expected_digest_algorithm.as_deref(),
-                "digest_algorithm_match_expected",
-            )?;
-            append_expected_text_match(
-                &mut output,
-                "init canonical JSON profile",
-                &info.manifest.canonical_json_profile,
-                expected_canonical_json_profile.as_deref(),
-                "canonical_json_profile_match_expected",
-            )?;
+            output.push_str(&expectation_output);
             Ok(output)
         }
         Command::Doctor {
@@ -6122,17 +6160,22 @@ fn run(cli: Cli) -> Result<String> {
                 expected_migrated,
             } => {
                 let result = Engine::migrate_context_packet_snapshot_schema(store)?;
-                let mut output = render_context_packet_snapshot_schema_migration(&result)?;
-                if let Some(expected_migrated) = expected_migrated {
-                    if result.migrated != expected_migrated {
-                        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
-                            "context packet snapshot schema migrated {} does not match expected {}",
-                            result.migrated, expected_migrated
-                        )));
-                    }
-                    output.push_str("migrated_match_expected=true\n");
-                }
-                Ok(output)
+                validate_committed_result(
+                    "store.migrate-context-packet-snapshot",
+                    render_context_packet_snapshot_schema_migration(&result)?,
+                    |output| {
+                        if let Some(expected_migrated) = expected_migrated {
+                            if result.migrated != expected_migrated {
+                                return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                                    "context packet snapshot schema migrated {} does not match expected {}",
+                                    result.migrated, expected_migrated
+                                )));
+                            }
+                            output.push_str("migrated_match_expected=true\n");
+                        }
+                        Ok(())
+                    },
+                )
             }
             StoreCommand::ExternalRefRecord {
                 store,
@@ -7587,70 +7630,75 @@ fn run(cli: Cli) -> Result<String> {
                     payload_index_bytes,
                     payloads,
                 )?)?;
-                let mut output = render_bundle_import_apply(&result);
-                if require_applied {
-                    if !result.applied {
-                        return Err(WorkVcsError::QueryInvalid(format!(
-                            "bundle apply did not apply: outcome={}",
-                            result.outcome
-                        )));
-                    }
-                    output.push_str("applied_required=true\n");
-                }
-                if let Some(expected_outcome) = expected_outcome {
-                    let actual_outcome = &result.outcome;
-                    if actual_outcome != &expected_outcome {
-                        return Err(WorkVcsError::QueryInvalid(format!(
-                            "bundle apply outcome {actual_outcome} does not match expected {expected_outcome}"
-                        )));
-                    }
-                    output.push_str("outcome_matches_expected=true\n");
-                }
-                append_expected_count_match(
-                    &mut output,
-                    "bundle apply imported commits",
-                    result.imported_commits,
-                    expected_imported_commits,
-                    "imported_commits_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle apply imported entity versions",
-                    result.imported_entity_versions,
-                    expected_imported_entity_versions,
-                    "imported_entity_versions_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle apply imported checkpoints",
-                    result.imported_checkpoints,
-                    expected_imported_checkpoints,
-                    "imported_checkpoints_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle apply imported checkpoint statuses",
-                    result.imported_checkpoint_statuses,
-                    expected_imported_checkpoint_statuses,
-                    "imported_checkpoint_statuses_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle apply updated branch heads",
-                    result.updated_branch_heads,
-                    expected_updated_branch_heads,
-                    "updated_branch_heads_match_expected",
-                )?;
-                append_branch_head_detail_expectations(
-                    &mut output,
-                    &result.preflight.branch_head_details,
-                    expected_branch_head_detail_count,
-                    expected_first_branch_head_status,
-                    expected_first_branch_head_source_head,
-                    expected_first_branch_head_target_head,
-                    expected_first_branch_head_merge_base,
-                )?;
-                Ok(output)
+                validate_committed_result(
+                    "bundle.apply-dir",
+                    render_bundle_import_apply(&result),
+                    |output| {
+                        if require_applied {
+                            if !result.applied {
+                                return Err(WorkVcsError::QueryInvalid(format!(
+                                    "bundle apply did not apply: outcome={}",
+                                    result.outcome
+                                )));
+                            }
+                            output.push_str("applied_required=true\n");
+                        }
+                        if let Some(expected_outcome) = expected_outcome {
+                            let actual_outcome = &result.outcome;
+                            if actual_outcome != &expected_outcome {
+                                return Err(WorkVcsError::QueryInvalid(format!(
+                                    "bundle apply outcome {actual_outcome} does not match expected {expected_outcome}"
+                                )));
+                            }
+                            output.push_str("outcome_matches_expected=true\n");
+                        }
+                        append_expected_count_match(
+                            output,
+                            "bundle apply imported commits",
+                            result.imported_commits,
+                            expected_imported_commits,
+                            "imported_commits_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle apply imported entity versions",
+                            result.imported_entity_versions,
+                            expected_imported_entity_versions,
+                            "imported_entity_versions_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle apply imported checkpoints",
+                            result.imported_checkpoints,
+                            expected_imported_checkpoints,
+                            "imported_checkpoints_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle apply imported checkpoint statuses",
+                            result.imported_checkpoint_statuses,
+                            expected_imported_checkpoint_statuses,
+                            "imported_checkpoint_statuses_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle apply updated branch heads",
+                            result.updated_branch_heads,
+                            expected_updated_branch_heads,
+                            "updated_branch_heads_match_expected",
+                        )?;
+                        append_branch_head_detail_expectations(
+                            output,
+                            &result.preflight.branch_head_details,
+                            expected_branch_head_detail_count,
+                            expected_first_branch_head_status,
+                            expected_first_branch_head_source_head,
+                            expected_first_branch_head_target_head,
+                            expected_first_branch_head_merge_base,
+                        )?;
+                        Ok(())
+                    },
+                )
             }
             BundleCommand::ImportDir {
                 store,
@@ -7680,88 +7728,93 @@ fn run(cli: Cli) -> Result<String> {
                         payload_index_bytes,
                         payloads,
                     )?)?;
-                let mut output = render_bundle_import_attempt(&result);
-                if require_valid {
-                    if !result.preflight.valid {
-                        return Err(WorkVcsError::QueryInvalid(format!(
-                            "bundle import validation failed: {}",
-                            result
-                                .preflight
-                                .problem
-                                .as_deref()
-                                .unwrap_or("unknown problem")
-                        )));
-                    }
-                    output.push_str("valid_required=true\n");
-                }
-                if let Some(expected_outcome) = expected_outcome {
-                    let actual_outcome = &result.outcome;
-                    if actual_outcome != &expected_outcome {
-                        return Err(WorkVcsError::QueryInvalid(format!(
-                            "bundle import outcome {actual_outcome} does not match expected {expected_outcome}"
-                        )));
-                    }
-                    output.push_str("outcome_matches_expected=true\n");
-                }
-                append_expected_count_match(
-                    &mut output,
-                    "bundle import payload files",
-                    result.preflight.payload_files,
-                    expected_payload_files,
-                    "payload_files_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle import payload references",
-                    result.preflight.payload_references,
-                    expected_payload_references,
-                    "payload_references_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle import exported branch heads",
-                    result.preflight.exported_branch_heads,
-                    expected_exported_branch_heads,
-                    "exported_branch_heads_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle import branch heads already present",
-                    result.preflight.branch_heads_already_present,
-                    expected_branch_heads_already_present,
-                    "branch_heads_already_present_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle import branch heads missing",
-                    result.preflight.branch_heads_missing,
-                    expected_branch_heads_missing,
-                    "branch_heads_missing_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle import branch heads fast forward",
-                    result.preflight.branch_heads_fast_forward,
-                    expected_branch_heads_fast_forward,
-                    "branch_heads_fast_forward_match_expected",
-                )?;
-                append_expected_count_match(
-                    &mut output,
-                    "bundle import branch heads diverged",
-                    result.preflight.branch_heads_diverged,
-                    expected_branch_heads_diverged,
-                    "branch_heads_diverged_match_expected",
-                )?;
-                append_branch_head_detail_expectations(
-                    &mut output,
-                    &result.preflight.branch_head_details,
-                    expected_branch_head_detail_count,
-                    expected_first_branch_head_status,
-                    expected_first_branch_head_source_head,
-                    expected_first_branch_head_target_head,
-                    expected_first_branch_head_merge_base,
-                )?;
-                Ok(output)
+                validate_committed_result(
+                    "bundle.import-dir",
+                    render_bundle_import_attempt(&result),
+                    |output| {
+                        if require_valid {
+                            if !result.preflight.valid {
+                                return Err(WorkVcsError::QueryInvalid(format!(
+                                    "bundle import validation failed: {}",
+                                    result
+                                        .preflight
+                                        .problem
+                                        .as_deref()
+                                        .unwrap_or("unknown problem")
+                                )));
+                            }
+                            output.push_str("valid_required=true\n");
+                        }
+                        if let Some(expected_outcome) = expected_outcome {
+                            let actual_outcome = &result.outcome;
+                            if actual_outcome != &expected_outcome {
+                                return Err(WorkVcsError::QueryInvalid(format!(
+                                    "bundle import outcome {actual_outcome} does not match expected {expected_outcome}"
+                                )));
+                            }
+                            output.push_str("outcome_matches_expected=true\n");
+                        }
+                        append_expected_count_match(
+                            output,
+                            "bundle import payload files",
+                            result.preflight.payload_files,
+                            expected_payload_files,
+                            "payload_files_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle import payload references",
+                            result.preflight.payload_references,
+                            expected_payload_references,
+                            "payload_references_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle import exported branch heads",
+                            result.preflight.exported_branch_heads,
+                            expected_exported_branch_heads,
+                            "exported_branch_heads_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle import branch heads already present",
+                            result.preflight.branch_heads_already_present,
+                            expected_branch_heads_already_present,
+                            "branch_heads_already_present_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle import branch heads missing",
+                            result.preflight.branch_heads_missing,
+                            expected_branch_heads_missing,
+                            "branch_heads_missing_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle import branch heads fast forward",
+                            result.preflight.branch_heads_fast_forward,
+                            expected_branch_heads_fast_forward,
+                            "branch_heads_fast_forward_match_expected",
+                        )?;
+                        append_expected_count_match(
+                            output,
+                            "bundle import branch heads diverged",
+                            result.preflight.branch_heads_diverged,
+                            expected_branch_heads_diverged,
+                            "branch_heads_diverged_match_expected",
+                        )?;
+                        append_branch_head_detail_expectations(
+                            output,
+                            &result.preflight.branch_head_details,
+                            expected_branch_head_detail_count,
+                            expected_first_branch_head_status,
+                            expected_first_branch_head_source_head,
+                            expected_first_branch_head_target_head,
+                            expected_first_branch_head_merge_base,
+                        )?;
+                        Ok(())
+                    },
+                )
             }
             BundleCommand::ImportShow {
                 store,
@@ -8009,17 +8062,22 @@ fn run(cli: Cli) -> Result<String> {
                 let mut engine = Engine::open(store)?;
                 let result =
                     engine.validate_checkpoint(CheckpointId::parse_canonical(&checkpoint)?)?;
-                let mut output = render_checkpoint_validation(&result);
-                if require_valid {
-                    if !result.valid {
-                        return Err(WorkVcsError::QueryInvalid(format!(
-                            "checkpoint validation failed: {}",
-                            result.problem.as_deref().unwrap_or("unknown problem")
-                        )));
-                    }
-                    output.push_str("valid_required=true\n");
-                }
-                Ok(output)
+                validate_committed_result(
+                    "checkpoint.validate",
+                    render_checkpoint_validation(&result),
+                    |output| {
+                        if require_valid {
+                            if !result.valid {
+                                return Err(WorkVcsError::QueryInvalid(format!(
+                                    "checkpoint validation failed: {}",
+                                    result.problem.as_deref().unwrap_or("unknown problem")
+                                )));
+                            }
+                            output.push_str("valid_required=true\n");
+                        }
+                        Ok(())
+                    },
+                )
             }
             CheckpointCommand::List {
                 store,
@@ -10159,20 +10217,40 @@ fn run(cli: Cli) -> Result<String> {
                         ));
                     }
                 };
-                let mut options = VerificationCreateOptions::new(
-                    BranchId::parse_canonical(&branch)?,
-                    CommitId::parse_canonical(&head)?,
+                let branch_id = BranchId::parse_canonical(&branch)?;
+                let head_id = CommitId::parse_canonical(&head)?;
+                let verification_result = parse_verification_result(&result)?;
+                let evidence_ids = evidence
+                    .iter()
+                    .map(|evidence_id| EvidenceId::parse_canonical(evidence_id))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut expectation_output = String::new();
+                append_verification_record_expectations(
+                    &mut expectation_output,
+                    branch_id,
+                    head_id,
                     target,
-                    parse_verification_result(&result)?,
+                    verification_result,
+                    evidence_ids.len(),
+                    VerificationRecordExpectationArgs {
+                        expected_branch,
+                        expected_head,
+                        expected_target_kind,
+                        expected_target,
+                        expected_result,
+                        expected_evidence_relations,
+                    },
+                )?;
+                let mut options = VerificationCreateOptions::new(
+                    branch_id,
+                    head_id,
+                    target,
+                    verification_result,
                 )?;
                 if let Some(method) = method {
                     options = options.with_method(method_value(&method))?;
                 }
-                if !evidence.is_empty() {
-                    let evidence_ids = evidence
-                        .iter()
-                        .map(|evidence_id| EvidenceId::parse_canonical(evidence_id))
-                        .collect::<Result<Vec<_>>>()?;
+                if !evidence_ids.is_empty() {
                     options = options.with_evidence(evidence_ids)?;
                 }
                 if resource.is_some()
@@ -10199,18 +10277,7 @@ fn run(cli: Cli) -> Result<String> {
                 }
                 let verification = engine.create_verification(options)?;
                 let mut output = render_verification_create(&verification);
-                append_verification_record_expectations(
-                    &mut output,
-                    &verification,
-                    VerificationRecordExpectationArgs {
-                        expected_branch,
-                        expected_head,
-                        expected_target_kind,
-                        expected_target,
-                        expected_result,
-                        expected_evidence_relations,
-                    },
-                )?;
+                output.push_str(&expectation_output);
                 Ok(output)
             }
             VerificationCommand::Show {
@@ -10353,6 +10420,9 @@ fn run(cli: Cli) -> Result<String> {
                 expected_resource_stamps,
             } => {
                 let mut engine = Engine::open(store)?;
+                let branch_id = BranchId::parse_canonical(&branch)?;
+                let head_id = CommitId::parse_canonical(&head)?;
+                let verification_id = EntityId::parse_canonical(&verification)?;
                 let stamp = applicability_stamp_from_cli(
                     resource_basis_ordinal,
                     adapter_kind,
@@ -10362,11 +10432,29 @@ fn run(cli: Cli) -> Result<String> {
                     observed_fingerprint,
                     observation,
                 )?;
+                let mut expectation_output = String::new();
+                if let Some(expected_evaluated_commit) = expected_evaluated_commit.as_deref() {
+                    let expected_evaluated_commit =
+                        CommitId::parse_canonical(expected_evaluated_commit)?;
+                    if head_id != expected_evaluated_commit {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "verification cache record evaluated commit {head_id} does not match expected {expected_evaluated_commit}"
+                        )));
+                    }
+                    expectation_output.push_str("evaluated_commit_matches_expected=true\n");
+                }
+                append_expected_count_match(
+                    &mut expectation_output,
+                    "verification cache record resource stamps",
+                    1,
+                    expected_resource_stamps,
+                    "resource_stamps_match_expected",
+                )?;
                 let snapshot = engine.record_verification_applicability(
                     VerificationApplicabilityRecordOptions::new(
-                        BranchId::parse_canonical(&branch)?,
-                        EntityId::parse_canonical(&verification)?,
-                        CommitId::parse_canonical(&head)?,
+                        branch_id,
+                        verification_id,
+                        head_id,
                     )?
                     .with_resource_stamps(vec![stamp])?
                     .with_detail(parse_cli_object(
@@ -10374,18 +10462,27 @@ fn run(cli: Cli) -> Result<String> {
                         &detail_json,
                     )?)?,
                 )?;
-                let mut output = render_verification_applicability_cache(&snapshot);
-                append_verification_cache_record_expectations(
-                    &mut output,
-                    &snapshot,
-                    VerificationCacheRecordExpectationArgs {
-                        expected_evaluated_commit,
-                        expected_applicability,
-                        expected_reason_code,
-                        expected_resource_stamps,
+                validate_committed_result(
+                    "verification.cache-record",
+                    {
+                        let mut output = render_verification_applicability_cache(&snapshot);
+                        output.push_str(&expectation_output);
+                        output
                     },
-                )?;
-                Ok(output)
+                    |output| {
+                        append_verification_cache_record_expectations(
+                            output,
+                            &snapshot,
+                            VerificationCacheRecordExpectationArgs {
+                                expected_evaluated_commit: None,
+                                expected_applicability,
+                                expected_reason_code,
+                                expected_resource_stamps: None,
+                            },
+                        )?;
+                        Ok(())
+                    },
+                )
             }
             VerificationCommand::CacheRefresh {
                 store,
@@ -10447,15 +10544,20 @@ fn run(cli: Cli) -> Result<String> {
                         expected_evaluated_commit_id,
                         detail,
                     )?;
-                    let mut output = render_verification_applicability_cache_refresh_batch(&batch);
-                    append_expected_count_match(
-                        &mut output,
-                        "refreshed verification caches",
-                        batch.caches.len(),
-                        expected_refreshed,
-                        "refreshed_caches_match_expected",
-                    )?;
-                    return Ok(output);
+                    return validate_committed_result(
+                        "verification.cache-refresh",
+                        render_verification_applicability_cache_refresh_batch(&batch),
+                        |output| {
+                            append_expected_count_match(
+                                output,
+                                "refreshed verification caches",
+                                batch.caches.len(),
+                                expected_refreshed,
+                                "refreshed_caches_match_expected",
+                            )?;
+                            Ok(())
+                        },
+                    );
                 }
                 if expected_refreshed.is_some() {
                     return Err(WorkVcsError::TaskInvalid(
@@ -10519,18 +10621,23 @@ fn run(cli: Cli) -> Result<String> {
                 } else {
                     engine.refresh_verification_applicability(options)?
                 };
-                let mut output = render_verification_applicability_cache(&snapshot);
-                append_verification_cache_record_expectations(
-                    &mut output,
-                    &snapshot,
-                    VerificationCacheRecordExpectationArgs {
-                        expected_evaluated_commit,
-                        expected_applicability,
-                        expected_reason_code,
-                        expected_resource_stamps,
+                validate_committed_result(
+                    "verification.cache-refresh",
+                    render_verification_applicability_cache(&snapshot),
+                    |output| {
+                        append_verification_cache_record_expectations(
+                            output,
+                            &snapshot,
+                            VerificationCacheRecordExpectationArgs {
+                                expected_evaluated_commit,
+                                expected_applicability,
+                                expected_reason_code,
+                                expected_resource_stamps,
+                            },
+                        )?;
+                        Ok(())
                     },
-                )?;
-                Ok(output)
+                )
             }
             VerificationCommand::CacheShow {
                 store,
@@ -10683,48 +10790,49 @@ fn run(cli: Cli) -> Result<String> {
                     metadata_json,
                 },
         } => {
-            let mut engine = Engine::open(store)?;
-            let session = engine.start_session(
-                SessionStartOptions::new(
-                    workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
-                    BranchId::parse_canonical(&branch)?,
-                )?
-                .with_metadata(parse_cli_object("session metadata", &metadata_json)?)?,
-            )?;
-            let mut output = render_session_start(&session);
+            let workspace_id = workvcs_core::WorkspaceId::parse_canonical(&workspace)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let metadata = parse_cli_object("session metadata", &metadata_json)?;
+            let mut expectation_output = String::new();
             if let Some(expected_workspace) = expected_workspace {
                 let expected_workspace =
                     workvcs_core::WorkspaceId::parse_canonical(&expected_workspace)?;
-                if session.workspace_id != expected_workspace {
+                if workspace_id != expected_workspace {
                     return Err(WorkVcsError::SessionInvalid(format!(
                         "session start workspace {} does not match expected {}",
-                        session.workspace_id, expected_workspace
+                        workspace_id, expected_workspace
                     )));
                 }
-                output.push_str("workspace_match_expected=true\n");
+                expectation_output.push_str("workspace_match_expected=true\n");
             }
             if let Some(expected_branch) = expected_branch {
                 let expected_branch = BranchId::parse_canonical(&expected_branch)?;
-                if session.branch_id != expected_branch {
+                if branch_id != expected_branch {
                     return Err(WorkVcsError::SessionInvalid(format!(
                         "session start branch {} does not match expected {}",
-                        session.branch_id, expected_branch
+                        branch_id, expected_branch
                     )));
                 }
-                output.push_str("branch_match_expected=true\n");
+                expectation_output.push_str("branch_match_expected=true\n");
             }
             if let Some(expected_lifecycle_state) = expected_lifecycle_state {
                 let expected_lifecycle_state =
                     parse_session_lifecycle_state(&expected_lifecycle_state)?;
-                if session.state.lifecycle_state != expected_lifecycle_state {
+                if SessionLifecycleState::Active != expected_lifecycle_state {
                     return Err(WorkVcsError::SessionInvalid(format!(
                         "session start lifecycle state {} does not match expected {}",
-                        session_lifecycle_state(session.state.lifecycle_state),
+                        session_lifecycle_state(SessionLifecycleState::Active),
                         session_lifecycle_state(expected_lifecycle_state)
                     )));
                 }
-                output.push_str("lifecycle_state_match_expected=true\n");
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
             }
+            let mut engine = Engine::open(store)?;
+            let session = engine.start_session(
+                SessionStartOptions::new(workspace_id, branch_id)?.with_metadata(metadata)?,
+            )?;
+            let mut output = render_session_start(&session);
+            output.push_str(&expectation_output);
             Ok(output)
         }
         Command::Session {
@@ -10889,23 +10997,63 @@ fn run(cli: Cli) -> Result<String> {
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let updated = engine.set_session_focus(SessionFocusOptions::new(
-                SessionId::parse_canonical(&session)?,
-                EntityId::parse_canonical(&focus)?,
-            ))?;
-            let mut output = render_session_focus_update(&updated);
-            append_session_focus_expectations(
-                &mut output,
-                &updated,
-                "session focus-set",
-                SessionFocusExpectationArgs {
-                    expected_session,
-                    expected_focus,
-                    expected_focus_path_entries,
-                    expected_lifecycle_state,
+            let session_id = SessionId::parse_canonical(&session)?;
+            let focus_id = EntityId::parse_canonical(&focus)?;
+            let mut expectation_output = String::new();
+            if let Some(expected_session) = expected_session.as_deref() {
+                let expected_session = SessionId::parse_canonical(expected_session)?;
+                if session_id != expected_session {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session focus-set session {session_id} does not match expected {expected_session}"
+                    )));
+                }
+                expectation_output.push_str("session_match_expected=true\n");
+            }
+            if let Some(expected_focus) = expected_focus.as_deref() {
+                let expected_focus = optional_focus_expectation(expected_focus)?;
+                if expected_focus != Some(focus_id) {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session focus-set focus {focus_id} does not match expected {}",
+                        render_optional_display_or_none(expected_focus.as_ref())
+                    )));
+                }
+                expectation_output.push_str("focus_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
+                let expected_lifecycle_state =
+                    parse_session_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != SessionLifecycleState::Active {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session focus-set lifecycle state active does not match expected {}",
+                        session_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            let updated =
+                engine.set_session_focus(SessionFocusOptions::new(session_id, focus_id))?;
+            validate_committed_result(
+                "session.focus-set",
+                {
+                    let mut output = render_session_focus_update(&updated);
+                    output.push_str(&expectation_output);
+                    output
                 },
-            )?;
-            Ok(output)
+                |output| {
+                    append_session_focus_expectations(
+                        output,
+                        &updated,
+                        "session focus-set",
+                        SessionFocusExpectationArgs {
+                            expected_session: None,
+                            expected_focus: None,
+                            expected_focus_path_entries,
+                            expected_lifecycle_state: None,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Session {
             command:
@@ -10919,20 +11067,61 @@ fn run(cli: Cli) -> Result<String> {
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let updated = engine.clear_session_focus(SessionId::parse_canonical(&session)?)?;
-            let mut output = render_session_focus_update(&updated);
-            append_session_focus_expectations(
-                &mut output,
-                &updated,
-                "session focus-clear",
-                SessionFocusExpectationArgs {
-                    expected_session,
-                    expected_focus,
-                    expected_focus_path_entries,
-                    expected_lifecycle_state,
+            let session_id = SessionId::parse_canonical(&session)?;
+            let mut expectation_output = String::new();
+            if let Some(expected_session) = expected_session.as_deref() {
+                let expected_session = SessionId::parse_canonical(expected_session)?;
+                if session_id != expected_session {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session focus-clear session {session_id} does not match expected {expected_session}"
+                    )));
+                }
+                expectation_output.push_str("session_match_expected=true\n");
+            }
+            if let Some(expected_focus) = expected_focus.as_deref() {
+                let expected_focus = optional_focus_expectation(expected_focus)?;
+                if expected_focus.is_some() {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session focus-clear focus none does not match expected {}",
+                        render_optional_display_or_none(expected_focus.as_ref())
+                    )));
+                }
+                expectation_output.push_str("focus_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
+                let expected_lifecycle_state =
+                    parse_session_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != SessionLifecycleState::Active {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session focus-clear lifecycle state active does not match expected {}",
+                        session_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            let updated = engine.clear_session_focus(session_id)?;
+            validate_committed_result(
+                "session.focus-clear",
+                {
+                    let mut output = render_session_focus_update(&updated);
+                    output.push_str(&expectation_output);
+                    output
                 },
-            )?;
-            Ok(output)
+                |output| {
+                    append_session_focus_expectations(
+                        output,
+                        &updated,
+                        "session focus-clear",
+                        SessionFocusExpectationArgs {
+                            expected_session: None,
+                            expected_focus: None,
+                            expected_focus_path_entries,
+                            expected_lifecycle_state: None,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Session {
             command:
@@ -10947,71 +11136,80 @@ fn run(cli: Cli) -> Result<String> {
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let marked = engine.mark_session_potentially_stale(SessionMarkStaleOptions::new(
-                SessionId::parse_canonical(&session)?,
-                rationale,
-            )?)?;
-            let mut output = render_session_mark_stale(&marked);
-            if let Some(expected_session) = expected_session {
-                let expected_session = SessionId::parse_canonical(&expected_session)?;
-                if marked.session_id != expected_session {
+            let session_id = SessionId::parse_canonical(&session)?;
+            let mut expectation_output = String::new();
+            if let Some(expected_session) = expected_session.as_deref() {
+                let expected_session = SessionId::parse_canonical(expected_session)?;
+                if session_id != expected_session {
                     return Err(WorkVcsError::SessionInvalid(format!(
-                        "session mark-stale session {} does not match expected {}",
-                        marked.session_id, expected_session
+                        "session mark-stale session {session_id} does not match expected {expected_session}"
                     )));
                 }
-                output.push_str("session_match_expected=true\n");
+                expectation_output.push_str("session_match_expected=true\n");
             }
-            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
                 let expected_lifecycle_state =
-                    parse_session_lifecycle_state(&expected_lifecycle_state)?;
-                if marked.state.lifecycle_state != expected_lifecycle_state {
+                    parse_session_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != SessionLifecycleState::PotentiallyStale {
                     return Err(WorkVcsError::SessionInvalid(format!(
-                        "session mark-stale lifecycle state {} does not match expected {}",
-                        session_lifecycle_state(marked.state.lifecycle_state),
+                        "session mark-stale lifecycle state potentially_stale does not match expected {}",
                         session_lifecycle_state(expected_lifecycle_state)
                     )));
                 }
-                output.push_str("lifecycle_state_match_expected=true\n");
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
             }
-            if let Some(expected_active_workspace) = expected_active_workspace {
-                let expected_active_workspace =
-                    workvcs_core::WorkspaceId::parse_canonical(&expected_active_workspace)?;
-                match marked.state.active_workspace_id {
-                    Some(actual) if actual == expected_active_workspace => {
-                        output.push_str("active_workspace_match_expected=true\n");
+            let marked = engine.mark_session_potentially_stale(SessionMarkStaleOptions::new(
+                session_id, rationale,
+            )?)?;
+            validate_committed_result(
+                "session.mark-stale",
+                {
+                    let mut output = render_session_mark_stale(&marked);
+                    output.push_str(&expectation_output);
+                    output
+                },
+                |output| {
+                    if let Some(expected_active_workspace) = expected_active_workspace {
+                        let expected_active_workspace =
+                            workvcs_core::WorkspaceId::parse_canonical(&expected_active_workspace)?;
+                        match marked.state.active_workspace_id {
+                            Some(actual) if actual == expected_active_workspace => {
+                                output.push_str("active_workspace_match_expected=true\n");
+                            }
+                            Some(actual) => {
+                                return Err(WorkVcsError::SessionInvalid(format!(
+                                    "session mark-stale active workspace {actual} does not match expected {expected_active_workspace}"
+                                )));
+                            }
+                            None => {
+                                return Err(WorkVcsError::SessionInvalid(format!(
+                                    "session mark-stale active workspace none does not match expected {expected_active_workspace}"
+                                )));
+                            }
+                        }
                     }
-                    Some(actual) => {
-                        return Err(WorkVcsError::SessionInvalid(format!(
-                            "session mark-stale active workspace {actual} does not match expected {expected_active_workspace}"
-                        )));
+                    if let Some(expected_active_branch) = expected_active_branch {
+                        let expected_active_branch =
+                            BranchId::parse_canonical(&expected_active_branch)?;
+                        match marked.state.active_branch_id {
+                            Some(actual) if actual == expected_active_branch => {
+                                output.push_str("active_branch_match_expected=true\n");
+                            }
+                            Some(actual) => {
+                                return Err(WorkVcsError::SessionInvalid(format!(
+                                    "session mark-stale active branch {actual} does not match expected {expected_active_branch}"
+                                )));
+                            }
+                            None => {
+                                return Err(WorkVcsError::SessionInvalid(format!(
+                                    "session mark-stale active branch none does not match expected {expected_active_branch}"
+                                )));
+                            }
+                        }
                     }
-                    None => {
-                        return Err(WorkVcsError::SessionInvalid(format!(
-                            "session mark-stale active workspace none does not match expected {expected_active_workspace}"
-                        )));
-                    }
-                }
-            }
-            if let Some(expected_active_branch) = expected_active_branch {
-                let expected_active_branch = BranchId::parse_canonical(&expected_active_branch)?;
-                match marked.state.active_branch_id {
-                    Some(actual) if actual == expected_active_branch => {
-                        output.push_str("active_branch_match_expected=true\n");
-                    }
-                    Some(actual) => {
-                        return Err(WorkVcsError::SessionInvalid(format!(
-                            "session mark-stale active branch {actual} does not match expected {expected_active_branch}"
-                        )));
-                    }
-                    None => {
-                        return Err(WorkVcsError::SessionInvalid(format!(
-                            "session mark-stale active branch none does not match expected {expected_active_branch}"
-                        )));
-                    }
-                }
-            }
-            Ok(output)
+                    Ok(())
+                },
+            )
         }
         Command::Session {
             command:
@@ -11032,31 +11230,94 @@ fn run(cli: Cli) -> Result<String> {
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let mut options = SessionSwitchOptions::new(
-                SessionId::parse_canonical(&session)?,
-                workvcs_core::WorkspaceId::parse_canonical(&workspace)?,
-                BranchId::parse_canonical(&branch)?,
-            );
-            if let Some(focus) = focus {
-                options = options.with_focus(EntityId::parse_canonical(&focus)?);
+            let session_id = SessionId::parse_canonical(&session)?;
+            let workspace_id = workvcs_core::WorkspaceId::parse_canonical(&workspace)?;
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let focus_id = focus
+                .as_deref()
+                .map(EntityId::parse_canonical)
+                .transpose()?;
+            let mut expectation_output = String::new();
+            if let Some(expected_session) = expected_session.as_deref() {
+                let expected_session = SessionId::parse_canonical(expected_session)?;
+                if session_id != expected_session {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session switch session {session_id} does not match expected {expected_session}"
+                    )));
+                }
+                expectation_output.push_str("session_match_expected=true\n");
+            }
+            if let Some(expected_workspace) = expected_workspace.as_deref() {
+                let expected_workspace =
+                    workvcs_core::WorkspaceId::parse_canonical(expected_workspace)?;
+                if workspace_id != expected_workspace {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session switch workspace {workspace_id} does not match expected {expected_workspace}"
+                    )));
+                }
+                expectation_output.push_str("workspace_match_expected=true\n");
+            }
+            if let Some(expected_branch) = expected_branch.as_deref() {
+                let expected_branch = BranchId::parse_canonical(expected_branch)?;
+                if branch_id != expected_branch {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session switch branch {branch_id} does not match expected {expected_branch}"
+                    )));
+                }
+                expectation_output.push_str("branch_match_expected=true\n");
+            }
+            if let Some(expected_focus) = expected_focus.as_deref() {
+                let expected_focus = optional_focus_expectation(expected_focus)?;
+                if focus_id != expected_focus {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session switch focus {} does not match expected {}",
+                        render_optional_display_or_none(focus_id.as_ref()),
+                        render_optional_display_or_none(expected_focus.as_ref())
+                    )));
+                }
+                expectation_output.push_str("focus_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
+                let expected_lifecycle_state =
+                    parse_session_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != SessionLifecycleState::Active {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "session switch lifecycle state active does not match expected {}",
+                        session_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
+            }
+            let mut options = SessionSwitchOptions::new(session_id, workspace_id, branch_id);
+            if let Some(focus_id) = focus_id {
+                options = options.with_focus(focus_id);
             }
             let switched = engine.switch_session(options)?;
-            let mut output = render_session_switch(&switched);
-            append_session_switch_expectations(
-                &mut output,
-                &switched,
-                SessionSwitchExpectationArgs {
-                    expected_session,
-                    expected_previous_workspace,
-                    expected_previous_branch,
-                    expected_workspace,
-                    expected_branch,
-                    expected_released_claims,
-                    expected_focus,
-                    expected_lifecycle_state,
+            validate_committed_result(
+                "session.switch",
+                {
+                    let mut output = render_session_switch(&switched);
+                    output.push_str(&expectation_output);
+                    output
                 },
-            )?;
-            Ok(output)
+                |output| {
+                    append_session_switch_expectations(
+                        output,
+                        &switched,
+                        SessionSwitchExpectationArgs {
+                            expected_session: None,
+                            expected_previous_workspace,
+                            expected_previous_branch,
+                            expected_workspace: None,
+                            expected_branch: None,
+                            expected_released_claims,
+                            expected_focus: None,
+                            expected_lifecycle_state: None,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Session {
             command:
@@ -11257,6 +11518,27 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let mut engine = Engine::open(store)?;
             let session_id = SessionId::parse_canonical(&session)?;
+            let requested_mode = parse_claim_mode(&mode)?;
+            if let Some(expected_mode) = expected_mode.as_deref() {
+                let expected_mode = parse_claim_mode(expected_mode)?;
+                if requested_mode != expected_mode {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim next requested mode {} does not match expected {}",
+                        claim_mode(requested_mode),
+                        claim_mode(expected_mode)
+                    )));
+                }
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
+                let expected_lifecycle_state =
+                    parse_claim_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != ClaimLifecycleState::Active {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim next lifecycle state active does not match expected {}",
+                        claim_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+            }
             let mut context_options = ContextPacketOptions::new(session_id);
             let context_scope = scope_from_cli(
                 "context scope",
@@ -11279,22 +11561,24 @@ fn run(cli: Cli) -> Result<String> {
             if let Some(scope) = context_scope {
                 context_options = context_options.with_scope(scope.into_value())?;
             }
-            let claimed = engine.claim_next_task(
-                ClaimNextOptions::new(session_id).with_mode(parse_claim_mode(&mode)?),
-            )?;
-            let mut output = render_claim_next(&claimed);
-            append_claim_next_expectations(
-                &mut output,
-                &claimed,
-                ClaimNextExpectationArgs {
-                    expected_selected,
-                    expected_head,
-                    expected_inspected_candidates,
-                    expected_task,
-                    expected_mode,
-                    expected_lifecycle_state,
-                },
-            )?;
+            let claimed = engine
+                .claim_next_task(ClaimNextOptions::new(session_id).with_mode(requested_mode))?;
+            let mut output =
+                validate_committed_result("claim.next", render_claim_next(&claimed), |output| {
+                    append_claim_next_expectations(
+                        output,
+                        &claimed,
+                        ClaimNextExpectationArgs {
+                            expected_selected,
+                            expected_head,
+                            expected_inspected_candidates,
+                            expected_task,
+                            expected_mode,
+                            expected_lifecycle_state,
+                        },
+                    )?;
+                    Ok(())
+                })?;
             if use_context_packet {
                 let packet = engine.context_packet(context_options)?;
                 output.push_str("claim_next_context_packet=true\n");
@@ -11317,69 +11601,75 @@ fn run(cli: Cli) -> Result<String> {
                 },
         } => {
             let mut engine = Engine::open(store)?;
-            let claim = engine.claim_task(
-                ClaimTaskOptions::new(
-                    SessionId::parse_canonical(&session)?,
-                    EntityId::parse_canonical(&task)?,
-                )
-                .with_mode(parse_claim_mode(&mode)?),
-            )?;
-            let mut output = render_claim_task(&claim);
-            if let Some(expected_workspace) = expected_workspace {
-                let expected_workspace =
-                    workvcs_core::WorkspaceId::parse_canonical(&expected_workspace)?;
-                if claim.workspace_id != expected_workspace {
+            let session_id = SessionId::parse_canonical(&session)?;
+            let task_id = EntityId::parse_canonical(&task)?;
+            let requested_mode = parse_claim_mode(&mode)?;
+            let mut expectation_output = String::new();
+            if let Some(expected_task) = expected_task.as_deref() {
+                let expected_task = EntityId::parse_canonical(expected_task)?;
+                if task_id != expected_task {
                     return Err(WorkVcsError::QueryInvalid(format!(
-                        "claim task workspace {} does not match expected {}",
-                        claim.workspace_id, expected_workspace
+                        "claim task task {task_id} does not match expected {expected_task}"
                     )));
                 }
-                output.push_str("workspace_match_expected=true\n");
+                expectation_output.push_str("task_match_expected=true\n");
             }
-            if let Some(expected_branch) = expected_branch {
-                let expected_branch = BranchId::parse_canonical(&expected_branch)?;
-                if claim.branch_id != expected_branch {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "claim task branch {} does not match expected {}",
-                        claim.branch_id, expected_branch
-                    )));
-                }
-                output.push_str("branch_match_expected=true\n");
-            }
-            if let Some(expected_task) = expected_task {
-                let expected_task = EntityId::parse_canonical(&expected_task)?;
-                if claim.task_entity_id != expected_task {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "claim task task {} does not match expected {}",
-                        claim.task_entity_id, expected_task
-                    )));
-                }
-                output.push_str("task_match_expected=true\n");
-            }
-            if let Some(expected_mode) = expected_mode {
-                let expected_mode = parse_claim_mode(&expected_mode)?;
-                if claim.mode != expected_mode {
+            if let Some(expected_mode) = expected_mode.as_deref() {
+                let expected_mode = parse_claim_mode(expected_mode)?;
+                if requested_mode != expected_mode {
                     return Err(WorkVcsError::ClaimInvalid(format!(
                         "claim task mode {} does not match expected {}",
-                        claim_mode(claim.mode),
+                        claim_mode(requested_mode),
                         claim_mode(expected_mode)
                     )));
                 }
-                output.push_str("mode_match_expected=true\n");
+                expectation_output.push_str("mode_match_expected=true\n");
             }
-            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
                 let expected_lifecycle_state =
-                    parse_claim_lifecycle_state(&expected_lifecycle_state)?;
-                if claim.state.lifecycle_state != expected_lifecycle_state {
+                    parse_claim_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != ClaimLifecycleState::Active {
                     return Err(WorkVcsError::ClaimInvalid(format!(
-                        "claim task lifecycle state {} does not match expected {}",
-                        claim_lifecycle_state(claim.state.lifecycle_state),
+                        "claim task lifecycle state active does not match expected {}",
                         claim_lifecycle_state(expected_lifecycle_state)
                     )));
                 }
-                output.push_str("lifecycle_state_match_expected=true\n");
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
             }
-            Ok(output)
+            let claim = engine
+                .claim_task(ClaimTaskOptions::new(session_id, task_id).with_mode(requested_mode))?;
+            validate_committed_result(
+                "claim.task",
+                {
+                    let mut output = render_claim_task(&claim);
+                    output.push_str(&expectation_output);
+                    output
+                },
+                |output| {
+                    if let Some(expected_workspace) = expected_workspace {
+                        let expected_workspace =
+                            workvcs_core::WorkspaceId::parse_canonical(&expected_workspace)?;
+                        if claim.workspace_id != expected_workspace {
+                            return Err(WorkVcsError::QueryInvalid(format!(
+                                "claim task workspace {} does not match expected {}",
+                                claim.workspace_id, expected_workspace
+                            )));
+                        }
+                        output.push_str("workspace_match_expected=true\n");
+                    }
+                    if let Some(expected_branch) = expected_branch {
+                        let expected_branch = BranchId::parse_canonical(&expected_branch)?;
+                        if claim.branch_id != expected_branch {
+                            return Err(WorkVcsError::QueryInvalid(format!(
+                                "claim task branch {} does not match expected {}",
+                                claim.branch_id, expected_branch
+                            )));
+                        }
+                        output.push_str("branch_match_expected=true\n");
+                    }
+                    Ok(())
+                },
+            )
         }
         Command::Claim {
             command:
@@ -11391,34 +11681,33 @@ fn run(cli: Cli) -> Result<String> {
                     expected_lifecycle_state,
                 },
         } => {
-            let mut engine = Engine::open(store)?;
-            let released = engine.release_claim(ClaimReleaseOptions::new(
-                SessionId::parse_canonical(&session)?,
-                ClaimId::parse_canonical(&claim)?,
-            ))?;
-            let mut output = render_claim_release(&released);
-            if let Some(expected_session) = expected_session {
-                let expected_session = SessionId::parse_canonical(&expected_session)?;
-                if released.session_id != expected_session {
+            let session_id = SessionId::parse_canonical(&session)?;
+            let claim_id = ClaimId::parse_canonical(&claim)?;
+            let mut expectation_output = String::new();
+            if let Some(expected_session) = expected_session.as_deref() {
+                let expected_session = SessionId::parse_canonical(expected_session)?;
+                if session_id != expected_session {
                     return Err(WorkVcsError::ClaimInvalid(format!(
-                        "claim release session {} does not match expected {}",
-                        released.session_id, expected_session
+                        "claim release session {session_id} does not match expected {expected_session}"
                     )));
                 }
-                output.push_str("session_match_expected=true\n");
+                expectation_output.push_str("session_match_expected=true\n");
             }
-            if let Some(expected_lifecycle_state) = expected_lifecycle_state {
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
                 let expected_lifecycle_state =
-                    parse_claim_lifecycle_state(&expected_lifecycle_state)?;
-                if released.state.lifecycle_state != expected_lifecycle_state {
+                    parse_claim_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != ClaimLifecycleState::Released {
                     return Err(WorkVcsError::ClaimInvalid(format!(
-                        "claim release lifecycle state {} does not match expected {}",
-                        claim_lifecycle_state(released.state.lifecycle_state),
+                        "claim release lifecycle state released does not match expected {}",
                         claim_lifecycle_state(expected_lifecycle_state)
                     )));
                 }
-                output.push_str("lifecycle_state_match_expected=true\n");
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
             }
+            let mut engine = Engine::open(store)?;
+            let released = engine.release_claim(ClaimReleaseOptions::new(session_id, claim_id))?;
+            let mut output = render_claim_release(&released);
+            output.push_str(&expectation_output);
             Ok(output)
         }
         Command::Claim {
@@ -11436,26 +11725,77 @@ fn run(cli: Cli) -> Result<String> {
                     expected_lifecycle_state,
                 },
         } => {
+            let from_session_id = SessionId::parse_canonical(&from_session)?;
+            let to_session_id = SessionId::parse_canonical(&to_session)?;
+            let claim_id = ClaimId::parse_canonical(&claim)?;
+            let mut expectation_output = String::new();
+            if let Some(expected_previous_claim) = expected_previous_claim.as_deref() {
+                let expected_previous_claim = ClaimId::parse_canonical(expected_previous_claim)?;
+                if claim_id != expected_previous_claim {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim transfer previous claim {claim_id} does not match expected {expected_previous_claim}"
+                    )));
+                }
+                expectation_output.push_str("previous_claim_match_expected=true\n");
+            }
+            if let Some(expected_from_session) = expected_from_session.as_deref() {
+                let expected_from_session = SessionId::parse_canonical(expected_from_session)?;
+                if from_session_id != expected_from_session {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim transfer from session {from_session_id} does not match expected {expected_from_session}"
+                    )));
+                }
+                expectation_output.push_str("previous_session_match_expected=true\n");
+            }
+            if let Some(expected_to_session) = expected_to_session.as_deref() {
+                let expected_to_session = SessionId::parse_canonical(expected_to_session)?;
+                if to_session_id != expected_to_session {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim transfer to session {to_session_id} does not match expected {expected_to_session}"
+                    )));
+                }
+                expectation_output.push_str("session_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
+                let expected_lifecycle_state =
+                    parse_claim_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != ClaimLifecycleState::Active {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim transfer lifecycle state active does not match expected {}",
+                        claim_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
+            }
             let mut engine = Engine::open(store)?;
             let transferred = engine.transfer_claim(ClaimTransferOptions::new(
-                SessionId::parse_canonical(&from_session)?,
-                SessionId::parse_canonical(&to_session)?,
-                ClaimId::parse_canonical(&claim)?,
+                from_session_id,
+                to_session_id,
+                claim_id,
             ))?;
-            let mut output = render_claim_transfer(&transferred);
-            append_claim_transfer_expectations(
-                &mut output,
-                &transferred,
-                ClaimTransferExpectationArgs {
-                    expected_previous_claim,
-                    expected_claim,
-                    expected_from_session,
-                    expected_to_session,
-                    expected_mode,
-                    expected_lifecycle_state,
+            validate_committed_result(
+                "claim.transfer",
+                {
+                    let mut output = render_claim_transfer(&transferred);
+                    output.push_str(&expectation_output);
+                    output
                 },
-            )?;
-            Ok(output)
+                |output| {
+                    append_claim_transfer_expectations(
+                        output,
+                        &transferred,
+                        ClaimTransferExpectationArgs {
+                            expected_previous_claim: None,
+                            expected_claim,
+                            expected_from_session: None,
+                            expected_to_session: None,
+                            expected_mode,
+                            expected_lifecycle_state: None,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Claim {
             command:
@@ -11479,27 +11819,66 @@ fn run(cli: Cli) -> Result<String> {
                     "claim takeover currently requires --force".to_owned(),
                 ));
             }
+            let session_id = SessionId::parse_canonical(&session)?;
+            let claim_id = ClaimId::parse_canonical(&claim)?;
+            let mut expectation_output = String::new();
+            if let Some(expected_previous_claim) = expected_previous_claim.as_deref() {
+                let expected_previous_claim = ClaimId::parse_canonical(expected_previous_claim)?;
+                if claim_id != expected_previous_claim {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim takeover previous claim {claim_id} does not match expected {expected_previous_claim}"
+                    )));
+                }
+                expectation_output.push_str("previous_claim_match_expected=true\n");
+            }
+            if let Some(expected_session) = expected_session.as_deref() {
+                let expected_session = SessionId::parse_canonical(expected_session)?;
+                if session_id != expected_session {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim takeover session {session_id} does not match expected {expected_session}"
+                    )));
+                }
+                expectation_output.push_str("session_match_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
+                let expected_lifecycle_state =
+                    parse_claim_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != ClaimLifecycleState::Active {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "claim takeover lifecycle state active does not match expected {}",
+                        claim_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                expectation_output.push_str("lifecycle_state_match_expected=true\n");
+            }
             let mut engine = Engine::open(store)?;
             let taken_over = engine.force_takeover_claim(ClaimForceTakeoverOptions::new(
-                SessionId::parse_canonical(&session)?,
-                ClaimId::parse_canonical(&claim)?,
-                rationale,
+                session_id, claim_id, rationale,
             )?)?;
-            let mut output = render_claim_force_takeover(&taken_over);
-            append_claim_force_takeover_expectations(
-                &mut output,
-                &taken_over,
-                ClaimForceTakeoverExpectationArgs {
-                    expected_previous_claim,
-                    expected_claim,
-                    expected_previous_session,
-                    expected_previous_session_lifecycle_state,
-                    expected_session,
-                    expected_mode,
-                    expected_lifecycle_state,
+            validate_committed_result(
+                "claim.takeover",
+                {
+                    let mut output = render_claim_force_takeover(&taken_over);
+                    output.push_str(&expectation_output);
+                    output
                 },
-            )?;
-            Ok(output)
+                |output| {
+                    append_claim_force_takeover_expectations(
+                        output,
+                        &taken_over,
+                        ClaimForceTakeoverExpectationArgs {
+                            expected_previous_claim: None,
+                            expected_claim,
+                            expected_previous_session,
+                            expected_previous_session_lifecycle_state,
+                            expected_session: None,
+                            expected_mode,
+                            expected_lifecycle_state: None,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Context {
             store,
@@ -11654,24 +12033,46 @@ fn run(cli: Cli) -> Result<String> {
             expected_lifecycle_state,
         } => {
             let mut engine = Engine::open(store)?;
+            let requested_mode = parse_claim_mode(&mode)?;
+            if let Some(expected_mode) = expected_mode.as_deref() {
+                let expected_mode = parse_claim_mode(expected_mode)?;
+                if requested_mode != expected_mode {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "next requested mode {} does not match expected {}",
+                        claim_mode(requested_mode),
+                        claim_mode(expected_mode)
+                    )));
+                }
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
+                let expected_lifecycle_state =
+                    parse_claim_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != ClaimLifecycleState::Active {
+                    return Err(WorkVcsError::ClaimInvalid(format!(
+                        "next lifecycle state active does not match expected {}",
+                        claim_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+            }
             let next = engine.next_work(
                 NextWorkOptions::new(SessionId::parse_canonical(&session)?)
-                    .with_mode(parse_claim_mode(&mode)?),
+                    .with_mode(requested_mode),
             )?;
-            let mut output = render_next_work(&next);
-            append_claim_next_expectations(
-                &mut output,
-                &next.claim_next,
-                ClaimNextExpectationArgs {
-                    expected_selected,
-                    expected_head,
-                    expected_inspected_candidates,
-                    expected_task,
-                    expected_mode,
-                    expected_lifecycle_state,
-                },
-            )?;
-            Ok(output)
+            validate_committed_result("next", render_next_work(&next), |output| {
+                append_claim_next_expectations(
+                    output,
+                    &next.claim_next,
+                    ClaimNextExpectationArgs {
+                        expected_selected,
+                        expected_head,
+                        expected_inspected_candidates,
+                        expected_task,
+                        expected_mode,
+                        expected_lifecycle_state,
+                    },
+                )?;
+                Ok(())
+            })
         }
         Command::Runnable {
             command:
@@ -11752,28 +12153,55 @@ fn run(cli: Cli) -> Result<String> {
                     expected_origin_session,
                 },
         } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = MergeStartOptions::new(
-                BranchId::parse_canonical(&target_branch)?,
-                BranchId::parse_canonical(&source_branch)?,
-            );
-            if let Some(session) = session {
-                options = options.with_origin_session_id(SessionId::parse_canonical(&session)?);
-            }
-            let result = engine.start_merge(options)?;
-            let mut output = render_merge_start(&result);
-            append_merge_start_expectations(
-                &mut output,
-                &result,
-                MergeStartExpectationArgs {
-                    expected_runtime_state,
-                    expected_merge_base,
-                    expected_target_head,
-                    expected_source_head,
-                    expected_origin_session,
-                },
+            let target_branch_id = BranchId::parse_canonical(&target_branch)?;
+            let source_branch_id = BranchId::parse_canonical(&source_branch)?;
+            let origin_session_id = session
+                .as_deref()
+                .map(SessionId::parse_canonical)
+                .transpose()?;
+            let mut expectation_output = String::new();
+            append_expected_text_match(
+                &mut expectation_output,
+                "merge start runtime state",
+                MergeRuntimeState::Active.as_str(),
+                expected_runtime_state.as_deref(),
+                "runtime_state_matches_expected",
             )?;
-            Ok(output)
+            append_expected_optional_session_id_match(
+                &mut expectation_output,
+                "merge start origin session",
+                origin_session_id,
+                expected_origin_session.as_deref(),
+                "origin_session_matches_expected",
+            )?;
+            let mut options = MergeStartOptions::new(target_branch_id, source_branch_id);
+            if let Some(session_id) = origin_session_id {
+                options = options.with_origin_session_id(session_id);
+            }
+            let mut engine = Engine::open(store)?;
+            let result = engine.start_merge(options)?;
+            validate_committed_result(
+                "merge.start",
+                {
+                    let mut output = render_merge_start(&result);
+                    output.push_str(&expectation_output);
+                    output
+                },
+                |output| {
+                    append_merge_start_expectations(
+                        output,
+                        &result,
+                        MergeStartExpectationArgs {
+                            expected_runtime_state: None,
+                            expected_merge_base,
+                            expected_target_head,
+                            expected_source_head,
+                            expected_origin_session: None,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Merge {
             command:
@@ -11806,9 +12234,31 @@ fn run(cli: Cli) -> Result<String> {
                     expected_resolved_by_session,
                 },
         } => {
-            let mut engine = Engine::open(store)?;
             let merge_item_id = MergeItemId::parse_canonical(&item)?;
             let kind = parse_merge_resolution_kind(&kind)?;
+            let resolved_by_session_id = session
+                .as_deref()
+                .map(SessionId::parse_canonical)
+                .transpose()?;
+            let mut expectation_output = String::new();
+            if let Some(expected_resolution) = expected_resolution.as_deref() {
+                let expected_resolution = parse_merge_resolution_kind(expected_resolution)?;
+                if kind != expected_resolution {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "merge resolve resolution {} does not match expected {}",
+                        kind.as_str(),
+                        expected_resolution.as_str()
+                    )));
+                }
+                expectation_output.push_str("resolution_matches_expected=true\n");
+            }
+            append_expected_optional_session_id_match(
+                &mut expectation_output,
+                "merge resolve resolved-by session",
+                resolved_by_session_id,
+                expected_resolved_by_session.as_deref(),
+                "resolved_by_session_matches_expected",
+            )?;
             let mut options = match kind {
                 MergeResolutionKind::Ours => {
                     reject_custom_payload_for_non_custom(custom_payload_json.as_ref())?;
@@ -11834,22 +12284,31 @@ fn run(cli: Cli) -> Result<String> {
                 "merge resolution rationale",
                 &rationale_json,
             )?)?;
-            if let Some(session) = session {
-                options =
-                    options.with_resolved_by_session_id(SessionId::parse_canonical(&session)?);
+            if let Some(session_id) = resolved_by_session_id {
+                options = options.with_resolved_by_session_id(session_id);
             }
+            let mut engine = Engine::open(store)?;
             let result = engine.resolve_merge_item(options)?;
-            let mut output = render_merge_resolve(&result)?;
-            append_merge_resolve_expectations(
-                &mut output,
-                &result,
-                MergeResolveExpectationArgs {
-                    expected_merge,
-                    expected_resolution,
-                    expected_resolved_by_session,
+            validate_committed_result(
+                "merge.resolve",
+                {
+                    let mut output = render_merge_resolve(&result)?;
+                    output.push_str(&expectation_output);
+                    output
                 },
-            )?;
-            Ok(output)
+                |output| {
+                    append_merge_resolve_expectations(
+                        output,
+                        &result,
+                        MergeResolveExpectationArgs {
+                            expected_merge,
+                            expected_resolution: None,
+                            expected_resolved_by_session: None,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Merge {
             command:
@@ -11860,20 +12319,37 @@ fn run(cli: Cli) -> Result<String> {
                     expected_frozen_items,
                 },
         } => {
-            let mut engine = Engine::open(store)?;
-            let frozen = engine.freeze_merge_resolutions(MergeFreezeResolutionsOptions::new(
-                MergeId::parse_canonical(&merge)?,
-            ))?;
-            let mut output = render_merge_freeze(&frozen);
-            append_merge_freeze_expectations(
-                &mut output,
-                &frozen,
-                MergeFreezeExpectationArgs {
-                    expected_merge,
-                    expected_frozen_items,
-                },
+            let merge_id = MergeId::parse_canonical(&merge)?;
+            let mut expectation_output = String::new();
+            append_expected_merge_id_match(
+                &mut expectation_output,
+                "merge freeze merge",
+                &merge_id,
+                expected_merge.as_deref(),
+                "merge_matches_expected",
             )?;
-            Ok(output)
+            let mut engine = Engine::open(store)?;
+            let frozen =
+                engine.freeze_merge_resolutions(MergeFreezeResolutionsOptions::new(merge_id))?;
+            validate_committed_result(
+                "merge.freeze",
+                {
+                    let mut output = render_merge_freeze(&frozen);
+                    output.push_str(&expectation_output);
+                    output
+                },
+                |output| {
+                    append_merge_freeze_expectations(
+                        output,
+                        &frozen,
+                        MergeFreezeExpectationArgs {
+                            expected_merge: None,
+                            expected_frozen_items,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Merge {
             command:
@@ -11888,25 +12364,54 @@ fn run(cli: Cli) -> Result<String> {
                     expected_continued_by_session,
                 },
         } => {
-            let mut engine = Engine::open(store)?;
-            let mut options = MergeContinueOptions::new(MergeId::parse_canonical(&merge)?)?
-                .with_detail(parse_cli_object("merge continue detail", &detail_json)?)?;
-            if let Some(session) = session {
-                options = options.with_continue_session_id(SessionId::parse_canonical(&session)?);
-            }
-            let result = engine.continue_merge(options)?;
-            let mut output = render_merge_continue(&result);
-            append_merge_continue_expectations(
-                &mut output,
-                &result,
-                MergeContinueExpectationArgs {
-                    expected_runtime_state,
-                    expected_target_branch,
-                    expected_source_branch,
-                    expected_continued_by_session,
-                },
+            let merge_id = MergeId::parse_canonical(&merge)?;
+            let continued_by_session_id = session
+                .as_deref()
+                .map(SessionId::parse_canonical)
+                .transpose()?;
+            let mut expectation_output = String::new();
+            append_expected_text_match(
+                &mut expectation_output,
+                "merge continue runtime state",
+                MergeRuntimeState::Completed.as_str(),
+                expected_runtime_state.as_deref(),
+                "runtime_state_matches_expected",
             )?;
-            Ok(output)
+            append_expected_optional_session_id_match(
+                &mut expectation_output,
+                "merge continue continued-by session",
+                continued_by_session_id,
+                expected_continued_by_session.as_deref(),
+                "continued_by_session_matches_expected",
+            )?;
+            let mut options = MergeContinueOptions::new(merge_id)?
+                .with_detail(parse_cli_object("merge continue detail", &detail_json)?)?;
+            if let Some(session_id) = continued_by_session_id {
+                options = options.with_continue_session_id(session_id);
+            }
+            let mut engine = Engine::open(store)?;
+            let result = engine.continue_merge(options)?;
+            validate_committed_result(
+                "merge.continue",
+                {
+                    let mut output = render_merge_continue(&result);
+                    output.push_str(&expectation_output);
+                    output
+                },
+                |output| {
+                    append_merge_continue_expectations(
+                        output,
+                        &result,
+                        MergeContinueExpectationArgs {
+                            expected_runtime_state: None,
+                            expected_target_branch,
+                            expected_source_branch,
+                            expected_continued_by_session: None,
+                        },
+                    )?;
+                    Ok(())
+                },
+            )
         }
         Command::Merge {
             command:
@@ -12853,6 +13358,14 @@ fn run_handoff(command: HandoffCommand) -> Result<String> {
                 focus_entity_id,
             };
             let scope = handoff_scope_value(fields)?;
+            let mut expectation_output = String::new();
+            append_handoff_scope_expectations(
+                &mut expectation_output,
+                &fields,
+                None,
+                expected_session_diff,
+                expected_focus,
+            )?;
             let record = engine.create_record(
                 RecordCreateOptions::handoff(branch_id, head_id, statement)?
                     .with_scope(scope.clone())?,
@@ -12862,13 +13375,7 @@ fn run_handoff(command: HandoffCommand) -> Result<String> {
                 .transpose()?;
             let mut output =
                 render_handoff_create(&record, &scope, session_diff_snapshot.as_ref())?;
-            append_handoff_scope_expectations(
-                &mut output,
-                &fields,
-                None,
-                expected_session_diff,
-                expected_focus,
-            )?;
+            output.push_str(&expectation_output);
             Ok(output)
         }
         HandoffCommand::Show {
@@ -12977,24 +13484,38 @@ fn run_handoff(command: HandoffCommand) -> Result<String> {
                 expected_session_diff,
                 expected_focus,
             )?;
-            let consumed = engine.set_session_focus(SessionFocusOptions::new(
-                SessionId::parse_canonical(&session)?,
-                focus_entity_id,
-            ))?;
-            let mut output = render_handoff_consume(
+            let target_session_id = SessionId::parse_canonical(&session)?;
+            if let Some(expected_session) = expected_session.as_deref() {
+                let expected_session = SessionId::parse_canonical(expected_session)?;
+                if target_session_id != expected_session {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "handoff consume session {target_session_id} does not match expected {expected_session}"
+                    )));
+                }
+                source_expectation_output.push_str("consume_session_matches_expected=true\n");
+            }
+            if let Some(expected_lifecycle_state) = expected_lifecycle_state.as_deref() {
+                let expected_lifecycle_state =
+                    parse_session_lifecycle_state(expected_lifecycle_state)?;
+                if expected_lifecycle_state != SessionLifecycleState::Active {
+                    return Err(WorkVcsError::SessionInvalid(format!(
+                        "handoff consume lifecycle state active does not match expected {}",
+                        session_lifecycle_state(expected_lifecycle_state)
+                    )));
+                }
+                source_expectation_output
+                    .push_str("consume_lifecycle_state_matches_expected=true\n");
+            }
+            let consumed = engine
+                .set_session_focus(SessionFocusOptions::new(target_session_id, focus_entity_id))?;
+            let mut operation_result = render_handoff_consume(
                 &record,
                 &fields,
                 session_diff_snapshot.as_ref(),
                 &consumed,
             )?;
-            output.push_str(&source_expectation_output);
-            append_handoff_consume_expectations(
-                &mut output,
-                &consumed,
-                expected_session,
-                expected_lifecycle_state,
-            )?;
-            Ok(output)
+            operation_result.push_str(&source_expectation_output);
+            Ok(operation_result)
         }
     }
 }
@@ -13072,14 +13593,16 @@ fn run_verify(args: Vec<String>) -> Result<String> {
         expected_cache_applicability,
         expected_cache_reason_code,
     } = args;
-    let mut engine = Engine::open(store)?;
     let source_session_id = source_session
         .as_deref()
         .map(SessionId::parse_canonical)
         .transpose()?;
+    let branch_id = BranchId::parse_canonical(&branch)?;
+    let head_id = CommitId::parse_canonical(&head)?;
     let target = verification_target_from_cli(acceptance_criterion, verification_requirement)?;
+    let verification_result = parse_verification_result(&result)?;
     let mut evidence = EvidenceCreateOptions::new(
-        evidence_kind,
+        evidence_kind.clone(),
         parse_cli_object("verify evidence metadata", &evidence_metadata_json)?,
     )?;
     if let Some(source_session_id) = source_session_id {
@@ -13098,13 +13621,8 @@ fn run_verify(args: Vec<String>) -> Result<String> {
     })? {
         evidence = evidence.with_contents(vec![content])?;
     }
-    let mut options = VerifyOptions::new(
-        BranchId::parse_canonical(&branch)?,
-        CommitId::parse_canonical(&head)?,
-        target,
-        parse_verification_result(&result)?,
-        evidence,
-    )?;
+    let mut options =
+        VerifyOptions::new(branch_id, head_id, target, verification_result, evidence)?;
     if let Some(method) = method {
         options = options.with_method(method_value(&method))?;
     }
@@ -13142,17 +13660,16 @@ fn run_verify(args: Vec<String>) -> Result<String> {
             "--cache-detail-json requires resource observation inputs".to_owned(),
         ));
     }
-    if let Some(resource_observation) = resource_observation {
-        options = options.with_resource_observation(resource_observation);
-    }
-    options =
-        options.with_cache_detail(parse_cli_object("verify cache detail", &cache_detail_json)?)?;
-    let result = engine.verify(options)?;
-    let mut output = render_verify_result(&result)?;
-    append_verify_expectations(
-        &mut output,
-        &result,
-        VerifyExpectationArgs {
+    let mut expectation_output = String::new();
+    append_verify_preflight_expectations(
+        &mut expectation_output,
+        branch_id,
+        head_id,
+        target,
+        verification_result,
+        &evidence_kind,
+        usize::from(resource_observation.is_some()),
+        VerifyPreflightExpectationArgs {
             expected_branch,
             expected_head,
             expected_target_kind,
@@ -13161,11 +13678,34 @@ fn run_verify(args: Vec<String>) -> Result<String> {
             expected_evidence_kind,
             expected_evidence_relations,
             expected_resource_basis,
-            expected_cache_applicability,
-            expected_cache_reason_code,
         },
     )?;
-    Ok(output)
+    if let Some(resource_observation) = resource_observation {
+        options = options.with_resource_observation(resource_observation);
+    }
+    options =
+        options.with_cache_detail(parse_cli_object("verify cache detail", &cache_detail_json)?)?;
+    let mut engine = Engine::open(store)?;
+    let result = engine.verify(options)?;
+    validate_committed_result(
+        "verify",
+        {
+            let mut output = render_verify_result(&result)?;
+            output.push_str(&expectation_output);
+            output
+        },
+        |output| {
+            append_verify_committed_expectations(
+                output,
+                &result,
+                VerifyCommittedExpectationArgs {
+                    expected_cache_applicability,
+                    expected_cache_reason_code,
+                },
+            )?;
+            Ok(())
+        },
+    )
 }
 
 fn parse_task_status(value: &str) -> Result<TaskStatus> {
@@ -14645,11 +15185,12 @@ fn render_closeout_inspect_task_projection(projection: &CloseoutInspectTaskProje
     let target_state_digest =
         render_optional_display_or_none(projection.read_proof.before.target_state_digest.as_ref());
     let mut output = format!(
-        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\nacceptance_criteria_total={}\nverification_requirements_total={}\nverifications_total={}\nevidence_total={}\ngaps_total={}\nacceptance_criteria={}\nverification_requirements={}\nverifications={}\nevidence={}\ngaps={}\nomitted={}\ntask_present={}\n",
+        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\nruntime_temporal_scope={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\nacceptance_criteria_total={}\nverification_requirements_total={}\nverifications_total={}\nevidence_total={}\ngaps_total={}\nacceptance_criteria={}\nverification_requirements={}\nverifications={}\nevidence={}\ngaps={}\nomitted={}\ntask_present={}\n",
         closeout_source_kind(projection.source.kind),
         render_optional_display_or_none(projection.source.branch_id.as_ref()),
         projection.source.commit_id,
         projection.source.state_digest,
+        closeout_runtime_temporal_scope(projection.source.kind),
         closeout_target_kind(projection.target.kind),
         projection.target.entity_id,
         closeout_target_resolution(projection.target_resolution),
@@ -14833,11 +15374,12 @@ fn render_closeout_inspect_task_projection(projection: &CloseoutInspectTaskProje
 
 fn render_closeout_inspect_plan_projection(projection: &CloseoutInspectPlanProjection) -> String {
     let mut output = format!(
-        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\ndirect_tasks_total={}\ndirect_child_plans_total={}\ngaps_total={}\ndirect_tasks={}\nnon_expanded={}\ngaps={}\nomitted={}\nplan_present={}\n",
+        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\nruntime_temporal_scope={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\ndirect_tasks_total={}\ndirect_child_plans_total={}\ngaps_total={}\ndirect_tasks={}\nnon_expanded={}\ngaps={}\nomitted={}\nplan_present={}\n",
         closeout_source_kind(projection.source.kind),
         render_optional_display_or_none(projection.source.branch_id.as_ref()),
         projection.source.commit_id,
         projection.source.state_digest,
+        closeout_runtime_temporal_scope(projection.source.kind),
         closeout_target_kind(projection.target.kind),
         projection.target.entity_id,
         closeout_target_resolution(projection.target_resolution),
@@ -14877,11 +15419,12 @@ fn render_closeout_inspect_plan_projection(projection: &CloseoutInspectPlanProje
 
 fn render_closeout_inspect_goal_projection(projection: &CloseoutInspectGoalProjection) -> String {
     let mut output = format!(
-        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\ndirect_plans_total={}\ndirect_tasks_total={}\ndirect_child_goals_total={}\ngaps_total={}\ndirect_plans={}\ndirect_tasks={}\nnon_expanded={}\ngaps={}\nomitted={}\ngoal_present={}\n",
+        "source_kind={}\nsource_branch_id={}\nsource_commit_id={}\nsource_state_digest={}\nruntime_temporal_scope={}\ntarget_kind={}\ntarget_entity_id={}\ntarget_resolution={}\ntarget_digest_status={}\ntarget_state_digest={}\nbudget_requested={}\nbudget_hard_limit={}\ntruncated={}\ndirect_plans_total={}\ndirect_tasks_total={}\ndirect_child_goals_total={}\ngaps_total={}\ndirect_plans={}\ndirect_tasks={}\nnon_expanded={}\ngaps={}\nomitted={}\ngoal_present={}\n",
         closeout_source_kind(projection.source.kind),
         render_optional_display_or_none(projection.source.branch_id.as_ref()),
         projection.source.commit_id,
         projection.source.state_digest,
+        closeout_runtime_temporal_scope(projection.source.kind),
         closeout_target_kind(projection.target.kind),
         projection.target.entity_id,
         closeout_target_resolution(projection.target_resolution),
@@ -15135,7 +15678,7 @@ fn append_closeout_runtime_summary(output: &mut String, summary: &CloseoutInspec
         let _ = writeln!(
             output,
             "{prefix}.focus_entity_id={}",
-            session.focus_entity_id
+            render_optional_display_or_none(session.focus_entity_id.as_ref())
         );
         let _ = writeln!(output, "{prefix}.focus_path_len={}", session.focus_path_len);
         let _ = writeln!(
@@ -15369,6 +15912,13 @@ fn closeout_source_kind(kind: CloseoutInspectSourceKind) -> &'static str {
     }
 }
 
+fn closeout_runtime_temporal_scope(kind: CloseoutInspectSourceKind) -> &'static str {
+    match kind {
+        CloseoutInspectSourceKind::Branch => "live_read_time",
+        CloseoutInspectSourceKind::Commit => "historical_commit",
+    }
+}
+
 fn closeout_target_kind(kind: CloseoutInspectTargetKind) -> &'static str {
     match kind {
         CloseoutInspectTargetKind::Goal => "goal",
@@ -15548,6 +16098,17 @@ fn run_recall(
         .knowledges_at(KnowledgeListOptions::new(commit_id))?
         .knowledge;
 
+    goals.sort_by_key(|goal| goal.goal_entity_version_id);
+    goals.reverse();
+    plans.sort_by_key(|plan| plan.plan_entity_version_id);
+    plans.reverse();
+    tasks.sort_by_key(|task| task.task_entity_version_id);
+    tasks.reverse();
+    records.sort_by_key(|record| record.record_entity_version_id);
+    records.reverse();
+    knowledge.sort_by_key(|item| item.knowledge_entity_version_id);
+    knowledge.reverse();
+
     if profile != RecallProfileArg::Retrospective {
         goals.retain(|goal| goal.state.status == GoalStatus::Active);
         plans.retain(|plan| plan.state.status == PlanStatus::Active);
@@ -15589,10 +16150,45 @@ fn run_recall(
     } else {
         Vec::new()
     };
+    record_relations.sort_by_key(|relation| relation.relation_version_id);
+    record_relations.reverse();
+    record_knowledge_relations.sort_by_key(|relation| relation.relation_version_id);
+    record_knowledge_relations.reverse();
+    knowledge_relations.sort_by_key(|relation| relation.relation_version_id);
+    knowledge_relations.reverse();
+    evidence.sort_by_key(|item| item.captured_at_us);
+    evidence.reverse();
+
+    let mut sessions = engine
+        .sessions(
+            SessionListOptions::all()
+                .with_active_workspace_id(discovery.binding.workspace_id)
+                .with_active_branch_id(discovery.binding.branch_id),
+        )?
+        .sessions;
+    sessions.sort_by_key(|session| session.last_activity_at_us.unwrap_or(session.started_at_us));
+    sessions.reverse();
+    let mut claims = Vec::new();
+    for session in &sessions {
+        claims.extend(
+            engine
+                .active_claims_for_session(ClaimListOptions::for_session(session.session_id))?
+                .claims
+                .into_iter()
+                .filter(|claim| {
+                    claim.workspace_id == discovery.binding.workspace_id
+                        && claim.branch_id == discovery.binding.branch_id
+                }),
+        );
+    }
+    claims.sort_by_key(|claim| claim.last_activity_at_us.unwrap_or(claim.created_at_us));
+    claims.reverse();
 
     let total_items = goals.len()
         + plans.len()
         + tasks.len()
+        + sessions.len()
+        + claims.len()
         + records.len()
         + knowledge.len()
         + record_relations.len()
@@ -15600,7 +16196,7 @@ fn run_recall(
         + knowledge_relations.len()
         + evidence.len();
     let mut output = format!(
-        "recall_profile={}\nregistry_path={}\nproject_identity={}\nproject_root={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\nstate_digest={}\nbudget_items={}\ntotal_items={}\ngoals_total={}\nplans_total={}\ntasks_total={}\nrecords_total={}\nknowledge_total={}\nrecord_relations_total={}\nrecord_knowledge_relations_total={}\nknowledge_relations_total={}\nevidence_total={}\nevidence_scope={}\n",
+        "recall_profile={}\nregistry_path={}\nproject_identity={}\nproject_root={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\nstate_digest={}\nwork_state_scope=current_branch_head\nruntime_scope=live\nordering=category_reserved_current_then_newest_semantics\nbudget_items={}\ntotal_items={}\ngoals_total={}\nplans_total={}\ntasks_total={}\nsessions_total={}\nclaims_total={}\nrecords_total={}\nknowledge_total={}\nrecord_relations_total={}\nrecord_knowledge_relations_total={}\nknowledge_relations_total={}\nevidence_total={}\nevidence_scope={}\n",
         profile.as_str(),
         discovery.registry_path.display(),
         discovery.current_identity.identity,
@@ -15616,6 +16212,8 @@ fn run_recall(
         goals.len(),
         plans.len(),
         tasks.len(),
+        sessions.len(),
+        claims.len(),
         records.len(),
         knowledge.len(),
         record_relations.len(),
@@ -15628,6 +16226,8 @@ fn run_recall(
         Goal(&'a GoalSnapshot),
         Plan(&'a PlanSnapshot),
         Task(&'a TaskSnapshot),
+        Session(&'a SessionSnapshot),
+        Claim(&'a ClaimSnapshot),
         Record(&'a RecordSnapshot),
         Knowledge(&'a KnowledgeSnapshot),
         RecordRelation(&'a RecordRelationSnapshot),
@@ -15637,13 +16237,37 @@ fn run_recall(
     }
 
     let mut ordered = Vec::with_capacity(total_items);
+    const CURRENT_CATEGORY_RESERVE: usize = 1;
     if profile == RecallProfileArg::Retrospective {
-        records.reverse();
-        knowledge.reverse();
-        record_relations.reverse();
-        record_knowledge_relations.reverse();
-        knowledge_relations.reverse();
-        evidence.reverse();
+        for index in 0..CURRENT_CATEGORY_RESERVE {
+            if let Some(goal) = goals
+                .iter()
+                .filter(|goal| goal.state.status == GoalStatus::Active)
+                .nth(index)
+            {
+                ordered.push(RecallItem::Goal(goal));
+            }
+            if let Some(plan) = plans
+                .iter()
+                .filter(|plan| plan.state.status == PlanStatus::Active)
+                .nth(index)
+            {
+                ordered.push(RecallItem::Plan(plan));
+            }
+            if let Some(session) = sessions.get(index) {
+                ordered.push(RecallItem::Session(session));
+            }
+            if let Some(claim) = claims.get(index) {
+                ordered.push(RecallItem::Claim(claim));
+            }
+            if let Some(task) = tasks
+                .iter()
+                .filter(|task| !task.state.status.is_terminal())
+                .nth(index)
+            {
+                ordered.push(RecallItem::Task(task));
+            }
+        }
 
         // Preserve category diversity under a small budget before one large
         // history category can consume the entire retrospective projection.
@@ -15668,6 +16292,40 @@ fn run_recall(
                 ordered.push(RecallItem::KnowledgeRelation(relation));
             }
         }
+
+        ordered.extend(
+            goals
+                .iter()
+                .filter(|goal| goal.state.status == GoalStatus::Active)
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Goal),
+        );
+        ordered.extend(
+            plans
+                .iter()
+                .filter(|plan| plan.state.status == PlanStatus::Active)
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Plan),
+        );
+        ordered.extend(
+            sessions
+                .iter()
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Session),
+        );
+        ordered.extend(
+            claims
+                .iter()
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Claim),
+        );
+        ordered.extend(
+            tasks
+                .iter()
+                .filter(|task| !task.state.status.is_terminal())
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Task),
+        );
 
         ordered.extend(
             records
@@ -15705,13 +16363,72 @@ fn run_recall(
                 .skip(CATEGORY_RESERVE)
                 .map(RecallItem::KnowledgeRelation),
         );
-        ordered.extend(goals.iter().map(RecallItem::Goal));
-        ordered.extend(plans.iter().map(RecallItem::Plan));
-        ordered.extend(tasks.iter().map(RecallItem::Task));
+        ordered.extend(
+            goals
+                .iter()
+                .filter(|goal| goal.state.status != GoalStatus::Active)
+                .map(RecallItem::Goal),
+        );
+        ordered.extend(
+            plans
+                .iter()
+                .filter(|plan| plan.state.status != PlanStatus::Active)
+                .map(RecallItem::Plan),
+        );
+        ordered.extend(
+            tasks
+                .iter()
+                .filter(|task| task.state.status.is_terminal())
+                .map(RecallItem::Task),
+        );
     } else {
-        ordered.extend(goals.iter().map(RecallItem::Goal));
-        ordered.extend(plans.iter().map(RecallItem::Plan));
-        ordered.extend(tasks.iter().map(RecallItem::Task));
+        for index in 0..CURRENT_CATEGORY_RESERVE {
+            if let Some(goal) = goals.get(index) {
+                ordered.push(RecallItem::Goal(goal));
+            }
+            if let Some(plan) = plans.get(index) {
+                ordered.push(RecallItem::Plan(plan));
+            }
+            if let Some(session) = sessions.get(index) {
+                ordered.push(RecallItem::Session(session));
+            }
+            if let Some(claim) = claims.get(index) {
+                ordered.push(RecallItem::Claim(claim));
+            }
+            if let Some(task) = tasks.get(index) {
+                ordered.push(RecallItem::Task(task));
+            }
+        }
+        ordered.extend(
+            goals
+                .iter()
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Goal),
+        );
+        ordered.extend(
+            plans
+                .iter()
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Plan),
+        );
+        ordered.extend(
+            sessions
+                .iter()
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Session),
+        );
+        ordered.extend(
+            claims
+                .iter()
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Claim),
+        );
+        ordered.extend(
+            tasks
+                .iter()
+                .skip(CURRENT_CATEGORY_RESERVE)
+                .map(RecallItem::Task),
+        );
         ordered.extend(records.iter().map(RecallItem::Record));
         ordered.extend(knowledge.iter().map(RecallItem::Knowledge));
         ordered.extend(record_relations.iter().map(RecallItem::RecordRelation));
@@ -15727,7 +16444,27 @@ fn run_recall(
         match item {
             RecallItem::Goal(goal) => {
                 writeln!(output, "item.{index}.category=goal").expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.temporal_scope={}",
+                    if goal.state.status == GoalStatus::Active {
+                        "current_active"
+                    } else {
+                        "historical_or_terminal"
+                    }
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.id={}", goal.goal_entity_id)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.version_id={}",
+                    goal.goal_entity_version_id
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.snapshot_commit_id={}", goal.commit_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.state_digest={}", goal.state_digest)
                     .expect("write to String");
                 writeln!(output, "item.{index}.status={}", goal.state.status)
                     .expect("write to String");
@@ -15740,7 +16477,27 @@ fn run_recall(
             }
             RecallItem::Plan(plan) => {
                 writeln!(output, "item.{index}.category=plan").expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.temporal_scope={}",
+                    if plan.state.status == PlanStatus::Active {
+                        "current_active"
+                    } else {
+                        "historical_or_terminal"
+                    }
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.id={}", plan.plan_entity_id)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.version_id={}",
+                    plan.plan_entity_version_id
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.snapshot_commit_id={}", plan.commit_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.state_digest={}", plan.state_digest)
                     .expect("write to String");
                 writeln!(output, "item.{index}.status={}", plan.state.status)
                     .expect("write to String");
@@ -15759,7 +16516,27 @@ fn run_recall(
             }
             RecallItem::Task(task) => {
                 writeln!(output, "item.{index}.category=task").expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.temporal_scope={}",
+                    if task.state.status.is_terminal() {
+                        "historical_or_terminal"
+                    } else {
+                        "current_active"
+                    }
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.id={}", task.task_entity_id)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.version_id={}",
+                    task.task_entity_version_id
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.snapshot_commit_id={}", task.commit_id)
+                    .expect("write to String");
+                writeln!(output, "item.{index}.state_digest={}", task.state_digest)
                     .expect("write to String");
                 writeln!(output, "item.{index}.status={}", task.state.status)
                     .expect("write to String");
@@ -15770,11 +16547,107 @@ fn run_recall(
                 )
                 .expect("write to String");
             }
+            RecallItem::Session(session) => {
+                writeln!(output, "item.{index}.category=session").expect("write to String");
+                writeln!(output, "item.{index}.temporal_scope=live_runtime")
+                    .expect("write to String");
+                writeln!(output, "item.{index}.id={}", session.session_id)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.status={}",
+                    session_lifecycle_state(session.lifecycle_state)
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.last_activity_at_us={}",
+                    render_optional_display_or_none(session.last_activity_at_us.as_ref())
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.workspace_id={}",
+                    render_optional_display_or_none(session.active_workspace_id.as_ref())
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.branch_id={}",
+                    render_optional_display_or_none(session.active_branch_id.as_ref())
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.focus_entity_id={}",
+                    session
+                        .focus
+                        .as_ref()
+                        .map(|focus| focus.focus_entity_id.to_string())
+                        .unwrap_or_else(|| "none".to_owned())
+                )
+                .expect("write to String");
+            }
+            RecallItem::Claim(claim) => {
+                writeln!(output, "item.{index}.category=claim").expect("write to String");
+                writeln!(output, "item.{index}.temporal_scope=live_runtime")
+                    .expect("write to String");
+                writeln!(output, "item.{index}.id={}", claim.claim_id).expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.status={}",
+                    claim_lifecycle_state(claim.lifecycle_state)
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.session_id={}", claim.session_id)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.task_entity_id={}",
+                    claim.task_entity_id
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.mode={}", claim_mode(claim.mode))
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.last_activity_at_us={}",
+                    render_optional_display_or_none(claim.last_activity_at_us.as_ref())
+                )
+                .expect("write to String");
+            }
             RecallItem::Record(record) => {
                 writeln!(output, "item.{index}.category=record").expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.temporal_scope={}",
+                    if matches!(
+                        record.state.status,
+                        RecordStatus::Active | RecordStatus::Running | RecordStatus::Unverified
+                    ) {
+                        "current_active"
+                    } else {
+                        "historical_or_terminal"
+                    }
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.subtype={}", record.state.kind)
                     .expect("write to String");
                 writeln!(output, "item.{index}.id={}", record.record_entity_id)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.version_id={}",
+                    record.record_entity_version_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.snapshot_commit_id={}",
+                    record.commit_id
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.state_digest={}", record.state_digest)
                     .expect("write to String");
                 writeln!(output, "item.{index}.status={}", record.state.status)
                     .expect("write to String");
@@ -15784,11 +16657,45 @@ fn run_recall(
                     canonical_text_json("recall record statement", &record.state.statement)?
                 )
                 .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.scope_json={}",
+                    canonical_cli_json("recall record scope", &record.state.scope)?
+                )
+                .expect("write to String");
             }
             RecallItem::Knowledge(knowledge) => {
                 writeln!(output, "item.{index}.category=knowledge").expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.temporal_scope={}",
+                    if knowledge.state.status == KnowledgeStatus::Active {
+                        "current_active"
+                    } else {
+                        "historical_or_terminal"
+                    }
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.id={}", knowledge.knowledge_entity_id)
                     .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.version_id={}",
+                    knowledge.knowledge_entity_version_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.snapshot_commit_id={}",
+                    knowledge.commit_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.state_digest={}",
+                    knowledge.state_digest
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.status={}", knowledge.state.status)
                     .expect("write to String");
                 writeln!(
@@ -15797,13 +16704,51 @@ fn run_recall(
                     canonical_text_json("recall knowledge statement", &knowledge.state.statement)?
                 )
                 .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.scope_json={}",
+                    canonical_cli_json("recall knowledge scope", &knowledge.state.scope)?
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.provenance_json={}",
+                    canonical_cli_json("recall knowledge provenance", &knowledge.state.provenance)?
+                )
+                .expect("write to String");
             }
             RecallItem::RecordRelation(relation) => {
                 writeln!(output, "item.{index}.category=record_relation").expect("write to String");
+                writeln!(output, "item.{index}.temporal_scope=branch_snapshot")
+                    .expect("write to String");
                 writeln!(output, "item.{index}.id={}", relation.relation_id)
                     .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.version_id={}",
+                    relation.relation_version_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.state_digest={}",
+                    relation.state_digest
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.snapshot_commit_id={}",
+                    relation.commit_id
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.subtype={}", relation.relation_type)
                     .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.label={}",
+                    render_optional_display_or_none(relation.relation_label.as_ref())
+                )
+                .expect("write to String");
                 writeln!(
                     output,
                     "item.{index}.source={}",
@@ -15820,8 +16765,28 @@ fn run_recall(
             RecallItem::RecordKnowledgeRelation(relation) => {
                 writeln!(output, "item.{index}.category=record_knowledge_relation")
                     .expect("write to String");
+                writeln!(output, "item.{index}.temporal_scope=branch_snapshot")
+                    .expect("write to String");
                 writeln!(output, "item.{index}.id={}", relation.relation_id)
                     .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.version_id={}",
+                    relation.relation_version_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.state_digest={}",
+                    relation.state_digest
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.snapshot_commit_id={}",
+                    relation.commit_id
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.subtype={}", relation.relation_type)
                     .expect("write to String");
                 writeln!(
@@ -15840,8 +16805,28 @@ fn run_recall(
             RecallItem::KnowledgeRelation(relation) => {
                 writeln!(output, "item.{index}.category=knowledge_relation")
                     .expect("write to String");
+                writeln!(output, "item.{index}.temporal_scope=branch_snapshot")
+                    .expect("write to String");
                 writeln!(output, "item.{index}.id={}", relation.relation_id)
                     .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.version_id={}",
+                    relation.relation_version_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.state_digest={}",
+                    relation.state_digest
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.snapshot_commit_id={}",
+                    relation.commit_id
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.subtype={}", relation.relation_type)
                     .expect("write to String");
                 writeln!(
@@ -15859,9 +16844,25 @@ fn run_recall(
             }
             RecallItem::Evidence(evidence) => {
                 writeln!(output, "item.{index}.category=evidence").expect("write to String");
+                writeln!(output, "item.{index}.temporal_scope=store_snapshot")
+                    .expect("write to String");
                 writeln!(output, "item.{index}.id={}", evidence.evidence_id)
                     .expect("write to String");
                 writeln!(output, "item.{index}.subtype={}", evidence.evidence_kind)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.captured_at_us={}",
+                    evidence.captured_at_us
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.source_session_id={}",
+                    render_optional_display_or_none(evidence.source_session_id.as_ref())
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.contents={}", evidence.contents.len())
                     .expect("write to String");
                 writeln!(
                     output,
@@ -20906,7 +21907,7 @@ fn render_verify_result(result: &VerifyResult) -> Result<String> {
     Ok(output)
 }
 
-struct VerifyExpectationArgs {
+struct VerifyPreflightExpectationArgs {
     expected_branch: Option<String>,
     expected_head: Option<String>,
     expected_target_kind: Option<String>,
@@ -20915,16 +21916,19 @@ struct VerifyExpectationArgs {
     expected_evidence_kind: Option<String>,
     expected_evidence_relations: Option<usize>,
     expected_resource_basis: Option<usize>,
-    expected_cache_applicability: Option<String>,
-    expected_cache_reason_code: Option<String>,
 }
 
-fn append_verify_expectations(
+fn append_verify_preflight_expectations(
     output: &mut String,
-    result: &VerifyResult,
-    expectations: VerifyExpectationArgs,
+    branch_id: BranchId,
+    head_id: CommitId,
+    target: VerificationTarget,
+    result: VerificationResult,
+    evidence_kind: &str,
+    resource_basis: usize,
+    expectations: VerifyPreflightExpectationArgs,
 ) -> Result<()> {
-    let VerifyExpectationArgs {
+    let VerifyPreflightExpectationArgs {
         expected_branch,
         expected_head,
         expected_target_kind,
@@ -20933,68 +21937,80 @@ fn append_verify_expectations(
         expected_evidence_kind,
         expected_evidence_relations,
         expected_resource_basis,
-        expected_cache_applicability,
-        expected_cache_reason_code,
     } = expectations;
-    let verification = &result.verification;
     append_expected_branch_id_match(
         output,
         "verify branch",
-        &verification.branch_id,
+        &branch_id,
         expected_branch.as_deref(),
         "branch_match_expected",
     )?;
     append_expected_commit_id_match(
         output,
         "verify head",
-        &verification.previous_head_commit_id,
+        &head_id,
         expected_head.as_deref(),
         "head_match_expected",
     )?;
     append_expected_text_match(
         output,
         "verify target kind",
-        verification_target_kind(verification.target),
+        verification_target_kind(target),
         expected_target_kind.as_deref(),
         "target_kind_match_expected",
     )?;
-    let actual_target = verification.target.entity_id().to_string();
     append_expected_text_match(
         output,
         "verify target",
-        &actual_target,
+        &target.entity_id().to_string(),
         expected_target.as_deref(),
         "target_match_expected",
     )?;
-    let actual_result = verification.state.result.to_string();
     append_expected_text_match(
         output,
         "verify result",
-        &actual_result,
+        &result.to_string(),
         expected_result.as_deref(),
         "result_match_expected",
     )?;
     append_expected_text_match(
         output,
         "verify evidence kind",
-        &result.evidence.evidence_kind,
+        evidence_kind,
         expected_evidence_kind.as_deref(),
         "evidence_kind_match_expected",
     )?;
     append_expected_count_match(
         output,
         "verify evidence relations",
-        verification.evidenced_by_relations.len(),
+        1,
         expected_evidence_relations,
         "evidence_relations_match_expected",
     )?;
     append_expected_count_match(
         output,
         "verify resource basis",
-        verification.state.resource_basis.len(),
+        resource_basis,
         expected_resource_basis,
         "resource_basis_match_expected",
     )?;
+    Ok(())
+}
+
+struct VerifyCommittedExpectationArgs {
+    expected_cache_applicability: Option<String>,
+    expected_cache_reason_code: Option<String>,
+}
+
+fn append_verify_committed_expectations(
+    output: &mut String,
+    result: &VerifyResult,
+    expectations: VerifyCommittedExpectationArgs,
+) -> Result<()> {
+    let VerifyCommittedExpectationArgs {
+        expected_cache_applicability,
+        expected_cache_reason_code,
+    } = expectations;
     if expected_cache_applicability.is_some() || expected_cache_reason_code.is_some() {
         let cache = result.applicability_cache.as_ref().ok_or_else(|| {
             WorkVcsError::QueryInvalid("verify did not record an applicability cache".to_owned())
@@ -21024,7 +22040,11 @@ struct VerificationRecordExpectationArgs {
 
 fn append_verification_record_expectations(
     output: &mut String,
-    verification: &VerificationCreateCommit,
+    branch_id: BranchId,
+    head_id: CommitId,
+    target: VerificationTarget,
+    result: VerificationResult,
+    evidence_relations: usize,
     expectations: VerificationRecordExpectationArgs,
 ) -> Result<()> {
     let VerificationRecordExpectationArgs {
@@ -21037,27 +22057,27 @@ fn append_verification_record_expectations(
     } = expectations;
     if let Some(expected_branch) = expected_branch {
         let expected_branch = BranchId::parse_canonical(&expected_branch)?;
-        if verification.branch_id != expected_branch {
+        if branch_id != expected_branch {
             return Err(WorkVcsError::TaskInvalid(format!(
                 "verification record branch {} does not match expected {}",
-                verification.branch_id, expected_branch
+                branch_id, expected_branch
             )));
         }
         output.push_str("branch_match_expected=true\n");
     }
     if let Some(expected_head) = expected_head {
         let expected_head = CommitId::parse_canonical(&expected_head)?;
-        if verification.previous_head_commit_id != expected_head {
+        if head_id != expected_head {
             return Err(WorkVcsError::TaskInvalid(format!(
                 "verification record head {} does not match expected {}",
-                verification.previous_head_commit_id, expected_head
+                head_id, expected_head
             )));
         }
         output.push_str("head_match_expected=true\n");
     }
     if let Some(expected_target_kind) = expected_target_kind {
         let expected_target_kind = parse_verification_target_kind(&expected_target_kind)?;
-        let actual_target_kind = verification_target_kind(verification.target);
+        let actual_target_kind = verification_target_kind(target);
         if actual_target_kind != expected_target_kind {
             return Err(WorkVcsError::TaskInvalid(format!(
                 "verification record target kind {actual_target_kind} does not match expected {expected_target_kind}"
@@ -21067,7 +22087,7 @@ fn append_verification_record_expectations(
     }
     if let Some(expected_target) = expected_target {
         let expected_target = EntityId::parse_canonical(&expected_target)?;
-        let actual_target = verification.target.entity_id();
+        let actual_target = target.entity_id();
         if actual_target != expected_target {
             return Err(WorkVcsError::TaskInvalid(format!(
                 "verification record target {actual_target} does not match expected {expected_target}"
@@ -21077,19 +22097,18 @@ fn append_verification_record_expectations(
     }
     if let Some(expected_result) = expected_result {
         let expected_result = parse_verification_result(&expected_result)?;
-        if verification.state.result != expected_result {
+        if result != expected_result {
             return Err(WorkVcsError::TaskInvalid(format!(
                 "verification record result {} does not match expected {}",
-                verification.state.result, expected_result
+                result, expected_result
             )));
         }
         output.push_str("result_match_expected=true\n");
     }
     if let Some(expected_evidence_relations) = expected_evidence_relations {
-        let actual_evidence_relations = verification.evidenced_by_relations.len();
-        if actual_evidence_relations != expected_evidence_relations {
+        if evidence_relations != expected_evidence_relations {
             return Err(WorkVcsError::TaskInvalid(format!(
-                "verification record evidence relations {actual_evidence_relations} does not match expected {expected_evidence_relations}"
+                "verification record evidence relations {evidence_relations} does not match expected {expected_evidence_relations}"
             )));
         }
         output.push_str("evidence_relations_match_expected=true\n");
@@ -22446,36 +23465,6 @@ fn append_handoff_consume_source_expectations(
             )));
         }
         output.push_str("focus_matches_expected=true\n");
-    }
-    Ok(())
-}
-
-fn append_handoff_consume_expectations(
-    output: &mut String,
-    consumed: &SessionFocusUpdateResult,
-    expected_session: Option<String>,
-    expected_lifecycle_state: Option<String>,
-) -> Result<()> {
-    if let Some(expected_session) = expected_session {
-        let expected_session = SessionId::parse_canonical(&expected_session)?;
-        if consumed.session_id != expected_session {
-            return Err(WorkVcsError::SessionInvalid(format!(
-                "handoff consume session {} does not match expected {}",
-                consumed.session_id, expected_session
-            )));
-        }
-        output.push_str("consume_session_matches_expected=true\n");
-    }
-    if let Some(expected_lifecycle_state) = expected_lifecycle_state {
-        let expected_lifecycle_state = parse_session_lifecycle_state(&expected_lifecycle_state)?;
-        if consumed.state.lifecycle_state != expected_lifecycle_state {
-            return Err(WorkVcsError::SessionInvalid(format!(
-                "handoff consume lifecycle state {} does not match expected {}",
-                session_lifecycle_state(consumed.state.lifecycle_state),
-                session_lifecycle_state(expected_lifecycle_state)
-            )));
-        }
-        output.push_str("consume_lifecycle_state_matches_expected=true\n");
     }
     Ok(())
 }
@@ -28071,6 +29060,32 @@ mod tests {
         }
     }
 
+    fn assert_mutation_postcondition_failure(
+        result: Result<String>,
+        expected_operation: &str,
+        expected_message_suffix: &str,
+    ) -> String {
+        match result {
+            Err(WorkVcsError::MutationPostconditionFailed {
+                operation,
+                result,
+                message,
+            }) => {
+                assert_eq!(operation, expected_operation);
+                assert!(
+                    message.ends_with(expected_message_suffix),
+                    "unexpected postcondition message: {message}"
+                );
+                assert!(
+                    !result.is_empty(),
+                    "completed mutation must expose its result"
+                );
+                result
+            }
+            other => panic!("expected completed mutation postcondition failure, got {other:?}"),
+        }
+    }
+
     #[test]
     fn cli_renders_stable_workvcs_error_fields() {
         let error = WorkVcsError::QueryInvalid("line one\nline two".to_owned());
@@ -28110,6 +29125,44 @@ mod tests {
         assert_eq!(json["retryable"], false);
         assert_eq!(json["message"], "query invalid: line one\nline two");
         assert_eq!(output.lines().count(), 1);
+    }
+
+    #[test]
+    fn cli_renders_completed_mutation_postcondition_failure() {
+        let error = WorkVcsError::MutationPostconditionFailed {
+            operation: "session.focus-set".to_owned(),
+            result: "session_id=01a00000-0000-7000-8000-000000000001\nfocus_entity_id=01a00000-0000-7000-8000-000000000002\n".to_owned(),
+            message: "session invalid: unexpected focus".to_owned(),
+        };
+
+        let key_value = render_workvcs_error(&error, ErrorOutputFormat::KeyValue);
+        assert_eq!(
+            value(&key_value, "error_code"),
+            "mutation_postcondition_failed"
+        );
+        assert_eq!(value(&key_value, "error_category"), "mutation");
+        assert_eq!(value(&key_value, "retryable"), "false");
+        assert_eq!(value(&key_value, "operation_completed"), "true");
+        assert_eq!(value(&key_value, "operation"), "session.focus-set");
+        assert!(
+            value(&key_value, "operation_result")
+                .contains("focus_entity_id=01a00000-0000-7000-8000-000000000002")
+        );
+        assert_eq!(
+            value(&key_value, "recovery_hint"),
+            "inspect_operation_result_before_retry"
+        );
+
+        let json = json_value(&render_workvcs_error(&error, ErrorOutputFormat::Json));
+        assert_eq!(json["error_code"], "mutation_postcondition_failed");
+        assert_eq!(json["operation_completed"], true);
+        assert_eq!(json["operation"], "session.focus-set");
+        assert!(
+            json["operation_result"]
+                .as_str()
+                .expect("operation result text")
+                .contains("focus_entity_id=")
+        );
     }
 
     #[test]
@@ -30621,6 +31674,10 @@ mod tests {
         ])
         .expect("parse mismatched init"));
         assert!(mismatched_init.is_err());
+        assert!(
+            !mismatch_path.exists(),
+            "deterministic init expectations must fail before store creation"
+        );
 
         let doctor = run(Cli::try_parse_from([
             "workvcs",
@@ -37781,10 +38838,27 @@ mod tests {
             &expected_other_workspace,
         ])
         .expect("parse previous workspace mismatched switch"));
-        assert!(matches!(
+        let previous_workspace_result = assert_mutation_postcondition_failure(
             previous_workspace_mismatch,
-            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
-        ));
+            "session.switch",
+            &expected_message,
+        );
+        assert_eq!(
+            value(&previous_workspace_result, "session_id"),
+            previous_workspace_mismatch_id
+        );
+        assert_eq!(value(&previous_workspace_result, "branch_id"), fork_branch);
+        let persisted_switch = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "show",
+            store,
+            "--session",
+            &previous_workspace_mismatch_id,
+        ])
+        .expect("parse postcondition-failed session show"))
+        .expect("show postcondition-failed switched session");
+        assert_eq!(value(&persisted_switch, "active_branch_id"), fork_branch);
 
         let previous_branch_mismatch_id = start_source_session();
         let expected_message = format!(
@@ -37805,10 +38879,11 @@ mod tests {
             &fork_branch,
         ])
         .expect("parse previous branch mismatched switch"));
-        assert!(matches!(
+        assert_mutation_postcondition_failure(
             previous_branch_mismatch,
-            Err(WorkVcsError::SessionInvalid(message)) if message == expected_message
-        ));
+            "session.switch",
+            &expected_message,
+        );
 
         let workspace_mismatch_id = start_source_session();
         let expected_other_workspace = WorkspaceId::new_v7().to_string();
@@ -37886,11 +38961,11 @@ mod tests {
             "0",
         ])
         .expect("parse released claims mismatched switch"));
-        assert!(matches!(
+        assert_mutation_postcondition_failure(
             released_claims_mismatch,
-            Err(WorkVcsError::SessionInvalid(message))
-                if message == "session switch released claims 1 does not match expected 0"
-        ));
+            "session.switch",
+            "session switch released claims 1 does not match expected 0",
+        );
 
         let focus_mismatch_id = start_source_session();
         let expected_message =
@@ -37991,11 +39066,11 @@ mod tests {
             "1",
         ])
         .expect("parse focus clear path mismatch"));
-        assert!(matches!(
+        assert_mutation_postcondition_failure(
             focus_clear_path_mismatch,
-            Err(WorkVcsError::SessionInvalid(message))
-                if message == "session focus-clear focus path entries 0 does not match expected 1"
-        ));
+            "session.focus-clear",
+            "session focus-clear focus path entries 0 does not match expected 1",
+        );
 
         let focus_clear_lifecycle_mismatch_id = start_source_session();
         let focus_clear_lifecycle_mismatch = run(Cli::try_parse_from([
@@ -38073,11 +39148,12 @@ mod tests {
             "1",
         ])
         .expect("parse focus set path mismatch"));
-        assert!(matches!(
+        let focus_set_result = assert_mutation_postcondition_failure(
             focus_set_path_mismatch,
-            Err(WorkVcsError::SessionInvalid(message))
-                if message == "session focus-set focus path entries 0 does not match expected 1"
-        ));
+            "session.focus-set",
+            "session focus-set focus path entries 0 does not match expected 1",
+        );
+        assert_eq!(value(&focus_set_result, "focus_entity_id"), task_id);
 
         let focus_set_lifecycle_mismatch_id = start_source_session();
         let focus_set_lifecycle_mismatch = run(Cli::try_parse_from([
@@ -46477,11 +47553,11 @@ mod tests {
             "stale",
         ])
         .expect("parse mismatched cache record applicability"));
-        assert!(matches!(
+        assert_mutation_postcondition_failure(
             mismatched_cache_record_applicability,
-            Err(WorkVcsError::QueryInvalid(message))
-                if message == "verification cache record applicability applicable does not match expected stale"
-        ));
+            "verification.cache-record",
+            "verification cache record applicability applicable does not match expected stale",
+        );
 
         let mismatched_cache_record_reason = run(Cli::try_parse_from([
             "workvcs",
@@ -46510,11 +47586,11 @@ mod tests {
             "missing_basis",
         ])
         .expect("parse mismatched cache record reason"));
-        assert!(matches!(
+        assert_mutation_postcondition_failure(
             mismatched_cache_record_reason,
-            Err(WorkVcsError::QueryInvalid(message))
-                if message == "verification cache record reason code all_basis_applicable does not match expected missing_basis"
-        ));
+            "verification.cache-record",
+            "verification cache record reason code all_basis_applicable does not match expected missing_basis",
+        );
 
         let mismatched_cache_record_resource_stamps = run(Cli::try_parse_from([
             "workvcs",
@@ -47836,6 +48912,112 @@ mod tests {
         assert_eq!(value(&verified, "resource_basis_match_expected"), "true");
         assert_eq!(value(&verified, "applicability_matches_expected"), "true");
         assert_eq!(value(&verified, "reason_code_matches_expected"), "true");
+    }
+
+    fn assert_cli_verify_rejects_deterministic_expectation_before_writing() {
+        let fixture = create_project_binding_fixture(false);
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &fixture.genesis_commit_id,
+            "--description",
+            "Verify preflight must not write",
+        ])
+        .expect("parse verify preflight task"))
+        .expect("create verify preflight task");
+        let criterion = run(Cli::try_parse_from([
+            "workvcs",
+            "ac",
+            "create",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&task, "commit_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+            "--task-version",
+            &value(&task, "task_entity_version_id"),
+            "--local-key",
+            "AC-VERIFY-PREFLIGHT",
+            "--statement",
+            "A deterministic mismatch leaves the Store unchanged.",
+        ])
+        .expect("parse verify preflight criterion"))
+        .expect("create verify preflight criterion");
+        let other_workspace = run(Cli::try_parse_from([
+            "workvcs",
+            "workspace",
+            "create",
+            &fixture.store,
+            "--display-name",
+            "other workspace",
+        ])
+        .expect("parse other workspace"))
+        .expect("create other workspace");
+
+        let before = Engine::open(&fixture.store).expect("open before rejected verify");
+        let before_head = before
+            .branch_head(BranchId::parse_canonical(&fixture.branch).expect("branch id"))
+            .expect("branch head before rejected verify")
+            .head_commit_id;
+        let before_evidence = before
+            .evidences(EvidenceListOptions::all())
+            .expect("evidence before rejected verify")
+            .evidences
+            .len();
+        drop(before);
+
+        let rejected = run(Cli::try_parse_from([
+            "workvcs",
+            "verify",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&criterion, "commit_id"),
+            "--acceptance-criterion",
+            &value(&criterion, "acceptance_criterion_entity_id"),
+            "--result",
+            "passed",
+            "--evidence-kind",
+            "verify-preflight",
+            "--expected-branch",
+            &value(&other_workspace, "branch_id"),
+        ])
+        .expect("parse rejected verify"))
+        .expect_err("reject deterministic expectation before write");
+        assert!(matches!(rejected, WorkVcsError::QueryInvalid(_)));
+
+        let after = Engine::open(&fixture.store).expect("open after rejected verify");
+        assert_eq!(
+            after
+                .branch_head(BranchId::parse_canonical(&fixture.branch).expect("branch id"))
+                .expect("branch head after rejected verify")
+                .head_commit_id,
+            before_head
+        );
+        assert_eq!(
+            after
+                .evidences(EvidenceListOptions::all())
+                .expect("evidence after rejected verify")
+                .evidences
+                .len(),
+            before_evidence
+        );
+    }
+
+    #[test]
+    fn cli_verify_rejects_deterministic_expectation_before_writing() {
+        run_cli_test_with_large_stack(
+            "cli-verify-deterministic-preflight-test",
+            assert_cli_verify_rejects_deterministic_expectation_before_writing,
+        );
     }
 
     #[test]
@@ -51952,6 +53134,7 @@ mod tests {
     }
 
     fn assert_closeout_runtime_summary_common_keys(output: &str) {
+        value(output, "runtime_temporal_scope");
         value(output, "runtime.sessions_total");
         value(output, "runtime.claims_total");
         value(output, "runtime.handoffs_total");
@@ -52099,6 +53282,7 @@ mod tests {
         .expect("explicit branch closeout inspect");
 
         assert_eq!(value(&output, "source_kind"), "branch");
+        assert_eq!(value(&output, "runtime_temporal_scope"), "live_read_time");
         assert_eq!(value(&output, "source_branch_id"), fixture.binding.branch);
         assert_eq!(
             value(&output, "source_commit_id"),
@@ -52227,6 +53411,10 @@ mod tests {
         .expect("parse explicit commit closeout inspect"))
         .expect("explicit commit closeout inspect");
         assert_eq!(value(&historical, "source_kind"), "commit");
+        assert_eq!(
+            value(&historical, "runtime_temporal_scope"),
+            "historical_commit"
+        );
         assert_eq!(value(&historical, "source_branch_id"), "none");
         assert_eq!(
             value(&historical, "source_commit_id"),
@@ -65184,8 +66372,7 @@ mod tests {
         assert_eq!(value(&listed, "invalid_bindings"), "0");
     }
 
-    #[test]
-    fn cli_capture_and_recall_work_without_plan_or_session() {
+    fn assert_cli_capture_and_recall_work_without_plan_or_session() {
         let fixture = create_project_binding_fixture(false);
         let head = run(Cli::try_parse_from([
             "workvcs",
@@ -65274,13 +66461,21 @@ mod tests {
         assert_eq!(value(&recalled, "goals_total"), "1");
         assert_eq!(value(&recalled, "plans_total"), "0");
         assert_eq!(value(&recalled, "tasks_total"), "0");
+        assert_eq!(value(&recalled, "sessions_total"), "0");
+        assert_eq!(value(&recalled, "claims_total"), "0");
         assert_eq!(value(&recalled, "records_total"), "2");
         assert_eq!(value(&recalled, "knowledge_total"), "1");
-        assert_eq!(value(&recalled, "item.0.category"), "record");
-        assert_eq!(value(&recalled, "item.1.category"), "knowledge");
-        assert_eq!(value(&recalled, "item.2.category"), "record_relation");
-        assert_eq!(value(&recalled, "item.3.category"), "record");
-        assert_eq!(value(&recalled, "item.4.category"), "goal");
+        assert_eq!(value(&recalled, "work_state_scope"), "current_branch_head");
+        assert_eq!(value(&recalled, "runtime_scope"), "live");
+        assert_eq!(value(&recalled, "item.0.category"), "goal");
+        assert_eq!(value(&recalled, "item.0.temporal_scope"), "current_active");
+        assert_eq!(value(&recalled, "item.1.category"), "record");
+        assert_eq!(value(&recalled, "item.1.scope_json"), "{}");
+        assert_eq!(value(&recalled, "item.2.category"), "knowledge");
+        assert_eq!(value(&recalled, "item.2.scope_json"), "{}");
+        assert_eq!(value(&recalled, "item.2.provenance_json"), "{}");
+        assert_eq!(value(&recalled, "item.3.category"), "record_relation");
+        assert_eq!(value(&recalled, "item.4.category"), "record");
         assert_eq!(value(&recalled, "read_only"), "true");
 
         let bounded = run(Cli::try_parse_from([
@@ -65297,13 +66492,299 @@ mod tests {
         ])
         .expect("parse bounded recall"))
         .expect("bounded recall");
-        assert_eq!(value(&bounded, "item.0.category"), "record");
-        assert_eq!(value(&bounded, "item.1.category"), "knowledge");
-        assert_eq!(value(&bounded, "item.2.category"), "record_relation");
+        assert_eq!(value(&bounded, "item.0.category"), "goal");
+        assert_eq!(value(&bounded, "item.1.category"), "record");
+        assert_eq!(value(&bounded, "item.2.category"), "knowledge");
         assert_eq!(value(&bounded, "truncated"), "true");
         assert_eq!(
             fs::read(&fixture.registry_path).expect("registry after recall"),
             registry_before
+        );
+    }
+
+    #[test]
+    fn cli_capture_and_recall_work_without_plan_or_session() {
+        run_cli_test_with_large_stack(
+            "cli-capture-recall-without-plan-session-test",
+            assert_cli_capture_and_recall_work_without_plan_or_session,
+        );
+    }
+
+    fn assert_cli_recall_reconstructs_standalone_cognition_without_work_spine() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse record-only branch head"))
+        .expect("record-only branch head");
+        let manifest_path = fixture._tempdir.path().join("record-only-capture.json");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "idempotency_key": "cli-record-only-reconstruction",
+  "expected_head_commit_id": "{}",
+  "expected_state_digest": "{}",
+  "records": [
+    {{"local_id":"question","kind":"question","statement":"Why did the recovery probe need an unbounded scan?","scope":{{"case":"record-only-reconstruction"}}}},
+    {{"local_id":"finding","kind":"finding","statement":"Older-first output hid the newest applicable reasoning","scope":{{"case":"record-only-reconstruction","source":"isolated-probe"}}}},
+    {{"local_id":"decision","kind":"decision","statement":"Reserve current work and newest semantic context before older history","scope":{{"case":"record-only-reconstruction"}}}}
+  ],
+  "knowledge": [
+    {{"local_id":"knowledge","statement":"Bounded recovery must expose currentness and provenance","scope":{{"project":"workvcs"}},"provenance":{{"case":"record-only-reconstruction"}}}}
+  ],
+  "evidence": [],
+  "relations": [
+    {{"local_id":"supports","type":"supports","source_local_id":"finding","target_local_id":"decision","rationale":"The isolated probe demonstrates the ordering failure"}},
+    {{"local_id":"validates","type":"validates","source_local_id":"finding","target_local_id":"knowledge","rationale":"The isolated probe establishes the reusable recovery requirement"}}
+  ],
+  "rationale": {{"reason":"prove standalone retrospective reconstruction"}}
+}}"#,
+                fixture.genesis_commit_id,
+                value(&head, "state_digest"),
+            ),
+        )
+        .expect("write record-only capture manifest");
+
+        let captured = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .expect("parse record-only capture"))
+        .expect("record-only capture");
+        let later_finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&captured, "commit_id"),
+            "--statement",
+            "A later probe corrected the current recovery mechanism",
+            "--scope-json",
+            "{\"case\":\"record-only-reconstruction\",\"phase\":\"correction\"}",
+        ])
+        .expect("parse later record-only finding"))
+        .expect("later record-only finding");
+
+        let recalled = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "retrospective",
+            "--budget-items",
+            "8",
+        ])
+        .expect("parse record-only recall"))
+        .expect("record-only recall");
+
+        assert_eq!(value(&recalled, "goals_total"), "0");
+        assert_eq!(value(&recalled, "plans_total"), "0");
+        assert_eq!(value(&recalled, "tasks_total"), "0");
+        assert_eq!(value(&recalled, "sessions_total"), "0");
+        assert_eq!(value(&recalled, "claims_total"), "0");
+        assert_eq!(value(&recalled, "records_total"), "4");
+        assert_eq!(value(&recalled, "knowledge_total"), "1");
+        assert_eq!(value(&recalled, "record_relations_total"), "1");
+        assert_eq!(value(&recalled, "record_knowledge_relations_total"), "1");
+        assert_eq!(value(&recalled, "total_items"), "7");
+        assert_eq!(value(&recalled, "item.0.category"), "record");
+        assert_eq!(
+            value(&recalled, "item.0.id"),
+            value(&later_finding, "record_entity_id")
+        );
+        assert_eq!(
+            value(&recalled, "item.0.statement_json"),
+            "\"A later probe corrected the current recovery mechanism\""
+        );
+        assert_eq!(
+            value(&recalled, "item.0.snapshot_commit_id"),
+            value(&later_finding, "commit_id")
+        );
+        assert!(!value(&recalled, "item.0.scope_json").is_empty());
+        assert!(recalled.contains("Bounded recovery must expose currentness and provenance"));
+        assert!(recalled.contains("provenance_json={\"case\":\"record-only-reconstruction\"}"));
+        assert!(recalled.contains("Older-first output hid the newest applicable reasoning"));
+        assert!(
+            recalled
+                .contains("Reserve current work and newest semantic context before older history")
+        );
+        assert!(recalled.contains("category=record_relation"));
+        assert!(recalled.contains("category=record_knowledge_relation"));
+        assert_eq!(value(&recalled, "read_only"), "true");
+        assert_eq!(value(&recalled, "truncated"), "false");
+    }
+
+    #[test]
+    fn cli_recall_reconstructs_standalone_cognition_without_work_spine() {
+        run_cli_test_with_large_stack(
+            "cli-recall-record-only-reconstruction-test",
+            assert_cli_recall_reconstructs_standalone_cognition_without_work_spine,
+        );
+    }
+
+    fn assert_cli_recall_reserves_current_work_and_live_runtime_spine() {
+        let fixture = create_project_binding_fixture(false);
+        let goal = run(Cli::try_parse_from([
+            "workvcs",
+            "goal",
+            "create",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &fixture.genesis_commit_id,
+            "--description",
+            "Recover the current work spine",
+        ])
+        .expect("parse recall goal"))
+        .expect("create recall goal");
+        let task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "create",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&goal, "commit_id"),
+            "--description",
+            "Keep live coordination visible",
+        ])
+        .expect("parse recall task"))
+        .expect("create recall task");
+        let session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            &fixture.store,
+            "--workspace",
+            &fixture.workspace_id,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse recall session"))
+        .expect("start recall session");
+        let claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            &fixture.store,
+            "--session",
+            &value(&session, "session_id"),
+            "--task",
+            &value(&task, "task_entity_id"),
+        ])
+        .expect("parse recall claim"))
+        .expect("claim recall task");
+        let marked = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "mark-stale",
+            &fixture.store,
+            "--session",
+            &value(&session, "session_id"),
+            "--rationale",
+            "recovery state must remain visible",
+            "--expected-lifecycle-state",
+            "potentially_stale",
+        ])
+        .expect("parse recall session mark-stale"))
+        .expect("mark recall session potentially stale");
+        assert_eq!(value(&marked, "lifecycle_state"), "potentially_stale");
+
+        let recalled = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "4",
+        ])
+        .expect("parse current recall"))
+        .expect("current recall");
+
+        assert_eq!(value(&recalled, "total_items"), "4");
+        assert_eq!(value(&recalled, "sessions_total"), "1");
+        assert_eq!(value(&recalled, "claims_total"), "1");
+        assert_eq!(value(&recalled, "item.0.category"), "goal");
+        assert_eq!(value(&recalled, "item.1.category"), "session");
+        assert_eq!(value(&recalled, "item.1.temporal_scope"), "live_runtime");
+        assert_eq!(value(&recalled, "item.1.status"), "potentially_stale");
+        assert_eq!(value(&recalled, "item.2.category"), "claim");
+        assert_eq!(value(&recalled, "item.2.id"), value(&claim, "claim_id"));
+        assert_eq!(value(&recalled, "item.3.category"), "task");
+        assert_eq!(value(&recalled, "truncated"), "false");
+
+        let mut head = value(&task, "commit_id");
+        for index in 0..20 {
+            let description = format!("Additional runnable Task {index}");
+            let extra_task = run(Cli::try_parse_from([
+                "workvcs",
+                "task",
+                "create",
+                &fixture.store,
+                "--branch",
+                &fixture.branch,
+                "--head",
+                &head,
+                "--description",
+                &description,
+            ])
+            .expect("parse additional recall task"))
+            .expect("create additional recall task");
+            head = value(&extra_task, "commit_id");
+        }
+        let saturated = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "20",
+        ])
+        .expect("parse saturated recall"))
+        .expect("saturated recall");
+        assert_eq!(value(&saturated, "tasks_total"), "21");
+        assert_eq!(value(&saturated, "sessions_total"), "1");
+        assert_eq!(value(&saturated, "claims_total"), "1");
+        assert_eq!(value(&saturated, "item.1.category"), "session");
+        assert_eq!(value(&saturated, "item.2.category"), "claim");
+        assert_eq!(value(&saturated, "returned_items"), "20");
+        assert_eq!(value(&saturated, "truncated"), "true");
+    }
+
+    #[test]
+    fn cli_recall_reserves_current_work_and_live_runtime_spine() {
+        run_cli_test_with_large_stack(
+            "cli-recall-current-work-live-runtime-test",
+            assert_cli_recall_reserves_current_work_and_live_runtime_spine,
         );
     }
 

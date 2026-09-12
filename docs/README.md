@@ -280,6 +280,9 @@ Recent repository-level CLI smoke gates:
 - [ADR-0499: Mechanical Authorization Receipts](decisions/adr/0499-mechanical-authorization-receipts.md)
 - [ADR-0500: Read-Only Closeout Inspection Projection](decisions/adr/0500-closeout-inspect-readonly-projection.md)
 - [ADR-0501: Stable Configuration, Standalone Cognition, and Skill Distribution](decisions/adr/0501-standalone-cognition-config-and-skill.md)
+- [ADR-0502: Mutating CLI Result Assertions](decisions/adr/0502-mutating-cli-result-assertions.md)
+- [ADR-0503: Bounded Recall Recovery Truth](decisions/adr/0503-bounded-recall-recovery-truth.md)
+- [ADR-0504: WorkVCS Skill Tree Install Integrity](decisions/adr/0504-skill-tree-install-integrity.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

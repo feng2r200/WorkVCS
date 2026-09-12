@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-07 by Phase 4PE compact read-only resume query
+Last refreshed: 2026-09-12 by Wave A durable recovery truth hardening
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -29,6 +29,18 @@ provides compact read-only recovery over existing brief ContextPacket data.
 It does not change the release gate matrix or authorize release, tag, push,
 deploy, remote, production, credential, or `/usr/local/bin/workvcs`
 installation actions.
+
+Wave A hardens the post-V1 operating contract without reopening V1 scope:
+mutating CLI expectations now distinguish rejected preflight conditions from
+committed-result assertion failures; bounded Recall preserves representatives
+of current Goal/Plan, live Session/Claim ownership, and non-terminal Task
+categories before a large category can consume the budget; closeout labels
+live Runtime reads separately from historical commit projections; and package
+installation verifies the complete WorkVCS Skill tree fail-closed. Focused
+regressions, full workspace validation, independent review, and real global
+installation evidence govern this row. Raw Evidence bundle portability and the
+monolithic CLI test stack requirement remain post-Wave-A work rather than being
+silently treated as complete.
 
 ## Classification
 

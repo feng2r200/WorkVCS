@@ -202,14 +202,16 @@ if git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git_dirty="false"
     fi
 fi
-artifact_name="workvcs-${artifact_target}-${git_head}-${timestamp}"
+artifact_name="workvcs-${artifact_target}-${git_head}-${timestamp}-$$"
 artifact_root="$package_dir/$artifact_name"
 package_binary="$artifact_root/bin/workvcs"
 source_skill="$repo_root/skills/workvcs"
 package_skill="$artifact_root/skills/workvcs"
 install_skill_path="$skills_dir/workvcs"
 manifest_path="$artifact_root/manifest.txt"
+skill_tree_manifest_path="$artifact_root/skill-tree.sha256"
 archive_path="$package_dir/$artifact_name.tar.gz"
+skill_tree_tool="$repo_root/scripts/workvcs-skill-tree.sh"
 
 cargo_args=(build --package workvcs-cli --bin workvcs)
 if [[ "$use_locked" == "1" && -f "$repo_root/Cargo.lock" ]]; then
@@ -267,16 +269,23 @@ step "build workvcs"
 (cd "$repo_root" && "$cargo_bin" "${cargo_args[@]}")
 [[ -x "$built_binary" ]] || die "missing built workvcs binary at $built_binary"
 [[ -f "$source_skill/SKILL.md" ]] || die "missing WorkVCS Skill at $source_skill/SKILL.md"
+[[ -x "$skill_tree_tool" ]] || die "missing executable Skill tree verifier at $skill_tree_tool"
 
 step "create package artifact"
+[[ ! -e "$artifact_root" ]] || die "package artifact already exists: $artifact_root"
+[[ ! -e "$archive_path" ]] || die "package archive already exists: $archive_path"
 mkdir -p "$artifact_root/bin"
 install -m 0755 "$built_binary" "$package_binary"
+"$skill_tree_tool" create "$source_skill" "$skill_tree_manifest_path" >/dev/null
 mkdir -p "$artifact_root/skills"
 cp -R "$source_skill" "$package_skill"
 
 binary_sha256="$(file_sha256 "$package_binary")"
 binary_size="$(wc -c < "$package_binary" | tr -d ' ')"
 skill_entry_sha256="$(file_sha256 "$package_skill/SKILL.md")"
+"$skill_tree_tool" verify "$package_skill" "$skill_tree_manifest_path" >/dev/null
+skill_tree_files="$(wc -l < "$skill_tree_manifest_path" | tr -d ' ')"
+skill_tree_sha256="$(file_sha256 "$skill_tree_manifest_path")"
 
 cat > "$manifest_path" <<EOF
 name=workvcs
@@ -293,6 +302,9 @@ binary_sha256=$binary_sha256
 binary_size_bytes=$binary_size
 skill_path=skills/workvcs
 skill_entry_sha256=$skill_entry_sha256
+skill_tree_manifest_path=skill-tree.sha256
+skill_tree_sha256=$skill_tree_sha256
+skill_files=$skill_tree_files
 default_skill_install_path=\$HOME/.agents/skills/workvcs
 default_install_path=/usr/local/bin/workvcs
 install_mode=explicit_only
@@ -318,6 +330,9 @@ printf 'workvcs_package_binary_sha256=%s\n' "$binary_sha256"
 printf 'workvcs_package_binary_verified=%s\n' "$package_binary_verified"
 printf 'workvcs_package_skill=%s\n' "$package_skill"
 printf 'workvcs_package_skill_entry_sha256=%s\n' "$skill_entry_sha256"
+printf 'workvcs_package_skill_tree_manifest=%s\n' "$skill_tree_manifest_path"
+printf 'workvcs_package_skill_tree_sha256=%s\n' "$skill_tree_sha256"
+printf 'workvcs_package_skill_files=%s\n' "$skill_tree_files"
 
 install_atomically() {
     local source_path="$1"
@@ -352,6 +367,7 @@ install_atomically() {
 install_skill_atomically() {
     local source_path="$1"
     local final_path="$2"
+    local tree_manifest="$3"
     local final_dir
     local temp_path
     local backup_path
@@ -362,15 +378,20 @@ install_skill_atomically() {
     temp_path="$(mktemp -d "$final_dir/.workvcs-skill.tmp.XXXXXX")"
     backup_path="$final_dir/.workvcs-skill.backup.$$"
     cp -R "$source_path/." "$temp_path/"
-    [[ -f "$temp_path/SKILL.md" ]] || die "packaged Skill copy is incomplete"
+    "$skill_tree_tool" verify "$temp_path" "$tree_manifest" >/dev/null || {
+        rm -rf "$temp_path"
+        die "packaged Skill copy failed full-tree verification"
+    }
     if [[ -e "$final_path" ]]; then
         [[ ! -e "$backup_path" ]] || die "Skill backup path already exists: $backup_path"
         mv "$final_path" "$backup_path"
     fi
-    if mv "$temp_path" "$final_path"; then
+    if mv "$temp_path" "$final_path" && \
+        "$skill_tree_tool" verify "$final_path" "$tree_manifest" >/dev/null; then
         rm -rf "$backup_path"
     else
         rm -rf "$temp_path"
+        rm -rf "$final_path"
         if [[ -e "$backup_path" ]]; then
             mv "$backup_path" "$final_path"
         fi
@@ -390,11 +411,14 @@ if [[ "$install_requested" == "1" ]]; then
     printf 'workvcs_install_verified=true\n'
     if [[ "$install_skill" == "1" ]]; then
         step "install WorkVCS Skill"
-        install_skill_atomically "$package_skill" "$install_skill_path"
+        install_skill_atomically "$package_skill" "$install_skill_path" "$skill_tree_manifest_path"
         installed_skill_sha256="$(file_sha256 "$install_skill_path/SKILL.md")"
         [[ "$installed_skill_sha256" == "$skill_entry_sha256" ]] || die "installed Skill digest mismatch"
+        "$skill_tree_tool" verify "$install_skill_path" "$skill_tree_manifest_path" >/dev/null
         printf 'workvcs_skill_install_path=%s\n' "$install_skill_path"
         printf 'workvcs_skill_install_sha256=%s\n' "$installed_skill_sha256"
+        printf 'workvcs_skill_install_tree_sha256=%s\n' "$skill_tree_sha256"
+        printf 'workvcs_skill_install_files=%s\n' "$skill_tree_files"
         printf 'workvcs_skill_install_verified=true\n'
     fi
 fi

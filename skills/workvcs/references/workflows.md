@@ -62,11 +62,30 @@ a testing ritual.
 
 ## Recall and retrospective
 
-`brief` is for immediate active context. `handoff` starts from active work and
-includes semantic relations needed by another Agent. `retrospective` samples
-the newest Records, Knowledge, semantic relations, and Store-wide Evidence
-metadata across categories before remaining semantic history and terminal
-Goal/Plan/Task summaries. A bounded projection therefore cannot be consumed by
-one large category alone. If evidence body matters, inspect the item and extract
-its persisted content separately; do not place arbitrary large bodies into
-every recall response.
+Every Recall profile first reserves one representative from each non-empty
+active Goal, active Plan, live Session, active Claim, and non-terminal Task
+category before any category can consume the remaining budget. Live Sessions
+include both `active` and recoverable `potentially_stale` states; a large Task
+queue therefore cannot hide all current ownership detail. `brief` is for immediate
+active context. `handoff` then adds the newest semantic context needed by
+another Agent. `retrospective` samples the newest Records, Knowledge, semantic
+relations, and Store-wide Evidence metadata across categories before remaining
+semantic history and terminal Goal/Plan/Task summaries. A bounded projection
+therefore cannot be consumed by one large category or old work merely because
+it was recorded first.
+
+Use each item's `temporal_scope`, version/state digest,
+`snapshot_commit_id`, Record scope, and Knowledge scope/provenance to
+distinguish current Work State, live Runtime Coordination, and historical Store
+inventory. `snapshot_commit_id` is the evaluation point, not the object's
+creation time; Recall uses current version identifiers for newest-first semantic
+ordering. For closeout, a branch source has
+`runtime_temporal_scope=live_read_time`; an explicit commit has
+`runtime_temporal_scope=historical_commit`. If evidence body matters, inspect
+the item and extract its persisted content separately; do not place arbitrary
+large bodies into every recall response.
+
+When a mutating command returns `mutation_postcondition_failed`, the mutation
+already completed but a result-dependent `--expected-*` assertion did not.
+Inspect `operation_result`, recover the current state, and decide whether any
+new action is still needed. Do not blindly replay the mutation.

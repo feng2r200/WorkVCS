@@ -49,6 +49,11 @@ Do not invent relations merely to fill a graph. Use `supports`, `contradicts`,
 causal or epistemic claim is justified. See
 [Semantic recording](references/semantics.md).
 
+Close a running Attempt when its result becomes known. If a Finding is later
+corrected or disproved, do not leave two contradictory Findings current: use
+the guarded Finding correction command that preserves the prior statement and
+creates its justified evolution relation.
+
 ## Evidence must remain inspectable
 
 Prefer raw content input when WorkVCS should preserve the evidence body. Check

@@ -19,6 +19,9 @@ use std::fmt;
 pub(crate) const RECORD_ENTITY_KIND: &str = "record";
 pub(crate) const RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION: i64 = 1;
 pub(crate) const RECORD_DECISION_SUPERSEDE_OPERATION_TYPE: &str = "record.decision.supersede";
+pub(crate) const RECORD_FINDING_CORRECTION_OPERATION_SCHEMA_VERSION: i64 = 1;
+pub(crate) const RECORD_FINDING_INVALIDATE_OPERATION_TYPE: &str = "record.finding.invalidate";
+pub(crate) const RECORD_FINDING_SUPERSEDE_OPERATION_TYPE: &str = "record.finding.supersede";
 pub(crate) const KNOWLEDGE_RELATION_CREATE_OPERATION_SCHEMA_VERSION: i64 = 1;
 pub(crate) const KNOWLEDGE_RELATION_CREATE_OPERATION_TYPE: &str = "knowledge.relation.create";
 pub(crate) const KNOWLEDGE_RELATION_REMOVE_OPERATION_SCHEMA_VERSION: i64 = 1;
@@ -54,6 +57,8 @@ const SUPPORTS_RELATION_TYPE: &str = "supports";
 const SUPERSEDES_RELATION_TYPE: &str = "supersedes";
 const VALIDATES_RELATION_TYPE: &str = "validates";
 const RECORD_DECISION_SUPERSEDE_EVENT_KIND: &str = "record.decision.superseded";
+const RECORD_FINDING_INVALIDATE_EVENT_KIND: &str = "record.finding.invalidated";
+const RECORD_FINDING_SUPERSEDE_EVENT_KIND: &str = "record.finding.superseded";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
@@ -336,6 +341,23 @@ impl RecordState {
             status: next_status,
         };
         Ok(next)
+    }
+
+    fn transition_finding(&self, next_status: RecordStatus, rationale_text: &str) -> Result<Self> {
+        if self.kind != RecordKind::Finding {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record kind {:?} does not use the Finding lifecycle",
+                self.kind
+            )));
+        }
+        validate_transition_rationale(rationale_text)?;
+        validate_finding_lifecycle_transition(self.status, next_status)?;
+        Ok(Self {
+            kind: self.kind,
+            statement: self.statement.clone(),
+            scope: self.scope.clone(),
+            status: next_status,
+        })
     }
 }
 
@@ -1363,6 +1385,133 @@ pub struct DecisionRecordSupersedeCommit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FindingRecordCorrectionOptions {
+    branch_id: BranchId,
+    expected_head_commit_id: CommitId,
+    source_record_entity_id: EntityId,
+    target_record_entity_id: EntityId,
+    expected_target_record_entity_version_id: EntityVersionId,
+    relation_type: RecordRelationType,
+    next_target_status: RecordStatus,
+    rationale_text: String,
+    rationale: CanonicalValue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FindingCorrectionKind {
+    Supersede,
+    Invalidate,
+}
+
+impl FindingCorrectionKind {
+    fn relation_type(self) -> RecordRelationType {
+        match self {
+            Self::Supersede => RecordRelationType::Supersedes,
+            Self::Invalidate => RecordRelationType::Invalidates,
+        }
+    }
+
+    fn target_status(self) -> RecordStatus {
+        match self {
+            Self::Supersede => RecordStatus::Superseded,
+            Self::Invalidate => RecordStatus::Invalidated,
+        }
+    }
+}
+
+impl FindingRecordCorrectionOptions {
+    pub fn supersede(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        replacement_record_entity_id: EntityId,
+        prior_record_entity_id: EntityId,
+        expected_prior_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            replacement_record_entity_id,
+            prior_record_entity_id,
+            expected_prior_record_entity_version_id,
+            FindingCorrectionKind::Supersede,
+            rationale,
+        )
+    }
+
+    pub fn invalidate(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        because_record_entity_id: EntityId,
+        target_record_entity_id: EntityId,
+        expected_target_record_entity_version_id: EntityVersionId,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            branch_id,
+            expected_head_commit_id,
+            because_record_entity_id,
+            target_record_entity_id,
+            expected_target_record_entity_version_id,
+            FindingCorrectionKind::Invalidate,
+            rationale,
+        )
+    }
+
+    fn new(
+        branch_id: BranchId,
+        expected_head_commit_id: CommitId,
+        source_record_entity_id: EntityId,
+        target_record_entity_id: EntityId,
+        expected_target_record_entity_version_id: EntityVersionId,
+        correction_kind: FindingCorrectionKind,
+        rationale: impl Into<String>,
+    ) -> Result<Self> {
+        let rationale_text = rationale.into();
+        validate_transition_rationale(&rationale_text)?;
+        Ok(Self {
+            branch_id,
+            expected_head_commit_id,
+            source_record_entity_id,
+            target_record_entity_id,
+            expected_target_record_entity_version_id,
+            relation_type: correction_kind.relation_type(),
+            next_target_status: correction_kind.target_status(),
+            rationale: rationale_value(&rationale_text)?,
+            rationale_text,
+        })
+    }
+
+    pub fn with_rationale(mut self, rationale: CanonicalValue) -> Self {
+        self.rationale = rationale;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FindingRecordCorrectionCommit {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub previous_head_commit_id: CommitId,
+    pub commit_id: CommitId,
+    pub changeset_id: ChangeSetId,
+    pub target_record_operation_id: OperationId,
+    pub relation_operation_id: OperationId,
+    pub relation_type: RecordRelationType,
+    pub source_record_entity_id: EntityId,
+    pub target_record_entity_id: EntityId,
+    pub previous_target_record_entity_version_id: EntityVersionId,
+    pub target_record_entity_version_id: EntityVersionId,
+    pub target_record_state_digest: Digest,
+    pub relation_id: RelationId,
+    pub relation_version_id: RelationVersionId,
+    pub relation_state_digest: Digest,
+    pub work_state_digest: Digest,
+    pub previous_target_state: RecordState,
+    pub target_state: RecordState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordRelationRemoveOptions {
     branch_id: BranchId,
     expected_head_commit_id: CommitId,
@@ -1903,7 +2052,7 @@ pub(crate) fn supersede_decision_record(
     let relation_state_value = CanonicalValue::object(Vec::new())?;
     let relation_state_json = canonical_json_string(&relation_state_value)?;
     let relation_state_digest = relation_version_digest(&relation_state_value)?;
-    let next_work_state = work_state_after_decision_supersede(
+    let next_work_state = work_state_after_record_evolution(
         &parent.state,
         options.prior_record_entity_id,
         options.expected_prior_record_entity_version_id,
@@ -1927,17 +2076,22 @@ pub(crate) fn supersede_decision_record(
         )?),
         None => None,
     };
-    let changeset_payload_json = decision_supersede_payload_json(&DecisionSupersedePayload {
-        replacement_record_entity_id: options.replacement_record_entity_id,
-        prior_record_entity_id: options.prior_record_entity_id,
-        previous_prior_record_entity_version_id: options.expected_prior_record_entity_version_id,
-        prior_record_entity_version_id,
-        relation_id,
-        relation_version_id,
-        causal_record_entity_id: options.causal_record_entity_id,
-        causal_relation_id,
-        causal_relation_version_id,
-    })?;
+    let changeset_payload_json = record_evolution_payload_json(
+        &RecordEvolutionPayload {
+            relation_type: RecordRelationType::Supersedes,
+            source_record_entity_id: options.replacement_record_entity_id,
+            target_record_entity_id: options.prior_record_entity_id,
+            previous_target_record_entity_version_id: options
+                .expected_prior_record_entity_version_id,
+            target_record_entity_version_id: prior_record_entity_version_id,
+            relation_id,
+            relation_version_id,
+            causal_record_entity_id: options.causal_record_entity_id,
+            causal_relation_id,
+            causal_relation_version_id,
+        },
+        true,
+    )?;
     let rationale_json = canonical_json_string(&options.rationale)?;
 
     let transaction = connection
@@ -1978,25 +2132,29 @@ pub(crate) fn supersede_decision_record(
             "",
         )?;
     }
-    write_decision_supersede(
+    write_record_evolution(
         &transaction,
-        &DecisionRecordSupersedeRows {
+        &RecordEvolutionRows {
             workspace_id: branch.workspace_id,
             expected_head_commit_id: options.expected_head_commit_id,
-            replacement_record_entity_id: options.replacement_record_entity_id,
-            prior_record_entity_id: options.prior_record_entity_id,
-            previous_prior_record_entity_version_id: options
+            operation_type: RECORD_DECISION_SUPERSEDE_OPERATION_TYPE,
+            operation_schema_version: RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION,
+            event_kind: RECORD_DECISION_SUPERSEDE_EVENT_KIND,
+            relation_type: RecordRelationType::Supersedes,
+            source_record_entity_id: options.replacement_record_entity_id,
+            target_record_entity_id: options.prior_record_entity_id,
+            previous_target_record_entity_version_id: options
                 .expected_prior_record_entity_version_id,
-            prior_record_entity_version_id,
-            prior_state_json,
-            prior_record_state_digest,
+            target_record_entity_version_id: prior_record_entity_version_id,
+            target_state_json: prior_state_json,
+            target_record_state_digest: prior_record_state_digest,
             relation_id,
             relation_version_id,
             relation_state_json,
             relation_state_digest,
             changeset_id,
             commit_id,
-            prior_record_operation_id,
+            target_record_operation_id: prior_record_operation_id,
             relation_operation_id,
             prior_payload_json,
             relation_payload_json,
@@ -2044,6 +2202,215 @@ pub(crate) fn supersede_decision_record(
         work_state_digest,
         previous_prior_state: prior.state,
         prior_state,
+    })
+}
+
+pub(crate) fn correct_finding_record(
+    connection: &mut StoreConnection,
+    options: &FindingRecordCorrectionOptions,
+) -> Result<FindingRecordCorrectionCommit> {
+    connection.verify_foreign_keys()?;
+    require_non_empty_rationale_object(&options.rationale)?;
+    if options.source_record_entity_id == options.target_record_entity_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "Finding Record {} cannot correct itself",
+            options.target_record_entity_id
+        )));
+    }
+
+    let parent = state_at(connection, options.expected_head_commit_id)?;
+    let source = record_at(
+        connection,
+        options.expected_head_commit_id,
+        options.source_record_entity_id,
+    )?;
+    let target = record_at(
+        connection,
+        options.expected_head_commit_id,
+        options.target_record_entity_id,
+    )?;
+    if source.workspace_id != parent.workspace_id || target.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "Finding correction endpoints must belong to workspace {}",
+            parent.workspace_id
+        )));
+    }
+    if target.record_entity_version_id != options.expected_target_record_entity_version_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "target Finding Record entity {} expected version {}, found {} at commit {}",
+            options.target_record_entity_id,
+            options.expected_target_record_entity_version_id,
+            target.record_entity_version_id,
+            options.expected_head_commit_id
+        )));
+    }
+    validate_finding_correction_endpoints(options.relation_type, &source, &target)?;
+    let target_state = target
+        .state
+        .transition_finding(options.next_target_status, &options.rationale_text)?;
+
+    let target_record_entity_version_id = EntityVersionId::new_v7();
+    let relation_id = RelationId::new_v7();
+    let relation_version_id = RelationVersionId::new_v7();
+    let changeset_id = ChangeSetId::new_v7();
+    let commit_id = CommitId::new_v7();
+    let target_record_operation_id = OperationId::new_v7();
+    let relation_operation_id = OperationId::new_v7();
+    let now_us = current_epoch_micros()?;
+
+    let target_state_value = target_state.to_canonical_value()?;
+    let target_state_json = canonical_json_string(&target_state_value)?;
+    let target_record_state_digest = entity_version_digest(&target_state_value)?;
+    let relation_state_value = CanonicalValue::object(Vec::new())?;
+    let relation_state_json = canonical_json_string(&relation_state_value)?;
+    let relation_state_digest = relation_version_digest(&relation_state_value)?;
+    let next_work_state = work_state_after_record_evolution(
+        &parent.state,
+        options.target_record_entity_id,
+        options.expected_target_record_entity_version_id,
+        target_record_entity_version_id,
+        relation_id,
+        relation_version_id,
+        None,
+    )?;
+    let work_state_digest = work_state_mapping_digest(&next_work_state);
+    let target_payload_json = entity_transition_payload_json(
+        options.target_record_entity_id,
+        Some(options.expected_target_record_entity_version_id),
+        target_record_entity_version_id,
+    )?;
+    let relation_payload_json = canonical_json_string(&relation_transition_payload_value(
+        relation_id,
+        None,
+        Some(relation_version_id),
+    )?)?;
+    let changeset_payload_json = record_evolution_payload_json(
+        &RecordEvolutionPayload {
+            relation_type: options.relation_type,
+            source_record_entity_id: options.source_record_entity_id,
+            target_record_entity_id: options.target_record_entity_id,
+            previous_target_record_entity_version_id: options
+                .expected_target_record_entity_version_id,
+            target_record_entity_version_id,
+            relation_id,
+            relation_version_id,
+            causal_record_entity_id: None,
+            causal_relation_id: None,
+            causal_relation_version_id: None,
+        },
+        false,
+    )?;
+    let rationale_json = canonical_json_string(&options.rationale)?;
+    let (operation_type, event_kind) = match options.relation_type {
+        RecordRelationType::Supersedes => (
+            RECORD_FINDING_SUPERSEDE_OPERATION_TYPE,
+            RECORD_FINDING_SUPERSEDE_EVENT_KIND,
+        ),
+        RecordRelationType::Invalidates => (
+            RECORD_FINDING_INVALIDATE_OPERATION_TYPE,
+            RECORD_FINDING_INVALIDATE_EVENT_KIND,
+        ),
+        other => {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "Finding correction relation type {other} is not supported"
+            )));
+        }
+    };
+
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let branch = load_active_branch(&transaction, options.branch_id)?;
+    if branch.head_commit_id != options.expected_head_commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {} expected head {}, found {}",
+            options.branch_id, options.expected_head_commit_id, branch.head_commit_id
+        )));
+    }
+    if branch.workspace_id != parent.workspace_id {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "branch {} belongs to workspace {}, but expected head {} belongs to workspace {}",
+            options.branch_id,
+            branch.workspace_id,
+            options.expected_head_commit_id,
+            parent.workspace_id
+        )));
+    }
+    ensure_record_relation_logical_key_available(
+        &transaction,
+        branch.workspace_id,
+        options.relation_type,
+        options.source_record_entity_id,
+        options.target_record_entity_id,
+        "",
+    )?;
+    write_record_evolution(
+        &transaction,
+        &RecordEvolutionRows {
+            workspace_id: branch.workspace_id,
+            expected_head_commit_id: options.expected_head_commit_id,
+            operation_type,
+            operation_schema_version: RECORD_FINDING_CORRECTION_OPERATION_SCHEMA_VERSION,
+            event_kind,
+            relation_type: options.relation_type,
+            source_record_entity_id: options.source_record_entity_id,
+            target_record_entity_id: options.target_record_entity_id,
+            previous_target_record_entity_version_id: options
+                .expected_target_record_entity_version_id,
+            target_record_entity_version_id,
+            target_state_json,
+            target_record_state_digest,
+            relation_id,
+            relation_version_id,
+            relation_state_json,
+            relation_state_digest,
+            changeset_id,
+            commit_id,
+            target_record_operation_id,
+            relation_operation_id,
+            prior_payload_json: target_payload_json,
+            relation_payload_json,
+            causal_record_entity_id: None,
+            causal_relation_id: None,
+            causal_relation_version_id: None,
+            causal_relation_operation_id: None,
+            causal_relation_payload_json: None,
+            changeset_payload_json,
+            rationale_json,
+            work_state_digest,
+            now_us,
+        },
+    )?;
+    move_branch_head(
+        &transaction,
+        options.branch_id,
+        options.expected_head_commit_id,
+        commit_id,
+        now_us,
+    )?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(FindingRecordCorrectionCommit {
+        workspace_id: branch.workspace_id,
+        branch_id: options.branch_id,
+        previous_head_commit_id: options.expected_head_commit_id,
+        commit_id,
+        changeset_id,
+        target_record_operation_id,
+        relation_operation_id,
+        relation_type: options.relation_type,
+        source_record_entity_id: options.source_record_entity_id,
+        target_record_entity_id: options.target_record_entity_id,
+        previous_target_record_entity_version_id: options.expected_target_record_entity_version_id,
+        target_record_entity_version_id,
+        target_record_state_digest,
+        relation_id,
+        relation_version_id,
+        relation_state_digest,
+        work_state_digest,
+        previous_target_state: target.state,
+        target_state,
     })
 }
 
@@ -3658,22 +4025,26 @@ struct RecordRelationRestoreRows {
     now_us: i64,
 }
 
-struct DecisionRecordSupersedeRows {
+struct RecordEvolutionRows {
     workspace_id: WorkspaceId,
     expected_head_commit_id: CommitId,
-    replacement_record_entity_id: EntityId,
-    prior_record_entity_id: EntityId,
-    previous_prior_record_entity_version_id: EntityVersionId,
-    prior_record_entity_version_id: EntityVersionId,
-    prior_state_json: String,
-    prior_record_state_digest: Digest,
+    operation_type: &'static str,
+    operation_schema_version: i64,
+    event_kind: &'static str,
+    relation_type: RecordRelationType,
+    source_record_entity_id: EntityId,
+    target_record_entity_id: EntityId,
+    previous_target_record_entity_version_id: EntityVersionId,
+    target_record_entity_version_id: EntityVersionId,
+    target_state_json: String,
+    target_record_state_digest: Digest,
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
     relation_state_json: String,
     relation_state_digest: Digest,
     changeset_id: ChangeSetId,
     commit_id: CommitId,
-    prior_record_operation_id: OperationId,
+    target_record_operation_id: OperationId,
     relation_operation_id: OperationId,
     prior_payload_json: String,
     relation_payload_json: String,
@@ -3721,6 +4092,19 @@ struct BranchRow {
     head_commit_id: CommitId,
 }
 
+struct RecordEvolutionPayload {
+    relation_type: RecordRelationType,
+    source_record_entity_id: EntityId,
+    target_record_entity_id: EntityId,
+    previous_target_record_entity_version_id: EntityVersionId,
+    target_record_entity_version_id: EntityVersionId,
+    relation_id: RelationId,
+    relation_version_id: RelationVersionId,
+    causal_record_entity_id: Option<EntityId>,
+    causal_relation_id: Option<RelationId>,
+    causal_relation_version_id: Option<RelationVersionId>,
+}
+
 fn validate_decision_supersede_endpoints(
     replacement: &RecordSnapshot,
     prior: &RecordSnapshot,
@@ -3747,6 +4131,46 @@ fn validate_decision_supersede_endpoints(
         return Err(WorkVcsError::RecordInvalid(format!(
             "supersedes prior Decision must be active, found {}",
             prior.state.status
+        )));
+    }
+    Ok(())
+}
+
+fn validate_finding_correction_endpoints(
+    relation_type: RecordRelationType,
+    source: &RecordSnapshot,
+    target: &RecordSnapshot,
+) -> Result<()> {
+    if !matches!(
+        relation_type,
+        RecordRelationType::Supersedes | RecordRelationType::Invalidates
+    ) {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "Finding correction relation type {relation_type} is not supported"
+        )));
+    }
+    if source.state.kind != RecordKind::Finding {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "Finding correction source must be a Finding Record, found {}",
+            source.state.kind
+        )));
+    }
+    if source.state.status != RecordStatus::Active {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "Finding correction source must be active, found {}",
+            source.state.status
+        )));
+    }
+    if target.state.kind != RecordKind::Finding {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "Finding correction target must be a Finding Record, found {}",
+            target.state.kind
+        )));
+    }
+    if target.state.status != RecordStatus::Active {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "Finding correction target must be active, found {}",
+            target.state.status
         )));
     }
     Ok(())
@@ -3787,16 +4211,24 @@ fn validate_record_relation_endpoints_for_create(
                     source.state.kind
                 )));
             }
-            if target.state.kind != RecordKind::Assumption {
+            if !matches!(
+                target.state.kind,
+                RecordKind::Assumption | RecordKind::Finding
+            ) {
                 return Err(WorkVcsError::RecordInvalid(format!(
-                    "invalidates target must be an Assumption Record, found {}",
+                    "invalidates target must be an Assumption or Finding Record, found {}",
                     target.state.kind
                 )));
             }
             if target.state.status != RecordStatus::Invalidated {
                 return Err(WorkVcsError::RecordInvalid(format!(
-                    "invalidates target Assumption must be invalidated, found {}",
-                    target.state.status
+                    "invalidates target {} must be invalidated, found {}",
+                    match target.state.kind {
+                        RecordKind::Assumption => "Assumption",
+                        RecordKind::Finding => "Finding",
+                        _ => unreachable!("validated target kind"),
+                    },
+                    target.state.status,
                 )));
             }
             Ok(())
@@ -4015,9 +4447,12 @@ fn validate_record_relation_endpoints_for_projection(
                     source.state.kind
                 )));
             }
-            if target.state.kind != RecordKind::Assumption {
+            if !matches!(
+                target.state.kind,
+                RecordKind::Assumption | RecordKind::Finding
+            ) {
                 return Err(WorkVcsError::RecordInvalid(format!(
-                    "invalidates target must be an Assumption Record, found {}",
+                    "invalidates target must be an Assumption or Finding Record, found {}",
                     target.state.kind
                 )));
             }
@@ -4025,16 +4460,19 @@ fn validate_record_relation_endpoints_for_projection(
         }
         RecordRelationType::RelatedTo => Ok(()),
         RecordRelationType::Supersedes => {
-            if source.state.kind != RecordKind::Decision {
+            if !matches!(
+                source.state.kind,
+                RecordKind::Decision | RecordKind::Finding
+            ) {
                 return Err(WorkVcsError::RecordInvalid(format!(
-                    "supersedes replacement must be a Decision Record, found {}",
+                    "supersedes replacement must be a Decision or Finding Record, found {}",
                     source.state.kind
                 )));
             }
-            if target.state.kind != RecordKind::Decision {
+            if target.state.kind != source.state.kind {
                 return Err(WorkVcsError::RecordInvalid(format!(
-                    "supersedes prior must be a Decision Record, found {}",
-                    target.state.kind
+                    "supersedes prior must have the same Record kind as the replacement; found {} -> {}",
+                    source.state.kind, target.state.kind
                 )));
             }
             Ok(())
@@ -4152,11 +4590,11 @@ fn work_state_after_record_relation_remove(
     }
 }
 
-fn work_state_after_decision_supersede(
+fn work_state_after_record_evolution(
     parent_state: &WorkState,
-    prior_record_entity_id: EntityId,
-    previous_prior_record_entity_version_id: EntityVersionId,
-    prior_record_entity_version_id: EntityVersionId,
+    target_record_entity_id: EntityId,
+    previous_target_record_entity_version_id: EntityVersionId,
+    target_record_entity_version_id: EntityVersionId,
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
     causal_relation: Option<(RelationId, RelationVersionId)>,
@@ -4164,21 +4602,21 @@ fn work_state_after_decision_supersede(
     let mut entities = Vec::new();
     let mut replaced = false;
     for (entity_id, entity_version_id) in parent_state.entities() {
-        if *entity_id == prior_record_entity_id {
+        if *entity_id == target_record_entity_id {
             replaced = true;
-            if *entity_version_id != previous_prior_record_entity_version_id {
+            if *entity_version_id != previous_target_record_entity_version_id {
                 return Err(WorkVcsError::RecordInvalid(format!(
-                    "prior Decision Record entity {prior_record_entity_id} expected parent version {previous_prior_record_entity_version_id}, found {entity_version_id}"
+                    "target Record entity {target_record_entity_id} expected parent version {previous_target_record_entity_version_id}, found {entity_version_id}"
                 )));
             }
-            entities.push((*entity_id, prior_record_entity_version_id));
+            entities.push((*entity_id, target_record_entity_version_id));
         } else {
             entities.push((*entity_id, *entity_version_id));
         }
     }
     if !replaced {
         return Err(WorkVcsError::RecordInvalid(format!(
-            "prior Decision Record entity {prior_record_entity_id} was expected to be present"
+            "target Record entity {target_record_entity_id} was expected to be present"
         )));
     }
 
@@ -4701,23 +5139,20 @@ fn write_record_relation_restore(
     Ok(())
 }
 
-fn write_decision_supersede(
-    transaction: &Transaction<'_>,
-    rows: &DecisionRecordSupersedeRows,
-) -> Result<()> {
+fn write_record_evolution(transaction: &Transaction<'_>, rows: &RecordEvolutionRows) -> Result<()> {
     let workspace_id_bytes = rows.workspace_id.raw_bytes();
-    let replacement_record_entity_id_bytes = rows.replacement_record_entity_id.raw_bytes();
-    let prior_record_entity_id_bytes = rows.prior_record_entity_id.raw_bytes();
-    let previous_prior_record_entity_version_id_bytes =
-        rows.previous_prior_record_entity_version_id.raw_bytes();
-    let prior_record_entity_version_id_bytes = rows.prior_record_entity_version_id.raw_bytes();
-    let prior_record_state_digest_bytes = rows.prior_record_state_digest.as_bytes();
+    let source_record_entity_id_bytes = rows.source_record_entity_id.raw_bytes();
+    let target_record_entity_id_bytes = rows.target_record_entity_id.raw_bytes();
+    let previous_target_record_entity_version_id_bytes =
+        rows.previous_target_record_entity_version_id.raw_bytes();
+    let target_record_entity_version_id_bytes = rows.target_record_entity_version_id.raw_bytes();
+    let target_record_state_digest_bytes = rows.target_record_state_digest.as_bytes();
     let relation_id_bytes = rows.relation_id.raw_bytes();
     let relation_version_id_bytes = rows.relation_version_id.raw_bytes();
     let relation_state_digest_bytes = rows.relation_state_digest.as_bytes();
     let changeset_id_bytes = rows.changeset_id.raw_bytes();
     let commit_id_bytes = rows.commit_id.raw_bytes();
-    let prior_record_operation_id_bytes = rows.prior_record_operation_id.raw_bytes();
+    let target_record_operation_id_bytes = rows.target_record_operation_id.raw_bytes();
     let relation_operation_id_bytes = rows.relation_operation_id.raw_bytes();
     let parent_commit_id_bytes = rows.expected_head_commit_id.raw_bytes();
     let work_state_digest_bytes = rows.work_state_digest.as_bytes();
@@ -4744,7 +5179,7 @@ fn write_decision_supersede(
         (None, None, None, None, None) => None,
         _ => {
             return Err(WorkVcsError::RecordInvalid(
-                "Decision supersede causal relation rows are incomplete".to_owned(),
+                "Record evolution causal relation rows are incomplete".to_owned(),
             ));
         }
     };
@@ -4760,11 +5195,11 @@ fn write_decision_supersede(
              )
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                &prior_record_entity_version_id_bytes[..],
-                &prior_record_entity_id_bytes[..],
+                &target_record_entity_version_id_bytes[..],
+                &target_record_entity_id_bytes[..],
                 RECORD_STATE_SCHEMA_VERSION,
-                rows.prior_state_json,
-                &prior_record_state_digest_bytes[..]
+                rows.target_state_json,
+                &target_record_state_digest_bytes[..]
             ],
         )
         .map_err(storage_error)?;
@@ -4789,9 +5224,9 @@ fn write_decision_supersede(
             params![
                 &relation_id_bytes[..],
                 &workspace_id_bytes[..],
-                RecordRelationType::Supersedes.as_str(),
-                &replacement_record_entity_id_bytes[..],
-                &prior_record_entity_id_bytes[..]
+                rows.relation_type.as_str(),
+                &source_record_entity_id_bytes[..],
+                &target_record_entity_id_bytes[..]
             ],
         )
         .map_err(storage_error)?;
@@ -4851,7 +5286,7 @@ fn write_decision_supersede(
                     &causal_relation_id_bytes[..],
                     &workspace_id_bytes[..],
                     RecordRelationType::DerivedFrom.as_str(),
-                    &replacement_record_entity_id_bytes[..],
+                    &source_record_entity_id_bytes[..],
                     &causal_record_entity_id_bytes[..]
                 ],
             )
@@ -4892,8 +5327,8 @@ fn write_decision_supersede(
             params![
                 &changeset_id_bytes[..],
                 &workspace_id_bytes[..],
-                RECORD_DECISION_SUPERSEDE_OPERATION_TYPE,
-                RECORD_DECISION_SUPERSEDE_OPERATION_SCHEMA_VERSION,
+                rows.operation_type,
+                rows.operation_schema_version,
                 rows.changeset_payload_json,
                 rows.rationale_json,
                 rows.now_us
@@ -4926,9 +5361,9 @@ fn write_decision_supersede(
              )
              VALUES (?1, ?2, 0, 'entity', ?3, ?4)",
             params![
-                &prior_record_operation_id_bytes[..],
+                &target_record_operation_id_bytes[..],
                 &changeset_id_bytes[..],
-                &prior_record_entity_id_bytes[..],
+                &target_record_entity_id_bytes[..],
                 rows.prior_payload_json
             ],
         )
@@ -4993,10 +5428,10 @@ fn write_decision_supersede(
              )
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                &prior_record_operation_id_bytes[..],
-                &prior_record_entity_id_bytes[..],
-                &previous_prior_record_entity_version_id_bytes[..],
-                &prior_record_entity_version_id_bytes[..],
+                &target_record_operation_id_bytes[..],
+                &target_record_entity_id_bytes[..],
+                &previous_target_record_entity_version_id_bytes[..],
+                &target_record_entity_version_id_bytes[..],
                 EMPTY_FIELD_DELTA
             ],
         )
@@ -5102,7 +5537,7 @@ fn write_decision_supersede(
                 &EventId::new_v7().raw_bytes()[..],
                 &workspace_id_bytes[..],
                 &changeset_id_bytes[..],
-                RECORD_DECISION_SUPERSEDE_EVENT_KIND,
+                rows.event_kind,
                 rows.now_us,
                 rows.changeset_payload_json
             ],
@@ -5190,19 +5625,10 @@ fn relation_transition_payload_value(
     .map_err(record_invalid_from)
 }
 
-struct DecisionSupersedePayload {
-    replacement_record_entity_id: EntityId,
-    prior_record_entity_id: EntityId,
-    previous_prior_record_entity_version_id: EntityVersionId,
-    prior_record_entity_version_id: EntityVersionId,
-    relation_id: RelationId,
-    relation_version_id: RelationVersionId,
-    causal_record_entity_id: Option<EntityId>,
-    causal_relation_id: Option<RelationId>,
-    causal_relation_version_id: Option<RelationVersionId>,
-}
-
-fn decision_supersede_payload_json(payload: &DecisionSupersedePayload) -> Result<String> {
+fn record_evolution_payload_json(
+    payload: &RecordEvolutionPayload,
+    legacy_decision_fields: bool,
+) -> Result<String> {
     let has_causal_relation = payload.causal_relation_version_id.is_some();
     let causal_record_entity_id = optional_id_value(payload.causal_record_entity_id);
     let causal_relation_id = optional_id_value(payload.causal_relation_id);
@@ -5227,16 +5653,33 @@ fn decision_supersede_payload_json(payload: &DecisionSupersedePayload) -> Result
                 causal_relation_version_id,
             ),
             (
-                "prior_record_after_entity_version_id".to_owned(),
-                CanonicalValue::String(payload.prior_record_entity_version_id.to_string()),
+                if legacy_decision_fields {
+                    "prior_record_after_entity_version_id"
+                } else {
+                    "target_record_after_entity_version_id"
+                }
+                .to_owned(),
+                CanonicalValue::String(payload.target_record_entity_version_id.to_string()),
             ),
             (
-                "prior_record_before_entity_version_id".to_owned(),
-                CanonicalValue::String(payload.previous_prior_record_entity_version_id.to_string()),
+                if legacy_decision_fields {
+                    "prior_record_before_entity_version_id"
+                } else {
+                    "target_record_before_entity_version_id"
+                }
+                .to_owned(),
+                CanonicalValue::String(
+                    payload.previous_target_record_entity_version_id.to_string(),
+                ),
             ),
             (
-                "prior_record_entity_id".to_owned(),
-                CanonicalValue::String(payload.prior_record_entity_id.to_string()),
+                if legacy_decision_fields {
+                    "prior_record_entity_id"
+                } else {
+                    "target_record_entity_id"
+                }
+                .to_owned(),
+                CanonicalValue::String(payload.target_record_entity_id.to_string()),
             ),
             (
                 "relation_id".to_owned(),
@@ -5244,15 +5687,20 @@ fn decision_supersede_payload_json(payload: &DecisionSupersedePayload) -> Result
             ),
             (
                 "relation_type".to_owned(),
-                CanonicalValue::String(RecordRelationType::Supersedes.as_str().to_owned()),
+                CanonicalValue::String(payload.relation_type.as_str().to_owned()),
             ),
             (
                 "relation_version_id".to_owned(),
                 CanonicalValue::String(payload.relation_version_id.to_string()),
             ),
             (
-                "replacement_record_entity_id".to_owned(),
-                CanonicalValue::String(payload.replacement_record_entity_id.to_string()),
+                if legacy_decision_fields {
+                    "replacement_record_entity_id"
+                } else {
+                    "source_record_entity_id"
+                }
+                .to_owned(),
+                CanonicalValue::String(payload.source_record_entity_id.to_string()),
             ),
         ])
         .map_err(record_invalid_from)?,
@@ -5919,11 +6367,21 @@ fn validate_decision_lifecycle_transition(current: RecordStatus, next: RecordSta
     }
 }
 
+fn validate_finding_lifecycle_transition(current: RecordStatus, next: RecordStatus) -> Result<()> {
+    match (current, next) {
+        (RecordStatus::Active, RecordStatus::Superseded | RecordStatus::Invalidated) => Ok(()),
+        (current, next) => Err(WorkVcsError::RecordInvalid(format!(
+            "finding transition {current:?} -> {next:?} is not allowed"
+        ))),
+    }
+}
+
 fn validate_record_status_for_kind(kind: RecordKind, status: RecordStatus) -> Result<()> {
     match (kind, status) {
-        (
-            RecordKind::Finding | RecordKind::Handoff | RecordKind::Question | RecordKind::Risk,
-            RecordStatus::Active,
+        (RecordKind::Handoff | RecordKind::Question | RecordKind::Risk, RecordStatus::Active)
+        | (
+            RecordKind::Finding,
+            RecordStatus::Active | RecordStatus::Superseded | RecordStatus::Invalidated,
         )
         | (
             RecordKind::Decision,

@@ -76,6 +76,8 @@ V1 versions:
 - separate Task execution status and open-semantic outcome;
 - explicit Plan completion and Goal achievement;
 - later Findings, Decisions, Knowledge, and new Task links on a terminal Task;
+- explicit Finding correction through atomic `active -> superseded|invalidated`
+  transitions with preserved causal ancestry;
 - ordinary `Record(kind=decision)` entries that can be promoted to a Decision
   with context, options, choice, rationale, and consequences, with later
   change represented by supersession;
@@ -87,11 +89,12 @@ V1 stable logical identity uses UUIDv7 stored as a 16-byte BLOB. Stable
 Task-local Acceptance Criterion identities remain owner-scoped so references
 survive wording changes and sibling reordering.
 
-Task, Plan, Goal, Assumption, Attempt, and Decision follow the state machines
-defined in [Semantic Operations and State Machines](../architecture/semantic-operations-and-state-machines.md).
+Task, Plan, Goal, Finding, Assumption, Attempt, and Decision follow the state
+machines defined in
+[Semantic Operations and State Machines](../architecture/semantic-operations-and-state-machines.md).
 In particular, explicit blockers and dependency readiness are distinct,
-terminal Attempts are never reopened, and superseded entities require
-supersession-aware transitions rather than ordinary reopen.
+terminal Findings and Attempts are never reopened, and superseded entities
+require supersession-aware transitions rather than ordinary reopen.
 
 ### Work-State versioning
 
@@ -174,6 +177,9 @@ V1 includes:
   readiness, lifecycle eligibility, priority, explicit manual order, and
   Session/Claim coordination, in that order; priority precedes manual order,
   and manual order cannot override readiness or eligibility;
+- a Finding correction lifecycle whose guarded semantic operations preserve
+  the corrected or disproved statement as history while excluding it from
+  current Recall;
 - a lightweight Attempt lifecycle with `running`, `succeeded`, `failed`, and
   `inconclusive` states plus a one-shot shortcut;
 - a deterministic single-target Verification command wrapper that captures

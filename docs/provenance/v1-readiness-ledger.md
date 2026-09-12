@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-12 by Wave A durable recovery truth hardening
+Last refreshed: 2026-09-12 by Phase 5A Finding currentness hardening
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -41,6 +41,25 @@ regressions, full workspace validation, independent review, and real global
 installation evidence govern this row. Raw Evidence bundle portability and the
 monolithic CLI test stack requirement remain post-Wave-A work rather than being
 silently treated as complete.
+
+Phase 5A adds explicit Finding currentness after installed-binary dogfood
+proved that a precise correction and its inaccurate predecessor could both
+remain active. `record supersede-finding` and `record invalidate-finding`
+perform one guarded Entity-plus-Relation commit; terminal Findings stay
+inspectable but ordinary brief/handoff Recall no longer presents them as
+current Records. Attempt help now says that creation starts `running` and that
+closure uses `succeeded|failed|inconclusive`. Focused lifecycle tests (3), the
+CLI currentness regression, the complete workspace suite, library/binary
+Clippy with the repository's pre-existing argument-count lint excluded, a
+five-file installed Skill-tree check, and required-valid doctor all pass. The
+maintained Store dogfood superseded Finding
+`01a093db-02be-7f70-ae33-fe3dec7a5e96` at Work-State commit
+`01a095b5-8194-7153-8056-b29b546339e6`; brief and handoff omit that Finding as
+a Record, retrospective retains it and its `supersedes` edge, and the dogfood
+Attempt reached `succeeded`. The same run exposed that top-level
+`verify --evidence-content` currently bypasses local object persistence, so
+the next Evidence portability slice must repair raw-content creation before
+claiming Bundle portability.
 
 ## Classification
 

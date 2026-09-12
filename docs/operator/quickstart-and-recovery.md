@@ -1,7 +1,7 @@
 # Local Operator Quickstart and Recovery
 
 Status: Phase 4LC local V0.1 operator guide
-Last updated: 2026-09-08
+Last updated: 2026-09-12
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
 this repository. It describes runnable local commands and the local
@@ -73,6 +73,33 @@ bounded project projection that does not require an active Session. Use
 standalone cognition change. Raw Evidence content supplied by `--content` or
 `--content-file` is stored in the local content-addressed object area; inspect
 it with `evidence show` and recover it with `evidence extract`.
+
+When a Finding is later corrected or disproved, preserve the original as
+history and change its currentness explicitly. Both commands guard the current
+Branch head and target Finding version, and atomically create the causal edge:
+
+```bash
+workvcs record supersede-finding "$STORE" \
+  --branch "$BRANCH_ID" --head "$HEAD_COMMIT_ID" \
+  --replacement-record "$CORRECTING_FINDING_ID" \
+  --prior-record "$PRIOR_FINDING_ID" \
+  --prior-record-version "$PRIOR_FINDING_VERSION_ID" \
+  --rationale "What changed and why the replacement is current"
+
+workvcs record invalidate-finding "$STORE" \
+  --branch "$BRANCH_ID" --head "$HEAD_COMMIT_ID" \
+  --because-record "$DISPROVING_FINDING_ID" \
+  --target-record "$TARGET_FINDING_ID" \
+  --target-record-version "$TARGET_FINDING_VERSION_ID" \
+  --rationale "What evidence disproved the target"
+```
+
+`record attempt` starts an Attempt in `running`; finish it with
+`record attempt-status --status succeeded|failed|inconclusive` as soon as its
+result is known. Brief Recall contains current Records only. Handoff Recall
+also retains terminal Attempts so another Agent does not repeat them.
+Retrospective Recall preserves terminal Findings and their relations, while
+ordering current cognition first.
 
 This cutover does not provide compatibility for `workctl`, schema-v3/v4/v5,
 or `.work-governance`. WorkVCS reports mechanical state; it does not decide

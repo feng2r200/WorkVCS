@@ -13,11 +13,11 @@ behavior without parsing natural language.
 | Scheduling | `depends_on` | dependent -> prerequisite | The source is not runnable until the target satisfies dependency rules |
 | Scheduling | `ordered_before` | earlier -> later | Preferred sibling sequence; does not create a dependency |
 | Evolution | `derived_from` | new/result -> source | The source explains the origin of the result |
-| Evolution | `supersedes` | replacement -> prior | The replacement becomes current while preserving the prior object |
+| Evolution | `supersedes` | replacement -> prior | A replacement Decision, Finding, or Knowledge statement becomes current while preserving the prior object |
 | Epistemic | `supports` | finding/claim -> target cognition | Expresses an epistemic claim that the source strengthens the target |
 | Epistemic | `contradicts` | claim -> target | Explicitly identifies incompatible knowledge or evidence |
 | Epistemic | `validates` | finding/evidence -> assumption/knowledge | Confirms the target under the recorded scope |
-| Epistemic | `invalidates` | finding/evidence -> assumption/knowledge | Rejects the target under the recorded scope |
+| Epistemic | `invalidates` | finding/evidence -> finding/assumption/knowledge | Rejects the target under the recorded scope |
 | Verification | `verifies` | verification -> verification requirement / acceptance criterion | Records a structured verification result for the target |
 | Verification | `evidenced_by` | semantic object -> evidence | Attaches immutable source material without duplicating an epistemic edge |
 
@@ -44,10 +44,13 @@ supersede T-18 with T-21 because F-17
 => T-21 derived_from F-17
 ```
 
-Likewise, invalidating an Assumption because of a Finding creates the canonical
-`Finding invalidates Assumption` edge. `why T-21` traverses the confirmed
-evolutionary and epistemic neighborhood and may render friendlier causal
-language without changing the stored graph.
+Likewise, invalidating an Assumption or an earlier Finding because of a Finding
+creates the canonical `Finding invalidates target` edge. Correcting an earlier
+Finding creates `replacement Finding supersedes prior Finding`. The lifecycle
+change and its canonical edge are one atomic semantic operation; callers must
+not approximate them with a generic relation plus a separate status write.
+`why T-21` traverses the confirmed evolutionary and epistemic neighborhood and
+may render friendlier causal language without changing the stored graph.
 
 Explicit Knowledge adoption creates Workspace-local Knowledge with
 `derived_from -> KnowledgeExposure` plus preserved source Knowledge-version,

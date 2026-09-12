@@ -1,7 +1,7 @@
 # WorkVCS Tool Reference For Governance Plan Carriers
 
 Status: current-main operator reference for Codex sessions
-Last updated: 2026-09-08
+Last updated: 2026-09-12
 
 This reference explains what the current `workvcs` tool can carry for an
 Agent-facing governance workflow. It is meant for other Codex sessions that
@@ -65,6 +65,11 @@ block the current P0 surface.
 No-Plan means no Plan is invented. Discovery, audit, recall, and resume are
 no-write entrypoints. A caller may still explicitly persist standalone
 cognition with `capture`; this creates no Goal, Plan, Task, Session, or Claim.
+Finding currentness is explicit: `record supersede-finding` and
+`record invalidate-finding` atomically transition an active target and add its
+typed causal relation. Brief Recall excludes terminal Findings, handoff keeps
+terminal Attempts as anti-repetition context, and retrospective preserves
+terminal cognition after current Records and Knowledge.
 
 `workvcs closeout inspect` is current. It requires explicit
 `--target-kind goal|plan|task` and `--target`, using either `--cwd PATH` or
@@ -228,7 +233,7 @@ The current top-level CLI exposes these command families:
 | Resources and drift | `resource`, `projection`, `verification cache-refresh` | Resource registration, observations, applicability, stale/drift/unavailable/error projections, and explicit foreground refresh. |
 | Runtime coordination | `session`, `claim`, `handoff`, `next`, `runnable` | Agent Sessions, focus, exclusive/shared Claims, Claim transfer/takeover, focused Handoffs, runnable Task projection, and next-work selection. |
 | Authorization receipts | `receipt issue`, `receipt show`, `receipt list`, `receipt consume` | Current P0-3a/P0-3b mechanical AuthorizationReceipt issue, redacted inspection/listing, and branch-scoped single-use consume; revoke is not current. |
-| Entry, capture, and recall | `config`, `project`, `capture`, `recall`, `resume` | Stable registry discovery, binding audit, standalone cognition, profile-prioritized bounded project context, and Session-aware recovery. |
+| Entry, capture, and recall | `config`, `project`, `capture`, `record supersede-finding`, `record invalidate-finding`, `recall`, `resume` | Stable registry discovery, binding audit, standalone cognition, guarded Finding correction, profile-prioritized bounded project context, and Session-aware recovery. |
 | Query and explanation | `closeout inspect`, `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Closeout summaries, bounded mechanical inspection, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
 | Portability and branching | `checkpoint`, `bundle`, `restore`, `merge` | Checkpoints, local Bundle export/validate/apply flows, restore-as-new-commit semantics, and three-way Work Branch merge lifecycle. |
 | Error handling | `--error-format key-value|json` plus command stderr | Script-readable error code, category, retryability, optional JSON output, and actionable recovery boundaries. |

@@ -3048,7 +3048,10 @@ fn record_priority_and_category(
             (ContextPriority::P5, ContextItemCategory::FailedAttempt)
         }
         (RecordKind::Attempt, _) => (ContextPriority::P5, ContextItemCategory::Attempt),
-        (RecordKind::Finding, _) => (ContextPriority::P6, ContextItemCategory::Finding),
+        (RecordKind::Finding, RecordStatus::Active) => {
+            (ContextPriority::P6, ContextItemCategory::Finding)
+        }
+        (RecordKind::Finding, _) => (ContextPriority::P9, ContextItemCategory::OlderProvenance),
         (RecordKind::Handoff, _) => (ContextPriority::P8, ContextItemCategory::RelevantHandoff),
         _ => (ContextPriority::P9, ContextItemCategory::OlderProvenance),
     }

@@ -44,7 +44,8 @@ use crate::history::{
     DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
     EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
     EvidenceContentReadResult, EvidenceCreateOptions, EvidenceCreateResult, EvidenceListOptions,
-    EvidenceListResult, EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
+    EvidenceListResult, EvidenceSnapshot, FindingRecordCorrectionCommit,
+    FindingRecordCorrectionOptions, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
     GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
     IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
     KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
@@ -844,6 +845,13 @@ impl Engine {
         options: DecisionRecordSupersedeOptions,
     ) -> Result<DecisionRecordSupersedeCommit> {
         self.store.supersede_decision_record(&options)
+    }
+
+    pub fn correct_finding_record(
+        &mut self,
+        options: FindingRecordCorrectionOptions,
+    ) -> Result<FindingRecordCorrectionCommit> {
+        self.store.correct_finding_record(&options)
     }
 
     pub fn record_verification_applicability(

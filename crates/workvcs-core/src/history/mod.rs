@@ -154,9 +154,10 @@ pub use receipt::{
     AuthorizationReceiptResult, AuthorizationReceiptSnapshot, AuthorizationReceiptTargetManifest,
 };
 pub use record::{
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, KnowledgeRelationCreateCommit,
-    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
+    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, FindingRecordCorrectionCommit,
+    FindingRecordCorrectionOptions, KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions,
+    KnowledgeRelationListOptions, KnowledgeRelationListResult, KnowledgeRelationRemoveCommit,
+    KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
     KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, RecordCreateCommit,
     RecordCreateOptions, RecordKind, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
@@ -260,12 +261,13 @@ pub(crate) use receipt::{
     issue_authorization_receipt,
 };
 pub(crate) use record::{
-    create_knowledge_relation, create_record, create_record_knowledge_relation,
-    create_record_relation, knowledge_relation_at, knowledge_relations_at, record_at,
-    record_knowledge_relation_at, record_knowledge_relations_at, record_relation_at,
-    record_relations_at, records_at, remove_knowledge_relation, remove_record_knowledge_relation,
-    remove_record_relation, restore_knowledge_relation, restore_record_knowledge_relation,
-    restore_record_relation, supersede_decision_record, transition_record,
+    correct_finding_record, create_knowledge_relation, create_record,
+    create_record_knowledge_relation, create_record_relation, knowledge_relation_at,
+    knowledge_relations_at, record_at, record_knowledge_relation_at, record_knowledge_relations_at,
+    record_relation_at, record_relations_at, records_at, remove_knowledge_relation,
+    remove_record_knowledge_relation, remove_record_relation, restore_knowledge_relation,
+    restore_record_knowledge_relation, restore_record_relation, supersede_decision_record,
+    transition_record,
 };
 pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::state_at;

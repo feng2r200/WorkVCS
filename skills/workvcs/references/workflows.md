@@ -74,6 +74,12 @@ semantic history and terminal Goal/Plan/Task summaries. A bounded projection
 therefore cannot be consumed by one large category or old work merely because
 it was recorded first.
 
+Brief Recall includes only current Record states. Handoff Recall additionally
+keeps terminal Attempts because they prevent duplicate work. Retrospective
+Recall preserves terminal Findings and other history, but prioritizes current
+Records and Knowledge so historical statements do not masquerade as live
+project truth.
+
 Use each item's `temporal_scope`, version/state digest,
 `snapshot_commit_id`, Record scope, and Knowledge scope/provenance to
 distinguish current Work State, live Runtime Coordination, and historical Store

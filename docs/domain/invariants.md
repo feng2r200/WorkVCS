@@ -134,6 +134,16 @@ WorkVCS packaging and installation compare a deterministic manifest of every
 regular file in `skills/workvcs`. Missing, modified, or extra files must fail
 verification; checking only `SKILL.md` is insufficient.
 
+### INV-098 — Finding correction preserves currentness and ancestry
+
+A Finding correction is an atomic Entity-plus-Relation transition. Superseding
+an active Finding creates `replacement -> prior` `supersedes`; invalidating an
+active Finding creates `cause -> target` `invalidates`. The source is an active
+Finding, the target version is explicitly guarded, and a terminal Finding
+cannot transition again. Brief and handoff recovery must not present terminal
+Findings as current truth, while retrospective projections preserve them and
+their causal ancestry.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate
@@ -407,10 +417,10 @@ yields stale; otherwise any unknown component yields unknown.
 
 ### INV-043 — Semantic lifecycles require explicit transitions
 
-Task, Plan, Goal, Assumption, Attempt, and Decision states change only through
-their confirmed semantic operations. Terminal Attempt never reopens; a
-superseded Entity cannot use an ordinary reopen that ignores its supersession
-relation.
+Task, Plan, Goal, Finding, Assumption, Attempt, and Decision states change only
+through their confirmed semantic operations. Terminal Findings and Attempts
+never reopen; a superseded Entity cannot use an ordinary reopen that ignores
+its supersession relation.
 
 ### INV-044 — Dependency blocking is derived
 

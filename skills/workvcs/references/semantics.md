@@ -33,7 +33,8 @@ Relations express meaning, not ordering decoration:
   Knowledge statement;
 - `validates` / `invalidates`: evidence or a Finding confirms or rejects a
   claim under its recorded scope;
-- `supersedes`: a newer Decision or Knowledge statement replaces an older one;
+- `supersedes`: a newer Decision, Finding, or Knowledge statement replaces an
+  older one;
 - `related_to`: a labeled non-causal association when no stronger relation is
   justified.
 
@@ -41,3 +42,18 @@ Relations express meaning, not ordering decoration:
 supported relations among newly named local items. Lifecycle-changing
 `invalidates` and `supersedes` operations against existing objects use their
 dedicated commands so the replaced target is explicit and guarded.
+
+Finding currentness is not inferred from recency or text similarity:
+
+- use `record supersede-finding` when an active correcting Finding replaces an
+  active prior Finding;
+- use `record invalidate-finding` when an active Finding disproves an active
+  target Finding;
+- both operations guard the Branch head and target Finding version, change the
+  target state, and create the canonical relation atomically;
+- terminal Findings remain available to retrospective and causal queries but
+  are not current facts and cannot transition again.
+
+`record attempt` starts a `running` Attempt. Once the route has a known result,
+finish it with `record attempt-status` as `succeeded`, `failed`, or
+`inconclusive`; do not leave a completed experiment mechanically running.

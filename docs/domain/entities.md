@@ -332,8 +332,10 @@ multi-process workload.
 not need separate top-level behavior.
 
 **Lifecycle:** Confirmed Record kinds include Finding, Assumption, Question,
-Attempt, ordinary decision, Risk, and Handoff. An Attempt may be `running`,
-`succeeded`, `failed`, or `inconclusive`, and may also be recorded in one
+Attempt, ordinary decision, Risk, and Handoff. A Finding begins `active` and
+may become `superseded` by a correcting Finding or `invalidated` by a Finding
+that disproves it. An Attempt begins `running` and may become `succeeded`,
+`failed`, or `inconclusive`; a small Attempt may instead be recorded in one
 operation with its approach and result. V1 records are created explicitly by
 an Agent semantic operation, not inferred from a transcript. An important
 ordinary decision can be promoted to a Decision without erasing its origin.
@@ -343,7 +345,8 @@ Open; no current confirmed requirement makes them distinct V1 kinds.
 
 An Assumption may move `unverified -> validated`, `unverified -> invalidated`,
 or `validated -> invalidated`; an invalidated Assumption is not ordinarily
-revalidated. A terminal Attempt is never reopened; another try creates another
+revalidated. Terminal Findings and Attempts are never reopened or corrected
+again: changed conditions create a new Finding and another try creates a new
 Attempt. One Session may create zero or more Handoff Records, but each Handoff
 belongs to exactly one Workspace and Work Branch and may bind a Focus/context
 path.
@@ -352,7 +355,8 @@ path.
 kind, and provenance.
 
 **Relations:** Participates in the typed causal graph. An Attempt may produce a
-Finding; a Finding may invalidate an Assumption; a Handoff supplements an
+Finding; a correcting Finding may supersede an earlier Finding; a disproving
+Finding may invalidate a Finding or Assumption; a Handoff supplements an
 automatic Session diff.
 
 **Version behavior:** Semantic Records in a Workspace are versioned. Their

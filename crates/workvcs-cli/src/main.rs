@@ -53,13 +53,13 @@ use workvcs_core::{
     EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
     ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
     ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
-    ExternalRefId, ExternalVersionId, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
-    GoalStatus, GoalTransitionCommit, GoalTransitionOptions, HistoryEntry, HistoryQueryOptions,
-    ImportId, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
-    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
-    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
-    KnowledgeExposureDerivedFromRelationCreateCommit,
+    ExternalRefId, ExternalVersionId, FindingRecordCorrectionCommit,
+    FindingRecordCorrectionOptions, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalStatus,
+    GoalTransitionCommit, GoalTransitionOptions, HistoryEntry, HistoryQueryOptions, ImportId,
+    IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
+    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
+    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
+    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -4184,6 +4184,58 @@ enum RecordCommand {
         #[arg(long)]
         rationale: String,
     },
+    #[command(
+        about = "Replace an active Finding with a correcting active Finding and preserve ancestry",
+        long_about = "Atomically mark the guarded prior Finding as superseded and create replacement -> prior supersedes. Both Records must be distinct active Findings in the Branch Workspace."
+    )]
+    SupersedeFinding {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long, help = "Active Finding that is now current")]
+        replacement_record: String,
+
+        #[arg(long, help = "Active Finding being replaced")]
+        prior_record: String,
+
+        #[arg(long, help = "Current version of the prior Finding")]
+        prior_record_version: String,
+
+        #[arg(long, help = "Why the replacement is now current")]
+        rationale: String,
+    },
+    #[command(
+        about = "Invalidate an active Finding because another active Finding disproves it",
+        long_about = "Atomically mark the guarded target Finding as invalidated and create cause -> target invalidates. Both Records must be distinct active Findings in the Branch Workspace."
+    )]
+    InvalidateFinding {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        branch: String,
+
+        #[arg(long)]
+        head: String,
+
+        #[arg(long, help = "Active Finding that disproves the target")]
+        because_record: String,
+
+        #[arg(long, help = "Active Finding being disproved")]
+        target_record: String,
+
+        #[arg(long, help = "Current version of the target Finding")]
+        target_record_version: String,
+
+        #[arg(long, help = "Why the cause disproves the target")]
+        rationale: String,
+    },
     #[command(group(
         ArgGroup::new("record-relation-list-target")
             .required(true)
@@ -4398,7 +4450,7 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
-    #[command(about = "Record a tried route, experiment, or failed approach")]
+    #[command(about = "Start a running Attempt for a route or experiment")]
     Attempt {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4415,7 +4467,7 @@ enum RecordCommand {
         #[arg(long)]
         scope_json: Option<String>,
     },
-    #[command(about = "Finish an active Attempt as succeeded, failed, or abandoned")]
+    #[command(about = "Finish a running Attempt as succeeded, failed, or inconclusive")]
     AttemptStatus {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -4432,7 +4484,7 @@ enum RecordCommand {
         #[arg(long)]
         record_version: String,
 
-        #[arg(long)]
+        #[arg(long, help = "Terminal result: succeeded, failed, or inconclusive")]
         status: String,
 
         #[arg(long)]
@@ -12820,6 +12872,48 @@ fn run_record(args: Vec<String>) -> Result<String> {
             let superseded = engine.supersede_decision_record(options)?;
             Ok(render_decision_record_supersede(&superseded))
         }
+        RecordCommand::SupersedeFinding {
+            store,
+            branch,
+            head,
+            replacement_record,
+            prior_record,
+            prior_record_version,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let corrected =
+                engine.correct_finding_record(FindingRecordCorrectionOptions::supersede(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&replacement_record)?,
+                    EntityId::parse_canonical(&prior_record)?,
+                    EntityVersionId::parse_canonical(&prior_record_version)?,
+                    rationale,
+                )?)?;
+            Ok(render_finding_record_correction(&corrected))
+        }
+        RecordCommand::InvalidateFinding {
+            store,
+            branch,
+            head,
+            because_record,
+            target_record,
+            target_record_version,
+            rationale,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let corrected =
+                engine.correct_finding_record(FindingRecordCorrectionOptions::invalidate(
+                    BranchId::parse_canonical(&branch)?,
+                    CommitId::parse_canonical(&head)?,
+                    EntityId::parse_canonical(&because_record)?,
+                    EntityId::parse_canonical(&target_record)?,
+                    EntityVersionId::parse_canonical(&target_record_version)?,
+                    rationale,
+                )?)?;
+            Ok(render_finding_record_correction(&corrected))
+        }
         RecordCommand::RelationList {
             store,
             branch,
@@ -16115,13 +16209,17 @@ fn run_recall(
         tasks.retain(|task| !task.state.status.is_terminal());
         knowledge.retain(|item| item.state.status == KnowledgeStatus::Active);
     }
-    if profile == RecallProfileArg::Brief {
-        records.retain(|record| {
-            matches!(
-                record.state.status,
-                RecordStatus::Active | RecordStatus::Running | RecordStatus::Unverified
-            )
-        });
+    match profile {
+        RecallProfileArg::Brief => {
+            records.retain(|record| record_status_is_current(record.state.status));
+        }
+        RecallProfileArg::Handoff => {
+            records.retain(|record| {
+                record_status_is_current(record.state.status)
+                    || record.state.kind == RecordKind::Attempt
+            });
+        }
+        RecallProfileArg::Retrospective => {}
     }
 
     let mut record_relations = if profile == RecallProfileArg::Brief {
@@ -16239,6 +16337,24 @@ fn run_recall(
     let mut ordered = Vec::with_capacity(total_items);
     const CURRENT_CATEGORY_RESERVE: usize = 1;
     if profile == RecallProfileArg::Retrospective {
+        let retrospective_records = records
+            .iter()
+            .filter(|record| record_status_is_current(record.state.status))
+            .chain(
+                records
+                    .iter()
+                    .filter(|record| !record_status_is_current(record.state.status)),
+            )
+            .collect::<Vec<_>>();
+        let retrospective_knowledge = knowledge
+            .iter()
+            .filter(|item| item.state.status == KnowledgeStatus::Active)
+            .chain(
+                knowledge
+                    .iter()
+                    .filter(|item| item.state.status != KnowledgeStatus::Active),
+            )
+            .collect::<Vec<_>>();
         for index in 0..CURRENT_CATEGORY_RESERVE {
             if let Some(goal) = goals
                 .iter()
@@ -16273,10 +16389,10 @@ fn run_recall(
         // history category can consume the entire retrospective projection.
         const CATEGORY_RESERVE: usize = 2;
         for index in 0..CATEGORY_RESERVE {
-            if let Some(record) = records.get(index) {
+            if let Some(record) = retrospective_records.get(index) {
                 ordered.push(RecallItem::Record(record));
             }
-            if let Some(knowledge) = knowledge.get(index) {
+            if let Some(knowledge) = retrospective_knowledge.get(index) {
                 ordered.push(RecallItem::Knowledge(knowledge));
             }
             if let Some(evidence) = evidence.get(index) {
@@ -16328,16 +16444,16 @@ fn run_recall(
         );
 
         ordered.extend(
-            records
+            retrospective_records
                 .iter()
                 .skip(CATEGORY_RESERVE)
-                .map(RecallItem::Record),
+                .map(|record| RecallItem::Record(record)),
         );
         ordered.extend(
-            knowledge
+            retrospective_knowledge
                 .iter()
                 .skip(CATEGORY_RESERVE)
-                .map(RecallItem::Knowledge),
+                .map(|item| RecallItem::Knowledge(item)),
         );
         ordered.extend(
             evidence
@@ -16621,10 +16737,7 @@ fn run_recall(
                 writeln!(
                     output,
                     "item.{index}.temporal_scope={}",
-                    if matches!(
-                        record.state.status,
-                        RecordStatus::Active | RecordStatus::Running | RecordStatus::Unverified
-                    ) {
+                    if record_status_is_current(record.state.status) {
                         "current_active"
                     } else {
                         "historical_or_terminal"
@@ -16883,6 +16996,16 @@ fn run_recall(
     writeln!(output, "truncated={}", emitted < total_items).expect("write to String");
     writeln!(output, "read_only=true").expect("write to String");
     Ok(output)
+}
+
+fn record_status_is_current(status: RecordStatus) -> bool {
+    matches!(
+        status,
+        RecordStatus::Active
+            | RecordStatus::Running
+            | RecordStatus::Unverified
+            | RecordStatus::Validated
+    )
 }
 
 fn run_cognition_capture(
@@ -23775,6 +23898,31 @@ fn render_decision_record_supersede(superseded: &DecisionRecordSupersedeCommit) 
         superseded.work_state_digest,
         superseded.previous_prior_state.status,
         superseded.prior_state.status
+    )
+}
+
+fn render_finding_record_correction(corrected: &FindingRecordCorrectionCommit) -> String {
+    format!(
+        "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\ntarget_record_operation_id={}\nrelation_operation_id={}\nrelation_type={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nprevious_target_record_entity_version_id={}\ntarget_record_entity_version_id={}\ntarget_record_state_digest={}\nrelation_id={}\nrelation_version_id={}\nrelation_state_digest={}\nwork_state_digest={}\nprevious_target_record_status={}\ntarget_record_status={}\n",
+        corrected.workspace_id,
+        corrected.branch_id,
+        corrected.previous_head_commit_id,
+        corrected.commit_id,
+        corrected.changeset_id,
+        corrected.target_record_operation_id,
+        corrected.relation_operation_id,
+        corrected.relation_type,
+        corrected.source_record_entity_id,
+        corrected.target_record_entity_id,
+        corrected.previous_target_record_entity_version_id,
+        corrected.target_record_entity_version_id,
+        corrected.target_record_state_digest,
+        corrected.relation_id,
+        corrected.relation_version_id,
+        corrected.relation_state_digest,
+        corrected.work_state_digest,
+        corrected.previous_target_state.status,
+        corrected.target_state.status,
     )
 }
 
@@ -59288,6 +59436,178 @@ mod tests {
         assert!(record.contains("record_status=active"));
         assert!(record.contains("record_entity_id="));
         assert!(record.contains("commit_id="));
+    }
+
+    fn assert_cli_corrects_findings_and_recall_preserves_currentness() {
+        let fixture = create_project_binding_fixture(false);
+        let prior = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &fixture.genesis_commit_id,
+            "--statement",
+            "The inaccurate Finding remains current",
+        ])
+        .expect("parse prior finding"))
+        .expect("create prior finding");
+        let replacement = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&prior, "commit_id"),
+            "--statement",
+            "The validated correction is current",
+        ])
+        .expect("parse replacement finding"))
+        .expect("create replacement finding");
+        let superseded = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "supersede-finding",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&replacement, "commit_id"),
+            "--replacement-record",
+            &value(&replacement, "record_entity_id"),
+            "--prior-record",
+            &value(&prior, "record_entity_id"),
+            "--prior-record-version",
+            &value(&prior, "record_entity_version_id"),
+            "--rationale",
+            "The focused probe corrected the earlier observation",
+        ])
+        .expect("parse supersede finding"))
+        .expect("supersede finding");
+        assert_eq!(value(&superseded, "relation_type"), "supersedes");
+        assert_eq!(
+            value(&superseded, "previous_target_record_status"),
+            "active"
+        );
+        assert_eq!(value(&superseded, "target_record_status"), "superseded");
+
+        let disproved = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&superseded, "commit_id"),
+            "--statement",
+            "The export already carries raw bodies",
+        ])
+        .expect("parse disproved finding"))
+        .expect("create disproved finding");
+        let cause = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&disproved, "commit_id"),
+            "--statement",
+            "Direct inspection found no raw bodies",
+        ])
+        .expect("parse cause finding"))
+        .expect("create cause finding");
+        let invalidated = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "invalidate-finding",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&cause, "commit_id"),
+            "--because-record",
+            &value(&cause, "record_entity_id"),
+            "--target-record",
+            &value(&disproved, "record_entity_id"),
+            "--target-record-version",
+            &value(&disproved, "record_entity_version_id"),
+            "--rationale",
+            "Direct inspection disproves the earlier observation",
+        ])
+        .expect("parse invalidate finding"))
+        .expect("invalidate finding");
+        assert_eq!(value(&invalidated, "relation_type"), "invalidates");
+        assert_eq!(value(&invalidated, "target_record_status"), "invalidated");
+
+        let brief = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "brief",
+            "--budget-items",
+            "20",
+        ])
+        .expect("parse brief recall"))
+        .expect("brief recall");
+        assert_eq!(value(&brief, "records_total"), "2");
+        assert!(brief.contains("The validated correction is current"));
+        assert!(brief.contains("Direct inspection found no raw bodies"));
+        assert!(!brief.contains("The inaccurate Finding remains current"));
+        assert!(!brief.contains("The export already carries raw bodies"));
+
+        let retrospective = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "retrospective",
+            "--budget-items",
+            "20",
+        ])
+        .expect("parse retrospective recall"))
+        .expect("retrospective recall");
+        assert_eq!(value(&retrospective, "records_total"), "4");
+        let current_position = retrospective
+            .find("The validated correction is current")
+            .expect("current Finding in retrospective");
+        let historical_position = retrospective
+            .find("The inaccurate Finding remains current")
+            .expect("historical Finding in retrospective");
+        assert!(current_position < historical_position);
+        assert!(retrospective.contains("status=superseded"));
+        assert!(retrospective.contains("status=invalidated"));
+        assert!(retrospective.contains("temporal_scope=historical_or_terminal"));
+
+        let doctor =
+            run(
+                Cli::try_parse_from(["workvcs", "doctor", &fixture.store, "--require-valid"])
+                    .expect("parse doctor"),
+            )
+            .expect("doctor after Finding corrections");
+        assert!(doctor.starts_with("ok "));
+        assert_eq!(value(&doctor, "valid_required"), "true");
+    }
+
+    #[test]
+    fn cli_corrects_findings_and_recall_preserves_currentness() {
+        run_cli_test_with_large_stack(
+            "cli-correct-finding-recall-currentness-test",
+            assert_cli_corrects_findings_and_recall_preserves_currentness,
+        );
     }
 
     #[test]

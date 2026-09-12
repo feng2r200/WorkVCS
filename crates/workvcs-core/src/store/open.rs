@@ -1232,6 +1232,15 @@ impl Store {
         history::supersede_decision_record(&mut self.connection, options)
     }
 
+    pub(crate) fn correct_finding_record(
+        &mut self,
+        options: &crate::FindingRecordCorrectionOptions,
+    ) -> Result<crate::FindingRecordCorrectionCommit> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::correct_finding_record(&mut self.connection, options)
+    }
+
     pub(crate) fn create_resource(
         &mut self,
         options: &ResourceCreateOptions,

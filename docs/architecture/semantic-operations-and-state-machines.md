@@ -70,9 +70,12 @@ be explicitly reopened with rationale. A superseded Plan requires
 supersession-aware resolution. Goal replacement is expressed through a
 relation rather than adding a mandatory Goal `superseded` state.
 
-### Assumption, Attempt, and Decision
+### Finding, Assumption, Attempt, and Decision
 
 ```text
+Finding:
+  active -> superseded | invalidated
+
 Assumption:
   unverified -> validated
   unverified -> invalidated
@@ -84,6 +87,12 @@ Attempt:
 Decision:
   active -> superseded | withdrawn
 ```
+
+Finding supersession atomically moves the prior Finding to `superseded` and
+creates `replacement -> prior` `supersedes`. Finding invalidation atomically
+moves the target Finding to `invalidated` and creates
+`cause -> target` `invalidates`. Both source Findings must already be active,
+and terminal Findings cannot transition again.
 
 An invalidated Assumption is not ordinarily revalidated; changed conditions
 produce a new or superseding Assumption. A terminal Attempt is never reopened;

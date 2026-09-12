@@ -45,6 +45,7 @@ Options:
 Examples:
   scripts/package-workvcs.sh
   scripts/package-workvcs.sh --dry-run --install
+  scripts/package-workvcs.sh --install --bin-dir "\$HOME/.local/bin"
   scripts/package-workvcs.sh --install --bin-dir /tmp/workvcs-bin
   scripts/package-workvcs.sh --install --bin-dir /usr/local/bin
 EOF

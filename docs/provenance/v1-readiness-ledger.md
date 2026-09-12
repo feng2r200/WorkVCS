@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-12 by Phase 5E default-stack CLI validation
+Last refreshed: 2026-09-12 by Phase 5F user-global installation evidence
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -121,6 +121,16 @@ The public CLI and production runtime are unchanged. Detailed evidence is in
 [`phase-5e-default-stack-cli-validation.md`](phase-5e-default-stack-cli-validation.md),
 and the decision is recorded in
 [`ADR-0509`](../decisions/adr/0509-parser-heavy-cli-test-stack-isolation.md).
+
+Phase 5F closes the evidence-gated installation ergonomics review without a new
+installer mode. Dry runs through both `--bin-dir` and exact `--dest` selected
+the same `$HOME/.local/bin/workvcs` path and exposed both binary and Skill
+overwrites. The exact clean Phase 5E commit then installed with matching binary
+and five-file Skill-tree digests; `command -v` resolves only that user-global
+binary on this host. Current docs now lead with the non-elevated user-global
+example and retain `/usr/local/bin` as an explicit system-wide choice. Detailed
+evidence is in
+[`phase-5f-user-global-install-path.md`](phase-5f-user-global-install-path.md).
 
 ## Classification
 

@@ -126,7 +126,7 @@ From the repository root:
 
 ```bash
 cargo test --workspace --quiet
-scripts/package-workvcs.sh --install --bin-dir /usr/local/bin
+scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
 workvcs --help
 ```
 
@@ -134,6 +134,11 @@ The complete workspace suite runs without a caller-supplied
 `RUST_MIN_STACK`. Parser-heavy CLI test bodies that exceed Rust's default test
 thread stack are isolated by the test harness itself; ordinary callers and CI
 do not need to manage a global stack override.
+
+The example selects a user-global destination explicitly and avoids elevated
+permissions. Confirm that `$HOME/.local/bin` is on `PATH` with
+`command -v workvcs`; use `/usr/local/bin` only when a system-wide destination
+is intended.
 
 For local packaging without installing:
 

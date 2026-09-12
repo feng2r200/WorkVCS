@@ -159,18 +159,21 @@ This builds the current checkout's `workvcs` binary, packages it with
 Skill-tree digests, creates a `.tar.gz` archive, and validates the packaged
 binary plus every regular file in the Skill tree.
 
-System-level install or overwrite is explicit:
+User-global install or overwrite is explicit:
 
 ```bash
-scripts/package-workvcs.sh --dry-run --install --bin-dir /usr/local/bin
-scripts/package-workvcs.sh --install --bin-dir /usr/local/bin
+scripts/package-workvcs.sh --dry-run --install --bin-dir "$HOME/.local/bin"
+scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
+command -v workvcs
 workvcs --help
 ```
 
 The dry-run command is the safe first check: it does not build or write, and it
-reports the planned binary and Skill destinations. The install command creates
-the target directory if needed, overwrites through a temporary file, verifies
-the installed command with `workvcs --help`, checks that the installed digest
+reports the planned binary and Skill destinations. Select `/usr/local/bin`
+explicitly instead when a system-wide destination is intended, or use `--dest`
+for an exact path whose basename is `workvcs`. The install command creates the
+target directory if needed, overwrites through a temporary file, verifies the
+installed command with `workvcs --help`, checks that the installed digest
 matches the packaged binary, and atomically installs the Skill under
 `$HOME/.agents/skills/workvcs` by default. Use `--skills-dir` to select another
 Agent Skills root or `--no-install-skill` for a binary-only installation. If

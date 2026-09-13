@@ -60,6 +60,9 @@ const RECORD_DECISION_SUPERSEDE_EVENT_KIND: &str = "record.decision.superseded";
 const RECORD_FINDING_INVALIDATE_EVENT_KIND: &str = "record.finding.invalidated";
 const RECORD_FINDING_SUPERSEDE_EVENT_KIND: &str = "record.finding.superseded";
 
+pub const DEFAULT_RECORD_CURRENTNESS_AUDIT_BUDGET: usize = 50;
+pub const MAX_RECORD_CURRENTNESS_AUDIT_BUDGET: usize = 200;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
     Assumption,
@@ -989,6 +992,125 @@ pub struct RecordListResult {
     pub workspace_id: WorkspaceId,
     pub commit_id: CommitId,
     pub records: Vec<RecordSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordCurrentnessClass {
+    OpenObligation,
+    CurrentClaim,
+}
+
+impl RecordCurrentnessClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenObligation => "open_obligation",
+            Self::CurrentClaim => "current_claim",
+        }
+    }
+}
+
+impl fmt::Display for RecordCurrentnessClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordCurrentnessAuditOptions {
+    commit_id: CommitId,
+    budget: usize,
+    include_current_claims: bool,
+    kind: Option<RecordKind>,
+    statement_contains: Option<String>,
+    scope: Option<CanonicalValue>,
+}
+
+impl RecordCurrentnessAuditOptions {
+    pub fn new(commit_id: CommitId) -> Self {
+        Self {
+            commit_id,
+            budget: DEFAULT_RECORD_CURRENTNESS_AUDIT_BUDGET,
+            include_current_claims: false,
+            kind: None,
+            statement_contains: None,
+            scope: None,
+        }
+    }
+
+    pub fn with_budget(mut self, budget: usize) -> Result<Self> {
+        validate_record_currentness_audit_budget(budget)?;
+        self.budget = budget;
+        Ok(self)
+    }
+
+    pub fn include_current_claims(mut self) -> Self {
+        self.include_current_claims = true;
+        self
+    }
+
+    pub fn with_kind(mut self, kind: RecordKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    pub fn with_statement_contains(mut self, fragment: impl Into<String>) -> Result<Self> {
+        let fragment = fragment.into();
+        if fragment.trim().is_empty() {
+            return Err(WorkVcsError::RecordInvalid(
+                "record currentness audit statement filter must not be empty".to_owned(),
+            ));
+        }
+        self.statement_contains = Some(fragment);
+        Ok(self)
+    }
+
+    pub fn with_scope(mut self, scope: CanonicalValue) -> Result<Self> {
+        require_object_value("record currentness audit scope filter", &scope)?;
+        self.scope = Some(scope);
+        Ok(self)
+    }
+
+    pub fn commit_id(&self) -> CommitId {
+        self.commit_id
+    }
+
+    pub fn budget(&self) -> usize {
+        self.budget
+    }
+
+    pub fn includes_current_claims(&self) -> bool {
+        self.include_current_claims
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordCurrentnessAuditItem {
+    pub class: RecordCurrentnessClass,
+    pub record: RecordSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordCurrentnessAuditCounts {
+    pub candidates_total: usize,
+    pub open_obligations_total: usize,
+    pub current_claims_total: usize,
+    pub assumptions_total: usize,
+    pub attempts_total: usize,
+    pub decisions_total: usize,
+    pub findings_total: usize,
+    pub questions_total: usize,
+    pub risks_total: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordCurrentnessAuditResult {
+    pub workspace_id: WorkspaceId,
+    pub commit_id: CommitId,
+    pub budget: usize,
+    pub include_current_claims: bool,
+    pub counts: RecordCurrentnessAuditCounts,
+    pub candidates: Vec<RecordCurrentnessAuditItem>,
+    pub omitted: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -3565,6 +3687,94 @@ pub(crate) fn records_at(
         workspace_id: replayed.workspace_id,
         commit_id,
         records,
+    })
+}
+
+pub(crate) fn record_currentness_audit(
+    connection: &StoreConnection,
+    options: &RecordCurrentnessAuditOptions,
+) -> Result<RecordCurrentnessAuditResult> {
+    validate_record_currentness_audit_budget(options.budget)?;
+
+    let mut list_options = RecordListOptions::new(options.commit_id);
+    if let Some(kind) = options.kind {
+        list_options = list_options.with_kind(kind);
+    }
+    if let Some(fragment) = &options.statement_contains {
+        list_options = list_options.with_statement_contains(fragment.clone())?;
+    }
+    if let Some(scope) = &options.scope {
+        list_options = list_options.with_scope(scope.clone())?;
+    }
+
+    let listed = records_at(connection, &list_options)?;
+    let mut candidates = listed
+        .records
+        .into_iter()
+        .filter_map(|record| {
+            record_currentness_class(&record.state, options.include_current_claims)
+                .map(|class| RecordCurrentnessAuditItem { class, record })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .record
+            .record_entity_version_id
+            .cmp(&left.record.record_entity_version_id)
+            .then_with(|| {
+                right
+                    .record
+                    .record_entity_id
+                    .cmp(&left.record.record_entity_id)
+            })
+    });
+
+    let counts = RecordCurrentnessAuditCounts {
+        candidates_total: candidates.len(),
+        open_obligations_total: candidates
+            .iter()
+            .filter(|candidate| candidate.class == RecordCurrentnessClass::OpenObligation)
+            .count(),
+        current_claims_total: candidates
+            .iter()
+            .filter(|candidate| candidate.class == RecordCurrentnessClass::CurrentClaim)
+            .count(),
+        assumptions_total: candidates
+            .iter()
+            .filter(|candidate| candidate.record.state.kind == RecordKind::Assumption)
+            .count(),
+        attempts_total: candidates
+            .iter()
+            .filter(|candidate| candidate.record.state.kind == RecordKind::Attempt)
+            .count(),
+        decisions_total: candidates
+            .iter()
+            .filter(|candidate| candidate.record.state.kind == RecordKind::Decision)
+            .count(),
+        findings_total: candidates
+            .iter()
+            .filter(|candidate| candidate.record.state.kind == RecordKind::Finding)
+            .count(),
+        questions_total: candidates
+            .iter()
+            .filter(|candidate| candidate.record.state.kind == RecordKind::Question)
+            .count(),
+        risks_total: candidates
+            .iter()
+            .filter(|candidate| candidate.record.state.kind == RecordKind::Risk)
+            .count(),
+    };
+    let omitted = candidates.len().saturating_sub(options.budget);
+    candidates.truncate(options.budget);
+
+    Ok(RecordCurrentnessAuditResult {
+        workspace_id: listed.workspace_id,
+        commit_id: listed.commit_id,
+        budget: options.budget,
+        include_current_claims: options.include_current_claims,
+        counts,
+        candidates,
+        omitted,
     })
 }
 
@@ -6529,6 +6739,35 @@ fn validate_statement(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_record_currentness_audit_budget(budget: usize) -> Result<()> {
+    if budget == 0 || budget > MAX_RECORD_CURRENTNESS_AUDIT_BUDGET {
+        return Err(WorkVcsError::RecordInvalid(format!(
+            "record currentness audit budget must be between 1 and {MAX_RECORD_CURRENTNESS_AUDIT_BUDGET}, found {budget}"
+        )));
+    }
+    Ok(())
+}
+
+fn record_currentness_class(
+    state: &RecordState,
+    include_current_claims: bool,
+) -> Option<RecordCurrentnessClass> {
+    match (state.kind, state.status) {
+        (RecordKind::Assumption, RecordStatus::Unverified)
+        | (RecordKind::Attempt, RecordStatus::Running)
+        | (RecordKind::Question, RecordStatus::Active)
+        | (RecordKind::Risk, RecordStatus::Active) => Some(RecordCurrentnessClass::OpenObligation),
+        (RecordKind::Assumption, RecordStatus::Validated)
+        | (RecordKind::Decision, RecordStatus::Active)
+        | (RecordKind::Finding, RecordStatus::Active)
+            if include_current_claims =>
+        {
+            Some(RecordCurrentnessClass::CurrentClaim)
+        }
+        _ => None,
+    }
 }
 
 fn validate_transition_rationale(value: &str) -> Result<()> {

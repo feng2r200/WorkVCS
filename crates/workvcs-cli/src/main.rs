@@ -86,8 +86,9 @@ use workvcs_core::{
     PlanCreateCommit, PlanCreateOptions, PlanEvolutionManifest, PlanEvolutionOptions,
     PlanEvolutionOutcome, PlanEvolutionResult, PlanSnapshot, PlanStatus, PlanTransitionCommit,
     PlanTransitionOptions, PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
-    PrimaryContainmentSnapshot, RecordCreateCommit, RecordCreateOptions, RecordKind,
-    RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
+    PrimaryContainmentSnapshot, RecordCreateCommit, RecordCreateOptions,
+    RecordCurrentnessAuditItem, RecordCurrentnessAuditOptions, RecordCurrentnessAuditResult,
+    RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
     RecordKnowledgeRelationRemoveCommit, RecordKnowledgeRelationRemoveOptions,
     RecordKnowledgeRelationRestoreCommit, RecordKnowledgeRelationRestoreOptions,
@@ -3954,6 +3955,70 @@ enum RecordCommand {
 
         #[arg(long)]
         expected_records: Option<usize>,
+    },
+    #[command(group(
+        ArgGroup::new("record-currentness-audit-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    #[command(group(
+        ArgGroup::new("record-currentness-audit-source")
+            .multiple(false)
+            .args(["branch", "commit"])
+    ))]
+    #[command(
+        about = "Audit current semantic Records without inferring or changing their truth",
+        long_about = "Read a bounded set of explicit open obligations and, when requested, current claims. The audit preserves statements and scope for model review, never infers staleness, never mutates Records, and never turns independent Records into Plan closeout blockers."
+    )]
+    CurrentnessAudit {
+        #[arg(value_name = "STORE")]
+        store: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Project checkout or worktree used to resolve its verified binding"
+        )]
+        cwd: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "One-command registry override; valid only with --cwd"
+        )]
+        registry: Option<PathBuf>,
+
+        #[arg(long, help = "Branch to inspect with an explicit STORE")]
+        branch: Option<String>,
+
+        #[arg(long, help = "Historical commit to inspect with an explicit STORE")]
+        commit: Option<String>,
+
+        #[arg(
+            long,
+            help = "Also include active Findings, Decisions, and validated Assumptions"
+        )]
+        include_current_claims: bool,
+
+        #[arg(long, help = "Narrow the selected audit classes to one Record kind")]
+        kind: Option<String>,
+
+        #[arg(long)]
+        scope_json: Option<String>,
+
+        #[arg(long)]
+        statement_contains: Option<String>,
+
+        #[arg(
+            long,
+            default_value_t = workvcs_core::DEFAULT_RECORD_CURRENTNESS_AUDIT_BUDGET,
+            help = "Maximum candidates to return (1..=200)"
+        )]
+        budget_items: usize,
+
+        #[arg(long)]
+        expected_candidates: Option<usize>,
     },
     #[command(about = "Record that a Finding invalidates an Assumption")]
     LinkInvalidates {
@@ -12698,6 +12763,31 @@ fn run_record(args: Vec<String>) -> Result<String> {
             }
             Ok(output)
         }
+        RecordCommand::CurrentnessAudit {
+            store,
+            cwd,
+            registry,
+            branch,
+            commit,
+            include_current_claims,
+            kind,
+            scope_json,
+            statement_contains,
+            budget_items,
+            expected_candidates,
+        } => run_record_currentness_audit(
+            store,
+            cwd,
+            registry,
+            branch,
+            commit,
+            include_current_claims,
+            kind,
+            scope_json,
+            statement_contains,
+            budget_items,
+            expected_candidates,
+        ),
         RecordCommand::LinkInvalidates {
             store,
             branch,
@@ -13524,6 +13614,130 @@ fn run_record(args: Vec<String>) -> Result<String> {
             let record = engine.transition_record(options)?;
             Ok(render_record_transition(&record))
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordCurrentnessAuditSource {
+    Branch(BranchId),
+    Commit(CommitId),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_record_currentness_audit(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    commit: Option<String>,
+    include_current_claims: bool,
+    kind: Option<String>,
+    scope_json: Option<String>,
+    statement_contains: Option<String>,
+    budget_items: usize,
+    expected_candidates: Option<usize>,
+) -> Result<String> {
+    let (store_path, source) =
+        resolve_record_currentness_audit_source(store, cwd, registry, branch, commit)?;
+    let engine = open_verified_store_readonly(&store_path)?;
+    let commit_id = match source {
+        RecordCurrentnessAuditSource::Branch(branch_id) => {
+            engine.branch_head(branch_id)?.head_commit_id
+        }
+        RecordCurrentnessAuditSource::Commit(commit_id) => commit_id,
+    };
+
+    let mut options = RecordCurrentnessAuditOptions::new(commit_id).with_budget(budget_items)?;
+    if include_current_claims {
+        options = options.include_current_claims();
+    }
+    if let Some(kind) = kind {
+        let kind = parse_record_kind(&kind)?;
+        if matches!(kind, RecordKind::AuthorizationReceipt | RecordKind::Handoff) {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record currentness audit kind {kind} has no reviewable lifecycle class"
+            )));
+        }
+        if matches!(kind, RecordKind::Finding | RecordKind::Decision) && !include_current_claims {
+            return Err(WorkVcsError::RecordInvalid(format!(
+                "record currentness audit kind {kind} requires --include-current-claims"
+            )));
+        }
+        options = options.with_kind(kind);
+    }
+    if let Some(scope_json) = scope_json {
+        options = options.with_scope(parse_cli_object(
+            "record currentness audit scope",
+            &scope_json,
+        )?)?;
+    }
+    if let Some(statement_contains) = statement_contains {
+        options = options.with_statement_contains(statement_contains)?;
+    }
+
+    let result = engine.record_currentness_audit(options)?;
+    let mut output = render_record_currentness_audit(&result, source)?;
+    if let Some(expected_candidates) = expected_candidates {
+        if result.counts.candidates_total != expected_candidates {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "record currentness audit candidates {} does not match expected {expected_candidates}",
+                result.counts.candidates_total
+            )));
+        }
+        output.push_str("candidates_match_expected=true\n");
+    }
+    Ok(output)
+}
+
+fn resolve_record_currentness_audit_source(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    commit: Option<String>,
+) -> Result<(PathBuf, RecordCurrentnessAuditSource)> {
+    match (store, cwd) {
+        (Some(store_path), None) => {
+            if registry.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "record currentness-audit explicit STORE does not accept --registry".to_owned(),
+                ));
+            }
+            let source = match (branch, commit) {
+                (Some(branch), None) => {
+                    RecordCurrentnessAuditSource::Branch(BranchId::parse_canonical(&branch)?)
+                }
+                (None, Some(commit)) => {
+                    RecordCurrentnessAuditSource::Commit(CommitId::parse_canonical(&commit)?)
+                }
+                _ => {
+                    return Err(WorkVcsError::QueryInvalid(
+                        "record currentness-audit explicit STORE requires exactly one of --branch or --commit"
+                            .to_owned(),
+                    ));
+                }
+            };
+            Ok((
+                canonical_existing_path("record currentness audit store", &store_path)?,
+                source,
+            ))
+        }
+        (None, Some(cwd)) => {
+            if branch.is_some() || commit.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "record currentness-audit --cwd uses the bound branch and must not pass --branch or --commit"
+                        .to_owned(),
+                ));
+            }
+            let discovery = discover_project_readonly(cwd, registry)?;
+            Ok((
+                PathBuf::from(discovery.binding.store_path),
+                RecordCurrentnessAuditSource::Branch(discovery.binding.branch_id),
+            ))
+        }
+        _ => Err(WorkVcsError::QueryInvalid(
+            "record currentness-audit requires exactly one of STORE or --cwd".to_owned(),
+        )),
     }
 }
 
@@ -23906,6 +24120,187 @@ fn render_record_list(result: &RecordListResult) -> String {
     output
 }
 
+fn render_record_currentness_audit(
+    result: &RecordCurrentnessAuditResult,
+    source: RecordCurrentnessAuditSource,
+) -> Result<String> {
+    let mut output = String::new();
+    match source {
+        RecordCurrentnessAuditSource::Branch(branch_id) => {
+            writeln!(output, "source_kind=branch").expect("write to String");
+            writeln!(output, "source_branch_id={branch_id}").expect("write to String");
+            writeln!(output, "source_temporal_scope=current_branch_head").expect("write to String");
+            writeln!(output, "source_mutation_eligible=true").expect("write to String");
+        }
+        RecordCurrentnessAuditSource::Commit(_) => {
+            writeln!(output, "source_kind=commit").expect("write to String");
+            writeln!(output, "source_branch_id=none").expect("write to String");
+            writeln!(output, "source_temporal_scope=historical_commit").expect("write to String");
+            writeln!(output, "source_mutation_eligible=false").expect("write to String");
+        }
+    }
+    writeln!(output, "workspace_id={}", result.workspace_id).expect("write to String");
+    writeln!(output, "commit_id={}", result.commit_id).expect("write to String");
+    writeln!(output, "audit_basis=explicit_lifecycle_state").expect("write to String");
+    writeln!(output, "automatic_stale_inference=false").expect("write to String");
+    writeln!(output, "plan_closeout_blocking=false").expect("write to String");
+    writeln!(
+        output,
+        "include_current_claims={}",
+        result.include_current_claims
+    )
+    .expect("write to String");
+    writeln!(output, "budget_requested={}", result.budget).expect("write to String");
+    writeln!(
+        output,
+        "budget_hard_limit={}",
+        workvcs_core::MAX_RECORD_CURRENTNESS_AUDIT_BUDGET
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "candidates_total={}",
+        result.counts.candidates_total
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "open_obligations_total={}",
+        result.counts.open_obligations_total
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "current_claims_total={}",
+        result.counts.current_claims_total
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "assumptions_total={}",
+        result.counts.assumptions_total
+    )
+    .expect("write to String");
+    writeln!(output, "attempts_total={}", result.counts.attempts_total).expect("write to String");
+    writeln!(output, "decisions_total={}", result.counts.decisions_total).expect("write to String");
+    writeln!(output, "findings_total={}", result.counts.findings_total).expect("write to String");
+    writeln!(output, "questions_total={}", result.counts.questions_total).expect("write to String");
+    writeln!(output, "risks_total={}", result.counts.risks_total).expect("write to String");
+    writeln!(output, "candidates={}", result.candidates.len()).expect("write to String");
+    writeln!(output, "omitted={}", result.omitted).expect("write to String");
+    writeln!(output, "truncated={}", result.omitted > 0).expect("write to String");
+
+    for (index, candidate) in result.candidates.iter().enumerate() {
+        writeln!(
+            output,
+            "candidate.{index}.classification={}",
+            candidate.class
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.record_entity_id={}",
+            candidate.record.record_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.record_entity_version_id={}",
+            candidate.record.record_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.record_state_digest={}",
+            candidate.record.state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.record_kind={}",
+            candidate.record.state.kind
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.record_status={}",
+            candidate.record.state.status
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.statement_json={}",
+            canonical_text_json(
+                "record currentness audit statement",
+                &candidate.record.state.statement,
+            )?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.scope_json={}",
+            canonical_cli_json(
+                "record currentness audit scope",
+                &candidate.record.state.scope,
+            )?
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.review_command={}",
+            record_currentness_review_command(candidate, source)
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "candidate.{index}.allowed_outcomes={}",
+            record_currentness_allowed_outcomes(candidate, source)
+        )
+        .expect("write to String");
+        writeln!(output, "candidate.{index}.requires_explicit_judgment=true")
+            .expect("write to String");
+    }
+    output.push_str("read_only=true\n");
+    Ok(output)
+}
+
+fn record_currentness_review_command(
+    candidate: &RecordCurrentnessAuditItem,
+    source: RecordCurrentnessAuditSource,
+) -> &'static str {
+    if matches!(source, RecordCurrentnessAuditSource::Commit(_)) {
+        return "workvcs record show";
+    }
+    match candidate.record.state.kind {
+        RecordKind::Assumption => "workvcs record assumption-status",
+        RecordKind::Attempt => "workvcs record attempt-status",
+        RecordKind::Decision => "workvcs record supersede-decision|workvcs record decision-status",
+        RecordKind::Finding => "workvcs record supersede-finding|workvcs record invalidate-finding",
+        RecordKind::Question => "workvcs record question-status",
+        RecordKind::Risk => "workvcs record risk-status",
+        RecordKind::AuthorizationReceipt | RecordKind::Handoff => "none",
+    }
+}
+
+fn record_currentness_allowed_outcomes(
+    candidate: &RecordCurrentnessAuditItem,
+    source: RecordCurrentnessAuditSource,
+) -> &'static str {
+    if matches!(source, RecordCurrentnessAuditSource::Commit(_)) {
+        return "inspect|compare_to_current";
+    }
+    match (candidate.record.state.kind, candidate.record.state.status) {
+        (RecordKind::Assumption, RecordStatus::Unverified) => "validated|invalidated|retain",
+        (RecordKind::Assumption, RecordStatus::Validated) => "invalidated|retain",
+        (RecordKind::Attempt, RecordStatus::Running) => "succeeded|failed|inconclusive|retain",
+        (RecordKind::Decision, RecordStatus::Active) => "superseded|withdrawn|retain",
+        (RecordKind::Finding, RecordStatus::Active) => "superseded|invalidated|retain",
+        (RecordKind::Question, RecordStatus::Active) => "answered|deferred|withdrawn|retain",
+        (RecordKind::Risk, RecordStatus::Active) => "mitigated|invalidated|withdrawn|retain",
+        _ => "retain",
+    }
+}
+
 fn render_record_relation_create(relation: &RecordRelationCreateCommit) -> String {
     format!(
         "workspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nchangeset_id={}\noperation_id={}\nrelation_id={}\nrelation_version_id={}\nrelation_type={}\nrelation_label={}\nsource_record_entity_id={}\ntarget_record_entity_id={}\nrelation_state_digest={}\nwork_state_digest={}\n",
@@ -29752,8 +30147,19 @@ mod tests {
         assert!(record_help.contains("Record and inspect semantic work notes"));
         assert!(record_help.contains("Usage: workvcs record <COMMAND>"));
         assert!(record_help.contains("assumption"));
+        assert!(record_help.contains("currentness-audit"));
         assert!(record_help.contains("question-status"));
         assert!(record_help.contains("risk-status"));
+
+        let currentness_help =
+            run(
+                Cli::try_parse_from(["workvcs", "record", "currentness-audit", "--help"])
+                    .expect("parse currentness audit help"),
+            )
+            .expect("currentness audit help");
+        assert!(currentness_help.contains("never infers staleness"));
+        assert!(currentness_help.contains("--include-current-claims"));
+        assert!(currentness_help.contains("--budget-items"));
 
         let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
             .expect_err("project help should render through clap DisplayHelp")
@@ -59941,6 +60347,215 @@ mod tests {
         run_cli_test_with_large_stack(
             "cli-question-risk-recall-currentness-test",
             assert_cli_closes_questions_and_risks_without_losing_retrospective_history,
+        );
+    }
+
+    fn assert_cli_audits_record_currentness_without_mutation() {
+        let fixture = create_project_binding_fixture(false);
+        let risk = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "risk",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &fixture.genesis_commit_id,
+            "--statement",
+            "Active risk for currentness review",
+            "--scope-json",
+            r#"{"area":"semantic-currentness"}"#,
+        ])
+        .expect("parse risk"))
+        .expect("create risk");
+        let question = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "question",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&risk, "commit_id"),
+            "--statement",
+            "Is the historical question still open?",
+        ])
+        .expect("parse question"))
+        .expect("create question");
+        let answered = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "question-status",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&question, "commit_id"),
+            "--record",
+            &value(&question, "record_entity_id"),
+            "--record-version",
+            &value(&question, "record_entity_version_id"),
+            "--status",
+            "answered",
+            "--rationale",
+            "The focused probe answered it",
+        ])
+        .expect("parse question status"))
+        .expect("answer question");
+        let finding = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "finding",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--head",
+            &value(&answered, "commit_id"),
+            "--statement",
+            "Current finding for explicit review",
+        ])
+        .expect("parse finding"))
+        .expect("create finding");
+
+        let store_before = fs::read(&fixture.store_path).expect("read Store before audit");
+        let registry_before = fs::read(&fixture.registry_path).expect("read registry before audit");
+        let audit = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "currentness-audit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--expected-candidates",
+            "1",
+        ])
+        .expect("parse currentness audit"))
+        .expect("audit currentness");
+        assert_eq!(value(&audit, "source_kind"), "branch");
+        assert_eq!(value(&audit, "source_branch_id"), fixture.branch);
+        assert_eq!(
+            value(&audit, "source_temporal_scope"),
+            "current_branch_head"
+        );
+        assert_eq!(value(&audit, "source_mutation_eligible"), "true");
+        assert_eq!(value(&audit, "commit_id"), value(&finding, "commit_id"));
+        assert_eq!(value(&audit, "audit_basis"), "explicit_lifecycle_state");
+        assert_eq!(value(&audit, "automatic_stale_inference"), "false");
+        assert_eq!(value(&audit, "plan_closeout_blocking"), "false");
+        assert_eq!(value(&audit, "candidates_total"), "1");
+        assert_eq!(value(&audit, "open_obligations_total"), "1");
+        assert_eq!(value(&audit, "current_claims_total"), "0");
+        assert_eq!(
+            value(&audit, "candidate.0.classification"),
+            "open_obligation"
+        );
+        assert_eq!(value(&audit, "candidate.0.record_kind"), "risk");
+        assert_eq!(value(&audit, "candidate.0.record_status"), "active");
+        assert_eq!(
+            value(&audit, "candidate.0.scope_json"),
+            r#"{"area":"semantic-currentness"}"#
+        );
+        assert_eq!(
+            value(&audit, "candidate.0.review_command"),
+            "workvcs record risk-status"
+        );
+        assert_eq!(
+            value(&audit, "candidate.0.allowed_outcomes"),
+            "mitigated|invalidated|withdrawn|retain"
+        );
+        assert_eq!(
+            value(&audit, "candidate.0.requires_explicit_judgment"),
+            "true"
+        );
+        assert_eq!(value(&audit, "candidates_match_expected"), "true");
+        assert_eq!(value(&audit, "read_only"), "true");
+        assert_eq!(
+            fs::read(&fixture.store_path).expect("read Store after audit"),
+            store_before
+        );
+        assert_eq!(
+            fs::read(&fixture.registry_path).expect("read registry after audit"),
+            registry_before
+        );
+
+        let with_claims = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "currentness-audit",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--include-current-claims",
+            "--budget-items",
+            "1",
+            "--expected-candidates",
+            "2",
+        ])
+        .expect("parse audit with current claims"))
+        .expect("audit current claims");
+        assert_eq!(value(&with_claims, "candidates_total"), "2");
+        assert_eq!(value(&with_claims, "open_obligations_total"), "1");
+        assert_eq!(value(&with_claims, "current_claims_total"), "1");
+        assert_eq!(value(&with_claims, "candidates"), "1");
+        assert_eq!(value(&with_claims, "omitted"), "1");
+        assert_eq!(value(&with_claims, "truncated"), "true");
+        assert_eq!(value(&with_claims, "candidate.0.record_kind"), "finding");
+        assert_eq!(
+            value(&with_claims, "candidate.0.classification"),
+            "current_claim"
+        );
+        assert_eq!(
+            value(&with_claims, "candidate.0.review_command"),
+            "workvcs record supersede-finding|workvcs record invalidate-finding"
+        );
+
+        let historical = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "currentness-audit",
+            &fixture.store,
+            "--commit",
+            &value(&risk, "commit_id"),
+            "--expected-candidates",
+            "1",
+        ])
+        .expect("parse historical audit"))
+        .expect("audit historical currentness");
+        assert_eq!(value(&historical, "source_kind"), "commit");
+        assert_eq!(
+            value(&historical, "source_temporal_scope"),
+            "historical_commit"
+        );
+        assert_eq!(value(&historical, "source_mutation_eligible"), "false");
+        assert_eq!(
+            value(&historical, "candidate.0.review_command"),
+            "workvcs record show"
+        );
+        assert_eq!(
+            value(&historical, "candidate.0.allowed_outcomes"),
+            "inspect|compare_to_current"
+        );
+
+        let finding_without_claims = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "currentness-audit",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--kind",
+            "finding",
+        ])
+        .expect("parse finding-only audit"));
+        assert!(finding_without_claims.is_err());
+    }
+
+    #[test]
+    fn cli_audits_record_currentness_without_mutation() {
+        run_cli_test_with_large_stack(
+            "cli-record-currentness-audit-test",
+            assert_cli_audits_record_currentness_without_mutation,
         );
     }
 

@@ -104,6 +104,30 @@ Recall also retains terminal Attempts so another Agent does not repeat them.
 Retrospective Recall preserves terminal cognition and its relations, while
 ordering current cognition first.
 
+Use one bounded audit when a closeout, resumed long-running project, periodic
+review, or contradictory Recall makes semantic currentness worth checking:
+
+```bash
+workvcs record currentness-audit \
+  --cwd "$PROJECT_PATH" \
+  --budget-items 50
+
+workvcs record currentness-audit \
+  --cwd "$PROJECT_PATH" \
+  --include-current-claims \
+  --kind finding \
+  --budget-items 50
+```
+
+The default returns unverified Assumptions, running Attempts, active Questions,
+and active Risks. `--include-current-claims` also reviews validated
+Assumptions and active Decisions and Findings. The command is read-only and
+does not claim that a candidate is stale: inspect current evidence, then either
+retain it or use the emitted guarded lifecycle/correction action. An explicit
+`STORE --commit COMMIT_ID` source is historical and inspection-only; compare it
+with current state before changing anything. The audit is independent of Plan
+gaps and is not required for every closeout.
+
 This cutover does not provide compatibility for `workctl`, schema-v3/v4/v5,
 or `.work-governance`. WorkVCS reports mechanical state; it does not decide
 authorization policy.

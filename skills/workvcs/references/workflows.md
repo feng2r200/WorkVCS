@@ -96,6 +96,12 @@ ordering. For closeout, a branch source has
 the item and extract its persisted content separately; do not place arbitrary
 large bodies into every recall response.
 
+Recall answers “what context should I recover now?”; currentness audit answers
+“which explicit open obligations or current claims merit deliberate review?”
+Use `record currentness-audit` only when that review has value. It is bounded
+and read-only, and it neither replaces retrospective Recall nor turns Plan
+closeout into a Record-lifecycle gate.
+
 When a mutating command returns `mutation_postcondition_failed`, the mutation
 already completed but a result-dependent `--expected-*` assertion did not.
 Inspect `operation_result`, recover the current state, and decide whether any

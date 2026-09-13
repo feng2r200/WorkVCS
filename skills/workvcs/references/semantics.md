@@ -65,3 +65,23 @@ Question and Risk currentness is also explicit:
 `record attempt` starts a `running` Attempt. Once the route has a known result,
 finish it with `record attempt-status` as `succeeded`, `failed`, or
 `inconclusive`; do not leave a completed experiment mechanically running.
+
+## Review currentness without inventing truth
+
+Run `workvcs record currentness-audit --cwd <project>` when a semantic review
+has concrete value—for example after resumed long-running work, at a meaningful
+closeout, during a periodic retrospective, or when current Recall conflicts
+with present evidence. The default returns only explicit open obligations:
+unverified Assumptions, running Attempts, active Questions, and active Risks.
+Use `--include-current-claims` to also review validated Assumptions and active
+Decisions and Findings. Narrow large reviews with `--kind`, exact
+`--scope-json`, or `--statement-contains`; keep the returned item budget
+proportional to the review.
+
+The command reports candidates, not detected errors. For each candidate,
+compare its full statement and scope with current evidence and choose one of
+the reported outcomes: retain it unchanged, or perform the appropriate guarded
+status/correction operation with a truthful rationale. Do not close a Record
+because its Plan or Task ended, and do not create changes merely to make an
+audit return zero. Historical `STORE --commit` audits are inspection-only; use
+the current Branch head and current Record version for any later mutation.

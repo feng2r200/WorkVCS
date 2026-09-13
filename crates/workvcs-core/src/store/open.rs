@@ -31,7 +31,8 @@ use crate::history::{
     PlanAdmissionResult, PlanCreateCommit, PlanCreateOptions, PlanEvolutionOptions,
     PlanEvolutionResult, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
-    RecordCreateCommit, RecordCreateOptions, RecordKnowledgeRelationCreateCommit,
+    RecordCreateCommit, RecordCreateOptions, RecordCurrentnessAuditOptions,
+    RecordCurrentnessAuditResult, RecordKnowledgeRelationCreateCommit,
     RecordKnowledgeRelationCreateOptions, RecordKnowledgeRelationListOptions,
     RecordKnowledgeRelationListResult, RecordKnowledgeRelationRemoveCommit,
     RecordKnowledgeRelationRemoveOptions, RecordKnowledgeRelationRestoreCommit,
@@ -1132,6 +1133,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::records_at(&self.connection, options)
+    }
+
+    pub(crate) fn record_currentness_audit(
+        &self,
+        options: &RecordCurrentnessAuditOptions,
+    ) -> Result<RecordCurrentnessAuditResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::record_currentness_audit(&self.connection, options)
     }
 
     pub(crate) fn create_record_relation(

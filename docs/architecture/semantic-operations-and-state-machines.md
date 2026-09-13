@@ -118,6 +118,21 @@ Major transitions carry rationale text, a causal Entity reference, or both as
 defined by their semantic contract. Coordination `force` cannot bypass a
 mandatory AC gate; any waiver is a distinct semantic concept.
 
+### Record currentness audit projection
+
+Currentness review is a query, not another semantic state machine. The default
+projection selects only explicit open lifecycle states: unverified Assumptions,
+running Attempts, active Questions, and active Risks. An explicit wider mode
+also selects validated Assumptions and active Decisions and Findings. Kind,
+exact canonical scope, and statement-substring filters narrow those classes.
+
+The query returns newest-current-version-first candidates under a default
+50-item and hard 200-item budget, with total and omitted counts. It opens the
+Store read-only and never infers staleness, performs a transition, or creates a
+Plan gap. Branch sources represent the resolved current head. Commit sources
+represent historical state and are inspection-only; a historical result is not
+a safe mutation base.
+
 ## Handoff and Session continuity
 
 SessionDiff is immutable Session-global provenance and may summarize changes

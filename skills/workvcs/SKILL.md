@@ -60,6 +60,14 @@ longer tracked, close it with `record risk-status`. Do not leave resolved
 unknowns or exposures current merely because retrospective history should be
 preserved.
 
+When resumed work, closeout, periodic review, or contradictory Recall makes a
+currentness review useful, run one bounded `record currentness-audit`. Start
+with its default open obligations; add `--include-current-claims` only when
+Findings, Decisions, and validated Assumptions also need review. Treat every
+candidate as a prompt for explicit judgment, not proof of staleness. Retaining
+a still-current Record is valid, and the audit never creates Plan gaps. See
+[Semantic recording](references/semantics.md).
+
 ## Evidence must remain inspectable
 
 Prefer raw content input when WorkVCS should preserve the evidence body. Check

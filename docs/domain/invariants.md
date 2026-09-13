@@ -144,6 +144,15 @@ cannot transition again. Brief and handoff recovery must not present terminal
 Findings as current truth, while retrospective projections preserve them and
 their causal ancestry.
 
+### INV-099 — Record currentness review is bounded, explicit, and independent
+
+`record currentness-audit` may select Records only from their explicit
+lifecycle state. It must be read-only, bounded to 1 through 200 returned items,
+report omitted candidates, preserve full statement and scope, and distinguish a
+current Branch-head source from a historical Commit source. It never infers
+staleness, mutates a Record, or turns independent cognition into a Goal, Plan,
+Task, Verification, or closeout gate.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

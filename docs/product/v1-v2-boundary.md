@@ -182,6 +182,9 @@ V1 includes:
   current Recall;
 - a lightweight Attempt lifecycle with `running`, `succeeded`, `failed`, and
   `inconclusive` states plus a one-shot shortcut;
+- a bounded read-only currentness audit over explicit Record lifecycle states,
+  with optional current-claim review, full statement/scope, stable omission
+  reporting, and no automatic stale inference or Plan-closeout coupling;
 - a deterministic single-target Verification command wrapper that captures
   applicable execution Evidence and the actual verified Resource state,
   including relevant uncommitted Git changes rather than Git HEAD alone; one

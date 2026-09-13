@@ -71,6 +71,15 @@ typed causal relation. Brief Recall excludes terminal Findings, handoff keeps
 terminal Attempts as anti-repetition context, and retrospective preserves
 terminal cognition after current Records and Knowledge.
 
+`record currentness-audit` is the bounded read-only review entrypoint for
+semantic debt. By default it returns explicit open obligations; add
+`--include-current-claims` to review validated Assumptions and active Decisions
+and Findings. It supports kind, exact scope, and statement filters, defaults to
+50 candidates, rejects budgets above 200, and reports full statement/scope plus
+stable IDs and omitted counts. It never infers staleness, mutates Records, or
+adds Plan gaps. Branch output is current-head and potentially actionable;
+Commit output is historical and inspection-only.
+
 `workvcs closeout inspect` is current. It requires explicit
 `--target-kind goal|plan|task` and `--target`, using either `--cwd PATH` or
 `STORE` with `--branch BRANCH`/`--commit COMMIT`; it never implicitly selects a
@@ -236,7 +245,7 @@ The current top-level CLI exposes these command families:
 | Resources and drift | `resource`, `projection`, `verification cache-refresh` | Resource registration, observations, applicability, stale/drift/unavailable/error projections, and explicit foreground refresh. |
 | Runtime coordination | `session`, `claim`, `handoff`, `next`, `runnable` | Agent Sessions, focus, exclusive/shared Claims, Claim transfer/takeover, focused Handoffs, runnable Task projection, and next-work selection. |
 | Authorization receipts | `receipt issue`, `receipt show`, `receipt list`, `receipt consume` | Current P0-3a/P0-3b mechanical AuthorizationReceipt issue, redacted inspection/listing, and branch-scoped single-use consume; revoke is not current. |
-| Entry, capture, and recall | `config`, `project`, `capture`, `record supersede-finding`, `record invalidate-finding`, `recall`, `resume` | Stable registry discovery, binding audit, standalone cognition, guarded Finding correction, profile-prioritized bounded project context, and Session-aware recovery. |
+| Entry, capture, and recall | `config`, `project`, `capture`, `record currentness-audit`, `record supersede-finding`, `record invalidate-finding`, `recall`, `resume` | Stable registry discovery, binding audit, standalone cognition, bounded read-only semantic-currentness review, guarded Finding correction, profile-prioritized bounded project context, and Session-aware recovery. |
 | Query and explanation | `closeout inspect`, `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Closeout summaries, bounded mechanical inspection, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
 | Portability and branching | `checkpoint`, `bundle`, `restore`, `merge` | Checkpoints, local Bundle export/validate/apply flows, restore-as-new-commit semantics, and three-way Work Branch merge lifecycle. |
 | Error handling | `--error-format key-value|json` plus command stderr | Script-readable error code, category, retryability, optional JSON output, and actionable recovery boundaries. |

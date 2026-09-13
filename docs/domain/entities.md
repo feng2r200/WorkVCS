@@ -367,6 +367,14 @@ automatic Session diff.
 **Version behavior:** Semantic Records in a Workspace are versioned. Their
 creation and changes also leave immutable Events.
 
+**Currentness review:** A bounded read-only audit may select explicit open
+obligations (`Assumption(unverified)`, `Attempt(running)`, `Question(active)`,
+and `Risk(active)`) and, when requested, current claims
+(`Assumption(validated)`, `Decision(active)`, and `Finding(active)`). Selection
+does not assert that any Record is stale and does not couple Record lifecycle to
+Plan closeout. A Branch-head view can guide a separately guarded transition; a
+historical Commit view is inspection-only.
+
 **Example:** A long Attempt moves from `running` to `failed`; a small Attempt
 may be recorded once with its approach and result.
 

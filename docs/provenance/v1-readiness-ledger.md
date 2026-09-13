@@ -1,7 +1,7 @@
 # V1 Readiness Ledger
 
 Status: current implementation-readiness ledger
-Last refreshed: 2026-09-12 by Phase 5F user-global installation evidence
+Last refreshed: 2026-09-13 by Phase 5G Record currentness dogfood
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -132,6 +132,21 @@ example and retain `/usr/local/bin` as an explicit system-wide choice. Detailed
 evidence is in
 [`phase-5f-user-global-install-path.md`](phase-5f-user-global-install-path.md).
 
+Phase 5G closes the demonstrated semantic-currentness review gap without
+adding automatic stale inference or Plan coupling. The bounded read-only
+`record currentness-audit` inventories explicit open obligations and, on
+request, active claims with full statement, scope, identity, lifecycle, and
+review guidance. Installed-binary dogfood on the maintained Store answered one
+Question, mitigated six resolved Risks, superseded nine contradicted Findings
+and two completed priority Decisions, and deliberately retained one genuine
+global-guidance Risk. No Record was deleted; history and supersession remain
+available for retrospective reconstruction. The current default audit returns
+that one obligation, while the expanded audit returns 33 current candidates
+without truncation. Detailed evidence is in
+[`phase-5g-record-currentness-audit.md`](phase-5g-record-currentness-audit.md),
+and the contract is recorded in
+[`ADR-0510`](../decisions/adr/0510-record-currentness-audit.md).
+
 ## Classification
 
 - **Design confirmed:** repository product, architecture, schema, or accepted
@@ -181,6 +196,9 @@ current user request supplies a narrower priority.
    post-V1 route or concrete dogfood continuation reopens that scope; do not
    add deeper nested, multi-hop, broader traversal, or more explanation fields
    speculatively.
+4. Keep the Phase 5G global-guidance Risk visible. Select another local
+   optimization only when current dogfood or project evidence identifies a
+   concrete correctness, workflow-friction, or retrospective-value gap.
 
 Narrow smoke expectation, list/detail, count, and display-only slices are still
 valid when they are required for one of the gaps above. They should name the

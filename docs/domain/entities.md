@@ -32,7 +32,10 @@ Discovery is followed by a second Store identity/integrity validation. Useful
 prior cognition may be inherited by first admission, while ambiguous active
 Session selection fails closed.
 
-P0-1 project bind/discover and read-only `resume --cwd` are implemented.
+P0-1 project ensure/bind/discover and read-only `resume --cwd` are implemented.
+Ensure is an explicit, idempotent entry mutation that creates one default
+Store/Workspace/Branch binding and no semantic Work-State objects; discovery
+remains read-only.
 P0-2a `plan admit` is implemented as one atomic, idempotent transition from a
 manifest. Its target is `STORE` plus `--branch`, or `--cwd` plus the bound
 branch; expected head/state and idempotency are manifest fields. The manifest

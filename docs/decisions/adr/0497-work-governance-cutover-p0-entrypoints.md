@@ -1,6 +1,6 @@
 # ADR-0497: Work-Governance Cutover P0 Entrypoints
 
-Status: Accepted; configuration and No-Plan recording clauses superseded by ADR-0501
+Status: Accepted; configuration and No-Plan recording clauses superseded by ADR-0501; first-use bootstrap extended by ADR-0511
 Date: 2026-09-10
 
 ## Context
@@ -26,7 +26,7 @@ The P0 capability matrix is:
 
 | Slice | Status | Contract |
 | --- | --- | --- |
-| Project bind/discover plus read-only `resume --cwd` | Implemented | Bind by Git common-directory identity; discover an external registry via explicit `--registry PATH` or `WORKVCS_HOME`; validate the Store before use; fail closed on ambiguous active Session selection. |
+| Project ensure/bind/discover plus read-only `resume --cwd` | Implemented; first-use bootstrap extended by ADR-0511 | Ensure one default external Store/Workspace/Branch binding idempotently; bind explicitly for intentional sharing; identify Git projects by common-directory identity; validate the Store before use; fail closed on ambiguous active Session selection. |
 | P0-2a atomic/idempotent `plan admit` | Implemented | `workvcs plan admit [OPTIONS] --manifest <PATH> <STORE\|--cwd <PATH>` admits one manifest atomically and replays the same idempotency key without duplicating state. |
 | P0-2b `plan evolve mode=in_place\|supersede` | Implemented; current | `workvcs plan evolve [OPTIONS] --manifest <PATH> <STORE\|--cwd <PATH>` supports atomic/idempotent in-place updates and supersede transitions with their explicit manifest semantics. |
 | P0-2b2 `plan evolve mode=supersede` | Implemented; current | Supersede atomically transitions old active→superseded, creates a new active Plan under the same Goal with dual `contains` relations and a `new_plan→old_plan` `supersedes` relation; constraints use explicit `carry_all` or `replace`, and old Tasks/Records/Evidence are not migrated. |

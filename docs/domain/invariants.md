@@ -153,6 +153,16 @@ current Branch-head source from a historical Commit source. It never infers
 staleness, mutates a Record, or turns independent cognition into a Goal, Plan,
 Task, Verification, or closeout gate.
 
+### INV-100 — Project first-use bootstrap is explicit and convergent
+
+Project discovery remains zero-write. Explicit project ensure either verifies
+an existing binding unchanged or converges concurrent and repeated first-use
+calls on one identity-derived external Store, one Workspace, one initial Work
+Branch, and one atomic registry binding. It creates no semantic work objects.
+Interrupted bootstrap may be resumed only from the exact deterministic Store
+marker and a missing or pristine Genesis Workspace; foreign, ambiguous, or
+non-pristine Stores fail closed without overwrite or adoption.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

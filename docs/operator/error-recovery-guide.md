@@ -44,6 +44,20 @@ recovery_hint=inspect_operation_result_before_retry
 Read `operation_result` and current state before deciding whether a compensating
 action is required. Replaying the original command can duplicate intent.
 
+`project_binding_not_found` identifies a read-only discovery miss and adds a
+stable recovery route:
+
+```text
+recoverable=true
+recovery_action=project_ensure
+recovery_cwd=<RESOLVED_LOGICAL_PROJECT_ROOT>
+recovery_registry=<RESOLVED_REGISTRY_PATH>
+```
+
+Confirm that `recovery_cwd` is the intended logical project, then use
+`workvcs project ensure --cwd <PATH>`. A direct registry locator also needs
+`--store-root PATH`. Discovery itself never performs this write.
+
 For JSON stderr, pass `--error-format json`. WorkVCS business errors render one
 JSON object:
 
@@ -101,6 +115,7 @@ through current CLI output.
 | `goal_not_found` | `goal` | `false` | Re-check the Goal id at the selected branch/head. Use current Goal list/show output before creating a replacement. |
 | `plan_invalid` | `plan` | `false` | Correct Plan content, status, containment, or transition input. Keep Plan changes aligned with the current Goal and Task graph. |
 | `plan_not_found` | `plan` | `false` | Re-check the Plan id at the selected branch/head. If the Plan was superseded, use the current containment path. |
+| `project_binding_not_found` | `query` | `false` | Confirm `recovery_cwd` is the intended logical project, then run `project ensure`. Supply `--store-root` when using a direct registry locator. Discovery made no changes. |
 | `query_invalid` | `query` | `false` | Fix selector syntax, required ids, filter values, or mutually exclusive arguments. Use the relevant subcommand help before rerunning. |
 | `query_unsupported` | `query` | `false` | Choose a supported query shape or defer the workflow. Do not treat this as a transient Store failure. |
 | `record_invalid` | `record` | `false` | Fix Record kind, content, support references, or relation inputs. Keep provenance links explicit. |

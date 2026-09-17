@@ -9,8 +9,8 @@ package/install helper, not a public release.
 
 ## P0 Cutover Entry
 
-The implemented P0 entrypoint binds and discovers a project from the working
-directory, exposes read-only `resume --cwd`, and provides atomic/idempotent
+The implemented P0 entrypoint ensures, binds, and discovers a project from the
+working directory, exposes read-only `resume --cwd`, and provides atomic/idempotent
 `workvcs plan admit` plus `plan evolve mode=in_place` and `mode=supersede`.
 Use `--registry PATH` to select the external registry explicitly. Otherwise
 WorkVCS checks `WORKVCS_HOME`, then
@@ -20,6 +20,28 @@ effective locator and `workvcs project list --require-valid` to audit every
 binding. The registry and Store are forced outside the project/repository. Git
 identity is derived from the repository common directory, and the discovered
 Store receives complete integrity validation before use.
+
+Start with read-only discovery:
+
+```sh
+workvcs project discover --cwd "$PROJECT"
+```
+
+If it returns `error_code=project_binding_not_found` and
+`recovery_action=project_ensure`, resolve the logical project rather than using
+an ambient temporary directory, then run:
+
+```sh
+workvcs project ensure --cwd "$PROJECT"
+```
+
+With a configured WorkVCS home, ensure creates one identity-derived Store under
+`<home>/stores/projects`, one Workspace, its initial Branch, and one registry
+binding. Repeated or concurrent calls converge on the same verified binding.
+It creates no Goal, Plan, Task, Record, Evidence, Session, or Claim. A direct
+`--registry` locator has no implied home, so an unbound project also requires
+`--store-root PATH`. Use explicit `project bind` instead when multiple logical
+projects intentionally share an existing Store/Workspace/Branch.
 
 Useful discovery from before the first admission is retained. If active
 Session selection is zero, multiple, or otherwise ambiguous, stop and recover

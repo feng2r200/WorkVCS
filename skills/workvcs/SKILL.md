@@ -13,8 +13,11 @@ authorization, validation strength, and completion.
 
 1. Confirm availability with `command -v workvcs`.
 2. Resolve configuration with `workvcs config show`.
-3. For a project, run `workvcs project discover --cwd <path>`. If location or
-   binding integrity is in doubt, run `workvcs project list --require-valid`.
+3. Resolve the logical project that owns the work, then run
+   `workvcs project discover --cwd <path>`. Prefer an explicit user target or
+   the primary artifact/operation directory over an ambient ChatGPT mirror,
+   temporary directory, or coordination checkout. If location or binding
+   integrity is in doubt, run `workvcs project list --require-valid`.
 4. Read only what the current task needs:
    - `recall --profile brief` for active context;
    - `recall --profile handoff` for a continuation or another Agent;
@@ -23,6 +26,21 @@ authorization, validation strength, and completion.
 
 Read-only discovery, recall, audit, and recovery do not create a Plan or
 Session. Do not scan the whole Store when a bounded projection is enough.
+
+If discovery returns `project_binding_not_found`, do not conclude that the
+work cannot be recorded and do not interrupt unrelated execution. Use
+`workvcs project ensure --cwd <logical-project>` immediately before the first
+durable write that has value:
+
+- when governance selects a Plan, ensure first and then admit it;
+- for No-Plan work, wait until a useful standalone Record, Evidence item, or
+  Knowledge statement actually exists, then ensure and capture it.
+
+Ensure is idempotent and creates only the Store/Workspace/Branch binding, not a
+Plan or semantic record. If ensure cannot complete, retain the small pending
+semantic packet in the active work context, report the exact locator or
+bootstrap problem, and persist it after the provider recovers. Do not create a
+second durable queue or silently discard the packet.
 
 ## Keep Plan and persistence independent
 

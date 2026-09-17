@@ -1,5 +1,19 @@
 # Plan and capture workflows
 
+## First durable write in an unbound project
+
+Keep discovery read-only. If it returns `project_binding_not_found`, first
+confirm the logical project from the user's target and the work's primary
+artifact or operation boundary. Do not bind an ambient mirror or temporary
+working directory merely because it is the process cwd.
+
+Run `project ensure` only when the first durable write is useful. For planned
+work, ensure and then admit the Plan, carrying forward the useful pre-Plan
+findings, decisions, unknowns, constraints, and evidence. For No-Plan work,
+ensure only when a standalone semantic item is worth capturing. A failed
+ensure pauses persistence, not otherwise safe work; keep a bounded pending
+packet and retry after the locator/bootstrap issue is fixed.
+
 ## Standalone cognition
 
 Use one `capture` manifest for a coherent set of new Records/Knowledge and

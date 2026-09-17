@@ -147,7 +147,7 @@ Commands:
   id            Generate and validate typed WorkVCS identifiers
   store         Inspect Store metadata, lineage, and migrations
   config        Inspect effective WorkVCS configuration
-  project       Bind, discover, and audit project Store entrypoints
+  project       Ensure, bind, discover, and audit project Store entrypoints
   history       List commit history from a branch or commit
   changeset     Inspect changesets and change operations
   commit        Inspect commit metadata and causal anchors
@@ -203,7 +203,7 @@ const WORKVCS_CONFIG_FILE: &str = "config.toml";
 #[cfg(not(test))]
 const PROJECT_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
-const PROJECT_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_millis(500);
+const PROJECT_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
 const PROJECT_REGISTRY_LOCK_RETRY: Duration = Duration::from_millis(25);
 const RESUME_CATEGORY_ORDER: [ContextItemCategory; 19] = [
     ContextItemCategory::SessionAnchor,
@@ -340,7 +340,7 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    #[command(about = "Bind, discover, and audit project Store entrypoints")]
+    #[command(about = "Ensure, bind, discover, and audit project Store entrypoints")]
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
@@ -1599,6 +1599,25 @@ enum StoreCommand {
 
 #[derive(Debug, Subcommand)]
 enum ProjectCommand {
+    #[command(about = "Ensure a project has a verified default Store binding")]
+    Ensure {
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Logical project checkout or directory to identify"
+        )]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Store directory required when the registry locator has no WorkVCS home"
+        )]
+        store_root: Option<PathBuf>,
+    },
     #[command(about = "Bind a project cwd to a Store workspace and branch")]
     Bind {
         #[arg(
@@ -5674,6 +5693,21 @@ fn render_workvcs_error_key_value(error: &WorkVcsError) -> String {
         let _ = writeln!(output, "operation_result={}", escape_key_value(result));
         output.push_str("recovery_hint=inspect_operation_result_before_retry\n");
     }
+    if let WorkVcsError::ProjectBindingNotFound {
+        project_root,
+        registry_path,
+        ..
+    } = error
+    {
+        output.push_str("recoverable=true\n");
+        output.push_str("recovery_action=project_ensure\n");
+        let _ = writeln!(output, "recovery_cwd={}", escape_key_value(project_root));
+        let _ = writeln!(
+            output,
+            "recovery_registry={}",
+            escape_key_value(registry_path)
+        );
+    }
     let _ = writeln!(output, "message={}", escape_key_value(&error.to_string()));
     output
 }
@@ -5694,6 +5728,17 @@ fn render_workvcs_error_json(error: &WorkVcsError) -> String {
         value["operation_result"] = serde_json::Value::String(result.clone());
         value["recovery_hint"] =
             serde_json::Value::String("inspect_operation_result_before_retry".to_owned());
+    }
+    if let WorkVcsError::ProjectBindingNotFound {
+        project_root,
+        registry_path,
+        ..
+    } = error
+    {
+        value["recoverable"] = serde_json::Value::Bool(true);
+        value["recovery_action"] = serde_json::Value::String("project_ensure".to_owned());
+        value["recovery_cwd"] = serde_json::Value::String(project_root.clone());
+        value["recovery_registry"] = serde_json::Value::String(registry_path.clone());
     }
     render_json_error(value)
 }
@@ -6850,6 +6895,11 @@ fn run(cli: Cli) -> Result<String> {
             ConfigCommand::Show { registry } => show_effective_config(registry),
         },
         Command::Project { command } => match command {
+            ProjectCommand::Ensure {
+                cwd,
+                registry,
+                store_root,
+            } => ensure_project(cwd, registry, store_root),
             ProjectCommand::Bind {
                 cwd,
                 registry,
@@ -15307,6 +15357,284 @@ struct ProjectDiscovery {
     binding: ProjectBinding,
 }
 
+#[derive(Clone, Debug)]
+struct ProjectBootstrapSpec {
+    store_path: PathBuf,
+    store_display_name: String,
+    workspace_display_name: String,
+}
+
+fn ensure_project(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    store_root: Option<PathBuf>,
+) -> Result<String> {
+    let identity = resolve_project_identity(&cwd)?;
+    let effective = effective_registry_config(registry)?;
+    let registry_path = project_registry_path_from_effective(&effective, true, &identity)?;
+    let _lock = ProjectRegistryLock::acquire(&registry_path)?;
+    let mut bindings = load_project_registry(&registry_path, true)?;
+    let matches = bindings
+        .iter()
+        .filter(|binding| {
+            binding.identity_kind == identity.kind && binding.identity == identity.identity
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [binding] => {
+            verify_project_binding_readonly(binding, &identity)?;
+            let discovery = ProjectDiscovery {
+                registry_path,
+                current_identity: identity,
+                binding: binding.clone(),
+            };
+            let mut output = render_project_discovery(&discovery);
+            output.push_str(
+                "binding_created=false\nstore_created=false\nworkspace_created=false\nbootstrap_recovered=false\n",
+            );
+            return Ok(output);
+        }
+        [] => {}
+        _ => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "project registry {} has duplicate bindings for {} identity {}",
+                registry_path.display(),
+                identity.kind,
+                identity.identity
+            )));
+        }
+    }
+
+    let store_root = project_store_root(&effective, store_root, &identity)?;
+    let bootstrap = project_bootstrap_spec(&identity, &store_root);
+    let store_existed = bootstrap.store_path.exists();
+    let (store_info, workspace, workspace_created) =
+        ensure_project_bootstrap_store(&bootstrap, &identity)?;
+    let store_path = canonical_existing_path("project bootstrap store", &bootstrap.store_path)?;
+    reject_project_local_path("project bootstrap store", &store_path, &identity)?;
+    if store_path != bootstrap.store_path {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Store path {} resolves to {}; refusing a path alias",
+            bootstrap.store_path.display(),
+            store_path.display()
+        )));
+    }
+
+    let binding = ProjectBinding {
+        identity_kind: identity.kind.clone(),
+        identity: identity.identity.clone(),
+        root: identity.root.clone(),
+        store_path: store_path.display().to_string(),
+        store_id: store_info.store_id,
+        workspace_id: workspace.workspace_id,
+        branch_id: workspace.initial_branch_id,
+    };
+    bindings.push(binding.clone());
+    bindings.sort_by(|left, right| {
+        (&left.identity_kind, &left.identity).cmp(&(&right.identity_kind, &right.identity))
+    });
+    save_project_registry_atomically(&registry_path, &bindings)?;
+    verify_project_binding_readonly(&binding, &identity)?;
+
+    let discovery = ProjectDiscovery {
+        registry_path,
+        current_identity: identity,
+        binding,
+    };
+    let mut output = render_project_discovery(&discovery);
+    output.push_str("binding_created=true\n");
+    let _ = writeln!(output, "store_created={}", !store_existed);
+    let _ = writeln!(output, "workspace_created={workspace_created}");
+    let _ = writeln!(output, "bootstrap_recovered={store_existed}");
+    Ok(output)
+}
+
+fn project_store_root(
+    effective: &EffectiveRegistryConfig,
+    explicit_store_root: Option<PathBuf>,
+    identity: &ProjectIdentity,
+) -> Result<PathBuf> {
+    let raw_path = match explicit_store_root {
+        Some(path) => absolute_cli_path("project Store root", path)?,
+        None => effective
+            .configured_home
+            .as_ref()
+            .map(|home| home.join("stores").join("projects"))
+            .ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "project ensure requires --store-root PATH when the selected registry locator does not define a WorkVCS home"
+                        .to_owned(),
+                )
+            })?,
+    };
+    reject_project_local_unresolved_path("project Store root", &raw_path, identity)?;
+    let resolved_before_create = if raw_path.exists() {
+        canonical_existing_path("project Store root", &raw_path)?
+    } else {
+        canonical_nonexistent_path("project Store root", &raw_path)?
+    };
+    reject_project_local_path("project Store root", &resolved_before_create, identity)?;
+    fs::create_dir_all(&raw_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot create project Store root {}: {error}",
+            raw_path.display()
+        ))
+    })?;
+    let store_root = canonical_existing_path("project Store root", &raw_path)?;
+    if !store_root.is_dir() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project Store root {} is not a directory",
+            store_root.display()
+        )));
+    }
+    reject_project_local_path("project Store root", &store_root, identity)?;
+    Ok(store_root)
+}
+
+fn project_bootstrap_spec(identity: &ProjectIdentity, store_root: &Path) -> ProjectBootstrapSpec {
+    let digest =
+        content_object_digest(format!("{}\0{}", identity.kind, identity.identity).as_bytes())
+            .to_string();
+    let slug = project_identity_slug(identity);
+    let marker = format!("workvcs-project:{digest}");
+    ProjectBootstrapSpec {
+        store_path: store_root.join(format!("{slug}-{digest}.sqlite")),
+        store_display_name: marker.clone(),
+        workspace_display_name: marker,
+    }
+}
+
+fn project_identity_slug(identity: &ProjectIdentity) -> String {
+    let source = if identity.kind == "git-common-dir" {
+        Path::new(&identity.identity)
+            .parent()
+            .and_then(Path::file_name)
+    } else {
+        Path::new(&identity.root).file_name()
+    }
+    .and_then(OsStr::to_str)
+    .unwrap_or("project");
+    let mut slug = String::new();
+    let mut prior_separator = false;
+    for character in source.chars() {
+        let mapped = if character.is_ascii_alphanumeric() {
+            character.to_ascii_lowercase()
+        } else if matches!(character, '-' | '_' | '.') {
+            character
+        } else {
+            '-'
+        };
+        let is_separator = mapped == '-';
+        if is_separator && prior_separator {
+            continue;
+        }
+        slug.push(mapped);
+        prior_separator = is_separator;
+        if slug.len() >= 48 {
+            break;
+        }
+    }
+    let slug = slug.trim_matches(['-', '.']).to_owned();
+    if slug.is_empty() || slug == "git" {
+        "project".to_owned()
+    } else {
+        slug
+    }
+}
+
+fn ensure_project_bootstrap_store(
+    spec: &ProjectBootstrapSpec,
+    identity: &ProjectIdentity,
+) -> Result<(StoreInfo, WorkspaceInfo, bool)> {
+    let mut engine = if spec.store_path.exists() {
+        let canonical = canonical_existing_path("project bootstrap store", &spec.store_path)?;
+        reject_project_local_path("project bootstrap store", &canonical, identity)?;
+        if canonical != spec.store_path {
+            return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                "project bootstrap Store path {} resolves to {}; refusing a path alias",
+                spec.store_path.display(),
+                canonical.display()
+            )));
+        }
+        open_verified_store(&canonical)?
+    } else {
+        Engine::init(
+            &spec.store_path,
+            StoreInitOptions::new(spec.store_display_name.clone())?,
+        )?
+    };
+    let store_info = engine.store_info()?;
+    if store_info.display_name != spec.store_display_name {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Store {} has display name {:?}, expected {:?}; refusing to overwrite or adopt it",
+            spec.store_path.display(),
+            store_info.display_name,
+            spec.store_display_name
+        )));
+    }
+    let workspaces = engine.workspaces(WorkspaceListOptions::all())?.workspaces;
+    let (workspace, workspace_created) = match workspaces.as_slice() {
+        [] => (
+            engine.create_workspace(WorkspaceInitOptions::new(
+                spec.workspace_display_name.clone(),
+            )?)?,
+            true,
+        ),
+        [workspace] => {
+            validate_project_bootstrap_workspace(&engine, workspace, spec)?;
+            (workspace.clone(), false)
+        }
+        _ => {
+            return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                "project bootstrap Store {} has {} Workspaces; refusing to adopt a non-pristine Store",
+                spec.store_path.display(),
+                workspaces.len()
+            )));
+        }
+    };
+    validate_project_bootstrap_workspace(&engine, &workspace, spec)?;
+    Ok((store_info, workspace, workspace_created))
+}
+
+fn validate_project_bootstrap_workspace(
+    engine: &Engine,
+    workspace: &WorkspaceInfo,
+    spec: &ProjectBootstrapSpec,
+) -> Result<()> {
+    if workspace.display_name != spec.workspace_display_name {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Workspace {} has display name {:?}, expected {:?}",
+            workspace.workspace_id, workspace.display_name, spec.workspace_display_name
+        )));
+    }
+    if workspace.initial_branch_name != "main" {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Workspace {} has initial branch {:?}, expected \"main\"",
+            workspace.workspace_id, workspace.initial_branch_name
+        )));
+    }
+    let branches = engine.list_branches(workspace.workspace_id)?;
+    if branches.len() != 1 || branches[0].branch_id != workspace.initial_branch_id {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Workspace {} is not pristine: expected only initial Branch {}",
+            workspace.workspace_id, workspace.initial_branch_id
+        )));
+    }
+    let head = &branches[0];
+    if head.head_commit_id != workspace.genesis_commit_id
+        || head.state_digest != workspace.state_digest
+        || head.head_commit_kind != "genesis"
+        || head.head_operation_type != "workspace.genesis"
+    {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Workspace {} is not pristine at its Genesis",
+            workspace.workspace_id
+        )));
+    }
+    Ok(())
+}
+
 fn bind_project(
     cwd: PathBuf,
     registry: Option<PathBuf>,
@@ -15358,7 +15686,7 @@ fn bind_project(
 fn discover_project(cwd: PathBuf, registry: Option<PathBuf>) -> Result<ProjectDiscovery> {
     let current_identity = resolve_project_identity(&cwd)?;
     let registry_path = project_registry_path(registry, false, &current_identity)?;
-    let bindings = load_project_registry(&registry_path, false)?;
+    let bindings = load_project_registry(&registry_path, true)?;
     let matches = bindings
         .into_iter()
         .filter(|binding| {
@@ -15369,12 +15697,7 @@ fn discover_project(cwd: PathBuf, registry: Option<PathBuf>) -> Result<ProjectDi
     let binding = match matches.as_slice() {
         [binding] => binding.clone(),
         [] => {
-            return Err(WorkVcsError::QueryInvalid(format!(
-                "no project binding for {} identity {} in {}",
-                current_identity.kind,
-                current_identity.identity,
-                registry_path.display()
-            )));
+            return Err(project_binding_not_found(&current_identity, &registry_path));
         }
         _ => {
             return Err(WorkVcsError::QueryInvalid(format!(
@@ -15396,7 +15719,7 @@ fn discover_project(cwd: PathBuf, registry: Option<PathBuf>) -> Result<ProjectDi
 fn discover_project_readonly(cwd: PathBuf, registry: Option<PathBuf>) -> Result<ProjectDiscovery> {
     let current_identity = resolve_project_identity(&cwd)?;
     let registry_path = project_registry_path(registry, false, &current_identity)?;
-    let bindings = load_project_registry(&registry_path, false)?;
+    let bindings = load_project_registry(&registry_path, true)?;
     let matches = bindings
         .into_iter()
         .filter(|binding| {
@@ -15407,12 +15730,7 @@ fn discover_project_readonly(cwd: PathBuf, registry: Option<PathBuf>) -> Result<
     let binding = match matches.as_slice() {
         [binding] => binding.clone(),
         [] => {
-            return Err(WorkVcsError::QueryInvalid(format!(
-                "no project binding for {} identity {} in {}",
-                current_identity.kind,
-                current_identity.identity,
-                registry_path.display()
-            )));
+            return Err(project_binding_not_found(&current_identity, &registry_path));
         }
         _ => {
             return Err(WorkVcsError::QueryInvalid(format!(
@@ -15429,6 +15747,15 @@ fn discover_project_readonly(cwd: PathBuf, registry: Option<PathBuf>) -> Result<
         current_identity,
         binding,
     })
+}
+
+fn project_binding_not_found(identity: &ProjectIdentity, registry_path: &Path) -> WorkVcsError {
+    WorkVcsError::ProjectBindingNotFound {
+        identity_kind: identity.kind.clone(),
+        identity: identity.identity.clone(),
+        project_root: identity.root.clone(),
+        registry_path: registry_path.display().to_string(),
+    }
 }
 
 fn verify_project_binding(
@@ -18010,9 +18337,20 @@ fn project_registry_path(
     for_write: bool,
     identity: &ProjectIdentity,
 ) -> Result<PathBuf> {
-    let raw_path = effective_registry_config(registry)?.registry_path;
+    let effective = effective_registry_config(registry)?;
+    project_registry_path_from_effective(&effective, for_write, identity)
+}
+
+fn project_registry_path_from_effective(
+    effective: &EffectiveRegistryConfig,
+    for_write: bool,
+    identity: &ProjectIdentity,
+) -> Result<PathBuf> {
+    let raw_path = effective.registry_path.clone();
     let absolute_path = absolute_cli_path("project registry", raw_path)?;
     reject_project_local_unresolved_path("project registry", &absolute_path, identity)?;
+    let resolved_before_create = canonical_nonexistent_path("project registry", &absolute_path)?;
+    reject_project_local_path("project registry", &resolved_before_create, identity)?;
     let registry_path = canonical_registry_path(absolute_path, for_write)?;
     reject_project_local_path("project registry", &registry_path, identity)?;
     Ok(registry_path)
@@ -18021,6 +18359,9 @@ fn project_registry_path(
 fn canonical_registry_path(path: PathBuf, for_write: bool) -> Result<PathBuf> {
     if path.exists() {
         return canonical_existing_path("project registry", &path);
+    }
+    if !for_write {
+        return canonical_nonexistent_path("project registry", &path);
     }
     let file_name = path.file_name().ok_or_else(|| {
         WorkVcsError::QueryInvalid(format!(
@@ -18044,6 +18385,31 @@ fn canonical_registry_path(path: PathBuf, for_write: bool) -> Result<PathBuf> {
     }
     let parent = canonical_existing_path("project registry directory", parent)?;
     Ok(parent.join(file_name))
+}
+
+fn canonical_nonexistent_path(label: &str, path: &Path) -> Result<PathBuf> {
+    let mut cursor = path;
+    let mut missing = Vec::new();
+    while !cursor.exists() {
+        let file_name = cursor.file_name().ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "{label} path {} has no existing ancestor",
+                path.display()
+            ))
+        })?;
+        missing.push(file_name.to_os_string());
+        cursor = cursor.parent().ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "{label} path {} has no existing ancestor",
+                path.display()
+            ))
+        })?;
+    }
+    let mut canonical = canonical_existing_path(label, cursor)?;
+    for component in missing.into_iter().rev() {
+        canonical.push(component);
+    }
+    Ok(canonical)
 }
 
 fn absolute_cli_path(label: &str, path: PathBuf) -> Result<PathBuf> {
@@ -29841,6 +30207,38 @@ mod tests {
     }
 
     #[test]
+    fn cli_renders_recoverable_project_binding_error_fields() {
+        let error = WorkVcsError::ProjectBindingNotFound {
+            identity_kind: "cwd".to_owned(),
+            identity: "/tmp/example".to_owned(),
+            project_root: "/tmp/example".to_owned(),
+            registry_path: "/tmp/workvcs/project-bindings.json".to_owned(),
+        };
+
+        let key_value = render_workvcs_error(&error, ErrorOutputFormat::KeyValue);
+        assert_eq!(value(&key_value, "error_code"), "project_binding_not_found");
+        assert_eq!(value(&key_value, "error_category"), "query");
+        assert_eq!(value(&key_value, "retryable"), "false");
+        assert_eq!(value(&key_value, "recoverable"), "true");
+        assert_eq!(value(&key_value, "recovery_action"), "project_ensure");
+        assert_eq!(value(&key_value, "recovery_cwd"), "/tmp/example");
+        assert_eq!(
+            value(&key_value, "recovery_registry"),
+            "/tmp/workvcs/project-bindings.json"
+        );
+
+        let json = json_value(&render_workvcs_error(&error, ErrorOutputFormat::Json));
+        assert_eq!(json["error_code"], "project_binding_not_found");
+        assert_eq!(json["recoverable"], true);
+        assert_eq!(json["recovery_action"], "project_ensure");
+        assert_eq!(json["recovery_cwd"], "/tmp/example");
+        assert_eq!(
+            json["recovery_registry"],
+            "/tmp/workvcs/project-bindings.json"
+        );
+    }
+
+    #[test]
     fn cli_renders_completed_mutation_postcondition_failure() {
         let error = WorkVcsError::MutationPostconditionFailed {
             operation: "session.focus-set".to_owned(),
@@ -30047,7 +30445,7 @@ mod tests {
             ("config", "Inspect effective WorkVCS configuration"),
             (
                 "project",
-                "Bind, discover, and audit project Store entrypoints",
+                "Ensure, bind, discover, and audit project Store entrypoints",
             ),
             ("history", "List commit history from a branch or commit"),
             ("changeset", "Inspect changesets and change operations"),
@@ -30164,7 +30562,10 @@ mod tests {
         let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
             .expect_err("project help should render through clap DisplayHelp")
             .to_string();
-        assert!(project_help.contains("Bind, discover, and audit project Store entrypoints"));
+        assert!(
+            project_help.contains("Ensure, bind, discover, and audit project Store entrypoints")
+        );
+        assert!(project_help.contains("ensure"));
         assert!(project_help.contains("bind"));
         assert!(project_help.contains("discover"));
 
@@ -53683,6 +54084,25 @@ mod tests {
         .expect("parse project bind"))
     }
 
+    fn ensure_project_for_test(
+        project: &Path,
+        registry: &Path,
+        store_root: &Path,
+    ) -> Result<String> {
+        run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "ensure",
+            "--cwd",
+            &path_text(project),
+            "--registry",
+            &path_text(registry),
+            "--store-root",
+            &path_text(store_root),
+        ])
+        .expect("parse project ensure"))
+    }
+
     fn minimal_admit_manifest(head: &str, state_digest: &str, key: &str) -> String {
         format!(
             r#"{{
@@ -54398,8 +54818,8 @@ mod tests {
         .expect("parse missing binding closeout"));
         assert!(matches!(
             missing_binding,
-            Err(WorkVcsError::QueryInvalid(message))
-                if message.contains("cannot read project registry")
+            Err(WorkVcsError::ProjectBindingNotFound { registry_path, .. })
+                if registry_path.ends_with("/missing-registry.json")
         ));
         assert!(!missing_registry_path.exists());
     }
@@ -54910,6 +55330,364 @@ mod tests {
     }
 
     #[test]
+    fn cli_project_ensure_bootstraps_once_and_discover_stays_read_only() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let project = tempdir.path().join("project");
+        let registry_dir = tempdir.path().join("registry");
+        let registry = registry_dir.join("project-bindings.json");
+        let store_root = tempdir.path().join("stores");
+        fs::create_dir_all(&project).expect("create project");
+
+        let missing = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &path_text(&project),
+            "--registry",
+            &path_text(&registry),
+        ])
+        .expect("parse missing project discover"));
+        assert!(matches!(
+            missing,
+            Err(WorkVcsError::ProjectBindingNotFound {
+                identity_kind,
+                project_root,
+                ..
+            }) if identity_kind == "cwd"
+                && project_root == path_text(&fs::canonicalize(&project).expect("canonical project"))
+        ));
+        assert!(!registry.exists());
+        assert!(!registry_dir.exists());
+        assert!(!store_root.exists());
+
+        let created = ensure_project_for_test(&project, &registry, &store_root)
+            .expect("ensure project binding");
+        assert_eq!(value(&created, "binding_created"), "true");
+        assert_eq!(value(&created, "store_created"), "true");
+        assert_eq!(value(&created, "workspace_created"), "true");
+        assert_eq!(value(&created, "bootstrap_recovered"), "false");
+        let store_path = PathBuf::from(value(&created, "store_path"));
+        assert!(store_path.starts_with(fs::canonicalize(&store_root).expect("store root")));
+        assert!(store_path.is_file());
+
+        let repeated = ensure_project_for_test(&project, &registry, &store_root)
+            .expect("repeat project ensure");
+        assert_eq!(value(&repeated, "binding_created"), "false");
+        assert_eq!(value(&repeated, "store_created"), "false");
+        assert_eq!(value(&repeated, "workspace_created"), "false");
+        assert_eq!(value(&repeated, "bootstrap_recovered"), "false");
+        assert_eq!(value(&repeated, "store_id"), value(&created, "store_id"));
+        assert_eq!(
+            value(&repeated, "workspace_id"),
+            value(&created, "workspace_id")
+        );
+        assert_eq!(value(&repeated, "branch_id"), value(&created, "branch_id"));
+
+        let discovered = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &path_text(&project),
+            "--registry",
+            &path_text(&registry),
+        ])
+        .expect("parse ensured project discover"))
+        .expect("discover ensured project");
+        assert_eq!(value(&discovered, "binding_verified"), "true");
+        assert_eq!(
+            value(&discovered, "workspace_id"),
+            value(&created, "workspace_id")
+        );
+    }
+
+    #[test]
+    fn cli_project_ensure_requires_store_root_for_direct_unbound_registry() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let project = tempdir.path().join("project");
+        let registry = tempdir.path().join("project-bindings.json");
+        fs::create_dir_all(&project).expect("create project");
+
+        let result = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "ensure",
+            "--cwd",
+            &path_text(&project),
+            "--registry",
+            &path_text(&registry),
+        ])
+        .expect("parse project ensure without Store root"));
+        assert!(matches!(
+            result,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("requires --store-root")
+        ));
+        assert!(!registry.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_project_ensure_rejects_symlinked_project_local_targets_before_creation() {
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let project = tempdir.path().join("project");
+        let alias = tempdir.path().join("project-alias");
+        let external = tempdir.path().join("external");
+        fs::create_dir_all(&project).expect("create project");
+        fs::create_dir_all(&external).expect("create external root");
+        symlink(&project, &alias).expect("create project symlink");
+
+        let registry_via_alias = alias.join("registry").join("project-bindings.json");
+        let rejected_registry =
+            ensure_project_for_test(&project, &registry_via_alias, &external.join("stores"));
+        assert!(matches!(
+            rejected_registry,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("project registry")
+                    && message.contains("outside project boundary")
+        ));
+        assert!(!project.join("registry").exists());
+
+        let external_registry = external.join("project-bindings.json");
+        let store_root_via_alias = alias.join("stores");
+        let rejected_store =
+            ensure_project_for_test(&project, &external_registry, &store_root_via_alias);
+        assert!(matches!(
+            rejected_store,
+            Err(WorkVcsError::QueryInvalid(message))
+                if message.contains("project Store root")
+                    && message.contains("outside project boundary")
+        ));
+        assert!(!project.join("stores").exists());
+        assert!(!external_registry.exists());
+    }
+
+    #[test]
+    fn cli_project_ensure_keeps_same_named_projects_in_distinct_stores() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let project_a = tempdir.path().join("a").join("project");
+        let project_b = tempdir.path().join("b").join("project");
+        let registry = tempdir.path().join("project-bindings.json");
+        let store_root = tempdir.path().join("stores");
+        fs::create_dir_all(&project_a).expect("create project a");
+        fs::create_dir_all(&project_b).expect("create project b");
+
+        let ensured_a =
+            ensure_project_for_test(&project_a, &registry, &store_root).expect("ensure project a");
+        let ensured_b =
+            ensure_project_for_test(&project_b, &registry, &store_root).expect("ensure project b");
+
+        assert_ne!(
+            value(&ensured_a, "project_identity"),
+            value(&ensured_b, "project_identity")
+        );
+        assert_ne!(
+            value(&ensured_a, "store_path"),
+            value(&ensured_b, "store_path")
+        );
+        assert_ne!(value(&ensured_a, "store_id"), value(&ensured_b, "store_id"));
+    }
+
+    #[test]
+    fn cli_project_ensure_reuses_binding_across_git_worktrees() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        git_test_init(&repo);
+        fs::write(repo.join("README.md"), b"baseline\n").expect("write readme");
+        git_test(&repo, &["add", "README.md"]);
+        git_test(&repo, &["commit", "-q", "-m", "baseline"]);
+        let linked = tempdir.path().join("repo-linked");
+        git_test(
+            &repo,
+            &["worktree", "add", "-q", &path_text(&linked), "-b", "linked"],
+        );
+        let registry = tempdir.path().join("project-bindings.json");
+        let store_root = tempdir.path().join("stores");
+
+        let original =
+            ensure_project_for_test(&repo, &registry, &store_root).expect("ensure repository");
+        let alias = ensure_project_for_test(&linked, &registry, &store_root)
+            .expect("ensure linked worktree");
+
+        assert_eq!(value(&original, "identity_kind"), "git-common-dir");
+        assert_eq!(value(&alias, "binding_created"), "false");
+        assert_eq!(
+            value(&original, "project_identity"),
+            value(&alias, "project_identity")
+        );
+        assert_eq!(value(&original, "store_id"), value(&alias, "store_id"));
+        assert_eq!(
+            value(&original, "workspace_id"),
+            value(&alias, "workspace_id")
+        );
+    }
+
+    #[test]
+    fn cli_project_ensure_recovers_only_matching_pristine_bootstrap() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let project = tempdir.path().join("project");
+        let registry = tempdir.path().join("project-bindings.json");
+        let store_root = tempdir.path().join("stores");
+        fs::create_dir_all(&project).expect("create project");
+        fs::create_dir_all(&store_root).expect("create Store root");
+        let canonical_store_root = fs::canonicalize(&store_root).expect("canonical Store root");
+        let identity = resolve_project_identity(&project).expect("project identity");
+        let spec = project_bootstrap_spec(&identity, &canonical_store_root);
+        Engine::init(
+            &spec.store_path,
+            StoreInitOptions::new(spec.store_display_name.clone()).expect("Store options"),
+        )
+        .expect("initialize interrupted bootstrap");
+
+        let recovered = ensure_project_for_test(&project, &registry, &store_root)
+            .expect("recover interrupted bootstrap");
+        assert_eq!(value(&recovered, "binding_created"), "true");
+        assert_eq!(value(&recovered, "store_created"), "false");
+        assert_eq!(value(&recovered, "workspace_created"), "true");
+        assert_eq!(value(&recovered, "bootstrap_recovered"), "true");
+
+        let conflicting_project = tempdir.path().join("conflicting-project");
+        fs::create_dir_all(&conflicting_project).expect("create conflicting project");
+        let conflicting_identity =
+            resolve_project_identity(&conflicting_project).expect("conflicting identity");
+        let conflicting_spec = project_bootstrap_spec(&conflicting_identity, &canonical_store_root);
+        Engine::init(
+            &conflicting_spec.store_path,
+            StoreInitOptions::new("unrelated-store").expect("unrelated Store options"),
+        )
+        .expect("initialize conflicting Store");
+        let collision = ensure_project_for_test(&conflicting_project, &registry, &store_root);
+        assert!(matches!(
+            collision,
+            Err(WorkVcsError::StoreBootstrapInvalid(message))
+                if message.contains("refusing to overwrite or adopt")
+        ));
+    }
+
+    #[test]
+    fn cli_project_ensure_recovers_pristine_workspace_but_rejects_used_store() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let registry = tempdir.path().join("project-bindings.json");
+        let store_root = tempdir.path().join("stores");
+        fs::create_dir_all(&store_root).expect("create Store root");
+        let canonical_store_root = fs::canonicalize(&store_root).expect("canonical Store root");
+
+        let pristine_project = tempdir.path().join("pristine-project");
+        fs::create_dir_all(&pristine_project).expect("create pristine project");
+        let pristine_identity =
+            resolve_project_identity(&pristine_project).expect("pristine identity");
+        let pristine_spec = project_bootstrap_spec(&pristine_identity, &canonical_store_root);
+        let mut pristine_engine = Engine::init(
+            &pristine_spec.store_path,
+            StoreInitOptions::new(pristine_spec.store_display_name.clone())
+                .expect("pristine Store options"),
+        )
+        .expect("initialize pristine Store");
+        let pristine_workspace = pristine_engine
+            .create_workspace(
+                WorkspaceInitOptions::new(pristine_spec.workspace_display_name.clone())
+                    .expect("pristine Workspace options"),
+            )
+            .expect("create pristine Workspace");
+        drop(pristine_engine);
+
+        let recovered = ensure_project_for_test(&pristine_project, &registry, &store_root)
+            .expect("recover pristine Workspace bootstrap");
+        assert_eq!(value(&recovered, "binding_created"), "true");
+        assert_eq!(value(&recovered, "store_created"), "false");
+        assert_eq!(value(&recovered, "workspace_created"), "false");
+        assert_eq!(value(&recovered, "bootstrap_recovered"), "true");
+        assert_eq!(
+            value(&recovered, "workspace_id"),
+            pristine_workspace.workspace_id.to_string()
+        );
+
+        let used_project = tempdir.path().join("used-project");
+        fs::create_dir_all(&used_project).expect("create used project");
+        let used_identity = resolve_project_identity(&used_project).expect("used identity");
+        let used_spec = project_bootstrap_spec(&used_identity, &canonical_store_root);
+        let mut used_engine = Engine::init(
+            &used_spec.store_path,
+            StoreInitOptions::new(used_spec.store_display_name.clone())
+                .expect("used Store options"),
+        )
+        .expect("initialize used Store");
+        let used_workspace = used_engine
+            .create_workspace(
+                WorkspaceInitOptions::new(used_spec.workspace_display_name.clone())
+                    .expect("used Workspace options"),
+            )
+            .expect("create used Workspace");
+        used_engine
+            .fork_branch(
+                BranchForkOptions::from_branch(used_workspace.initial_branch_id, "other")
+                    .expect("fork options"),
+            )
+            .expect("fork used Store branch");
+        drop(used_engine);
+
+        let rejected = ensure_project_for_test(&used_project, &registry, &store_root);
+        assert!(matches!(
+            rejected,
+            Err(WorkVcsError::StoreBootstrapInvalid(message))
+                if message.contains("is not pristine")
+        ));
+    }
+
+    #[test]
+    fn cli_project_ensure_serializes_concurrent_first_use() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let project = tempdir.path().join("project");
+        let registry = tempdir.path().join("project-bindings.json");
+        let store_root = tempdir.path().join("stores");
+        fs::create_dir_all(&project).expect("create project");
+        let barrier = Arc::new(Barrier::new(2));
+
+        let start = |barrier: Arc<Barrier>| {
+            let project = project.clone();
+            let registry = registry.clone();
+            let store_root = store_root.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                ensure_project_for_test(&project, &registry, &store_root)
+            })
+        };
+        let thread_a = start(Arc::clone(&barrier));
+        let thread_b = start(Arc::clone(&barrier));
+        let result_a = thread_a.join().expect("thread a").expect("ensure a");
+        let result_b = thread_b.join().expect("thread b").expect("ensure b");
+
+        let created = [
+            value(&result_a, "binding_created"),
+            value(&result_b, "binding_created"),
+        ];
+        assert_eq!(
+            created
+                .iter()
+                .filter(|value| value.as_str() == "true")
+                .count(),
+            1
+        );
+        assert_eq!(
+            value(&result_a, "workspace_id"),
+            value(&result_b, "workspace_id")
+        );
+        let registry_json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&registry).expect("read registry"))
+                .expect("registry JSON");
+        assert_eq!(
+            registry_json["bindings"]
+                .as_array()
+                .expect("bindings")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn cli_project_binding_keeps_distinct_repositories_separate() {
         let fixture = create_project_binding_fixture(false);
         let repo_a = fixture._tempdir.path().join("repo-a");
@@ -54955,8 +55733,8 @@ mod tests {
 
         assert!(matches!(
             missing,
-            Err(WorkVcsError::QueryInvalid(message))
-                if message.contains("no project binding")
+            Err(WorkVcsError::ProjectBindingNotFound { identity_kind, .. })
+                if identity_kind == "git-common-dir"
         ));
     }
 
@@ -67751,6 +68529,44 @@ mod tests {
         assert_eq!(value(&listed, "bindings"), "1");
         assert_eq!(value(&listed, "valid_bindings"), "1");
         assert_eq!(value(&listed, "invalid_bindings"), "0");
+    }
+
+    #[test]
+    fn cli_xdg_home_config_supplies_default_project_store_root() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let xdg_root = tempdir.path().join("xdg");
+        let config_dir = xdg_root.join("workvcs");
+        let workvcs_home = tempdir.path().join("workvcs-home");
+        let project = tempdir.path().join("project");
+        fs::create_dir_all(&config_dir).expect("create config dir");
+        fs::create_dir_all(&project).expect("create project");
+        fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                "version = 1\nhome = {:?}\n",
+                workvcs_home.display().to_string()
+            ),
+        )
+        .expect("write config");
+        let _home = EnvVarRestore::set(PROJECT_REGISTRY_ENV, None);
+        let _xdg = EnvVarRestore::set(XDG_CONFIG_HOME_ENV, Some(xdg_root.as_os_str()));
+
+        let ensured = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "ensure",
+            "--cwd",
+            &path_text(&project),
+        ])
+        .expect("parse config-backed ensure"))
+        .expect("config-backed ensure");
+
+        let expected_root = fs::canonicalize(workvcs_home.join("stores").join("projects"))
+            .expect("canonical default Store root");
+        assert!(Path::new(&value(&ensured, "store_path")).starts_with(expected_root));
+        assert!(workvcs_home.join("project-bindings.json").is_file());
+        assert_eq!(value(&ensured, "binding_created"), "true");
     }
 
     fn assert_cli_capture_and_recall_work_without_plan_or_session() {

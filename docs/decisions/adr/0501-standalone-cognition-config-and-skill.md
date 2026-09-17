@@ -31,6 +31,9 @@ the effective source. `project list --require-valid` checks every binding for
 duplicate identity, path drift, Store identity, Workspace, and Branch
 consistency. Any future configuration or environment-locator change must update
 `config.toml.example`, operator documentation, and focused tests together.
+ADR-0511 adds explicit idempotent `project ensure`: configured homes place
+default per-project Stores under `stores/projects`, while direct registry
+locators require a separate Store root and never infer one from the registry.
 
 ### Plan-independent cognition
 

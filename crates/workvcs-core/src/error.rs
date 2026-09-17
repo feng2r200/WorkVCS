@@ -84,6 +84,7 @@ pub enum ErrorCode {
     GoalNotFound,
     PlanInvalid,
     PlanNotFound,
+    ProjectBindingNotFound,
     QueryInvalid,
     QueryUnsupported,
     RecordInvalid,
@@ -131,6 +132,7 @@ impl ErrorCode {
             Self::GoalNotFound => "goal_not_found",
             Self::PlanInvalid => "plan_invalid",
             Self::PlanNotFound => "plan_not_found",
+            Self::ProjectBindingNotFound => "project_binding_not_found",
             Self::QueryInvalid => "query_invalid",
             Self::QueryUnsupported => "query_unsupported",
             Self::RecordInvalid => "record_invalid",
@@ -231,6 +233,14 @@ pub enum WorkVcsError {
     #[error("plan not found: {0}")]
     PlanNotFound(String),
 
+    #[error("project binding not found for {identity_kind} identity {identity} in {registry_path}")]
+    ProjectBindingNotFound {
+        identity_kind: String,
+        identity: String,
+        project_root: String,
+        registry_path: String,
+    },
+
     #[error("query invalid: {0}")]
     QueryInvalid(String),
 
@@ -319,6 +329,7 @@ impl WorkVcsError {
             Self::GoalNotFound(_) => ErrorCode::GoalNotFound,
             Self::PlanInvalid(_) => ErrorCode::PlanInvalid,
             Self::PlanNotFound(_) => ErrorCode::PlanNotFound,
+            Self::ProjectBindingNotFound { .. } => ErrorCode::ProjectBindingNotFound,
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
             Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
             Self::RecordInvalid(_) => ErrorCode::RecordInvalid,
@@ -358,7 +369,9 @@ impl WorkVcsError {
             | Self::EntityTransitionInvalid(_) => ErrorCategory::Mutation,
             Self::GoalInvalid(_) | Self::GoalNotFound(_) => ErrorCategory::Goal,
             Self::PlanInvalid(_) | Self::PlanNotFound(_) => ErrorCategory::Plan,
-            Self::QueryInvalid(_) | Self::QueryUnsupported(_) => ErrorCategory::Query,
+            Self::ProjectBindingNotFound { .. }
+            | Self::QueryInvalid(_)
+            | Self::QueryUnsupported(_) => ErrorCategory::Query,
             Self::RecordInvalid(_) | Self::RecordNotFound(_) => ErrorCategory::Record,
             Self::RelationInvalid(_) => ErrorCategory::Relation,
             Self::ResourceInvalid(_)
@@ -397,6 +410,10 @@ mod tests {
     #[test]
     fn error_codes_render_stable_lower_snake_case() {
         assert_eq!(ErrorCode::QueryInvalid.as_str(), "query_invalid");
+        assert_eq!(
+            ErrorCode::ProjectBindingNotFound.as_str(),
+            "project_binding_not_found"
+        );
         assert_eq!(
             ErrorCode::BranchHeadConflict.as_str(),
             "branch_head_conflict"

@@ -5,6 +5,9 @@ version = 1
 
 # Choose exactly one locator. `home` places project-bindings.json under this
 # directory and is the recommended form for a normal local installation.
+# `workvcs project ensure` places default per-project Stores under
+# <home>/stores/projects/. If `registry` is selected instead, first-use ensure
+# requires an explicit --store-root because no home can be inferred.
 home = "~/.codex/workvcs"
 
 # Alternatively, point directly at a registry file:

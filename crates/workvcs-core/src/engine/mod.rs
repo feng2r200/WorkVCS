@@ -115,7 +115,6 @@ use crate::history::{
 use crate::store::{
     ContextPacketSnapshotSchemaMigrationResult, Store, StoreInfo, StoreInitOptions,
 };
-use crate::store::{LocalObjectV2MigrationOptions, LocalObjectV2MigrationResult};
 use crate::{
     ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardOptions, ClaimGuardResult,
     ClaimListOptions, ClaimListResult, ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions,
@@ -161,13 +160,6 @@ impl Engine {
         path: impl AsRef<Path>,
     ) -> Result<ContextPacketSnapshotSchemaMigrationResult> {
         Store::migrate_context_packet_snapshot_schema(path.as_ref())
-    }
-
-    pub fn migrate_local_object_store_v2(
-        path: impl AsRef<Path>,
-        options: LocalObjectV2MigrationOptions,
-    ) -> Result<LocalObjectV2MigrationResult> {
-        crate::store::migrate_local_object_store_v2(path.as_ref(), options)
     }
 
     pub fn store_info(&self) -> Result<StoreInfo> {

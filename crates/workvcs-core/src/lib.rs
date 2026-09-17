@@ -207,7 +207,5 @@ pub use runtime::{
 };
 pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 pub use store::{
-    ContextPacketSnapshotSchemaMigrationResult, LocalObjectV2MigrationMode,
-    LocalObjectV2MigrationOptions, LocalObjectV2MigrationResult, StoreInfo, StoreInitOptions,
-    StoreManifest,
+    ContextPacketSnapshotSchemaMigrationResult, StoreInfo, StoreInitOptions, StoreManifest,
 };

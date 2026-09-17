@@ -1,6 +1,6 @@
 ---
 name: workvcs
-description: "Use WorkVCS when prior project state can affect current work, or when work develops durable value that should survive a turn, handoff, or restart: meaningful findings, decisions, evidence, recovery context, coordination, or a Plan. Do not use it merely because the command is installed."
+description: "Use WorkVCS only for an explicit recall/resume/audit/record request, when already-known durable project state can affect current work, or after current work has actually produced a durable finding, decision, evidence, recovery need, or coordination need. Do not invoke it prospectively at routine task start merely because work might become reusable, and do not make a Plan mandatory."
 ---
 
 # WorkVCS
@@ -11,8 +11,9 @@ authorization, validation strength, and completion.
 
 ## Decide from durable value
 
-Do not probe WorkVCS at the start of every task. Invoke it only when at least
-one condition is present:
+Activation is evidence-gated. Do not select or probe WorkVCS at routine task
+start merely because useful state might appear later. Invoke it only when at
+least one condition is already present:
 
 - the user asks to recall, resume, audit, or record WorkVCS state;
 - prior durable state can change the current route, ownership, authority, or
@@ -22,11 +23,20 @@ one condition is present:
   survive a turn, handoff, or restart; or
 - durable coordination or recovery would materially help the work.
 
-When none applies, make no WorkVCS call and create no WorkVCS state. Reassess
-internally when the route, scope, or ownership changes and before a handoff,
-long pause, or meaningful closeout. This reassessment is not a required CLI
-step. When value emerges during work, invoke WorkVCS just in time and prefer
-one coherent capture over incremental narration.
+Prospective applicability is not a condition. If this Skill was loaded before
+any condition is evidenced, make no WorkVCS call, load no reference, and return
+to the task. Reassess internally when the route, scope, or ownership changes
+and before a handoff, long pause, or meaningful closeout. This reassessment is
+not a required CLI step.
+
+For value produced by current work, require an evidenced result and a concrete
+consumer beyond the current turn. Examples include a shared invariant used by
+multiple named consumers, a confirmed decision that constrains later work, or
+a root cause/evidence item whose absence would make a likely recurrence or
+continuation repeat the investigation. Mere possibility of future usefulness
+does not qualify. When this test is met, finish validation and perform one
+coherent capture before the final response; a response-only summary is not the
+durable record.
 
 Examples:
 
@@ -37,15 +47,16 @@ Examples:
 - multi-stage work: admit a Plan only if its coordination or recovery value
   justifies the durable structure.
 
-## Read only what can affect the task
+## Read prior state only when it can matter
 
-After the value decision, resolve the logical project that owns the work and
-run `workvcs project discover --cwd <path>`. Prefer an explicit user target or
-the primary artifact/operation directory over an ambient ChatGPT mirror,
-temporary directory, or coordination checkout. If location or binding
-integrity is in doubt, run `workvcs project list --require-valid`.
+When prior durable state can affect the task, resolve the logical project that
+owns the work and run `workvcs project discover --cwd <path>`. Prefer an
+explicit user target or the primary artifact/operation directory over an
+ambient ChatGPT mirror, temporary directory, or coordination checkout. If
+location or binding integrity is actually in doubt, run
+`workvcs project list --require-valid`.
 
-Choose one bounded read path:
+Then choose one bounded read path:
 
 - `recall --profile brief` for active context;
 - `recall --profile handoff` for a continuation or another Agent;
@@ -55,8 +66,18 @@ Choose one bounded read path:
 Read-only discovery, recall, audit, and recovery do not create a Plan or
 Session. Do not scan the whole Store when a bounded projection is enough.
 
-Use `command -v workvcs` only when availability is unknown. Use exact command
-help before relying on flags.
+When durable value emerges from otherwise standalone work, finish and validate
+that work before routing the capture. Discover the owning project immediately
+before the write. Do not Recall merely because a new standalone capture is
+valuable; Recall only when existing state could change its statement, scope,
+duplicate/conflict judgment, relation target, or provenance.
+
+The command forms shown in this Skill and its linked workflows are established.
+Use them directly. A preflight Help call for the shown `project discover`,
+`resume`, or `capture` forms is a routing error. Use
+`workvcs <command> --help` only for a different form whose syntax is genuinely
+unknown or after a command rejects its arguments. Do not probe availability or
+prepend Help to an established form unless an actual failure requires it.
 
 ## Write just in time
 
@@ -102,13 +123,17 @@ over a chronological transcript. Capture the original problem, discoveries,
 choices and tradeoffs, route changes, failed attempts, unresolved questions,
 evidence, and reusable conclusions only when they matter.
 
-- Use [Plan and capture workflows](references/workflows.md) for unbound first
-  writes, atomic capture, Plan admission/evolution, Recall, Handoffs, and
-  mutation recovery.
-- Use [Semantic recording](references/semantics.md) for object choice,
-  relations, lifecycle closure, and bounded currentness review.
-- Use [Configuration](references/configuration.md) only for setup or locator
-  problems.
+References are not a startup checklist. Load only the one that answers a
+current need; load another only when a later decision or failure requires it.
+
+- Use [Plan and capture workflows](references/workflows.md) when constructing a
+  first durable write, atomic capture, Plan admission/evolution, focused
+  Handoff, or mutation recovery.
+- Use [Semantic recording](references/semantics.md) when object choice,
+  relations, lifecycle closure, or bounded currentness review is unresolved.
+- Use [Configuration](references/configuration.md) only after an observed setup,
+  locator, registry, or binding-integrity problem. Do not load it before
+  ordinary discovery, Recall, Resume, or capture.
 
 Prefer raw content when WorkVCS should preserve an evidence body; digest-only
 Evidence may not be locally extractable. For shared work, default to one writer

@@ -58,7 +58,7 @@ decision, not the prerequisite for durable recording.
 
 Evidence created from raw bytes persists those bytes in a Store-adjacent,
 Store-ID-scoped, content-addressed object area. The database records an
-available `workvcs.local-object-v1` storage location. `evidence extract`
+available `workvcs.local-object-v2` storage location. `evidence extract`
 verifies size and digest before writing the requested output. Digest-only
 content remains a valid external reference and has no fabricated local body.
 

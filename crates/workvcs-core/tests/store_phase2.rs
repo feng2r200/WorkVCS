@@ -320,6 +320,32 @@ fn open_rejects_newer_object_store_format() {
 }
 
 #[test]
+fn open_rejects_legacy_object_store_format_without_runtime_fallback() {
+    let (_tempdir, path) = store_path();
+    init_store(&path).expect("init store");
+
+    let mut legacy_manifest = StoreManifest::current();
+    legacy_manifest.object_store_format_version = OBJECT_STORE_FORMAT_VERSION - 1;
+    let legacy_manifest_json = legacy_manifest
+        .canonical_manifest_json()
+        .expect("legacy manifest json");
+    let connection = raw_connection(&path);
+    connection
+        .execute(
+            "UPDATE store_manifest
+             SET object_store_format_version = ?1, manifest_json = ?2",
+            params![
+                legacy_manifest.object_store_format_version,
+                legacy_manifest_json,
+            ],
+        )
+        .expect("update object store format");
+    drop(connection);
+
+    assert_open_error_code(&path, ErrorCode::StoreCompatibilityUnsupported);
+}
+
+#[test]
 fn open_rejects_id_scheme_mismatch() {
     let (_tempdir, path) = store_path();
     init_store(&path).expect("init store");

@@ -3694,7 +3694,7 @@ enum EvidenceCommand {
         #[arg(long, help = "Allow replacing an existing destination file")]
         overwrite: bool,
 
-        #[arg(long, help = "Optional expected SHA-256 content digest")]
+        #[arg(long, help = "Optional expected BLAKE3-256 content digest")]
         expected_content_digest: Option<String>,
     },
     List {
@@ -31360,7 +31360,7 @@ mod tests {
             "--expected-schema-version",
             "1",
             "--expected-object-store-format-version",
-            "1",
+            "2",
             "--expected-id-scheme",
             "uuidv7-blob16",
             "--expected-digest-algorithm",
@@ -32763,7 +32763,7 @@ mod tests {
             "--expected-schema-version",
             "1",
             "--expected-object-store-format-version",
-            "1",
+            "2",
             "--expected-id-scheme",
             "uuidv7-blob16",
             "--expected-digest-algorithm",

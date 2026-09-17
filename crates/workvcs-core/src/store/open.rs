@@ -248,7 +248,7 @@ pub(crate) fn local_content_relative_path(
     let digest_text = content_digest.to_string();
     PathBuf::from(LOCAL_CONTENT_OBJECT_DIR)
         .join(store_id.to_string())
-        .join("sha256")
+        .join("blake3-256")
         .join(&digest_text[..2])
         .join(digest_text)
 }

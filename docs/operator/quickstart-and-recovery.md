@@ -233,7 +233,7 @@ verify` can independently recheck a Skill directory against a packaged
 For one-off local use without installing:
 
 ```bash
-cargo run -q -p workvcs-cli -- --help
+cargo run -q -p workvcs-cli --bin workvcs -- --help
 ```
 
 The smoke script uses the one-off form internally, so it can validate the

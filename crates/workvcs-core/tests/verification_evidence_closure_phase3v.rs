@@ -229,7 +229,12 @@ fn evidence_can_be_metadata_only_or_reference_raw_byte_content() {
     assert_eq!(snapshot.contents[0].storage_locations.len(), 1);
     assert_eq!(
         snapshot.contents[0].storage_locations[0].storage_backend,
-        "workvcs.local-object-v1"
+        "workvcs.local-object-v2"
+    );
+    assert!(
+        snapshot.contents[0].storage_locations[0]
+            .locator
+            .contains("/blake3-256/")
     );
     assert_eq!(
         engine

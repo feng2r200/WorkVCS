@@ -77,7 +77,7 @@ imported and existing Branch heads advance by compare-and-swap only after
 preflight reports `same_store_fast_forward_ready`.
 
 Portable Evidence bytes are written to the target Store's own sibling
-`.workvcs-objects/<store-id>/sha256/...` directory. The target locator is
+`.workvcs-objects/<store-id>/blake3-256/...` directory. The target locator is
 derived locally; no source filesystem locator is transported. The
 `content_storage_location` row is inserted or validated in the same database
 transaction as the imported Evidence closure and Branch update.
@@ -93,4 +93,3 @@ Direct canonical DAG apply from a different Store identity remains
 unsupported. Packaged archives, compression, streaming, signatures,
 exchange/access APIs, missing Branch creation, checkpoint raw bytes, and raw
 content families other than Evidence remain open.
-

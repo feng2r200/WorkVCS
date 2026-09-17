@@ -96,7 +96,7 @@ impl EvidenceContentInput {
     }
 }
 
-pub(crate) const LOCAL_CONTENT_STORAGE_BACKEND: &str = "workvcs.local-object-v1";
+pub(crate) const LOCAL_CONTENT_STORAGE_BACKEND: &str = "workvcs.local-object-v2";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedContentStorageLocation {

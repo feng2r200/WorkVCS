@@ -145,12 +145,12 @@ VALUES (
     x'00000000000000000000000000000001',
     1,
     1,
-    1,
+    2,
     'uuidv7-blob16',
     'blake3-256',
     'workvcs-jcs-v1',
     1001,
-    '{"canonical_json_profile":"workvcs-jcs-v1","digest_algorithm":"blake3-256","id_scheme":"uuidv7-blob16","object_store_format_version":1,"schema_version":1,"store_format_version":1}'
+    '{"canonical_json_profile":"workvcs-jcs-v1","digest_algorithm":"blake3-256","id_scheme":"uuidv7-blob16","object_store_format_version":2,"schema_version":1,"store_format_version":1}'
 );
 
 INSERT INTO workspace(workspace_id, store_id, display_name, genesis_commit_id, created_at_us)

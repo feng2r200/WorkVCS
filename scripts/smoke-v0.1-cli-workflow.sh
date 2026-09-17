@@ -28,7 +28,7 @@ step() {
 }
 
 run_workvcs() {
-    (cd "$repo_root" && cargo run -q -p workvcs-cli -- "$@")
+    (cd "$repo_root" && cargo run -q -p workvcs-cli --bin workvcs -- "$@")
 }
 
 value() {
@@ -101,7 +101,7 @@ init_output="$(run_workvcs \
     --expected-display-name "smoke-store" \
     --expected-store-format-version 1 \
     --expected-schema-version 1 \
-    --expected-object-store-format-version 1 \
+    --expected-object-store-format-version 2 \
     --expected-id-scheme uuidv7-blob16 \
     --expected-digest-algorithm blake3-256 \
     --expected-canonical-json-profile workvcs-jcs-v1)"
@@ -120,7 +120,7 @@ store_output="$(run_workvcs \
     --expected-display-name "smoke-store" \
     --expected-store-format-version 1 \
     --expected-schema-version 1 \
-    --expected-object-store-format-version 1 \
+    --expected-object-store-format-version 2 \
     --expected-id-scheme uuidv7-blob16 \
     --expected-digest-algorithm blake3-256 \
     --expected-canonical-json-profile workvcs-jcs-v1)"

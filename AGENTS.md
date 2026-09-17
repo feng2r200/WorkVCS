@@ -2,15 +2,27 @@
 
 ## Current Stage
 
-WorkVCS has moved from design-only specification into an in-progress local
-Rust V0.1 implementation. Do not implement new runtime behavior, command
-behavior, schema behavior, release behavior, or V2 scope unless the current
-user request and active governed Plan explicitly open that scope.
+WorkVCS is a locally release-ready V1 implementation with post-V1 local
+improvements. New runtime, command, schema, release, or V2 behavior requires a
+current user request that authorizes the scope and must remain consistent with
+current project truth. A WorkVCS Plan is not required merely because a change
+is large, complex, high-impact, architectural, schema-related, or a migration.
+Use a Plan when durable coordination or recovery adds value, such as dependent
+stages or owners, cross-turn continuation, a confirmation contract that must
+survive handoff, or long-running work whose state is costly to reconstruct.
+
+Plan admission is independent from authority and assurance. High-impact work
+still requires exact user authority, the relevant accepted ADR or domain
+contract, confirmation gates, and proportional evidence whether or not it uses
+a Plan. A Plan does not authorize Push, merge, release, deployment, cleanup,
+or any other action outside the user's stated boundary.
 
 Use `docs/provenance/v1-readiness-ledger.md` for current implementation
-readiness and dogfood gaps. Product, architecture, schema, and accepted ADRs
-remain the authority for confirmed WorkVCS semantics. Smoke coverage does not
-by itself imply release readiness or dogfood completion.
+readiness and dogfood gaps, and use newer focused provenance for completed
+post-V1 changes. Product, architecture, schema, and accepted ADRs remain the
+authority for confirmed WorkVCS semantics. Local release readiness does not
+authorize an external release, and focused smoke coverage does not establish
+broader maturity than it tests.
 
 ## Source of Truth
 

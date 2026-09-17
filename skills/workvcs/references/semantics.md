@@ -5,7 +5,7 @@ Choose the smallest truthful object:
 | Meaning | WorkVCS object |
 | --- | --- |
 | desired outcome | Goal |
-| selected multi-step route | Plan |
+| durable route whose coordination or recovery value justifies persistence | Plan |
 | executable unit | Task |
 | provisional belief | Assumption Record |
 | observed fact or analysis result | Finding Record |

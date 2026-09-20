@@ -2,16 +2,12 @@
 
 Thank you for taking an interest in WorkVCS.
 
-## Current contribution boundary
+## Contribution license
 
-WorkVCS has not selected an open-source license. Until that decision is made,
-the maintainers welcome issue reports, design feedback, and documentation
-suggestions, but are not accepting unsolicited code contributions. Opening a
-pull request does not grant reuse rights in the repository or automatically
-transfer rights in the submitted code.
-
-This boundary will be updated together with the repository license and a
-contributor policy before public code contributions are accepted.
+WorkVCS is licensed under Apache-2.0. Unless you explicitly state otherwise,
+any contribution intentionally submitted for inclusion in WorkVCS is provided
+under the same license, as described by section 5 of [LICENSE](LICENSE). Only
+submit work that you have the right to contribute.
 
 ## Good issue reports
 

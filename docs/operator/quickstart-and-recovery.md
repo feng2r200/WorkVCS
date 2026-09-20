@@ -6,7 +6,7 @@ Last updated: 2026-09-20
 This guide is for a local operator or Agent using the current WorkVCS CLI from
 this repository. It describes the locally release-ready V1 boundary, runnable
 local commands, and the package/install helper. It is not evidence that a
-public release, license, tag, or remote distribution has occurred.
+public release, tag, or remote distribution has occurred.
 
 ## P0 Cutover Entry
 

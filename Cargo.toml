@@ -10,7 +10,7 @@ edition = "2024"
 authors = ["feng2r200"]
 description = "Local-first version control for Agent work and knowledge state"
 homepage = "https://github.com/feng2r200/WorkVCS"
-license = "UNLICENSED"
+license = "Apache-2.0"
 repository = "https://github.com/feng2r200/WorkVCS"
 rust-version = "1.100"
 

@@ -17,8 +17,9 @@ review, and restore work.
 
 > **Project status:** the repository contains a locally release-ready bounded
 > V1 implementation. The Rust packages remain at `0.1.0`, and no public
-> release has been made. The source is currently `UNLICENSED` while the public
-> license is being selected; viewing the source does not grant reuse rights.
+> release has been made. The source is licensed under Apache-2.0; selecting a
+> release version, publishing artifacts, and making release commitments remain
+> separate decisions.
 
 ## What makes it different
 
@@ -146,9 +147,6 @@ reports follow [SECURITY.md](SECURITY.md); general help belongs in
 
 ## License
 
-No open-source license has been selected yet. Until a `LICENSE` file replaces
-the current `UNLICENSED` package metadata, this repository is source-visible
-but is **not** an open-source distribution and grants no permission to use,
-copy, modify, or redistribute the code.
+WorkVCS is licensed under the [Apache License 2.0](LICENSE).
 
 Copyright © 2026 feng2r200.

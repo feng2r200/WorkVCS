@@ -11,6 +11,7 @@ and released versions will follow [Semantic Versioning](https://semver.org/).
 
 - Public project overview, architecture map, contributor guidance, security
   policy, support policy, community health files, and continuous integration.
+- Apache-2.0 licensing for the repository and Rust packages.
 - Standard `--version` / `-V` CLI output.
 
 ### Changed
@@ -18,8 +19,7 @@ and released versions will follow [Semantic Versioning](https://semver.org/).
 - Public-facing maturity language now distinguishes the bounded locally
   release-ready V1 implementation from the unreleased `0.1.0` package version.
 
-### Known release gates
+### Remaining release gates
 
-- Select and adopt an open-source license.
 - Complete the separately authorized Git history and public release review.
 - Select, tag, and publish the first public version.

@@ -16,9 +16,9 @@ behavior for the next stage. Decisions 514-566 close that stage without
 introducing new architecture capability, new table families, or performance
 indexes.
 
-The implemented artifact is [schema-v0.1.sql](../../schema/schema-v0.1.sql).
+The implemented artifact is [schema-v0.1.sql](../../../schema/schema-v0.1.sql).
 The minimal executable harness is
-[validate-schema-v0.1.sh](../../scripts/validate-schema-v0.1.sh).
+[validate-schema-v0.1.sh](../../../scripts/validate-schema-v0.1.sh).
 
 ## Decision
 

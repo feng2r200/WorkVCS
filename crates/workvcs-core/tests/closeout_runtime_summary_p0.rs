@@ -129,6 +129,8 @@ struct ReceiptTarget<'a> {
     state_digest: Digest,
 }
 
+// Keep every receipt field explicit so closeout fixtures can vary invariants independently.
+#[allow(clippy::too_many_arguments)]
 fn issue_manifest_json(
     target: ReceiptTarget<'_>,
     key: &str,

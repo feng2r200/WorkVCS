@@ -121,18 +121,19 @@ records from a transcript.
 
 ## Current product stage
 
-This repository contains the confirmed WorkVCS design baseline and an
-in-progress local Rust V0.1 implementation. Accepted ADRs have since closed the
-initial Rust workspace, canonical encoding, executable SQLite schema,
-Store/bootstrap, Work-State history, Runtime Coordination, Verification,
-Merge, Checkpoint, Bundle, and CLI smoke slices.
+This repository contains the confirmed WorkVCS design baseline and a locally
+release-ready V1 implementation in Rust, followed by focused post-V1 local
+improvements. The crate and CLI package version remains `0.1.0` until an
+external release version is selected; that package number must not be confused
+with the bounded V1 product-maturity judgment.
 
 Implementation readiness is tracked in
 [V1 Readiness Ledger](../provenance/v1-readiness-ledger.md). That ledger
 distinguishes implemented behavior, smoke proof, dogfood proof, and remaining
-V1 Open work. The current implementation is not release-ready, the final Agent
-protocol and full CLI spelling remain subject to accepted decisions, and smoke
-coverage does not by itself prove dogfood readiness.
+V1 exclusions. The [V1 Release Gate Matrix](../provenance/v1-release-gate-matrix.md)
+records the exact locally validated candidate boundary. No public release, tag,
+push, deployment, or production activation follows from that local judgment;
+those remain separate decisions and operations.
 
 The confirmed logical persistence architecture defines canonical
 Commit/ChangeSet history, immutable Entity/Relation versions, rebuildable

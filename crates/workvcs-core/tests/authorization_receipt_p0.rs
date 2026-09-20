@@ -93,6 +93,8 @@ fn digest(label: &str) -> String {
     Digest::domain_separated("workvcs.test.authorization-receipt", label.as_bytes()).to_string()
 }
 
+// Keep every receipt field explicit so tests can vary authorization invariants independently.
+#[allow(clippy::too_many_arguments)]
 fn receipt_manifest_json(
     goal: &GoalCreateCommit,
     key: &str,

@@ -136,7 +136,7 @@ use workvcs_core::{
 };
 
 const TOP_LEVEL_HELP: &str = "\
-WorkVCS v0.1 thin command shell
+WorkVCS — version control for Agent work and knowledge state
 
 Usage: workvcs [OPTIONS] <COMMAND>
 
@@ -192,6 +192,7 @@ Commands:
 Options:
       --error-format <ERROR_FORMAT>  [default: key-value] [possible values: key-value, json]
   -h, --help                         Print help
+  -V, --version                      Print version
 ";
 
 const RESUME_DEFAULT_BUDGET_ITEMS: usize = 12;
@@ -229,7 +230,8 @@ const RESUME_CATEGORY_ORDER: [ContextItemCategory; 19] = [
 
 #[derive(Debug, Parser)]
 #[command(name = "workvcs")]
-#[command(about = "WorkVCS v0.1 thin command shell")]
+#[command(about = "Version control for Agent work and knowledge state")]
+#[command(version)]
 #[command(override_help = TOP_LEVEL_HELP)]
 struct Cli {
     #[arg(long, value_enum, default_value_t = ErrorOutputFormat::KeyValue, global = true)]
@@ -16800,6 +16802,8 @@ fn closeout_verification_target_kind(kind: CloseoutInspectVerificationTargetKind
     }
 }
 
+// CLI entrypoints intentionally preserve a one-to-one mapping to public flags.
+#[allow(clippy::too_many_arguments)]
 fn run_resume(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
@@ -17976,6 +17980,8 @@ fn run_receipt_show(
     Ok(output)
 }
 
+// CLI entrypoints intentionally preserve a one-to-one mapping to public flags.
+#[allow(clippy::too_many_arguments)]
 fn run_receipt_list(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
@@ -18122,6 +18128,8 @@ fn resolve_receipt_query_commit(
     }
 }
 
+// CLI entrypoints intentionally preserve a one-to-one mapping to public flags.
+#[allow(clippy::too_many_arguments)]
 fn run_closeout_inspect(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
@@ -22782,6 +22790,8 @@ struct VerifyPreflightExpectationArgs {
     expected_resource_basis: Option<usize>,
 }
 
+// Actual values remain explicit while optional expectations travel as one value object.
+#[allow(clippy::too_many_arguments)]
 fn append_verify_preflight_expectations(
     output: &mut String,
     branch_id: BranchId,
@@ -30359,6 +30369,17 @@ mod tests {
                 .contains("Usage: workvcs [OPTIONS] <COMMAND>")
         );
         assert!(help.to_string().contains("--error-format <ERROR_FORMAT>"));
+
+        let version = Cli::try_parse_from(["workvcs", "--version"])
+            .expect_err("version should be represented as a clap display error");
+
+        assert_eq!(version.kind(), ErrorKind::DisplayVersion);
+        assert_eq!(version.exit_code(), 0);
+        assert!(!version.use_stderr());
+        assert_eq!(
+            version.to_string(),
+            concat!("workvcs ", env!("CARGO_PKG_VERSION"), "\n")
+        );
     }
 
     #[test]

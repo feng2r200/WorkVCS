@@ -1546,6 +1546,8 @@ fn insert_entity_mapping(
     Ok(())
 }
 
+// The arguments mirror the immutable changeset envelope at this transaction boundary.
+#[allow(clippy::too_many_arguments)]
 fn write_admission(
     transaction: &Transaction<'_>,
     workspace_id: WorkspaceId,
@@ -1717,6 +1719,8 @@ fn write_admission(
     Ok(())
 }
 
+// The arguments mirror the immutable changeset envelope at this transaction boundary.
+#[allow(clippy::too_many_arguments)]
 fn write_evolution(
     transaction: &Transaction<'_>,
     workspace_id: WorkspaceId,
@@ -3003,6 +3007,8 @@ fn apply_plan_update(
     Ok(state)
 }
 
+// Canonical payload fields stay explicit so their ordering and provenance are reviewable.
+#[allow(clippy::too_many_arguments)]
 fn admission_payload_value(
     workspace_id: WorkspaceId,
     branch_id: BranchId,
@@ -3246,6 +3252,8 @@ fn evidence_payload_values(evidence: &[PreparedEvidence]) -> Result<CanonicalVal
         .map(CanonicalValue::Array)
 }
 
+// Canonical payload fields stay explicit so their ordering and provenance are reviewable.
+#[allow(clippy::too_many_arguments)]
 fn evolution_payload_value(
     workspace_id: WorkspaceId,
     branch_id: BranchId,

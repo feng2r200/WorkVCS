@@ -789,6 +789,8 @@ fn prepare_issue(options: &AuthorizationReceiptIssueOptions) -> Result<PreparedI
     })
 }
 
+// Keep each branch-head invariant explicit at the authorization boundary.
+#[allow(clippy::too_many_arguments)]
 fn validate_branch_and_head(
     transaction: &Transaction<'_>,
     branch: &BranchRow,
@@ -916,6 +918,8 @@ fn issue_work_state(parent_state: &WorkState, prepared: &PreparedIssue) -> Resul
     WorkState::new(entities, relations)
 }
 
+// The arguments mirror the immutable changeset envelope at this transaction boundary.
+#[allow(clippy::too_many_arguments)]
 fn write_issue(
     transaction: &Transaction<'_>,
     workspace_id: WorkspaceId,
@@ -954,6 +958,8 @@ fn write_issue(
     )
 }
 
+// Changeset provenance fields remain explicit at the persistence boundary.
+#[allow(clippy::too_many_arguments)]
 fn write_changeset(
     transaction: &Transaction<'_>,
     workspace_id: WorkspaceId,
@@ -991,6 +997,8 @@ fn write_changeset(
     Ok(())
 }
 
+// Commit and event provenance fields remain explicit at the persistence boundary.
+#[allow(clippy::too_many_arguments)]
 fn write_commit_and_event(
     transaction: &Transaction<'_>,
     workspace_id: WorkspaceId,
@@ -1665,6 +1673,8 @@ fn load_entity_version_readonly(
     )
 }
 
+// Validate every persisted identity and payload field before constructing the value.
+#[allow(clippy::too_many_arguments)]
 fn validate_loaded_entity_version(
     workspace_id: WorkspaceId,
     entity_id: EntityId,

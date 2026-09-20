@@ -704,6 +704,8 @@ fn capture_payload_value(
     ])
 }
 
+// The arguments mirror the immutable changeset envelope at this transaction boundary.
+#[allow(clippy::too_many_arguments)]
 fn write_capture(
     transaction: &Transaction<'_>,
     workspace_id: WorkspaceId,

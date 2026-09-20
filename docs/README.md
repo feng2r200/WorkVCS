@@ -297,13 +297,14 @@ Recent repository-level CLI smoke gates:
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is
-tracked in the V1 release gate matrix. The local Rust V0.1 implementation
-remains local and in progress, while current evidence records bounded V1 local
-release maturity as ready and dogfood-complete. Release, tag, push, deploy,
-remote, production, credential, and global installation actions remain separate
-authority decisions. `scripts/package-workvcs.sh` provides local binary
-packaging and an explicit install/overwrite path for `workvcs`, but running a
-real system install remains a separate authority decision.
+tracked in the V1 release gate matrix. The current Rust implementation is
+locally release-ready and dogfood-complete for the bounded V1 scope; its crate
+and CLI package version remains `0.1.0` until an external release version is
+selected. Release, tag, push, deploy, remote, production, credential, and
+global installation actions remain separate authority decisions.
+`scripts/package-workvcs.sh` provides local binary packaging and an explicit
+install/overwrite path for `workvcs`, but running a real system install remains
+a separate authority decision.
 
 Detailed promotion evidence and the confirmation ledger are retained in
 [Confirmed State v0.1 Provenance](provenance/confirmed-state-v0.1.md) and

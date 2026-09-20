@@ -1,11 +1,12 @@
 # Local Operator Quickstart and Recovery
 
-Status: Phase 4LC local V0.1 operator guide
-Last updated: 2026-09-12
+Status: Local V1 operator guide for CLI package `0.1.0`
+Last updated: 2026-09-20
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
-this repository. It describes runnable local commands and the local
-package/install helper, not a public release.
+this repository. It describes the locally release-ready V1 boundary, runnable
+local commands, and the package/install helper. It is not evidence that a
+public release, license, tag, or remote distribution has occurred.
 
 ## P0 Cutover Entry
 

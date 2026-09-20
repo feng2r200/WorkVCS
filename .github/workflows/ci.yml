@@ -22,10 +22,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install Rust 1.100
+      - name: Install Rust 1.98.1
         run: |
-          rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.100.0
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.1
 
       - name: Check formatting
         run: cargo fmt --all -- --check

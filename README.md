@@ -55,7 +55,7 @@ coordination as project truth, and treating a transcript as a database.
 
 ## Quick start
 
-Prerequisites: Git and Rust `1.100` or newer.
+Prerequisites: Git and Rust `1.98.1` or newer.
 
 ```bash
 git clone https://github.com/feng2r200/WorkVCS.git

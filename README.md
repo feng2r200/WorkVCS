@@ -1,5 +1,7 @@
 # WorkVCS
 
+**English** | [简体中文](README.zh-CN.md)
+
 **Version control for Agent work and knowledge state.**
 
 [![CI](https://github.com/feng2r200/WorkVCS/actions/workflows/ci.yml/badge.svg)](https://github.com/feng2r200/WorkVCS/actions/workflows/ci.yml)

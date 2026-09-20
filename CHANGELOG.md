@@ -9,6 +9,7 @@ and released versions will follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- A complete Simplified Chinese README with bidirectional language navigation.
 - Public project overview, architecture map, contributor guidance, security
   policy, support policy, community health files, and continuous integration.
 - Apache-2.0 licensing for the repository and Rust packages.

@@ -3196,6 +3196,9 @@ enum TaskCommand {
         outcome: Option<String>,
 
         #[arg(long)]
+        rationale_json: Option<String>,
+
+        #[arg(long)]
         session: Option<String>,
     },
     DependsOn {
@@ -9943,6 +9946,7 @@ fn run(cli: Cli) -> Result<String> {
                     task_version,
                     status,
                     outcome,
+                    rationale_json,
                     session,
                 },
         } => {
@@ -9956,6 +9960,12 @@ fn run(cli: Cli) -> Result<String> {
             )?;
             if let Some(outcome) = outcome {
                 options = options.with_outcome(outcome)?;
+            }
+            if let Some(rationale_json) = rationale_json {
+                options = options.with_rationale(parse_cli_object(
+                    "task transition rationale",
+                    &rationale_json,
+                )?);
             }
             if let Some(session) = session {
                 options = options.with_actor_session(SessionId::parse_canonical(&session)?);
@@ -49027,6 +49037,41 @@ mod tests {
         .expect("parse superseded task list at branch"))
         .expect("list superseded tasks at branch");
         assert_eq!(value(&superseded_tasks_at_branch, "tasks"), "0");
+
+        let cancelled_task = run(Cli::try_parse_from([
+            "workvcs",
+            "task",
+            "transition",
+            store,
+            "--branch",
+            &branch,
+            "--head",
+            &value(&blocked_task, "commit_id"),
+            "--task",
+            &task_id,
+            "--task-version",
+            &value(&blocked_task, "task_entity_version_id"),
+            "--status",
+            "cancelled",
+            "--outcome",
+            "replaced by a bounded successor task",
+            "--rationale-json",
+            r#"{"reason":"superseded operational path"}"#,
+        ])
+        .expect("parse task cancellation with rationale"))
+        .expect("cancel task with rationale");
+        assert_eq!(value(&cancelled_task, "status"), "cancelled");
+
+        let cancelled_task_at_branch = run(Cli::try_parse_from([
+            "workvcs", "task", "show", store, "--branch", &branch, "--task", &task_id,
+        ])
+        .expect("parse cancelled task show"))
+        .expect("show cancelled task");
+        assert_eq!(value(&cancelled_task_at_branch, "status"), "cancelled");
+        assert_eq!(
+            value(&cancelled_task_at_branch, "outcome_json"),
+            r#""replaced by a bounded successor task""#
+        );
     }
 
     #[test]

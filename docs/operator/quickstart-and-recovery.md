@@ -715,6 +715,11 @@ workvcs task transition "$STORE" \
   --session "$SESSION_ID"
 ```
 
+To cancel rather than complete a Task, use `--status cancelled` together with
+a non-empty canonical object in `--rationale-json`; cancellation without that
+structured provenance fails closed. `--outcome` remains an independent,
+human-readable result and does not replace the rationale object.
+
 End a Session with a summary and create a focused handoff:
 
 ```bash

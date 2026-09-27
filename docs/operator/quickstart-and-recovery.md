@@ -13,9 +13,9 @@ public release, tag, or remote distribution has occurred.
 ADR-0513 accepts stable ProjectRef ownership, semantic-Project-before-Git/CWD
 resolution, an external write-ahead capture journal, CaptureGroup association,
 and preview-gated registry v2 migration. The core model/resolver/intent and
-generic adapter-input foundations exist. The source tree exposes read-only
-preview plus migration apply and rollback candidates, a rollback state probe, versioned
-ordinary reads, and a separately guarded read-routing activation candidate:
+generic adapter-input foundations exist. The CLI exposes read-only preview,
+migration apply and rollback, a rollback state probe, versioned ordinary
+reads, and a separately guarded read-routing activation path:
 
 ```sh
 workvcs project registry-migrate --preview [--registry "$REGISTRY"] [--repair-manifest PATH] [--format text|json]
@@ -50,13 +50,13 @@ one of those paths. `rollback_apply_safe=true` means a v2 restore is ready for
 separate authorization; `rollback_reentry_safe=true` means an exact v1 restore
 has already been verified and a repeat would be a no-write result. Apply and
 rollback currently fail closed on non-Unix platforms. The empty-journal check
-is now protected in the source candidate by
+is protected by
 `<canonical-registry-path>.journal-quiescence.lock`; `--rollback-check`
 reports the lock path and state. Both race orders are fixture-tested. Determine
 v2 journal-admission state from its exact read-only status, never from source
 availability or an earlier observation.
 
-The source tree can inspect and prepare the exact v2 read-routing gate:
+The CLI can inspect and prepare the exact v2 read-routing gate:
 
 ```sh
 workvcs project routing-activation --status [--registry "$REGISTRY"]
@@ -66,9 +66,10 @@ workvcs project routing-activation --apply --expected-registry-digest DIGEST --e
 
 Absence of `<control-plane-root>/routing-activation-v1.json` means off. The
 marker is bound to one registry ID, revision, and digest; a stale, malformed,
-or mismatched marker fails closed. Only the apply candidate writes, and it has
-been tested only on isolated fixtures. Do not apply it to the configured live
-control plane without separate authorization. Its scope enables ProjectRef-v2
+or mismatched marker fails closed. Only apply writes. Fault behavior has
+isolated-fixture validation, and the configured local marker also has bounded
+live evidence. Do not apply it to another live control plane without separate
+authorization. Its scope enables ProjectRef-v2
 reads only; journal delivery and Store writes remain inactive.
 If apply returns `routing_activation_install_indeterminate`, the marker may
 already be active. Do not delete it or replay apply blindly. Run
@@ -76,7 +77,7 @@ already be active. Do not delete it or replay apply blindly. Run
 only an exact active marker supports idempotent reuse, and every other state
 remains fail-closed.
 
-The source tree has a separate journal-admission gate:
+The CLI has a separate journal-admission gate:
 
 ```sh
 workvcs project journal-admission-activation --status [--registry "$REGISTRY"]
@@ -219,7 +220,7 @@ The same three options are available on `recall`, cwd-based `resume`, and
 cwd-based `record currentness-audit`; the journal-first `capture` form accepts
 them as well. `--locator-context` contains already-verified tool-neutral
 evidence. `--locator-adapter-context` dispatches bounded provider context; the
-current source candidate supports `codex-app-project-metadata/v1` with
+current implementation supports `codex-app-project-metadata/v1` with
 verified task-Project metadata and/or a canonical ChatGPT Project mirror. They
 are rejected against v1 reads rather than ignored. An unbound semantic owner
 blocks Git/CWD fallback.

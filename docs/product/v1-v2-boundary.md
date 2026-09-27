@@ -241,36 +241,35 @@ The accepted target includes:
   existing Store/Workspace/Branch target and never infers identity from a
   shared target.
 
-The target is accepted and its round-5 source candidate is implemented. The
-core remains tool-neutral; the CLI integration layer includes the first
-concrete adapter behind the generic input contract. The source-tree CLI can
-produce a deterministic, read-only v1-to-v2 migration preview and contains
-digest-locked apply and rollback candidates plus a read-only rollback state probe. It
-also contains versioned ordinary reads and a separate, default-off activation
-candidate bound to the exact registry v2 ID, revision, and digest. A second,
-separate exact marker now guards journal admission. On activated fixtures, the
-actual `capture` route follows explicit ProjectRef, semantic Project, Git
-common directory, and CWD order, persists one immutable intent, and performs
-no ProjectRef bootstrap or target Store write. A value-qualified v1 capture
-can also persist a target-neutral intent before migration. All mutation paths
-are fixture-only and uninstalled. Other binding and semantic mutation paths
-continue to use registry v1; no live migration or activation has occurred,
-and neither marker activates target delivery.
+The target is accepted and implemented. The core remains tool-neutral; the CLI
+integration layer includes the first concrete adapter behind the generic
+input contract. The installed CLI provides deterministic read-only migration
+preview, digest-locked apply and rollback, a read-only rollback probe,
+versioned ordinary reads, and separate exact markers for read routing and
+journal admission. Marker presence never activates target delivery.
 
-The fixture-only recovery candidate adds immutable post-intent events,
-rebuildable projections, read-only `project capture-recovery --status`, and an
-explicit digest-locked recovery apply. Apply can converge one unbound
-semantic/Git/CWD owner to one ProjectRef and pristine binding; conflict or
-unresolved ownership never falls back. Once binding is ready, the same explicit
-operator action persists exact delivery guards, calls the existing atomic
-cognition capture once, and records a complete receipt. Commit-before-receipt
-replay reuses that result; stale legacy guards preserve the intent and target
-unchanged. The candidate is not installed or authorized against the live
-control plane. The completed fixture-only CaptureGroup slice derives state from
-immutable authority, installs only missing secondary references pinned to the
-exact canonical Record version, records idempotent completion, and exposes
-read-only recall by secondary ProjectRef without opening its Store. None of
-these paths is installed or live-authorized.
+Public registry-v2 `capture` follows explicit ProjectRef, semantic Project,
+Git common directory, and CWD order. It admits target-neutral `cognition_v2`,
+rejects caller target guards, optionally accepts a strict CaptureGroup, and
+performs no ProjectRef bootstrap or target Store write. The complete
+CaptureGroup value is part of admission idempotency identity. A value-qualified
+registry-v1 capture retains `legacy_cognition_v1` for migration visibility.
+
+Separately explicit recovery uses immutable events, rebuildable projections,
+fresh status digests, and exact target guards. It can converge one unbound
+owner without fallback, deliver one canonical cognition result, recover a
+commit-before-receipt window by idempotency, install only missing immutable
+secondary references, and recall them without opening the secondary Store.
+Stale legacy guards preserve the original intent and target unchanged.
+
+The eleven-round initial delivery roadmap completed locally on 2026-09-27.
+The configured registry was migrated and both exact markers activated in
+separate authorized rounds. The final installed canary admitted a new
+`cognition_v2` CaptureGroup, committed its sole canonical Record to
+work-governance, exposed one immutable Hernes association with a byte-stable
+Hernes Store, and replayed with zero writes. The prior legacy intent remained
+byte-identical. See the
+[live canary evidence](../provenance/projectref-live-primary-and-capture-group-canary.md).
 
 Rollback checks every supported home/sidecar activation and journal alias for
 the same standard registry. The source candidate now derives one quiescence
@@ -278,9 +277,8 @@ lock from the canonical registry and passes both admission-first and
 rollback-first isolated race fixtures. The source route now uses the
 registry-derived alias API, supplies the observed revision/digest to the
 mandatory guarded post-lock identity check, and rechecks the separate
-journal-admission marker while holding the lock. Live admission remains off
-because no live marker was installed. Registry replacement candidates are
-currently Unix-only.
+journal-admission marker while holding the lock. Registry replacement remains
+Unix-only; live rollback was not performed after v2 use.
 
 ## Explicitly deferred beyond V1
 

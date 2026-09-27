@@ -5,38 +5,23 @@ confirmed product, domain, and architecture state.
 
 ## Accepted ProjectRef design and bounded implementation status
 
-The following material is confirmed project authority. Its core registry,
-resolver, intent-admission, and generic adapter-input foundations exist. The
-source-tree CLI also exposes a read-only v1-to-v2 migration preview with an
-optional evidence-bound historical ownership-repair manifest, a digest-locked
-apply candidate, a read-only rollback state probe, an explicit digest-locked
-rollback candidate, versioned ordinary read paths, and a separately
-digest-bound ProjectRef-v2 read-routing activation candidate. The source-tree
-`capture` caller also has actual target-neutral v1 and registry-coupled v2
-journal admission behind a second exact, default-off marker. Immutable capture
-events, authority-derived projections, read-only recovery status, and an
-explicit digest-locked `project capture-recovery --apply` candidate now
-converge an admitted unbound owner to one ProjectRef and pristine
-Store/Workspace/Branch binding, deliver one canonical primary result with an
-immutable receipt, and converge CaptureGroup secondary references without
-opening a secondary Store. Commit-before-receipt recovery reuses the target
-idempotency result, reference retry installs only missing associations, and
-read-only recall resolves them from a secondary ProjectRef. Stale legacy
-guards stop at an explicit upgrade state without changing the Store.
-Migration apply, rollback, both activation surfaces, admission,
-recovery/bootstrap, primary delivery, and secondary association have been
-validated only on isolated fixtures. The ordinary `capture` path remains
-admission-only. The first concrete CLI integration adapter now routes verified
-desktop Project metadata and canonical mirror evidence through the generic
-core interface; it is not installed or active in the current runtime. Live
-migration, live rollback, installation, either live activation, and live
-delivery remain separately authorized work:
+The following material is confirmed project authority. Core registry,
+resolver, intent admission, recovery, CaptureGroup, and generic adapter-input
+contracts are implemented. The CLI exposes read-only migration preview,
+digest-locked migration/rollback, versioned reads, separate exact read and
+journal activation markers, public target-neutral `cognition_v2` admission,
+explicit status-first recovery, canonical primary delivery, immutable
+secondary association, and Store-free secondary recall. The ordinary
+`capture` path remains admission-only; activation markers never imply target
+delivery authority.
 
-The authoritative delivery sequence is the eleven-round **Remaining delivery
-roadmap** in ADR-0513; rounds 1 through 5 are complete in the source tree. It
-deliberately separates five source-function rounds from six
-Git/install/migration/activation rounds so a source change never implies
-authority to mutate the live registry, journal, or Stores.
+The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
+on 2026-09-27. The final exact installed canary wrote one canonical
+work-governance Record, exposed one immutable Hernes association without
+opening or changing the Hernes Store, replayed with zero writes, and preserved
+the earlier legacy intent byte-for-byte. Fault injection remains isolated,
+and live rollback, global per-turn Hook activation, historical backfill, push,
+tag, public release, and remote deployment remain separate decisions.
 
 - [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
@@ -51,6 +36,7 @@ authority to mutate the live registry, journal, or Stores.
 - [ProjectRef CaptureGroup Secondary Reference Evidence](provenance/projectref-capture-group-secondary-reference-candidate.md)
 - [ProjectRef Journal Recovery and Bootstrap Candidate Evidence](provenance/projectref-journal-recovery-bootstrap-candidate.md)
 - [ProjectRef Concrete Adapter and Round-5 Acceptance Evidence](provenance/projectref-concrete-adapter-and-round5-acceptance.md)
+- [ProjectRef Live Primary Delivery and CaptureGroup Canary Evidence](provenance/projectref-live-primary-and-capture-group-canary.md)
 
 ## Implementation readiness
 

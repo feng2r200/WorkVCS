@@ -160,23 +160,18 @@ Resource/Federation infrastructure boundaries.
 
 ADR-0513 additionally confirms the ProjectRef control plane, journal-first
 capture routing, cross-project CaptureGroup, and registry v2 migration
-contracts. Those contracts are current product authority but are not yet the
-live write route. The core registry/resolver/intent and generic adapter-input
-foundations exist, and the CLI exposes a read-only migration preview plus an
-optional evidence-bound historical ownership-repair preview. The source tree
-also contains digest-locked migration apply and rollback candidates, a
-read-only rollback state probe, versioned ordinary reads, separate
-read-routing and journal-admission activation candidates, and an actual
-value-qualified `capture` route that journals without ProjectRef bootstrap or
-Store delivery. A following source candidate implements immutable recovery
-events, deterministic projections, read-only recovery status, and explicit
-digest-locked first-write ProjectRef/binding convergence with genesis-only
-Store bootstrap. The round-3 source slice adds one guarded primary cognition
-delivery, a complete immutable result receipt, commit-before-receipt replay,
-and fail-closed legacy-manifest staleness. Round 4 adds authority-derived
-CaptureGroup state, immutable secondary references pinned to the exact
-canonical Record version, missing-only retry, completion receipts, and
-read-only recall by secondary ProjectRef without opening a secondary Store.
-All mutation evidence is from isolated fixtures. Provider adapters, live
-migration or rollback, installation, and live activation or delivery remain
-separate future work.
+contracts. Those contracts are current product authority and the initial
+eleven-round local delivery roadmap is complete. The installed CLI exposes
+migration preview and evidence-bound repair, digest-locked migration/rollback,
+versioned reads, separate read and journal activation markers, target-neutral
+`cognition_v2` admission, immutable recovery events, deterministic
+projections, status-first binding convergence, guarded primary delivery,
+complete receipts, CaptureGroup secondary references, missing-only retry, and
+Store-free recall by secondary ProjectRef.
+
+Isolated fixtures remain the authority for injected faults and concurrency.
+The bounded configured-local canary proves one canonical work-governance
+Record, one immutable Hernes association with a byte-stable Hernes Store, and
+zero-write replay while the earlier legacy intent remains unchanged. Global
+Hook activation, historical backfill, live rollback after v2 use, push,
+release, and deployment remain separate future decisions.

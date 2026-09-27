@@ -1,6 +1,6 @@
 # ProjectRef Control Plane v2 Contract
 
-Status: Accepted design contract — releasable source candidate through roadmap round 5; all mutation and activation evidence remains fixture-only and live operations remain pending
+Status: Accepted implemented contract — roadmap rounds 1–11 complete with isolated fault evidence and bounded live local canary evidence
 Date: 2026-09-23
 Last updated: 2026-09-27
 Parent: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md)
@@ -13,8 +13,8 @@ does not change the current SQLite Store schema. ADR-0513 accepts this target
 design. The core now contains the strict registry v2 model, pure ranked
 resolver, CaptureIntent model, and atomic/idempotent intent admission
 foundation. The core also contains the generic `ContextLocatorProvider`
-invocation and deterministic unified locator-input assembly. The source-tree
-CLI contains digest-locked v1-to-v2 apply and v2-to-v1 rollback candidates plus
+invocation and deterministic unified locator-input assembly. The CLI contains
+digest-locked v1-to-v2 apply and v2-to-v1 rollback paths plus
 a read-only rollback state probe in addition to preview. Core and CLI now also
 contain the registry-derived journal-quiescence candidate: routed admission can
 revalidate eligibility while holding the same lock that rollback holds from
@@ -28,20 +28,22 @@ read-routing marker first. Its apply and disable operations share the registry
 then quiescence lock order with rollback. V2 list/status can inspect an
 inactive registry; normal reads and journal admission fail closed until their
 respective exact markers are present. All mutating migration, activation,
-rollback, admission, recovery/bootstrap, and concurrency verification has run
-only against isolated fixtures. The source tree now persists immutable event
+rollback, admission, recovery/bootstrap, and concurrency fault verification
+has run against isolated fixtures; separately authorized bounded live local
+migration, activation, admission, and delivery canaries are also complete. The
+implementation persists immutable event
 chains, rebuilds deterministic projections, reports recovery status without
 writing, and exposes a separately explicit registry/projection-digest-locked
-recovery apply candidate. That candidate can establish one pristine
+recovery apply. It can establish one pristine
 Store/Workspace/Branch binding and then, on the same explicit operator path,
 materialize one guarded primary manifest through the existing atomic capture
 engine. `delivery_started`, `delivery_applied`, and bounded
 `delivery_failed` events make the target commit and missing-receipt window
-recoverable without duplicate objects. The round-4 source candidate also
+recoverable without duplicate objects. The CaptureGroup implementation also
 derives CaptureGroup state, installs immutable secondary-project references,
 retries only missing references, records an idempotent group-completion
 receipt, and recalls associations by secondary ProjectRef without opening a
-semantic Store. The round-5 source candidate adds the first concrete adapter,
+semantic Store. The concrete adapter
 `codex-app-project-metadata/v1`, in the CLI integration layer behind the
 generic provider interface. It consumes only a bounded, command-local trusted
 handoff, keeps authoritative Project metadata distinct from mirror-derived
@@ -49,18 +51,25 @@ evidence, and leaves the core provider-neutral. It also closes the explicit
 stronger-locator attachment contract: an eligible unclaimed semantic or
 repository locator can promote one selected provisional ProjectRef without
 moving its target, while an already claimed key returns
-`locator_already_claimed` without reassignment. Live target delivery, live
-rollback, installation, and all live operations remain pending.
-The configured live registry, journal, markers, and target Stores have not
-been changed.
+`locator_already_claimed` without reassignment.
+
+On 2026-09-27 the configured local registry was already migrated and both
+exact activation markers were active. The installed public `capture` route
+admitted a resolved `cognition_v2` CaptureGroup, explicit recovery committed
+one canonical Record to work-governance, control-plane recall exposed one
+immutable association from Hernes without opening its Store, and fresh-digest
+replay wrote nothing. The prior legacy intent and Hernes Store remained
+byte-identical. See the
+[live primary and CaptureGroup canary evidence](../provenance/projectref-live-primary-and-capture-group-canary.md).
+Live rollback was neither required nor performed.
 
 For a standard registry filename, rollback treats the home-root and
 registry-sidecar activation/journal paths as aliases of the same control plane
 and checks both regardless of the caller's selection input. Apply and rollback
-are currently Unix-only candidates. The source candidate now derives one
+are currently Unix-only. The implementation derives one
 quiescence lock from the canonical registry path for every journal alias and
 passes both admission-first and rollback-first isolated concurrency fixtures.
-This closes the source-level race candidate; it does not activate admission or
+This closes the race contract; it does not by itself activate admission or
 authorize live rollback.
 
 The v2 control plane has three distinct authorities:
@@ -126,13 +135,13 @@ symlinked marker admits nothing. This marker authorizes intent persistence
 only; it does not authorize ProjectRef bootstrap, journal-event processing, or
 any target Store write.
 
-The source-tree `project capture-recovery` surface is separate from both
+The `project capture-recovery` surface is separate from both
 markers. `--status` reconstructs authority from one immutable intent and its
 events and performs no write. `--apply` requires the exact current registry
 digest and reconstructed projection digest, then acquires the registry lock,
 the registry-derived quiescence lock, and per-capture event locks in that
-order. It is an explicit operator candidate, not an automatically activated
-route and not authority to operate on the live control plane. A registry-only
+order. It is an explicit operator route, not an automatically activated route
+and not authority to operate on another live control plane. A registry-only
 configuration must also supply `--store-root` for unbound bootstrap.
 
 ## Common scalar types
@@ -668,7 +677,7 @@ intent and events. It contains:
 
 An `immutable_reference` is a control-plane index entry derived from the group
 events and keyed by the secondary ProjectRef. The explicit read-only
-`project capture-group-recall --project-ref-id ID` candidate scans immutable
+`project capture-group-recall --project-ref-id ID` scans immutable
 intent/event authority across the registry-derived journal aliases and exposes
 that association without opening or mutating any semantic Store. The entry is
 not a Store-local Record and is not a Work-State relation. If a secondary
@@ -695,7 +704,7 @@ Errors such as an unavailable Store, registry conflict, or failed reference
 attempt are diagnostics on one of these recoverable states. There is no
 generic state that means “silently skipped.”
 
-The source candidate materializes `resolution_recorded`,
+The implementation materializes `resolution_recorded`,
 `project_binding_ready`, `capture_group_resolved`, `delivery_started`,
 `delivery_applied`, secondary `reference_applied`, `capture_completed`, and
 the bounded legacy-staleness form of `delivery_failed`. It derives

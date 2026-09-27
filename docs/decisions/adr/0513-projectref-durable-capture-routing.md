@@ -1,6 +1,6 @@
 # ADR-0513: ProjectRef Ownership and Durable Capture Routing
 
-Status: Accepted — roadmap rounds 1–6 complete in the containing local commit; installation, migration, activation, and live operations pending
+Status: Accepted and delivered locally — roadmap rounds 1–11 complete with bounded live canary evidence; no push, release, deployment, or global Hook
 Date: 2026-09-23
 Last updated: 2026-09-27
 
@@ -10,34 +10,35 @@ This ADR records the exact design accepted after the ownership and durability
 direction was confirmed. The user accepted the schema, migration, failure, and
 acceptance contracts on 2026-09-23. It supersedes the project-identity and
 first-use routing semantics of ADR-0497 and ADR-0511, and extends ADR-0501's
-standalone-cognition entry boundary. The source-tree CLI now reads registry v1
-and v2 explicitly for discovery, list, recall, resume, closeout/receipt reads,
-and currentness audit. V2 read routing uses the unified explicit
-ProjectRef/semantic/Git/CWD resolver and is default-off unless an exact
-registry-ID/revision/digest activation marker is present. A generic strict
-`--locator-context` envelope supplies already-verified semantic evidence; it
-does not embed ChatGPT/Codex policy in core. The source tree also exposes the
-read-only migration preview, evidence-bound ownership-repair input,
-digest-locked migration apply and rollback candidates, rollback state probe,
-and a digest-locked read-routing activation candidate. The source-tree
-`capture` route now admits explicitly value-qualified registry-v1 content as a
-target-neutral intent and, under registry v2, consumes the same tool-neutral
-locator input and resolver behind a separate exact-snapshot journal-admission
-marker. The v2 journal gate requires read routing first and is absent by
-default. Every mutating migration, rollback, and activation test has run only
-on isolated fixtures. Legacy v1 capture without `--value-reason` retains its
-existing direct-Store compatibility behavior; registry-v2 capture never
-bypasses the journal.
-The source tree now also implements immutable ordered events, deterministic
-projection rebuild, read-only recovery status, and separately explicit,
-registry/projection-digest-locked recovery apply. Recovery can revalidate an
-existing binding or turn one eligible unbound semantic, repository, or CWD
-owner into exactly one ProjectRef plus pristine Store/Workspace/Branch
-binding. The ordinary `capture` path remains admission-only, the existing
-journal marker still authorizes intent persistence only, and recovery never
-delivers semantic payloads in this round. The binary is not installed, no live
-registry has been migrated or rolled back, no live activation marker exists,
-and all recovery/bootstrap mutation evidence is isolated-fixture evidence.
+standalone-cognition entry boundary.
+
+The implementation reads registry v1 and v2 explicitly for ordinary project
+operations. Registry-v2 routing uses the unified explicit
+ProjectRef/semantic/Git/CWD resolver and fails closed unless the exact
+registry-ID/revision/digest read marker is active. A strict tool-neutral
+locator envelope supplies verified semantic evidence; the concrete desktop
+Project adapter remains outside core. Migration, rollback, activation, and
+journal admission retain separate commands, locks, digests, and authority
+boundaries.
+
+Public registry-v2 `capture` now admits target-neutral `cognition_v2`, rejects
+caller target guards, and optionally accepts a strict CaptureGroup whose
+complete value is part of idempotency identity. Admission remains Store-free.
+Separately explicit recovery records fresh target guards, delivers exactly one
+canonical primary result, converges missing immutable secondary references,
+and exposes read-only recall from a secondary ProjectRef. Registry-v1
+value-qualified admission retains `legacy_cognition_v1`; legacy direct capture
+without `--value-reason` remains a bounded compatibility route.
+
+On 2026-09-27 the exact local package from commit
+`615f946c11ea21152616dfccffe13c612a8d8059` was installed, the previously
+migrated registry and both exact activation markers were revalidated, and one
+bounded live CaptureGroup completed. Work-governance received the sole
+canonical Record, Hernes received only a control-plane immutable association,
+replay wrote nothing, and the earlier terminal legacy intent stayed
+byte-identical. Exact IDs, digests, event sequence, Store proofs, and remaining
+boundaries are in the
+[live primary and CaptureGroup canary evidence](../../provenance/projectref-live-primary-and-capture-group-canary.md).
 
 The companion contracts are:
 
@@ -412,7 +413,8 @@ journal authority by secondary ProjectRef and returns references pinned to the
 exact canonical Record version/digest. A later canonical version does not
 silently retarget an existing reference. Once canonical delivery exists, a
 CaptureGroup target change fails closed and requires a new capture rather than
-creating a second mutable authority. All evidence remains fixture-only.
+creating a second mutable authority. At completion of that source slice, all
+evidence remained fixture-only.
 
 The twelfth bounded slice, roadmap round 5, adds the first concrete tool
 adapter behind the generic interface. The CLI integration layer turns a
@@ -424,21 +426,17 @@ fallback, and explicitly bad handoff data fails closed. The same slice closes
 the provisional-to-established stronger-locator attachment contract, aligns
 the WorkVCS Skill and operator material, accounts for every R/C/M/N acceptance
 row, obtains independent adversarial review, and refreshes the real-registry
-preview under a zero-write probe. Mutating behavior is still fixture-only.
+preview under a zero-write probe. At completion of that source slice,
+mutating behavior remained fixture-only.
 
-No live registry/journal/Store mutation, activation,
-installation, Git commit, push, release, deployment, or global Hook is part of
-this slice.
+No live registry/journal/Store mutation, activation, installation, Git commit,
+push, release, deployment, or global Hook was part of that source slice.
 
-## Remaining delivery roadmap
+## Delivery roadmap completion
 
-The authoritative delivery roadmap contains eleven confirmation-bounded
-rounds. Rounds 1 through 6 are complete in the local revision containing this
-ADR update; five rounds remain. The round-6 commit hash is intentionally
-reported by Git and the local WorkVCS closeout record rather than embedded
-self-referentially in its own tree. The count changes only through an explicit
-material revision of this ADR; ordinary implementation detail does not create
-a new round. Each round has one risk boundary and one completion purpose:
+The authoritative delivery roadmap contains eleven bounded rounds. All eleven
+are complete. The table preserves the boundary and purpose of each round;
+ordinary implementation detail does not create another hidden round.
 
 | Round | Boundary | Purpose |
 | --- | --- | --- |
@@ -447,20 +445,20 @@ a new round. Each round has one risk boundary and one completion purpose:
 | 3 | **Source candidate complete (2026-09-27).** Primary target Store delivery and delivery-receipt recovery, including commit-before-receipt faults and legacy-manifest staleness; fixture Stores only. | Establish one canonical primary result and idempotent recovery without duplicate Store objects. |
 | 4 | **Source candidate complete (2026-09-27).** CaptureGroup state and immutable secondary-project association, including pending-reference retry, completion receipt, and recall from a secondary ProjectRef; isolated fixtures only. | Preserve one mutable authority while making cross-project work explicitly discoverable from every intended project. |
 | 5 | **Source candidate complete (2026-09-27).** First concrete tool adapter behind the generic interface, WorkVCS Skill ordering, the full acceptance matrix, operator material, independent review, and a refreshed zero-write real-state preview. | Prove the motivating desktop-Project omission is closed end to end and freeze a releasable source candidate. |
-| 6 | **Complete in the local commit containing this update (2026-09-27).** Exact staged review and one local Git commit; no push or tag. | Give the reviewed source an immutable local revision for reproducible installation and recovery. |
-| 7 | Install that exact revision with every ProjectRef-v2 write/read activation still off, then verify installed/source parity. | Put verified code in the runtime without changing registry format or routing behavior. |
-| 8 | Separately confirmed live registry v1-to-v2 migration using a refreshed digest-locked preview and ownership-repair manifest; activation remains off. | Establish the ProjectRef control plane while preserving targets, backup proof, and rollback readiness. |
-| 9 | Separately confirmed digest-bound live read-routing activation and read-only canaries. | Validate real ProjectRef ownership resolution before any journal or Store mutation is permitted. |
-| 10 | Separately confirmed live journal-admission activation with target delivery still off and one bounded canary intent. | Establish the live no-silent-loss-after-admission boundary before accepting Store-delivery risk. |
-| 11 | Separately confirmed live primary/recovery delivery, followed by the cross-project reference path and bounded canaries. | Complete the accepted initial feature in live operation and prove receipts, idempotency, and operator recovery. |
+| 6 | **Complete (2026-09-27).** Exact staged review and the first local delivery commit; no push or tag. | Give the reviewed source an immutable local revision for reproducible installation and recovery. |
+| 7 | **Complete (2026-09-27).** The reviewed local revision was packaged and installed with source/package/runtime parity while routing remained unchanged. | Put verified code in the runtime without changing registry format or routing behavior. |
+| 8 | **Complete (2026-09-27).** Digest-locked live registry v1-to-v2 migration used the accepted ownership repair and preserved exact targets, backup, and rollback evidence. | Establish the ProjectRef control plane while preserving targets, backup proof, and rollback readiness. |
+| 9 | **Complete (2026-09-27).** Exact live read-routing activation and read-only ownership canaries passed. | Validate real ProjectRef ownership resolution before any journal or Store mutation is permitted. |
+| 10 | **Complete (2026-09-27).** Exact live journal-admission activation and bounded Store-free intent admission passed. | Establish the live no-silent-loss-after-admission boundary before accepting Store-delivery risk. |
+| 11 | **Complete (2026-09-27).** Installed public `cognition_v2` and CaptureGroup input produced Capture `01a0e33e-31e1-7b91-a698-4e06525377fd`; primary delivery, Hernes immutable-reference recall, status-first replay, and old-intent preservation all passed. | Complete the accepted initial feature in live operation and prove receipts, idempotency, and operator recovery. |
 
-Rounds 1 through 5 are source-function rounds. Round 6 is the completed local
-Git delivery boundary. Rounds 7 through 11 remain installation and live-state
-rounds, each with its own confirmation gate. Global per-turn Hook activation,
-non-Unix atomic replacement support, journal retention/compaction, historical
-CaptureGroup backfill, push, tag, public release, and remote deployment are not
-hidden rounds in this roadmap; each is optional or separately scoped work
-requiring its own decision and authority.
+Rounds 1 through 5 were source-function rounds, round 6 established the first
+local Git delivery boundary, and rounds 7 through 11 installed and canaried
+the live local control plane. Global per-turn Hook activation, non-Unix atomic
+replacement support, journal retention/compaction, historical CaptureGroup
+backfill, push, tag, public release, and remote deployment are not hidden
+follow-on rounds; each is optional or separately scoped work requiring its own
+decision and authority.
 
 ## Consequences
 

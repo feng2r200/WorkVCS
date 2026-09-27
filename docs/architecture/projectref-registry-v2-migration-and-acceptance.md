@@ -1,6 +1,6 @@
 # ProjectRef Registry v2 Migration and Acceptance Contract
 
-Status: Accepted design contract — roadmap round-5 source candidate and complete 93-row acceptance ledger present; live operations remain pending
+Status: Accepted implemented contract — complete 93-row acceptance ledger plus bounded live migration, activation, admission, delivery, and replay evidence
 Date: 2026-09-23
 Last updated: 2026-09-27
 Parent: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md)
@@ -10,7 +10,7 @@ Schema: [ProjectRef Control Plane v2 Contract](projectref-control-plane-v2.md)
 
 This contract defines the only accepted v1-to-v2 registry migration and the
 evidence required before the accepted ownership and capture-routing design can
-be called implemented. It deliberately separates four future authority gates:
+be called implemented. It deliberately separates four authority gates:
 
 1. accept the semantic contract;
 2. authorize implementation;
@@ -33,19 +33,19 @@ projection, immutable secondary-project reference delivery, missing-only
 reference retry, completion receipts, and read-only recall by secondary
 ProjectRef, followed by the first concrete CLI integration adapter, explicit
 stronger-locator attachment, the full acceptance ledger, operator material,
-and independent adversarial review. Mutating paths have been exercised only
-on isolated fixtures.
-Gate 3 was exercised
-against the real configured registry on 2026-09-24 and remained zero-write.
-The apply candidate, rollback state probe, actual rollback candidate, both
-quiescence race orders, and orphan-lock recovery were then exercised only on
-isolated fixtures. Read-routing activation apply was likewise exercised only
-inside temporary fixtures. Gate 4 has not been exercised: the live registry
-has not been replaced. Live read-routing activation, live journal admission,
-live rollback, live semantic Store delivery,
-live secondary-reference delivery, installation, commit, push, release, and a
-global Hook remain outside the authorization. The complete feature and every
-remaining migration gate remain subject to the acceptance evidence below.
+and independent adversarial review. Fault injection and destructive rollback
+proof remain isolated-fixture work.
+
+Gate 3 was exercised against the real configured registry first as zero-write
+preview. Gate 4 was later separately authorized and completed with exact
+digest locks, target preservation, backup proof, and activation still off.
+Subsequent separately authorized rounds installed the reviewed binary,
+activated exact read routing, activated journal admission, and canaried public
+`cognition_v2` primary delivery plus a secondary immutable association. Live
+rollback was neither authorized nor needed. Push, release, deployment,
+historical backfill, and a global Hook remain outside the completed roadmap.
+The exact final live proof is the
+[primary and CaptureGroup canary evidence](../provenance/projectref-live-primary-and-capture-group-canary.md).
 
 ## Migration invariants
 
@@ -84,14 +84,14 @@ The migration MUST satisfy all of the following:
     and integrity checks. Apply fails closed unless every selected binding
     passes its applicable complete checks.
 
-## Current source-tree migration command contracts
+## Current migration command contracts
 
 The accepted command surface is shown here to make migration behavior
 testable. Preview, digest-locked apply, read-only rollback state inspection,
-and explicit digest-locked rollback exist in the current source tree. Both
-mutation paths are candidates validated only on isolated fixtures; they are
-not installed and have not been run against the live registry. A successful
-preview or probe never authorizes mutation.
+and explicit digest-locked rollback exist in the installed implementation.
+Fault paths are validated on isolated fixtures; the live migration apply was
+completed under separate exact authority, while live rollback was not run. A
+successful preview or probe never authorizes mutation.
 
 ### Read-only preview
 
@@ -214,7 +214,7 @@ and fails closed.
 
 Apply MUST NOT accept a flag that skips preview-digest validation.
 
-The current candidate implements this contract. It supports text output only,
+The current implementation satisfies this contract. It supports text output only,
 re-reads the source, repair manifest, preview facts, and every Store under the
 registry lock, and rechecks the exact v1 bytes immediately before rename. It
 does not activate routing or mutate a Store.
@@ -251,7 +251,7 @@ registry-sidecar activation markers and both corresponding capture-journal
 roots. Any present activation alias or unreadable/non-empty journal alias
 blocks readiness. Canonically equivalent home paths are deduplicated.
 
-The source candidate now closes the scan race with
+The implementation closes the scan race with
 `<canonical-registry-path>.journal-quiescence.lock`. Every supported journal
 alias derives that same path. The registry-coupled journal API derives its root
 from a closed standard-home/sidecar alias choice, rather than accepting an
@@ -262,9 +262,9 @@ no-op or registry-mutating callback cannot bypass the identity revalidation.
 Admission revalidates after acquiring it;
 rollback acquires it after the registry lock and holds it across the first
 scan, snapshot/candidate work, atomic restore, and post-install verification.
-Both race orders pass in isolated fixtures. V2 durable-write admission and
-delivery nevertheless remain disabled because no live adapter route is wired
-or authorized in this slice.
+Both race orders pass in isolated fixtures. Their presence never grants live
+admission, delivery, or rollback authority; those remain separate operations
+even where exact markers are currently active.
 
 ## One-to-one mapping rules
 
@@ -418,8 +418,8 @@ v1 capture accepts tool-neutral semantic input and persists a target-neutral
 intent without a Store write. Under v2, `capture` requires exact read-routing
 and separate journal-admission markers, admits the intent, and stops before
 ProjectRef bootstrap or Store delivery. Other cwd-based mutations continue to
-reject v2. The migration and activation apply candidates MUST NOT be used
-against live state without their later explicit gates.
+reject v2. Migration and activation apply MUST NOT be used against live state
+without exact separate authority.
 
 A v2-capable binary encountering a v1 registry behaves as follows:
 
@@ -540,17 +540,16 @@ evidence.
 The
 [round-5 acceptance ledger](../provenance/projectref-concrete-adapter-and-round5-acceptance.md)
 accounts for all 93 R/C/M/N rows with a focused test, bounded probe, inspection,
-or independent review. All executable rows except M-33 are proven for the
-source candidate or isolated fixtures; this does not claim installation or
-live execution. M-33 retains a fail-closed guard and remains explicitly
+or independent review. All executable rows except M-33 have source or
+isolated-fixture proof; the bounded live canary additionally covers installed
+admission, primary delivery, secondary recall, and no-write replay. M-33
+retains a fail-closed guard and remains explicitly
 deferred until non-Unix atomic replacement and fault evidence exists. The
-primary target-delivery path exists only behind the explicit recovery
-candidate and has not been activated or run on the live control plane. M-32
-is closed for the source candidate: the actual route uses the registry-coupled
+primary target-delivery path remains behind explicit recovery and was run once
+on the configured local control plane under exact authority. M-32 is closed:
+the actual route uses the registry-coupled
 constructor, supplies the observed v2 revision/digest, and rechecks separate
-activation while holding the shared lock. It remains a live-release gate until
-the same behavior is canaried after separately authorized activation. In
-particular:
+activation while holding the shared lock. In particular:
 
 - `migration_candidate_preserves_targets_and_persists_one_to_one_receipts`
   and
@@ -642,20 +641,18 @@ particular:
   resolution, Store-free recall by secondary ProjectRef, and completion-receipt
   recovery across the four round-4 fault windows.
 
-M-10 is implemented and proven only in isolated fixtures. M-11 is proven for
-the currently observable activation, journal, bootstrap, and primary-delivery
-surfaces; the live route remains disabled rather than exercised. Focused
+M-10 retains isolated-fixture proof. M-11 is proven for the observable
+activation, journal, bootstrap, primary-delivery, and secondary-reference
+surfaces; the live local route has also been bounded-canary exercised. Focused
 fixture tests now prove ordinary v1/v2 reads, default-off v2 routing,
 exact-digest read and journal activation, status-first recovery after
 post-install and post-disable faults, fail-closed semantic-owner precedence,
 journal-only routed capture with zero target-Store writes, separately explicit
 primary delivery and receipt recovery on fixture Stores, and control-plane-only
-secondary association plus recall without a secondary Store open. This
-evidence does not claim live migration, live activation, ProjectRef bootstrap
-against the real registry, live semantic target delivery, live
-secondary-reference delivery, or installation. It establishes the source
-candidate and isolated-fixture contract for ProjectRef bootstrap, recovery
-status, primary delivery receipts, and CaptureGroup reference convergence.
+secondary association plus recall without a secondary Store open. The live
+evidence claims only the dated, exact configured registry and Capture IDs in
+the provenance record; it does not generalize fault injection, rollback,
+global Hooks, or remote release from one canary.
 
 ### D. Boundaries and non-regression
 
@@ -690,11 +687,11 @@ An implementation completion report MUST include:
 - an independent review result; and
 - explicit disclosure of any deferred matrix row.
 
-Passing unit tests alone is not evidence that the user's live registry was
-migrated. A successful preview is not authority to apply migration. Running
-the source-tree migration, rollback, or activation candidate against live
-state, installation, durable-write routing, commit, push, release, and global
-Hook activation remain separate actions.
+Passing unit tests alone is not evidence that a selected live registry was
+migrated. A successful preview is not authority to apply migration. Migration,
+rollback, activation, installation, durable-write routing, commit, push,
+release, and global Hook activation remain separate actions even though the
+dated configured-local evidence completed a subset of them.
 
 ## Accepted semantic checklist
 

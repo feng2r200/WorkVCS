@@ -69,15 +69,15 @@ reference is a ProjectRef-keyed index entry, not a Store-local Record or a
 cross-Workspace relation. A secondary semantic conclusion is a distinct local
 Record with explicit `derived_from` provenance.
 
-This architecture is accepted and its roadmap round-5 source candidate is
-implemented. The core registry/resolver/intent-admission and provider
-interface remain tool-neutral. The CLI integration layer contains the first
-concrete desktop-Project adapter, plus versioned ordinary reads, separate
-default-off exact-registry-bound read and journal-admission markers, and the
-explicit fixture-only recovery/delivery path. The installed/live capability
-remains registry v1/Git-CWD until separately authorized commit, installation,
-migration, and activation. Durable write routing is not enabled by the read
-marker.
+This architecture is accepted and implemented. The core
+registry/resolver/intent-admission and provider interface remain tool-neutral.
+The CLI integration layer contains the first concrete desktop-Project adapter,
+versioned ordinary reads, separate exact-registry-bound read and
+journal-admission markers, and explicit status-first recovery/delivery.
+Isolated fixtures cover fault boundaries; a bounded configured-local canary
+also proves public `cognition_v2`, one canonical primary delivery, Store-free
+secondary association recall, and zero-write replay. Durable write routing is
+never enabled by the read marker alone.
 
 ## Store
 

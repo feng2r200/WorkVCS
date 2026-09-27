@@ -56,36 +56,22 @@ one transaction; delivery converges through immutable intent, idempotency, and
 receipts.
 
 The core contains the registry v2, locator, binding, link, observation,
-CaptureIntent, CaptureGroup, and resolution foundation from ADR-0513. The
-source-tree CLI adds versioned ordinary reads and separate default-off,
-digest-bound read-routing and journal-admission candidates. Activated v2
-fixture reads resolve explicit ProjectRef, verified semantic evidence, Git
-common directory, and CWD in that order; an unbound higher rank blocks
-fallback. Registry-v1 reads remain available and report migration required.
-Legacy mutation remains on the v1 compatibility path, while value-qualified
-`capture` can admit a target-neutral v1 intent or an activation-gated,
-registry-coupled v2 intent without ProjectRef bootstrap or Store delivery.
+CaptureIntent, CaptureGroup, and resolution model from ADR-0513. The installed
+CLI adds versioned ordinary reads, separate digest-bound read-routing and
+journal-admission markers, deterministic migration preview, digest-locked
+migration/rollback, immutable recovery events, rebuildable projections,
+status-first recovery, primary delivery receipts, missing-only secondary
+references, and Store-free recall by secondary ProjectRef. Registry-v1 reads
+remain available and report migration required; value-qualified v1 admission
+uses `legacy_cognition_v1`, while registry-v2 admission uses target-neutral
+`cognition_v2` and may carry a strict CaptureGroup.
 
-The CLI also exposes deterministic read-only migration preview and an optional
-exact, evidence-bound historical ownership-repair preview, plus
-isolated-fixture migration apply and rollback candidates and a read-only
-rollback state probe. Neither mutation candidate is installed, live-authorized,
-or applied to the real control plane. The read marker enables reads only; the
-separate journal marker enables immutable intent admission only. CaptureEvent,
-projection, and ProjectRef bootstrap now have a source candidate exercised on
-isolated fixtures: immutable events are authority, projections are rebuildable,
-read-only status re-resolves ownership, and explicit digest-locked recovery can
-converge one unbound owner to one pristine binding. The same explicit recovery
-candidate can now record guarded primary delivery, commit one cognition change,
-and persist its complete idempotent receipt; stale legacy guards produce an
-upgrade-required state without target mutation. The CaptureGroup projection,
-immutable secondary reference, missing-only reference retry, completion
-receipt, and read-only lookup by secondary ProjectRef now have a
-fixture-validated source candidate that never opens the secondary Store. The
-first concrete provider adapter now exists in the CLI integration layer
-behind the tool-neutral core interface and has fixture-only end-to-end
-evidence. Live rollback/recovery, activation, and delivery remain pending.
-This implementation-state note does not weaken the accepted target contract.
+Fault and concurrency behavior has isolated-fixture evidence. The completed
+configured-local canary additionally proves one canonical Record in
+work-governance, one immutable Hernes association without opening or changing
+the Hernes Store, and no-write replay. Live rollback was not performed. This
+implementation-state note does not weaken the accepted target contract or
+grant authority for another live control plane.
 
 ### Current P0 cutover entry state
 

@@ -22,7 +22,7 @@ list, recall, resume, and currentness audit. Registry v1 remains readable and
 reports `migration_required=true`. Registry v2 ordinary reads fail closed
 unless an exact read-routing activation marker matches the current registry
 ID, revision, and digest. Legacy direct Store mutation remains on the v1
-compatibility path. The source-tree `capture` caller now has a separate,
+compatibility path. The `capture` caller has a separate,
 value-qualified journal route: on v1 it admits a target-neutral intent and
 reports that migration is required; on v2 it requires both exact activation
 markers and admits a registry-coupled intent. Neither path bootstraps a
@@ -40,11 +40,12 @@ historical path locators as retired and namespaced semantic locators as active;
 it pins the exact source and target digests and cannot move a Store or mutate
 the live registry.
 
-The source tree also contains `registry-migrate --apply` with mandatory
+The CLI also contains `registry-migrate --apply` with mandatory
 `--expected-source-digest` and `--expected-preview-digest`, plus read-only
 `--rollback-check` and mutating `--rollback`, each with mandatory
-installed/backup digests. Apply and rollback have been tested only on isolated
-fixtures. Rollback requires absent read-routing activation and empty supported
+installed/backup digests. Apply has bounded configured-local evidence;
+rollback and mutation fault windows retain isolated-fixture evidence. Rollback
+requires absent read-routing activation and empty supported
 journal layouts, retains an exact v2 snapshot, atomically restores the exact v1
 backup, and treats post-rename failures as indeterminate. For a standard
 registry filename, the probe enumerates both WorkVCS-home and registry-sidecar
@@ -52,7 +53,7 @@ activation/journal aliases, independent of whether the caller used home
 configuration or explicit `--registry`. `rollback_apply_safe` identifies
 `v2_ready`; `rollback_reentry_safe` is true only for exact `v1_restored`.
 Apply/rollback replacement is currently enabled only on Unix-family platforms.
-The source candidate now combines the journal-emptiness guard with one
+The implementation combines the journal-emptiness guard with one
 canonical-registry-derived admission/rollback quiescence lock and exposes its
 path/state in `--rollback-check`; both race orders are fixture-tested. The
 actual `capture` route uses that closed alias and mandatory pre/post-caller
@@ -110,7 +111,7 @@ action. For an unbound semantic or repository owner it may converge exactly
 one established ProjectRef/binding; CWD-only ownership remains provisional.
 Conflict and unresolved ownership never fall through to a lower owner.
 
-The recovery candidate first converges or revalidates the exact binding. When
+Recovery first converges or revalidates the exact binding. When
 the projection is `pending_primary`, it records `delivery_started` with the
 exact Branch head/state guards and one target idempotency key before invoking
 the existing atomic cognition-capture engine. A successful result records a
@@ -147,7 +148,7 @@ preserve a valuable pending semantic packet and trigger deliberate owner
 selection; it must never be translated into “no record.” That active-context
 packet is not a current WorkVCS durability guarantee.
 
-The accepted candidate guarantee is **no silent loss after admission**. It is
+The accepted route guarantee is **no silent loss after admission**. It is
 not a claim that every valuable thought is observed or captured while the
 global per-turn Hook remains deferred.
 

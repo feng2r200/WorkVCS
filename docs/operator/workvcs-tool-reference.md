@@ -69,8 +69,10 @@ workvcs project routing-activation --apply --expected-registry-digest DIGEST --e
 
 Absence is off. Malformed, stale, symlinked, or mismatched markers fail closed.
 The marker activates only v2 reads; it does not activate journal admission or
-Store writes. Migration apply and activation apply are not installed, have not
-been run against the live control plane, and require later separate authority.
+Store writes. Presence in source or an installed package does not prove that
+migration or activation happened. Inspect the exact installed revision and
+the read-only activation status for the selected registry; every live
+mutation still requires authority covering that exact operation.
 After an activation post-install failure,
 `routing_activation_install_indeterminate` requires a read-only `--status`
 check against the same registry before retry or recovery. The command never
@@ -135,11 +137,11 @@ Post-install or post-target uncertainty returns
 `capture_recovery_install_indeterminate` and requires `--status` before
 forward recovery; the command never guesses a rollback. The ordinary
 `capture` route remains admission-only, neither activation marker implicitly
-runs recovery, and this candidate is fixture-tested, uninstalled, and not
-authorized for the configured live registry.
+runs recovery. The recovery route and its fault boundaries are
+fixture-tested; current installed revision, registry identity, marker digests,
+and operation authority must be verified before use on a configured registry.
 
-The source candidate is not installed, and neither live activation marker
-exists. Until an installed route is separately activated,
+Unless an installed route and both exact activation markers are verified,
 `project_binding_not_found` must
 preserve a valuable pending semantic packet and trigger deliberate owner
 selection; it must never be translated into “no record.” That active-context
@@ -153,7 +155,7 @@ global per-turn Hook remains deferred.
 
 The implemented entry surface includes configuration inspection, project
 bind/discover/list audit, bounded read-only `recall`, read-only `resume --cwd`,
-legacy atomic/idempotent standalone `capture`, journal-first source-candidate
+legacy atomic/idempotent standalone `capture`, journal-first ProjectRef-v2
 `capture`, atomic/idempotent `plan admit`, and
 `plan evolve` with manifest mode `in_place|supersede`. Binding uses the Git
 common-directory identity and discovers an external Store registry through
@@ -209,21 +211,53 @@ evidence digests in an admitted intent, not the raw adapter context or its
 explanation. This file is an integration handoff, not a user-authored claim;
 do not synthesize it from labels, memory, or arbitrary text.
 
-The installed live-compatible capture form remains:
+The legacy direct-Store capture form is:
 
 ```text
 workvcs capture --cwd PATH --manifest FILE [--registry PATH]
 ```
 
-After the exact source candidate is installed, the journal-first form adds
-`--value-reason TEXT` and may also add `--project-ref ID` or
-`--locator-context FILE` or `--locator-adapter-context FILE`. Registry v1
-admits a target-neutral intent and reports migration required. Registry v2
-requires both exact activation markers and admits only the immutable intent.
-Reusing the manifest idempotency key with identical content reuses the intent;
-conflicting content fails closed. This command does not deliver the manifest
-into a target Store; delivery is a separate explicit
-`project capture-recovery --apply` action.
+The journal-first form adds `--value-reason TEXT` and may also add
+`--project-ref ID`, `--locator-context FILE`,
+`--locator-adapter-context FILE`, and `--capture-group FILE`. Registry v1
+admits a `legacy_cognition_v1` target-neutral intent and reports migration
+required; it rejects `--capture-group`. Registry v2 requires both exact
+activation markers and admits `cognition_v2`: the CLI removes manifest
+transport fields and rejects caller-supplied target head/state guards so that
+recovery derives them from the selected target after admission.
+
+CaptureGroup input is strict JSON and requires `--value-reason`. A resolved
+primary plus one related secondary has this shape:
+
+```json
+{
+  "capture_group_id": "01a00000-0000-7000-8000-000000000001",
+  "primary_project_ref": "01a00000-0000-7000-8000-000000000002",
+  "primary_locator_evidence_digest": null,
+  "canonical_record_local_id": "canonical-finding",
+  "members": [
+    {
+      "project_ref_id": "01a00000-0000-7000-8000-000000000002",
+      "role": "primary",
+      "relation": "canonical_owner",
+      "delivery_mode": "canonical"
+    },
+    {
+      "project_ref_id": "01a00000-0000-7000-8000-000000000003",
+      "role": "related",
+      "relation": "related_context",
+      "delivery_mode": "immutable_reference"
+    }
+  ]
+}
+```
+
+The canonical local ID must name exactly one Record in the semantic payload.
+Reusing the manifest idempotency key reuses an intent only when both the
+semantic payload and complete CaptureGroup (including `null`) are identical;
+any drift fails as `capture_idempotency_conflict`. Admission does not deliver
+the payload into a target Store. Delivery is a separate, explicit
+`project capture-recovery --apply` action using fresh status digests.
 
 The live admit syntax is:
 

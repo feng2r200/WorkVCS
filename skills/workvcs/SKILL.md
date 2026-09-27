@@ -58,8 +58,8 @@ ambient repository, mirror, temporary directory, or coordination checkout
 must not replace a known higher-ranked semantic owner. If location or binding
 integrity is actually in doubt, run `workvcs project list --require-valid`.
 
-After the exact ProjectRef-v2 source candidate is installed and read routing
-is separately activated, a trusted integration may pass its bounded adapter
+When the selected registry is v2 and exact read routing is active, a trusted
+integration may pass its bounded adapter
 handoff with `--locator-adapter-context FILE`. The current concrete adapter
 accepts verified Codex task-Project metadata and/or a canonical ChatGPT
 Project-mirror path, but it runs behind the same tool-neutral provider
@@ -71,7 +71,7 @@ and continue with verified Git then CWD; if supplied adapter material is
 malformed or contradictory, preserve the diagnostic and fail closed rather
 than silently discarding it.
 
-Describe the durability boundary exactly: the journal-backed candidate
+Describe the durability boundary exactly: the journal-backed route
 provides **no silent loss after admission**. It does not claim complete
 cognition capture while the global per-turn Hook remains deferred.
 
@@ -103,16 +103,19 @@ prepend Help to an established form unless an actual failure requires it.
 Run the value decision before binding resolution. A missing binding is a
 routing state, never evidence that admitted content is unworthy. ADR-0513
 accepts journal-first routing and semantic-Project-before-Git/CWD ownership.
-The core accepts bounded, tool-neutral adapter locator input, and the
-source-tree CLI has default-off, digest-bound candidates for ordinary v2 reads
-and journal admission. The CLI integration layer now includes the first
+The core accepts bounded, tool-neutral adapter locator input, and the CLI has
+digest-bound gates for ordinary v2 reads and journal admission. The CLI
+integration layer includes the first
 concrete provider adapter and exposes its strict dispatch envelope as
 `--locator-adapter-context FILE`; the core schema and resolver remain
-provider-neutral. Its actual `capture` caller can persist an explicitly
-value-qualified target-neutral v1 intent, or a registry-coupled v2 intent after
-both exact markers are active. It does not bootstrap a ProjectRef or write a
-target Store. The candidate has not been installed or enabled against the live
-control plane, so this Skill must not treat it as current live durability.
+provider-neutral. Its `capture` caller can persist an explicitly
+value-qualified target-neutral `legacy_cognition_v1` intent on registry v1, or
+a target-neutral `cognition_v2` intent after both exact v2 markers are active.
+The v2 form optionally accepts `--capture-group FILE`; that strict group is
+part of idempotency identity and requires `--value-reason`. It does not
+bootstrap a ProjectRef or write a target Store. Verify the exact installed
+revision plus both read-only marker statuses before treating the route as live
+durability; source availability alone is not evidence.
 
 Use `workvcs project registry-migrate --preview` with optional `--registry`,
 `--repair-manifest`, and `--format text|json` only when the task explicitly
@@ -121,13 +124,12 @@ manifest is appropriate only after current evidence proves that an exact v1
 path locator is historical context for a namespaced semantic Project; it must
 pin the source digest, binding key, target digest, and evidence digest. The
 preview is strictly read-only and does not repair a missing binding or change
-the live registry. The source tree contains digest-locked migration apply and
-rollback candidates, a read-only rollback state probe, versioned ordinary
-reads, a separately digest-bound `project routing-activation` candidate, and a
-separate `project journal-admission-activation` candidate with exact apply and
-disable locks.
-They are not installed or live-authorized and have been validated only on
-isolated fixtures. Never infer authority to migrate, roll back, or activate
+the live registry. The CLI contains digest-locked migration apply and rollback,
+a read-only rollback state probe, versioned ordinary reads, a separately
+digest-bound `project routing-activation`, and a separate
+`project journal-admission-activation` with exact apply and disable locks.
+These paths have isolated-fixture validation. Never infer installation,
+current marker state, or authority to migrate, roll back, or activate
 from a successful preview or probe. Do not run any mutation path on a live
 registry unless the user separately authorizes that exact operation.
 `--rollback-check` never performs rollback; `--rollback` is explicit, preserves
@@ -145,7 +147,7 @@ marker permits intent admission only; it leaves ProjectRef bootstrap,
 journal-event processing, and Store delivery disabled. Neither marker may be
 installed or removed on a live control plane without separate exact authority.
 
-The source tree also has an explicit `project capture-recovery` candidate.
+The CLI also has an explicit `project capture-recovery` route.
 `--status --capture-id <id>` is read-only: it validates immutable events,
 derives the projection, compares stored projection state, and re-resolves the
 owner. `--apply` additionally requires the exact observed registry and
@@ -158,30 +160,33 @@ explicit upgrade. It never falls back after conflict. For a CaptureGroup it
 derives one primary from exact locator evidence, preserves the canonical
 receipt, and appends only missing immutable secondary references; it never
 opens a secondary Store. The read-only
-`project capture-group-recall --project-ref-id <id>` candidate scans immutable
+`project capture-group-recall --project-ref-id <id>` scans immutable
 journal authority and returns references pinned to one canonical Record
 version. A registry refresh reuses a receipt only after the same ProjectRef and
 exact Store/Workspace/Branch are revalidated; a delivered CaptureGroup cannot
 be retargeted and requires a new capture. An indeterminate install or target
 step always returns
-to `--status` and forward recovery; it never authorizes rollback. This
-candidate is uninstalled and fixture-only. Do not use it on the live registry
-or treat the source candidate as live target-delivery durability.
+to `--status` and forward recovery; it never authorizes rollback. Its fault
+boundaries have isolated-fixture validation. Verify the installed revision and
+require explicit authority covering recovery apply before target delivery;
+read activation or journal activation alone never grants that authority.
 
 If discovery returns `project_binding_not_found`, continue otherwise safe
-work. Run `workvcs project ensure --cwd <logical-project>` only immediately
-before admitting a useful Plan or capturing a valuable standalone item.
+work. On a verified registry-v2 journal route, admit the valuable intent first
+and let separately authorized recovery converge the selected owner; do not
+create a CWD fallback. On the legacy v1 direct-Store route, run
+`workvcs project ensure --cwd <logical-project>` only immediately before the
+valuable write.
 
 Ensure creates only the Store/Workspace/Branch binding, not a Plan or semantic
 record. If it fails, keep one small pending semantic packet in the active work
 context, report the exact problem, and persist it after recovery. Do not create
 a second durable queue or silently discard the packet. When verified semantic
 Project context exists, do not replace it with a repository or ambient mirror
-merely because current v1 has a binding there. This active-context packet is
-not durable WorkVCS state; disclose that limitation until the source candidate
-is installed and its journal route is separately activated. Do not run a
-repository-local candidate against the live registry as a substitute for
-installation and activation gates.
+merely because current v1 has a binding there. An active-context packet is not
+durable WorkVCS state; disclose that limitation until exact journal admission
+has succeeded. Do not run a repository-local build against a configured
+registry as a substitute for installation and activation gates.
 
 ## Keep Plan and persistence independent
 

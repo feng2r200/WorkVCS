@@ -61,10 +61,10 @@ Confirm that `recovery_cwd` is the intended logical project, then use
 this error into a no-record decision or silently redirect a known semantic
 Project into its repository/mirror. The source-tree ProjectRef-v2 read route
 uses `control_plane_invalid` for absent/stale activation and unresolved,
-unbound, or conflicting ownership. The source-tree value-qualified `capture`
-route can journal admitted content without target Store delivery, but it is
-not installed or live-activated and still reports routing state in successful
-output rather than dedicated `ownership_unbound` or
+unbound, or conflicting ownership. The value-qualified `capture` route can
+journal admitted content without target Store delivery when its exact
+installed revision and activation markers are verified. It reports routing
+state in successful output rather than dedicated `ownership_unbound` or
 `registry_migration_required` error codes.
 
 For `--locator-adapter-context`, distinguish absence from invalid input. An
@@ -141,7 +141,8 @@ is not silently recreated. After canonical delivery,
 no longer names that authority, while
 `start_new_capture_canonical_target_changed` means its binding tuple changed;
 neither condition permits retargeting the existing CaptureGroup. This
-candidate is uninstalled and fixture-only.
+route has isolated-fixture fault validation; live apply still requires exact
+status digests and operation authority.
 
 Migration ownership-repair manifests fail as `control_plane_invalid` when
 their schema, semantic locator, source digest, binding key, or target digest is

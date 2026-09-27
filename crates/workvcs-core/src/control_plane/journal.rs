@@ -2856,7 +2856,9 @@ impl CaptureJournal {
         self.ensure_layout()?;
 
         if let Some((existing, path)) = self.find_idempotency_key(intent.idempotency_key())? {
-            if existing.payload_digest() == intent.payload_digest() {
+            if existing.payload_digest() == intent.payload_digest()
+                && existing.capture_group() == intent.capture_group()
+            {
                 return Ok(CaptureAdmissionResult {
                     outcome: CaptureAdmissionOutcome::Reused,
                     capture_id: existing.capture_id(),
@@ -2865,7 +2867,7 @@ impl CaptureJournal {
                 });
             }
             return Err(WorkVcsError::CaptureIdempotencyConflict(format!(
-                "idempotency key {:?} already belongs to capture {} with payload {}",
+                "idempotency key {:?} already belongs to capture {} with payload {} and its admitted CaptureGroup",
                 intent.idempotency_key(),
                 existing.capture_id(),
                 existing.payload_digest()
@@ -2877,6 +2879,7 @@ impl CaptureJournal {
             let existing = self.load_path(&target)?;
             if existing.idempotency_key() == intent.idempotency_key()
                 && existing.payload_digest() == intent.payload_digest()
+                && existing.capture_group() == intent.capture_group()
             {
                 return Ok(CaptureAdmissionResult {
                     outcome: CaptureAdmissionOutcome::Reused,

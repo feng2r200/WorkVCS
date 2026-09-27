@@ -195,8 +195,10 @@ Registry replacement, journal installation, and each Store transition have
 their own atomicity boundary. A Store commit whose receipt was interrupted is
 recovered by replaying the same target idempotency key. Primary success is not
 rolled back when a secondary delivery fails; the missing delivery remains
-visible and independently retryable. No completion claim may imply a
-cross-Store all-or-nothing transaction.
+visible and independently retryable. Journal admission reuses an idempotency
+key only when both semantic payload and the complete CaptureGroup (including
+`null`) are unchanged. No completion claim may imply a cross-Store
+all-or-nothing transaction.
 
 ### INV-103 — Registry migration is explicit, one-to-one, and recoverable
 

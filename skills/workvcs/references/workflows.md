@@ -11,11 +11,11 @@ working directory merely because it is the process cwd.
 
 Value admission precedes this routing step. Preserve admitted content as one
 bounded pending semantic packet when the installed CLI cannot bind the
-verified semantic owner. The source-tree `capture --value-reason` candidate
-now persists a target-neutral v1 intent or, behind both exact v2 markers, a
-registry-coupled intent before creating a ProjectRef or writing a Store. It is
-not installed or live-activated, so the write commands below remain the live
-v1 compatibility path. The available
+verified semantic owner. `capture --value-reason` persists a target-neutral
+`legacy_cognition_v1` intent on registry v1 or, behind both exact v2 markers,
+a target-neutral `cognition_v2` intent before creating a ProjectRef or writing
+a Store. Verify the installed revision and marker status rather than inferring
+them from source availability. The available
 `project registry-migrate --preview` command is inspection-only and is not a
 capture or recovery path. The source-tree migration apply, explicit rollback,
 and read-only rollback probe do not activate write routing and must not be used
@@ -31,23 +31,25 @@ installation plus a separately authorized, digest-locked
 `project journal-admission-activation --apply`; disabling it requires the
 exact installed marker digest. Neither action activates bootstrap, event
 processing, or Store delivery.
-The separate source-tree `project capture-recovery` candidate starts with
+The separate `project capture-recovery` route starts with
 `--status --capture-id <id>`. Status is read-only and produces the registry
 and projection digests needed by an explicit `--apply`. Apply can converge an
 unbound semantic, Git, or CWD owner to exactly one ProjectRef and pristine
 genesis Store binding; conflict or unresolved ownership remains pending and
-does not fall back. This slice does not write the manifest or semantic Store
-objects. After `capture_recovery_install_indeterminate`, status is mandatory
+does not fall back. It can then deliver target-neutral cognition under fresh
+target guards. After `capture_recovery_install_indeterminate`, status is mandatory
 before digest-locked forward recovery; rollback is never inferred. The
-candidate is fixture-only, uninstalled, and not a live compatibility path.
-The source-tree ordinary-read route
+route has isolated-fixture fault validation; a live apply still needs explicit
+authority for that delivery. The ordinary-read route
 can consume registry v2 only after a separate, exact `project
 routing-activation` marker is installed; this gate is default-off and does not
 provide journal durability. The optional `--repair-manifest` only previews a
 source/key/target/evidence-bound historical ownership correction; it does not
 mutate the registry, rewrite a path, or activate routing.
 
-Run `project ensure` only when the first durable write is useful. For planned
+On a verified registry-v2 journal route, admit the first valuable intent before
+binding convergence and use separately authorized recovery. On the legacy v1
+direct-Store route, run `project ensure` only when the first durable write is useful. For planned
 work, ensure and then admit the Plan, carrying forward the useful pre-Plan
 findings, decisions, unknowns, constraints, and evidence. For No-Plan work,
 ensure only when a standalone semantic item is worth capturing. A failed
@@ -102,21 +104,24 @@ head/state fields add CAS guards; the CLI uses the currently verified bound
 head when they are omitted. Reusing the same key with identical content returns
 the prior result; a conflicting payload fails.
 
-After the exact source candidate is installed, the journal-first form is
+The journal-first form is
 `workvcs capture --cwd <context> --manifest <file> --value-reason <reason>`.
 It may also receive `--project-ref ID`, a strict `--locator-context FILE` with
 already-verified semantic evidence, or a strict
-`--locator-adapter-context FILE` from a trusted integration. The first concrete
+`--locator-adapter-context FILE` from a trusted integration. On registry v2 it
+may additionally receive `--capture-group FILE`; the strict group is control-
+plane authority and is part of the idempotency identity. The first concrete
 dispatch target is `codex-app-project-metadata/v1`; its bounded context may
 contain verified task-Project metadata, a canonical Project-mirror path, or
 both. Adapter absence yields no semantic evidence and permits Git/CWD
 degradation; explicit malformed adapter input fails closed. Other tools can
 add their own adapter behind the same provider interface without changing the
 core resolver or the ownership order.
-On registry v1 it records a target-neutral intent and reports migration
-required. On registry v2 it additionally requires both exact activation
-markers and records only the immutable intent. Do not substitute a
-repository-local binary for the installation and live-activation gates.
+On registry v1 it records `legacy_cognition_v1` and reports migration required;
+CaptureGroup input is rejected. On registry v2 it requires both exact
+activation markers, removes manifest transport fields, rejects caller target
+head/state guards, and records only immutable `cognition_v2`. Do not substitute
+a repository-local binary for the installation and live-activation gates.
 
 Primary delivery is a separate operator action, never an automatic continuation
 of `capture`: first run
@@ -131,10 +136,10 @@ ProjectRef and exact Store/Workspace/Branch target.
 decision. At `pending_references`, use fresh status digests and repeat the
 explicit apply: it validates each member ProjectRef and installs only missing
 immutable-reference events without opening a secondary Store. Recall an
-installed association read-only with
+association read-only with
 `workvcs project capture-group-recall --project-ref-id <id> [--registry <path>]`.
-The current source candidate is fixture-only and must not be pointed at the
-live registry or substituted for installation and activation.
+Recovery has isolated-fixture validation but remains a live write operation;
+require current status digests and explicit authority for the exact apply.
 
 ## No-Plan to Plan
 

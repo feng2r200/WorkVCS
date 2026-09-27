@@ -473,8 +473,8 @@ evidence.
 | C-04 | Binding or Store invalid after intent install | Pending state plus exact recovery action; no alternate target is guessed. |
 | C-05 | Crash after target commit but before receipt event | Retry reuses target idempotency result and records the missing receipt without duplicate objects. |
 | C-06 | Primary succeeds and secondary reference fails | Canonical record remains committed once; state is `pending_references`; retry creates only missing references. |
-| C-07 | Same idempotency key and same payload | One intent/result is reused. |
-| C-08 | Same idempotency key and different payload | `capture_idempotency_conflict`; neither intent is overwritten. |
+| C-07 | Same idempotency key, same payload, and same CaptureGroup (including `null`) | One intent/result is reused. |
+| C-08 | Same idempotency key with a different payload or any CaptureGroup drift | `capture_idempotency_conflict`; neither intent is overwritten. |
 | C-09 | Cross-project capture requests two canonical deliveries | Validation fails before intent admission. |
 | C-10 | Canonical Record later changes | Existing secondary reference stays pinned; no silent follow-latest behavior. |
 | C-11 | Secondary project needs an independent conclusion | New local Record has its own ID and explicit `derived_from` provenance. |

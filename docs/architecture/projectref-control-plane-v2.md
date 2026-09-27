@@ -527,9 +527,13 @@ The protocol is exclusive and fail-closed:
 | `initial_resolution` | `ResolutionResult` | yes | May be unresolved or conflict. |
 | `capture_group` | `CaptureGroupIntent` or `null` | yes | Required when more than one project context is intentionally in scope, including an unbound primary locator. |
 
-The tuple `(idempotency_key, payload_digest)` is replay-safe. Reusing an
-idempotency key with a different payload digest fails as
-`capture_idempotency_conflict`.
+The tuple `(idempotency_key, payload_digest, capture_group)` is replay-safe.
+Here `capture_group` means the complete canonical CaptureGroup value or
+`null`, not merely its ID. Reusing an idempotency key with a different payload
+digest, adding or removing a group, or changing any group field fails as
+`capture_idempotency_conflict`. This prevents a replay from silently changing
+the canonical owner or secondary association set while retaining the same
+semantic payload.
 
 `cognition_v2` is target-neutral: it contains semantic items and local
 relations but no target Branch head or state digest. The delivery attempt

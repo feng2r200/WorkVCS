@@ -13,7 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use workvcs_core::control_plane::{
     BoundedAdapterContext, CanonicalPath, CaptureAdmissionOutcome, CaptureCompletedPayload,
-    CaptureEventAppendOutcome, CaptureEventPayload, CaptureGroupMemberDelivery,
+    CaptureEventAppendOutcome, CaptureEventPayload, CaptureGroupIntent, CaptureGroupMemberDelivery,
     CaptureGroupResolvedPayload, CaptureIntent, CaptureJournal, CapturePayloadKind,
     CaptureProjectionWriteOutcome, CaptureRecoveryState, ControlPlaneDigest,
     DeliveryAppliedPayload, DeliveryFailedPayload, DeliveryFailureCode, DeliveryStartedPayload,
@@ -718,7 +718,7 @@ enum Command {
     },
     #[command(
         about = "Record or journal standalone cognition without requiring a Session or Plan",
-        long_about = "On registry v1, the legacy form atomically writes the bound Store; adding --value-reason instead admits one target-neutral immutable journal intent. On registry v2, --value-reason plus the exact read-routing and journal-admission activations route the same tool-neutral locator input into the registry-coupled journal. Journal admission does not bootstrap a ProjectRef or write a target Store. All forms are idempotent by the manifest key and do not require or create a Goal, Plan, Task, Session, or Claim."
+        long_about = "On registry v1, the legacy form atomically writes the bound Store; adding --value-reason instead admits one target-neutral legacy_cognition_v1 journal intent. On registry v2, --value-reason plus the exact read-routing and journal-admission activations convert the manifest to target-neutral cognition_v2 and admit it into the registry-coupled journal. An optional --capture-group FILE records one canonical primary and explicit immutable-reference members. cognition_v2 rejects caller-supplied target head/state guards because recovery derives fresh guards after admission. Journal admission does not bootstrap a ProjectRef or write a target Store. Reusing a manifest idempotency key requires the same semantic payload and the same CaptureGroup. No form requires or creates a Goal, Plan, Task, Session, or Claim."
     )]
     Capture {
         #[arg(
@@ -751,6 +751,13 @@ enum Command {
             help = "JSON capture manifest containing standalone cognition and semantic relations"
         )]
         manifest: PathBuf,
+
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Optional strict CaptureGroup intent for registry-v2 journal admission; requires --value-reason"
+        )]
+        capture_group: Option<PathBuf>,
     },
     #[command(
         about = "Read bounded project context without requiring a Session or Plan",
@@ -12659,7 +12666,15 @@ fn run(cli: Cli) -> Result<String> {
             locator,
             value_reason,
             manifest,
-        } => run_cognition_capture(cwd, registry, locator, value_reason, manifest),
+            capture_group,
+        } => run_cognition_capture(
+            cwd,
+            registry,
+            locator,
+            value_reason,
+            manifest,
+            capture_group,
+        ),
         Command::Recall {
             cwd,
             registry,
@@ -24247,7 +24262,14 @@ fn run_cognition_capture(
     locator: ProjectLocatorArgs,
     value_reason: Option<String>,
     manifest_path: PathBuf,
+    capture_group_path: Option<PathBuf>,
 ) -> Result<String> {
+    if capture_group_path.is_some() && value_reason.is_none() {
+        return Err(WorkVcsError::QueryInvalid(
+            "--capture-group requires --value-reason because CaptureGroup is control-plane journal authority, not a legacy direct Store write"
+                .to_owned(),
+        ));
+    }
     let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
         WorkVcsError::QueryInvalid(format!(
             "cannot read cognition capture manifest {}: {error}",
@@ -24260,6 +24282,12 @@ fn run_cognition_capture(
     let registry_path = project_registry_path_from_effective(&effective, false, &current_identity)?;
     match load_project_registry_readonly(&registry_path, true)? {
         LoadedProjectRegistry::V1 { digest, .. } => {
+            if capture_group_path.is_some() {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "CaptureGroup journal admission requires registry v2; migrate and activate the exact v2 routing gates before retrying"
+                        .to_owned(),
+                ));
+            }
             if locator.project_ref.is_some() {
                 return Err(WorkVcsError::ControlPlaneInvalid(
                     "registry v1 cannot evaluate an explicit ProjectRef override; migrate before using --project-ref"
@@ -24348,17 +24376,18 @@ fn run_cognition_capture(
             }
             require_active_journal_admission(&effective, &registry_path, &registry_v2)?;
 
-            let semantic_payload = canonical_cognition_payload(&manifest_bytes)?;
+            let semantic_payload = canonical_cognition_v2_payload(&manifest_bytes)?;
+            let capture_group = load_capture_group_intent(capture_group_path.as_deref())?;
             let intent = CaptureIntent::new(
                 CaptureId::new_v7(),
                 manifest.idempotency_key.clone(),
                 UtcTimestamp::now()?,
                 value_reason,
-                CapturePayloadKind::LegacyCognitionV1,
+                CapturePayloadKind::CognitionV2,
                 semantic_payload,
                 locator_input.resolution_context().clone(),
                 resolution,
-                None,
+                capture_group,
             )?;
             let journal = CaptureJournal::for_project_registry(
                 &registry_path,
@@ -24420,6 +24449,71 @@ fn canonical_cognition_payload(input: &[u8]) -> Result<serde_json::Value> {
     })
 }
 
+fn canonical_cognition_v2_payload(input: &[u8]) -> Result<serde_json::Value> {
+    let canonical = parse_canonical_json(input).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cognition_v2 manifest is not strict canonical-domain JSON: {error}"
+        ))
+    })?;
+    let canonical = canonical_bytes(&canonical).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot encode cognition_v2 manifest for journal admission: {error}"
+        ))
+    })?;
+    let mut payload: serde_json::Value = serde_json::from_slice(&canonical).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot decode canonical cognition_v2 manifest: {error}"
+        ))
+    })?;
+    let object = payload.as_object_mut().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "cognition_v2 capture manifest must be a JSON object".to_owned(),
+        )
+    })?;
+    for target_field in ["expected_head_commit_id", "expected_state_digest"] {
+        if object.contains_key(target_field) {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "cognition_v2 capture manifest must not contain target field {target_field}; recovery records fresh target guards after admission"
+            )));
+        }
+    }
+    object.remove("schema_version");
+    object.remove("idempotency_key");
+    Ok(payload)
+}
+
+fn load_capture_group_intent(path: Option<&Path>) -> Result<Option<CaptureGroupIntent>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let input = fs::read(path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read CaptureGroup intent {}: {error}",
+            path.display()
+        ))
+    })?;
+    let canonical = parse_canonical_json(&input).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "CaptureGroup intent {} is not strict canonical-domain JSON: {error}",
+            path.display()
+        ))
+    })?;
+    let canonical = canonical_bytes(&canonical).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot encode CaptureGroup intent {}: {error}",
+            path.display()
+        ))
+    })?;
+    serde_json::from_slice(&canonical)
+        .map(Some)
+        .map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "CaptureGroup intent {} has invalid shape: {error}",
+                path.display()
+            ))
+        })
+}
+
 fn render_v1_routed_cognition_admission(
     registry_path: &Path,
     registry_digest: &ControlPlaneDigest,
@@ -24474,11 +24568,16 @@ fn render_routed_cognition_admission(
         CaptureAdmissionOutcome::Created => "created",
         CaptureAdmissionOutcome::Reused => "reused",
     };
+    let capture_group = intent.capture_group();
     Ok(format!(
-        "capture_status=admitted\nadmission_outcome={}\ncapture_id={}\nidempotency_key={}\npayload_kind=legacy_cognition_v1\npayload_digest={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nread_routing_active=true\njournal_admission_active=true\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nrelated_project_refs={}\nunmapped_locators={}\nresolution_diagnostics={}\nlocator_providers={}\njournal_path={}\njournal_persisted=true\njournal_written={}\nregistry_written=false\nproject_ref_created=false\nstore_written=false\ndelivery_status=not_started\ndelivery_activated=false\n",
+        "capture_status=admitted\nadmission_outcome={}\ncapture_id={}\nidempotency_key={}\npayload_kind={}\npayload_digest={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nread_routing_active=true\njournal_admission_active=true\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nrelated_project_refs={}\nunmapped_locators={}\nresolution_diagnostics={}\nlocator_providers={}\ncapture_group_id={}\ncapture_group_primary_project_ref={}\ncapture_group_members={}\njournal_path={}\njournal_persisted=true\njournal_written={}\nregistry_written=false\nproject_ref_created=false\nstore_written=false\ndelivery_status=not_started\ndelivery_activated=false\n",
         outcome,
         admission.capture_id(),
         escape_key_value(intent.idempotency_key()),
+        match intent.payload_kind() {
+            CapturePayloadKind::CognitionV2 => "cognition_v2",
+            CapturePayloadKind::LegacyCognitionV1 => "legacy_cognition_v1",
+        },
         admission.payload_digest(),
         escape_key_value(&registry_path.display().to_string()),
         registry.registry_id(),
@@ -24494,6 +24593,16 @@ fn render_routed_cognition_admission(
         resolution.unmapped_locators().len(),
         resolution.diagnostics().len(),
         provider_ids.len(),
+        capture_group
+            .map(|group| group.capture_group_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        capture_group
+            .and_then(CaptureGroupIntent::primary_project_ref)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        capture_group
+            .map(|group| group.members().len())
+            .unwrap_or(0),
         escape_key_value(&admission.intent_path().display().to_string()),
         admission.outcome() == CaptureAdmissionOutcome::Created,
     ))
@@ -64070,6 +64179,7 @@ mod tests {
         let admitted = run(capture_command()).expect("journal-backed capture admission");
         assert_eq!(value(&admitted, "capture_status"), "admitted");
         assert_eq!(value(&admitted, "admission_outcome"), "created");
+        assert_eq!(value(&admitted, "payload_kind"), "cognition_v2");
         assert_eq!(value(&admitted, "resolution_status"), "unbound");
         assert_eq!(value(&admitted, "resolution_rank"), "semantic_project");
         assert_eq!(value(&admitted, "journal_persisted"), "true");
@@ -64078,6 +64188,23 @@ mod tests {
         assert_eq!(value(&admitted, "delivery_status"), "not_started");
         let intent_path = PathBuf::from(value(&admitted, "journal_path"));
         assert!(intent_path.is_file());
+        let intent = CaptureIntent::from_json_bytes(&fs::read(&intent_path).unwrap()).unwrap();
+        assert_eq!(intent.payload_kind(), CapturePayloadKind::CognitionV2);
+        assert!(intent.capture_group().is_none());
+        assert!(
+            !intent
+                .semantic_payload()
+                .as_object()
+                .unwrap()
+                .contains_key("idempotency_key")
+        );
+        assert!(
+            !intent
+                .semantic_payload()
+                .as_object()
+                .unwrap()
+                .contains_key("schema_version")
+        );
         let capture_id = value(&admitted, "capture_id");
         assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
         assert_eq!(
@@ -64125,6 +64252,405 @@ mod tests {
         assert_eq!(
             cli_sqlite_file_snapshots(&fixture.store_path),
             store_snapshots
+        );
+    }
+
+    #[test]
+    fn cli_public_v2_capture_group_end_to_end() {
+        run_cli_test_with_large_stack(
+            "cli-public-v2-capture-group-admission-test",
+            assert_cli_public_v2_capture_group_end_to_end,
+        );
+    }
+
+    fn assert_cli_public_v2_capture_group_end_to_end() {
+        let v1_fixture = create_project_binding_fixture(false);
+        let v1_store_snapshots = cli_sqlite_file_snapshots(&v1_fixture.store_path);
+        let v1_manifest_path = v1_fixture._tempdir.path().join("v1-group-capture.json");
+        fs::write(
+            &v1_manifest_path,
+            r#"{"schema_version":1,"idempotency_key":"v1-group-rejected","records":[],"knowledge":[],"evidence":[],"relations":[],"rationale":{}}"#,
+        )
+        .unwrap();
+        let v1_group_path = v1_fixture._tempdir.path().join("v1-group.json");
+        fs::write(&v1_group_path, b"{}\n").unwrap();
+        let v1_group = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &v1_fixture.project_text,
+            "--registry",
+            &v1_fixture.registry,
+            "--value-reason",
+            "A group cannot be admitted before registry v2",
+            "--manifest",
+            &path_text(&v1_manifest_path),
+            "--capture-group",
+            &path_text(&v1_group_path),
+        ])
+        .unwrap())
+        .expect_err("registry v1 must reject CaptureGroup admission");
+        assert!(v1_group.to_string().contains("requires registry v2"));
+        assert_eq!(
+            cli_sqlite_file_snapshots(&v1_fixture.store_path),
+            v1_store_snapshots
+        );
+
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&fixture.registry_path).unwrap()).unwrap();
+        let secondary_project_ref = registry
+            .projects()
+            .first()
+            .expect("fixture secondary ProjectRef")
+            .project_ref_id();
+        let secondary_store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let read_preview =
+            preview_project_routing_activation(Some(fixture.registry_path.clone())).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&read_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&read_preview, "candidate_digest")).unwrap(),
+        )
+        .expect("activate fixture read routing");
+        let journal_preview =
+            preview_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .unwrap();
+        apply_project_journal_admission_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "candidate_digest")).unwrap(),
+        )
+        .expect("activate fixture journal admission");
+
+        let resolved_manifest_path = fixture
+            ._tempdir
+            .path()
+            .join("resolved-public-v2-group-capture.json");
+        fs::write(
+            &resolved_manifest_path,
+            r#"{
+  "schema_version": 1,
+  "idempotency_key": "public-v2-resolved-capture-group-admission",
+  "records": [{"local_id":"resolved-canonical","kind":"finding","statement":"A resolved public v2 CaptureGroup preserves its declared canonical owner","scope":{"source":"isolated-public-cli"}}],
+  "knowledge": [],
+  "evidence": [],
+  "relations": [],
+  "rationale": {"source":"public-v2-resolved-capture-group-test"}
+}"#,
+        )
+        .unwrap();
+        let resolved_group_id = workvcs_core::CaptureGroupId::new_v7();
+        let resolved_group_path = fixture._tempdir.path().join("resolved-capture-group.json");
+        fs::write(
+            &resolved_group_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "capture_group_id": resolved_group_id,
+                "primary_project_ref": secondary_project_ref,
+                "primary_locator_evidence_digest": null,
+                "canonical_record_local_id": "resolved-canonical",
+                "members": [{
+                    "project_ref_id": secondary_project_ref,
+                    "role": "primary",
+                    "relation": "canonical_owner",
+                    "delivery_mode": "canonical"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let resolved_admission = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--project-ref",
+            &secondary_project_ref.to_string(),
+            "--value-reason",
+            "Prove the resolved public CaptureGroup admission shape",
+            "--manifest",
+            &path_text(&resolved_manifest_path),
+            "--capture-group",
+            &path_text(&resolved_group_path),
+        ])
+        .unwrap())
+        .expect("admit resolved public v2 CaptureGroup");
+        assert_eq!(value(&resolved_admission, "payload_kind"), "cognition_v2");
+        assert_eq!(
+            value(&resolved_admission, "project_ref_id"),
+            secondary_project_ref.to_string()
+        );
+        assert_eq!(
+            value(&resolved_admission, "capture_group_primary_project_ref"),
+            secondary_project_ref.to_string()
+        );
+        assert_eq!(value(&resolved_admission, "capture_group_members"), "1");
+        assert_eq!(value(&resolved_admission, "store_written"), "false");
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            secondary_store_snapshots
+        );
+
+        let primary_evidence = LocatorEvidence::new(
+            LocatorAuthority::SemanticProject,
+            "fixture-tool",
+            "isolated:public-v2-group",
+            "project_id",
+            format!("public-v2-group-primary-{}", CaptureId::new_v7()),
+            LocatorAssurance::Authoritative,
+            "fixture-tool/v1",
+            ControlPlaneDigest::raw(b"public v2 CaptureGroup primary"),
+        )
+        .unwrap();
+        let locator_path = fixture._tempdir.path().join("public-v2-group-locator.json");
+        fs::write(
+            &locator_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "semantic_locator_evidence": [primary_evidence.clone()]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let manifest_path = fixture._tempdir.path().join("public-v2-group-capture.json");
+        fs::write(
+            &manifest_path,
+            r#"{
+  "schema_version": 1,
+  "idempotency_key": "public-v2-capture-group-end-to-end",
+  "records": [{"local_id":"canonical-finding","kind":"finding","statement":"One public v2 CaptureGroup has one canonical primary Record","scope":{"source":"isolated-public-cli"}}],
+  "knowledge": [],
+  "evidence": [],
+  "relations": [],
+  "rationale": {"source":"public-v2-capture-group-test"}
+}"#,
+        )
+        .unwrap();
+        let capture_group_id = workvcs_core::CaptureGroupId::new_v7();
+        let capture_group_value = serde_json::json!({
+            "capture_group_id": capture_group_id,
+            "primary_project_ref": null,
+            "primary_locator_evidence_digest": primary_evidence.evidence_digest(),
+            "canonical_record_local_id": "canonical-finding",
+            "members": [{
+                "project_ref_id": secondary_project_ref,
+                "role": "related",
+                "relation": "related_context",
+                "delivery_mode": "immutable_reference"
+            }]
+        });
+        let capture_group_path = fixture._tempdir.path().join("capture-group.json");
+        fs::write(
+            &capture_group_path,
+            serde_json::to_vec_pretty(&capture_group_value).unwrap(),
+        )
+        .unwrap();
+
+        let no_value_reason = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--locator-context",
+            &path_text(&locator_path),
+            "--manifest",
+            &path_text(&manifest_path),
+            "--capture-group",
+            &path_text(&capture_group_path),
+        ])
+        .unwrap())
+        .expect_err("CaptureGroup must require the external value gate");
+        assert!(
+            no_value_reason
+                .to_string()
+                .contains("requires --value-reason")
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            secondary_store_snapshots
+        );
+
+        let capture_command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "capture",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--locator-context",
+                &path_text(&locator_path),
+                "--value-reason",
+                "Prove the public target-neutral CaptureGroup path",
+                "--manifest",
+                &path_text(&manifest_path),
+                "--capture-group",
+                &path_text(&capture_group_path),
+            ])
+            .expect("parse public v2 CaptureGroup admission")
+        };
+        let admitted = run(capture_command()).expect("admit public v2 CaptureGroup");
+        assert_eq!(value(&admitted, "capture_status"), "admitted");
+        assert_eq!(value(&admitted, "payload_kind"), "cognition_v2");
+        assert_eq!(
+            value(&admitted, "capture_group_id"),
+            capture_group_id.to_string()
+        );
+        assert_eq!(value(&admitted, "capture_group_members"), "1");
+        assert_eq!(value(&admitted, "store_written"), "false");
+        let capture_id = CaptureId::parse_canonical(&value(&admitted, "capture_id")).unwrap();
+        let intent_path = PathBuf::from(value(&admitted, "journal_path"));
+        let intent = CaptureIntent::from_json_bytes(&fs::read(&intent_path).unwrap()).unwrap();
+        assert_eq!(intent.payload_kind(), CapturePayloadKind::CognitionV2);
+        assert_eq!(
+            intent.capture_group().unwrap().capture_group_id(),
+            capture_group_id
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            secondary_store_snapshots
+        );
+
+        let replayed_admission = run(capture_command()).expect("replay same group admission");
+        assert_eq!(value(&replayed_admission, "admission_outcome"), "reused");
+        assert_eq!(
+            value(&replayed_admission, "capture_id"),
+            capture_id.to_string()
+        );
+
+        let mut changed_group = capture_group_value.clone();
+        changed_group["capture_group_id"] =
+            serde_json::to_value(workvcs_core::CaptureGroupId::new_v7()).unwrap();
+        fs::write(
+            &capture_group_path,
+            serde_json::to_vec_pretty(&changed_group).unwrap(),
+        )
+        .unwrap();
+        let conflicting_group = run(capture_command())
+            .expect_err("same idempotency payload with a different CaptureGroup must conflict");
+        assert_eq!(
+            conflicting_group.code().as_str(),
+            "capture_idempotency_conflict"
+        );
+
+        let guarded_manifest_path = fixture._tempdir.path().join("guarded-v2-capture.json");
+        fs::write(
+            &guarded_manifest_path,
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "idempotency_key": "guarded-v2-capture-must-fail",
+  "expected_head_commit_id": "{}",
+  "records": [{{"local_id":"finding","kind":"finding","statement":"Target guards do not belong in cognition_v2","scope":{{}}}}],
+  "knowledge": [],
+  "evidence": [],
+  "relations": [],
+  "rationale": {{}}
+}}"#,
+                fixture.genesis_commit_id
+            ),
+        )
+        .unwrap();
+        let guarded = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--locator-context",
+            &path_text(&locator_path),
+            "--value-reason",
+            "Reject stale target guards before journal admission",
+            "--manifest",
+            &path_text(&guarded_manifest_path),
+        ])
+        .unwrap())
+        .expect_err("cognition_v2 must reject caller-supplied target guards");
+        assert!(
+            guarded
+                .to_string()
+                .contains("must not contain target field")
+        );
+
+        let status =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .expect("inspect public group capture");
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "pending_project"
+        );
+        assert_eq!(value(&status, "secondary_references_required"), "1");
+        let store_root = fixture._tempdir.path().join("public-v2-group-stores");
+        let applied = apply_project_capture_recovery_with_fault(
+            Some(fixture.registry_path.clone()),
+            Some(store_root),
+            capture_id,
+            &ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+            None,
+        )
+        .expect("recover public v2 CaptureGroup");
+        assert_eq!(
+            applied.projection.recovery_state(),
+            CaptureRecoveryState::Completed
+        );
+        assert!(applied.target_delivery_written);
+        assert_eq!(applied.secondary_reference_events_written, 1);
+        assert!(applied.capture_completed_written);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            secondary_store_snapshots,
+            "secondary semantic Store must remain byte-stable"
+        );
+
+        let recalled = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "capture-group-recall",
+            "--project-ref-id",
+            &secondary_project_ref.to_string(),
+            "--registry",
+            &fixture.registry,
+        ])
+        .unwrap())
+        .expect("recall public CaptureGroup from secondary ProjectRef");
+        assert_eq!(value(&recalled, "associations"), "1");
+        assert_eq!(
+            value(&recalled, "association.0.capture_id"),
+            capture_id.to_string()
+        );
+        assert_eq!(value(&recalled, "association.0.capture_completed"), "true");
+        assert_eq!(value(&recalled, "store_opened"), "false");
+        assert_eq!(value(&recalled, "store_written"), "false");
+
+        let completed =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .expect("inspect completed public group capture");
+        let replayed = apply_project_capture_recovery_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            capture_id,
+            &ControlPlaneDigest::from_text(&value(&completed, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&completed, "projection_digest")).unwrap(),
+            None,
+        )
+        .expect("replay completed public group recovery");
+        assert!(!replayed.registry_written);
+        assert!(!replayed.target_delivery_written);
+        assert!(replayed.target_delivery_reused);
+        assert_eq!(replayed.secondary_reference_events_written, 0);
+        assert!(!replayed.capture_completed_written);
+
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            secondary_store_snapshots
         );
     }
 
@@ -65527,34 +66053,18 @@ mod tests {
         .expect("activate fixture journal admission");
         assert_eq!(value(&activated, "journal_admission_active"), "true");
 
-        let target_head = run(Cli::try_parse_from([
-            "workvcs",
-            "branch",
-            "head",
-            &fixture.store,
-            "--branch",
-            &fixture.branch,
-        ])
-        .expect("parse semantic target head"))
-        .expect("read semantic target head");
-        let expected_head = value(&target_head, "head_commit_id");
-        let expected_state = value(&target_head, "state_digest");
         let manifest_path = fixture._tempdir.path().join("adapter-capture.json");
         fs::write(
             &manifest_path,
-            format!(
-                r#"{{
+            r#"{
   "schema_version": 1,
   "idempotency_key": "codex-project-adapter-end-to-end",
-  "expected_head_commit_id": "{expected_head}",
-  "expected_state_digest": "{expected_state}",
-  "records": [{{"local_id":"finding","kind":"finding","statement":"Semantic Project owns a capture admitted from its desktop mirror","scope":{{"source":"isolated-adapter-fixture"}}}}],
+  "records": [{"local_id":"finding","kind":"finding","statement":"Semantic Project owns a capture admitted from its desktop mirror","scope":{"source":"isolated-adapter-fixture"}}],
   "knowledge": [],
   "evidence": [],
   "relations": [],
-  "rationale": {{"source":"adr-0513-round-5"}}
-}}"#
-            ),
+  "rationale": {"source":"adr-0513-round-5"}
+}"#,
         )
         .expect("write adapter capture manifest");
         let capture_command = || {
@@ -65576,6 +66086,7 @@ mod tests {
         };
         let admitted = run(capture_command()).expect("admit adapter-backed capture");
         assert_eq!(value(&admitted, "capture_status"), "admitted");
+        assert_eq!(value(&admitted, "payload_kind"), "cognition_v2");
         assert_eq!(value(&admitted, "resolution_status"), "resolved");
         assert_eq!(value(&admitted, "resolution_rank"), "semantic_project");
         assert_eq!(

@@ -1,11 +1,11 @@
 # Local Operator Quickstart and Recovery
 
-Status: Local V1 operator guide for CLI package `0.1.0`
+Status: Local operator guide for CLI package `0.1.0`; verify registry version and activation state before selecting a route
 Last updated: 2026-09-27
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
-this repository. It describes the locally release-ready V1 boundary, runnable
-local commands, and the package/install helper. It is not evidence that a
+this repository. It describes the locally packaged v1 and ProjectRef-v2
+boundaries, runnable local commands, and the package/install helper. It is not evidence that a
 public release, tag, or remote distribution has occurred.
 
 ## Accepted Target Versus Current Commands
@@ -40,9 +40,9 @@ journal layouts, preserves the exact installed v2 bytes in a digest-named
 snapshot, then atomically restores the verified v1 backup. A repeated rollback
 is a verified no-op only when the current v1 bytes, retained v1 backup, v2
 snapshot, receipt, and both supplied digests all match. These mutation paths
-have been validated only on isolated fixtures. Do not run apply or rollback
-against the configured live registry: the candidates have not been installed,
-and a successful preview or probe is not mutation authorization.
+have isolated-fixture validation. Their presence in the binary, a successful
+preview, or a successful probe is not mutation authorization; verify the exact
+installed revision and separately authorize the selected registry operation.
 
 For a standard `project-bindings.json`, rollback checks both the WorkVCS-home
 and registry-sidecar activation/journal aliases even if the command used only
@@ -52,9 +52,9 @@ has already been verified and a repeat would be a no-write result. Apply and
 rollback currently fail closed on non-Unix platforms. The empty-journal check
 is now protected in the source candidate by
 `<canonical-registry-path>.journal-quiescence.lock`; `--rollback-check`
-reports the lock path and state. Both race orders are fixture-tested, but v2
-journal admission remains disabled because the source route is not installed
-and no live activation is authorized.
+reports the lock path and state. Both race orders are fixture-tested. Determine
+v2 journal-admission state from its exact read-only status, never from source
+availability or an earlier observation.
 
 The source tree can inspect and prepare the exact v2 read-routing gate:
 
@@ -86,14 +86,32 @@ workvcs project journal-admission-activation --disable --expected-registry-diges
 ```
 
 Apply additionally requires exact read activation; disable acquires the shared
-quiescence lock before removing the exact marker. Both remain fixture-only and
-uninstalled. The marker permits only `capture --value-reason` intent admission;
-it does not bootstrap a ProjectRef, process journal events, or write a Store.
+quiescence lock before removing the exact marker. Both have isolated-fixture
+validation and require exact live-state verification and operation authority. The marker
+permits only `capture --value-reason` intent admission; it does not bootstrap a
+ProjectRef, process journal events, or write a Store.
 If disable returns `routing_activation_disable_indeterminate`, inspect
 `journal-admission-activation --status` before any retry.
 
-The next source-only recovery surface is intentionally separate from both
-activation markers:
+The recovery surface is intentionally separate from both activation markers:
+
+```sh
+workvcs capture --cwd "$CONTEXT" --registry "$REGISTRY" \
+  --project-ref "$PRIMARY_PROJECT_REF" \
+  --value-reason "$VALUE_REASON" \
+  --manifest "$CAPTURE_MANIFEST" \
+  --capture-group "$CAPTURE_GROUP"
+```
+
+On registry v2 this public entry creates a target-neutral `cognition_v2`
+intent. The manifest must not contain `expected_head_commit_id` or
+`expected_state_digest`; recovery derives fresh target guards later. The
+strict CaptureGroup file names exactly one canonical primary member and any
+explicit immutable-reference members. Reusing the manifest idempotency key is
+valid only with the same semantic payload and byte-equivalent canonical group
+meaning; changing either fails closed. Admission itself writes no Store.
+
+Continue only from the admitted Capture ID:
 
 ```sh
 workvcs project capture-recovery --status --capture-id "$CAPTURE_ID" [--registry "$REGISTRY"]
@@ -144,9 +162,9 @@ ProjectRef without a semantic Store read:
 workvcs project capture-group-recall --project-ref-id "$PROJECT_REF_ID" [--registry "$REGISTRY"]
 ```
 
-This source candidate is read-only, fixture-tested, and uninstalled. Neither
-it nor capture recovery may be pointed at the configured live registry in this
-round.
+Recall is read-only and fixture-tested. Capture recovery remains a distinct
+write action: use it on a configured registry only with exact current status
+digests and authority covering that delivery.
 
 `--repair-manifest` is only for an already evidenced historical ownership
 error. The strict manifest pins the current source digest, one exact v1 binding
@@ -156,12 +174,11 @@ retired while preserving the Store/Workspace/Branch target. It is not a path
 rewrite, does not repair the live registry, and is never inferred from a
 similar directory name.
 
-Until live migration and activation are separately authorized and validated,
-use the current v1 P0 commands below. A missing binding is a routing problem, not
+When migration or either activation marker is not verified, use only the
+compatible v1/read-only route. A missing binding is a routing problem, not
 evidence that valuable content should be discarded: preserve the bounded
-semantic packet, confirm the logical owner, then use current `project ensure`
-immediately before the valuable write. This compatibility packet is not
-durable WorkVCS state; the target journal guarantee is not active yet.
+semantic packet, confirm the logical owner, then choose the verified route.
+An active-context compatibility packet is not durable WorkVCS state.
 Read-only/no-record work still creates nothing.
 
 ## P0 Cutover Entry

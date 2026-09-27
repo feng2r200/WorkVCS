@@ -28,7 +28,7 @@ identity-derived Store under `<home>/stores/projects`. When the effective
 locator is a direct registry path, pass `--store-root PATH`; WorkVCS will not
 invent a Store location from the registry's parent.
 
-In current registry v1, the registry is an index, not the work history. Each
+In registry v1, the registry is an index, not the work history. Each
 binding pins Store, Workspace, and Work Branch identities. Git projects use the
 common Git directory as identity, so linked worktrees resolve to the same
 record set even when their checkout paths differ.
@@ -36,19 +36,19 @@ record set even when their checkout paths differ.
 ADR-0513 accepts a successor registry v2 in which stable ProjectRef is separate
 from semantic Project, Git, and CWD locators. A known WorkVCS home will hold the
 registry and capture journal; registry-only configuration will derive the
-journal sidecar as `<canonical-registry-path>.d`. The source-tree CLI can inspect
+journal sidecar as `<canonical-registry-path>.d`. The CLI can inspect
 the v1-to-v2 mapping with `workvcs project registry-migrate --preview`; an
 explicit `--repair-manifest PATH` may add a strictly bound historical ownership
-repair to that preview. Preview creates no sidecar. The source-tree apply
-candidate, explicit rollback candidate, and read-only rollback probe use the
-same registry precedence and introduce no new TOML key, but they have only
-fixture evidence and are not installed or live-authorized.
+repair to that preview. Preview creates no sidecar. Migration apply, explicit
+rollback, and the read-only rollback probe use the same registry precedence
+and introduce no new TOML key. They have isolated-fixture validation; command
+availability does not prove installation, current state, or live authority.
 For rollback of the standard registry filename, the probe enumerates both the
 home-root and registry-sidecar marker/journal aliases even when only one input
 form selected the registry. Canonically equivalent home paths are deduplicated.
 Apply and rollback currently require Unix atomic-replace semantics. Journal
-admission must remain disabled until it shares a quiescence lock with rollback
-and the admission-versus-rollback race is validated.
+admission and rollback share the canonical-registry quiescence lock; always
+inspect exact marker and lock state before a live operation.
 
 Versioned ordinary reads and `project routing-activation` use the same
 precedence. With `home`, the marker path is
@@ -56,8 +56,8 @@ precedence. With `home`, the marker path is
 `<canonical-registry-path>.d/routing-activation-v1.json`. Marker absence means
 off. An exact marker activates only ProjectRef-v2 reads and is bound to the
 registry ID, revision, and digest. It does not activate the capture journal or
-Store writes. The live control plane remains unactivated until a separate
-authorized operation installs the exact candidate.
+Store writes. Determine live state only from the selected registry and its
+exact marker; activation remains a separately authorized operation.
 
 Concrete locator adapters do not add a configuration key. A trusted tool
 integration passes one bounded invocation explicitly with

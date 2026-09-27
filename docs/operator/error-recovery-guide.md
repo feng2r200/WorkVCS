@@ -1,6 +1,7 @@
 # WorkVCS Error Recovery Guide
 
-Status: Phase 4NI current V1-local operator guidance.
+Status: Current V1-local guidance with ADR-0513 migration and capture-recovery candidates
+Last updated: 2026-09-27
 
 This guide covers the stable error fields emitted by the current CLI. It is
 intentionally an operator recovery contract, not a new recovery engine or Store
@@ -56,7 +57,132 @@ recovery_registry=<RESOLVED_REGISTRY_PATH>
 
 Confirm that `recovery_cwd` is the intended logical project, then use
 `workvcs project ensure --cwd <PATH>`. A direct registry locator also needs
-`--store-root PATH`. Discovery itself never performs this write.
+`--store-root PATH`. Discovery itself never performs this write. Do not turn
+this error into a no-record decision or silently redirect a known semantic
+Project into its repository/mirror. The source-tree ProjectRef-v2 read route
+uses `control_plane_invalid` for absent/stale activation and unresolved,
+unbound, or conflicting ownership. The source-tree value-qualified `capture`
+route can journal admitted content without target Store delivery, but it is
+not installed or live-activated and still reports routing state in successful
+output rather than dedicated `ownership_unbound` or
+`registry_migration_required` error codes.
+
+For `--locator-adapter-context`, distinguish absence from invalid input. An
+omitted adapter or a valid context with neither Project metadata nor mirror
+evidence means the provider is unavailable, so the generic resolver may use
+verified Git then CWD. A supplied file with an unsupported adapter, unknown or
+secret-bearing field, malformed Project/thread ID, unverifiable mirror path,
+or bad verification-source set is an explicit invalid assertion and fails
+closed. Correct or regenerate the trusted handoff; do not delete it merely to
+force repository fallback when semantic Project context is known. When
+authoritative metadata conflicts with the canonical mirror, the authoritative
+Project wins and `context_mismatch` must be investigated before treating the
+mirror as related context.
+
+`project routing-activation --status` is read-only for registry v1 or v2.
+`--preview` requires v2 and reports the exact registry and candidate digests.
+Activation apply must receive both expected digests and refuses to replace an
+invalid, stale, or existing nonmatching marker. Do not delete or overwrite a
+marker as error recovery: inspect the selected registry, marker path, and
+reported state. A matching existing marker is an idempotent reuse. A successful
+marker enables v2 reads only and never authorizes journal or Store writes.
+If marker installation has completed or may have completed but temp cleanup,
+directory sync, or post-install verification fails, the command returns
+`routing_activation_install_indeterminate`. Do not replay apply immediately.
+Run `project routing-activation --status` against the same registry, preserve
+the reported marker, registry, and candidate digests, and decide recovery only
+from that observed state. An exact active marker makes a later exact apply an
+idempotent reuse; any other state remains fail-closed.
+
+`project journal-admission-activation --status` and `--preview` are read-only.
+Apply requires the exact registry and candidate digests plus an active exact
+read-routing marker. Disable requires the exact registry and installed marker
+digests. Both operations hold the registry lock before the shared
+journal-quiescence lock; disable therefore excludes new admissions before
+removing the marker. Never delete or hand-edit this marker. A malformed,
+stale, wrong-scope, or symlinked marker is fail-closed. A failed post-install
+step uses `routing_activation_install_indeterminate`; inspect journal-admission
+status before retrying. A failed post-removal step uses
+`routing_activation_disable_indeterminate`; status must prove whether the
+marker is absent before any retry or recovery. Neither successful state change
+authorizes ProjectRef bootstrap or target Store delivery.
+
+`project capture-recovery --status --capture-id ID` is the read-only authority
+for one admitted capture's recovery state. It validates immutable events,
+rebuilds the projection in memory, compares any stored projection, and reports
+the current registry digest and exact next action. A malformed stored
+projection may be rebuilt from valid events; an invalid event sequence,
+payload digest, or digest chain is authority corruption and fails closed.
+
+Recovery apply is a distinct, explicit operation requiring both the exact
+status-observed registry and projection digests. A stale guard fails before
+mutation. `capture_recovery_install_indeterminate` means a registry, event, or
+projection install may already be durable. Do not delete an initialized Store,
+restore an older registry, or blindly replay. Run `--status` first and continue
+forward using fresh digests only if that observed action remains intended.
+For `pending_primary`, the explicit apply path records exact target guards,
+performs one idempotent semantic capture, and records its receipt. A failure
+after the Store commit but before the receipt is indeterminate: status still
+shows `pending_primary`, and retry must use the same capture so the Store
+returns the existing commit with `reused=true`. Do not delete or roll back that
+Store. `legacy_manifest_upgrade_required` means the retained v1 manifest did
+not carry guards matching the selected Branch; preserve it and make a separate
+upgrade decision. `pending_references` preserves a successful primary while
+one or more immutable secondary references are missing. Retry from fresh
+status digests: the recovery path installs only missing reference events and
+must not roll back or redeliver the primary. If all references are present but
+the completion summary is absent, `recovery_action=apply_capture_completion`
+means only the idempotent `capture_completed` event remains. Use the read-only
+`project capture-group-recall --project-ref-id ID` command to inspect installed
+associations from a secondary ProjectRef; it must report `store_opened=false`
+and `store_written=false`. A missing secondary ProjectRef remains pending and
+is not silently recreated. After canonical delivery,
+`restore_exact_canonical_owner_or_start_new_capture` means current resolution
+no longer names that authority, while
+`start_new_capture_canonical_target_changed` means its binding tuple changed;
+neither condition permits retargeting the existing CaptureGroup. This
+candidate is uninstalled and fixture-only.
+
+Migration ownership-repair manifests fail as `control_plane_invalid` when
+their schema, semantic locator, source digest, binding key, or target digest is
+not exact. Do not weaken or hand-edit around the guard. Regenerate the manifest
+from the current registry and current bounded ownership evidence, then rerun
+preview. A repaired preview that reports a target `query_invalid` still means
+the Store/Workspace/Branch/content target must be corrected; the historical
+repair never bypasses target validation. Neither error authorizes apply.
+
+The isolated apply candidate emits `registry_migration_apply_failed` only
+before authoritative replacement, so v1 remains authoritative. Recompute the
+source and preview digests after correcting the cause; an exact existing backup
+may be reused, but no conflicting backup or temp artifact may be overwritten.
+`registry_migration_install_indeterminate` means the atomic rename already
+completed and a later step failed. Do not retry apply or restore the backup by
+assumption. Inspect the actual registry and run the digest-locked read-only
+`--rollback-check`. The source-tree `--rollback` candidate is a separate,
+explicitly authorized operation and has only isolated-fixture evidence.
+
+`registry_rollback_failed` means the v2-to-v1 authoritative replacement did
+not occur. Correct the reported digest, receipt, activation, journal, backup,
+snapshot, lock, or temp conflict. An exact v2 rollback snapshot installed
+before the failure may remain reusable, but it is never treated as authority.
+`registry_rollback_install_indeterminate` means the v1 restore rename occurred
+and a later durability or verification step failed. Run `--rollback-check`
+with the same digests first. A `v1_restored` result permits an explicit repeat
+to return a verified no-op; do not blindly retry or infer recovery.
+For a standard registry filename the probe checks both WorkVCS-home and
+registry-sidecar activation/journal aliases, so switching between configured
+home and explicit `--registry` is not a bypass. Apply and rollback are currently
+unsupported on non-Unix platforms. The source candidate now coordinates
+admission and rollback with
+`<canonical-registry-path>.journal-quiescence.lock`; live durable admission is
+still disabled even though the source candidate has an actual routed caller.
+`--rollback-check` reports the exact path and one of `absent`,
+`present`, `invalid`, or `unreadable`. A present lock may be active or may be
+an orphan after a crash; WorkVCS intentionally does not steal it from its age
+or PID. Confirm that no admission or rollback owner remains before removing
+that exact file under a separately controlled procedure, then rerun the
+read-only probe. Do not delete a broad lock directory or infer recovery from a
+retry timeout.
 
 For JSON stderr, pass `--error-format json`. WorkVCS business errors render one
 JSON object:
@@ -95,6 +221,16 @@ through current CLI output.
 | error_code | category | retryable | Recovery action |
 | --- | --- | --- | --- |
 | `canonical_encoding_invalid` | `canonical` | `false` | Stop using the malformed canonical payload as authority. Regenerate it through the WorkVCS CLI or schema-backed producer, then rerun the operation with the corrected payload. |
+| `control_plane_invalid` | `control_plane` | `false` | Stop using the malformed, stale, unbound, conflicting, or inactive control-plane input. For migration repair, regenerate an exact source/key/target-bound manifest. For v2 reads, inspect the registry and activation status, then correct the evidence or use a separately authorized exact activation candidate; never bypass a digest, owner rank, or marker guard. |
+| `capture_not_persisted` | `control_plane` | `false` | The journal did not durably admit the capture. Preserve the bounded pending semantic packet, repair the journal path, permissions, lock, or storage fault, and retry with the same idempotency key before any target Store write. |
+| `capture_idempotency_conflict` | `control_plane` | `false` | The idempotency key already names different capture content or identity. Inspect the existing immutable intent; reuse its exact payload or choose a genuinely new key for a distinct capture. Never overwrite the admitted intent. |
+| `registry_migration_apply_failed` | `control_plane` | `false` | The atomic registry replacement did not occur. Preserve v1, correct the reported digest, manifest, Store, lock, backup, or temp conflict, recompute both expected digests, and retry only with explicit apply authority. |
+| `registry_migration_install_indeterminate` | `control_plane` | `false` | The atomic rename occurred but later durability or verification failed. Inspect the actual v2 registry and exact backup with `registry-migrate --rollback-check`; do not retry apply or infer rollback. |
+| `registry_rollback_failed` | `control_plane` | `false` | The authoritative registry was not replaced. Correct the reported digest, receipt, activation, journal, backup, snapshot, lock, or temp conflict; reuse an exact retained v2 snapshot only through another explicitly authorized rollback. |
+| `registry_rollback_install_indeterminate` | `control_plane` | `false` | The v1 restore rename occurred but later durability or verification failed. Run `registry-migrate --rollback-check` with the same digests; continue only from its observed `v1_restored` or `blocked` state. |
+| `routing_activation_install_indeterminate` | `control_plane` | `false` | The activation marker was installed or may have been installed before a later cleanup, durability, or verification failure. Run `project routing-activation --status` against the same registry before any retry; never delete, overwrite, or infer marker state from the failed command alone. |
+| `routing_activation_disable_indeterminate` | `control_plane` | `false` | The journal-admission marker was removed or may have been removed before a later durability or verification failure. Run `project journal-admission-activation --status` against the same registry before retry or recovery; never infer disabled state from the failed command alone. |
+| `capture_recovery_install_indeterminate` | `control_plane` | `false` | A recovery registry, event, target commit, receipt, or projection install may already be durable. Run `project capture-recovery --status --capture-id ID` against the same registry, use its fresh registry/projection digests, and converge forward only from the observed state; never guess rollback or remove a bootstrapped or delivered Store. |
 | `digest_invalid` | `canonical` | `false` | Recompute the digest from the current canonical bytes. Do not copy a digest from another object or bypass digest checks. |
 | `evidence_invalid` | `evidence` | `false` | Fix the Evidence content, kind, or referenced entities before retrying. Preserve the failed payload for audit if it came from an external artifact. |
 | `evidence_not_found` | `evidence` | `false` | Confirm the Evidence id at the selected branch/head and use `evidence show` or adjacent list commands to recover the correct id. Do not recreate Evidence until the missing selector is understood. |
@@ -103,6 +239,7 @@ through current CLI output.
 | `integrity_invalid` | `integrity` | `false` | Stop treating the Store as authoritative. Run `workvcs doctor "$STORE" --require-valid` and `workvcs store integrity "$STORE" --require-valid`, then repair from a known-good Store or Bundle. |
 | `knowledge_invalid` | `knowledge` | `false` | Fix the Knowledge payload, kind, or support references. Avoid recording semantic knowledge that is not backed by the current evidence chain. |
 | `knowledge_not_found` | `knowledge` | `false` | Re-check the Knowledge id at the selected branch/head. Use current list/show output before deciding whether new Knowledge should be created. |
+| `locator_already_claimed` | `control_plane` | `false` | Do not reassign or merge automatically. Inspect both ProjectRefs and their exact locator evidence, then use a separately authorized link or conflict-resolution operation. |
 | `commit_not_found` | `replay` | `false` | Confirm the commit id belongs to this Store lineage and selected branch. If it came from a Bundle or copied Store, validate the import/export boundary before retrying. |
 | `branch_head_conflict` | `mutation` | `true` | Refresh the branch head, inspect the intervening history, then rerun only if the mutation still represents the operator intent against the new head. Never force a stale expected head. |
 | `mutation_postcondition_failed` | `mutation` | `false` | The write completed and only a result-dependent expectation failed. Inspect `operation`, `operation_result`, and current state before any new action; never blindly replay the original mutation. Caller-known deterministic expectations fail before writing and do not use this code. |
@@ -115,7 +252,7 @@ through current CLI output.
 | `goal_not_found` | `goal` | `false` | Re-check the Goal id at the selected branch/head. Use current Goal list/show output before creating a replacement. |
 | `plan_invalid` | `plan` | `false` | Correct Plan content, status, containment, or transition input. Keep Plan changes aligned with the current Goal and Task graph. |
 | `plan_not_found` | `plan` | `false` | Re-check the Plan id at the selected branch/head. If the Plan was superseded, use the current containment path. |
-| `project_binding_not_found` | `query` | `false` | Confirm `recovery_cwd` is the intended logical project, then run `project ensure`. Supply `--store-root` when using a direct registry locator. Discovery made no changes. |
+| `project_binding_not_found` | `query` | `false` | Current v1: preserve any valuable semantic packet, confirm the intended logical owner, then run `project ensure`; supply `--store-root` for a direct registry locator. Discovery made no changes. Never interpret the miss as no-record. |
 | `query_invalid` | `query` | `false` | Fix selector syntax, required ids, filter values, or mutually exclusive arguments. Use the relevant subcommand help before rerunning. |
 | `query_unsupported` | `query` | `false` | Choose a supported query shape or defer the workflow. Do not treat this as a transient Store failure. |
 | `record_invalid` | `record` | `false` | Fix Record kind, content, support references, or relation inputs. Keep provenance links explicit. |

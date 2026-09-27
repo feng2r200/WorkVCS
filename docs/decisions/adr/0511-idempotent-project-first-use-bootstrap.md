@@ -1,6 +1,6 @@
 # ADR-0511: Idempotent Project First-Use Bootstrap
 
-Status: Accepted
+Status: Accepted current v1 capability; project identity and journal-first bootstrap semantics superseded by ADR-0513 (foundation implemented; activation pending)
 Date: 2026-09-17
 
 ## Context

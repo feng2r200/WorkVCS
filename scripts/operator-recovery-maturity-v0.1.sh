@@ -123,7 +123,8 @@ audit_error_guide_coverage() {
 
     sed -n '/impl ErrorCode {/,/impl fmt::Display for ErrorCode/p' \
         "$repo_root/crates/workvcs-core/src/error.rs" \
-        | awk -F '"' '/Self::/ && /=>/ {print $2}' \
+        | grep -Eo '"[a-z_]+"' \
+        | tr -d '"' \
         | sort -u >"$core_codes_file"
     awk -F '`' '/^\| `[^`]+` \|/ {print $2}' \
         "$repo_root/docs/operator/error-recovery-guide.md" \

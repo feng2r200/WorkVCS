@@ -1,5 +1,6 @@
 pub mod canonical;
 mod closeout;
+pub mod control_plane;
 pub mod engine;
 pub mod error;
 mod history;
@@ -167,11 +168,13 @@ pub use history::{
     WorkspaceResourceAssociationResult, WorkspaceResourceAssociationSnapshot,
 };
 pub use identity::{
-    BranchId, ChangeSetId, CheckpointId, ClaimId, CommitId, ContextPacketId, Digest, EntityId,
-    EntityVersionId, EventId, EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId,
-    ExternalRefId, ExternalVersionId, ImportId, KnowledgeSpaceId, LineageId, MergeId, MergeItemId,
-    MigrationId, OperationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId,
-    SessionDiffId, SessionId, StoreId, WorkspaceId,
+    BranchId, CaptureGroupId, CaptureId, ChangeSetId, CheckpointId, ClaimId, CommitId,
+    ContextPacketId, DeliveryId, Digest, EntityId, EntityVersionId, EventId, EvidenceId,
+    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalRefId, ExternalVersionId, ImportId,
+    KnowledgeSpaceId, LineageId, MergeId, MergeItemId, MigrationId, OperationId, ProjectLinkId,
+    ProjectLocatorId, ProjectRefId, RegistryId, RegistryObservationId, RelationId,
+    RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId,
+    WorkspaceId,
 };
 pub use runtime::{
     ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardAction, ClaimGuardOptions,

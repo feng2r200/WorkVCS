@@ -1,6 +1,6 @@
 # ADR-0497: Work-Governance Cutover P0 Entrypoints
 
-Status: Accepted; configuration and No-Plan recording clauses superseded by ADR-0501; first-use bootstrap extended by ADR-0511
+Status: Accepted; configuration and No-Plan recording clauses superseded by ADR-0501; Project identity and routing clauses superseded by ADR-0513 (foundation implemented; activation pending)
 Date: 2026-09-10
 
 ## Context

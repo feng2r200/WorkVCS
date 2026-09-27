@@ -1,6 +1,6 @@
 # ADR-0501: Stable Configuration, Standalone Cognition, and Skill Distribution
 
-Status: Accepted / Implemented (current capability)
+Status: Accepted / Implemented (current capability); durable routing target extended by ADR-0513 (foundation implemented; activation pending)
 Date: 2026-09-11
 
 ## Context

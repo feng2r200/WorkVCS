@@ -1,6 +1,46 @@
 # Versioning Engine
 
-## P0 cutover entry boundary
+## Project entry boundary
+
+### Accepted ProjectRef routing target
+
+ADR-0513 places a journal-first routing boundary before the versioning engine.
+After an external value gate admits content, WorkVCS installs one immutable,
+bounded CaptureIntent before any target Store write. Project ownership resolves
+through explicit ProjectRef, verified semantic Project, Git common directory,
+CWD, then pending. An unbound higher-ranked locator blocks lower-ranked
+fallback and may bootstrap its ProjectRef and target only after the intent is
+durable.
+
+The target Store operation remains one ordinary atomic/idempotent Work-State
+transition. Registry replacement, journal events, and separate Store
+transitions are not one transaction. If a Store commit succeeds before its
+journal receipt, replay reuses the Store idempotency result. Secondary delivery
+failure never rolls back the primary canonical Record; it remains an explicit
+pending delivery.
+
+Read-only and explicit no-record paths stop before journal admission. One
+CaptureGroup may index multiple project contexts, but exactly one primary Store
+owns its canonical mutable Record. Control-plane references do not enter the
+Workspace Entity/Relation mappings.
+
+The core registry/resolver/intent-admission foundation is implemented. The
+source-tree CLI has versioned ordinary reads plus a default-off,
+registry-digest-bound activation candidate for ProjectRef-v2 read routing.
+The separate journal marker gates intent admission only. A further
+fixture-tested source candidate adds immutable recovery events, rebuildable
+projections, read-only recovery status, and explicit digest-locked convergence
+from an unbound owner to one ProjectRef plus a pristine binding. The explicit
+recovery action now fixes exact Branch guards, reuses the existing atomic
+capture engine for one primary semantic commit, and persists an immutable
+receipt; commit-before-receipt replay returns the same target result. Neither
+marker activates that recovery command. The next isolated-fixture source slice
+adds authority-derived CaptureGroup state, missing-only immutable-reference
+retry, an idempotent completion receipt, and read-only recall by secondary
+ProjectRef without opening its semantic Store. Live Store delivery remains
+pending.
+
+### Current P0 cutover entry and versioning commands
 
 P0-1 project ensure/bind/discover and read-only `resume --cwd` are entry projections
 around the versioning engine. Binding uses the Git common directory and an

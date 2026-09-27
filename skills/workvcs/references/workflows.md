@@ -3,16 +3,60 @@
 ## First durable write in an unbound project
 
 Keep discovery read-only. If it returns `project_binding_not_found`, first
-confirm the logical project from the user's target and the work's primary
-artifact or operation boundary. Do not bind an ambient mirror or temporary
+confirm the logical owner using explicit ProjectRef, verified semantic Project,
+Git common directory, CWD, then pending resolution. The work's artifact or
+operation path is evidence and boundary context, not an automatic override of
+a higher-ranked semantic owner. Do not bind an ambient mirror or temporary
 working directory merely because it is the process cwd.
+
+Value admission precedes this routing step. Preserve admitted content as one
+bounded pending semantic packet when the installed CLI cannot bind the
+verified semantic owner. The source-tree `capture --value-reason` candidate
+now persists a target-neutral v1 intent or, behind both exact v2 markers, a
+registry-coupled intent before creating a ProjectRef or writing a Store. It is
+not installed or live-activated, so the write commands below remain the live
+v1 compatibility path. The available
+`project registry-migrate --preview` command is inspection-only and is not a
+capture or recovery path. The source-tree migration apply, explicit rollback,
+and read-only rollback probe do not activate write routing and must not be used
+on the live registry without separate authorization for the exact operation.
+For a standard registry filename, rollback enumerates both home-root and
+registry-sidecar activation/journal aliases; changing from configured home to
+explicit `--registry` is not a bypass. The mutation candidates are currently
+Unix-only. Their empty-journal proof is admissible only while v2 journal
+admission remains disabled. The source route now shares one canonical-registry
+quiescence lock, uses the closed alias, and repeats the exact registry identity
+check around its restrictive activation callback. Enabling it still requires
+installation plus a separately authorized, digest-locked
+`project journal-admission-activation --apply`; disabling it requires the
+exact installed marker digest. Neither action activates bootstrap, event
+processing, or Store delivery.
+The separate source-tree `project capture-recovery` candidate starts with
+`--status --capture-id <id>`. Status is read-only and produces the registry
+and projection digests needed by an explicit `--apply`. Apply can converge an
+unbound semantic, Git, or CWD owner to exactly one ProjectRef and pristine
+genesis Store binding; conflict or unresolved ownership remains pending and
+does not fall back. This slice does not write the manifest or semantic Store
+objects. After `capture_recovery_install_indeterminate`, status is mandatory
+before digest-locked forward recovery; rollback is never inferred. The
+candidate is fixture-only, uninstalled, and not a live compatibility path.
+The source-tree ordinary-read route
+can consume registry v2 only after a separate, exact `project
+routing-activation` marker is installed; this gate is default-off and does not
+provide journal durability. The optional `--repair-manifest` only previews a
+source/key/target/evidence-bound historical ownership correction; it does not
+mutate the registry, rewrite a path, or activate routing.
 
 Run `project ensure` only when the first durable write is useful. For planned
 work, ensure and then admit the Plan, carrying forward the useful pre-Plan
 findings, decisions, unknowns, constraints, and evidence. For No-Plan work,
 ensure only when a standalone semantic item is worth capturing. A failed
 ensure pauses persistence, not otherwise safe work; keep a bounded pending
-packet and retry after the locator/bootstrap issue is fixed.
+packet and retry after the locator/bootstrap issue is fixed. Never fall back
+from a known unbound semantic Project to a bound repository merely for
+convenience. The pending packet remains active-context compatibility state, not
+a durability guarantee, until the candidate is installed and the accepted
+journal route is separately activated.
 
 ## Standalone cognition
 
@@ -57,6 +101,40 @@ Run `workvcs capture --cwd <project> --manifest <file>`. Optional expected
 head/state fields add CAS guards; the CLI uses the currently verified bound
 head when they are omitted. Reusing the same key with identical content returns
 the prior result; a conflicting payload fails.
+
+After the exact source candidate is installed, the journal-first form is
+`workvcs capture --cwd <context> --manifest <file> --value-reason <reason>`.
+It may also receive `--project-ref ID`, a strict `--locator-context FILE` with
+already-verified semantic evidence, or a strict
+`--locator-adapter-context FILE` from a trusted integration. The first concrete
+dispatch target is `codex-app-project-metadata/v1`; its bounded context may
+contain verified task-Project metadata, a canonical Project-mirror path, or
+both. Adapter absence yields no semantic evidence and permits Git/CWD
+degradation; explicit malformed adapter input fails closed. Other tools can
+add their own adapter behind the same provider interface without changing the
+core resolver or the ownership order.
+On registry v1 it records a target-neutral intent and reports migration
+required. On registry v2 it additionally requires both exact activation
+markers and records only the immutable intent. Do not substitute a
+repository-local binary for the installation and live-activation gates.
+
+Primary delivery is a separate operator action, never an automatic continuation
+of `capture`: first run
+`workvcs project capture-recovery --status --capture-id <id>`, then use the
+fresh registry/projection digests with `--apply` only inside the explicitly
+authorized control plane. Apply records target guards before the Store commit;
+if status remains `pending_primary` after an uncertain result, replay the same
+capture so target idempotency can recover a committed-but-unreceipted result.
+Receipt reuse across a registry refresh additionally requires the same
+ProjectRef and exact Store/Workspace/Branch target.
+`legacy_manifest_upgrade_required` requires a separate manifest-upgrade
+decision. At `pending_references`, use fresh status digests and repeat the
+explicit apply: it validates each member ProjectRef and installs only missing
+immutable-reference events without opening a secondary Store. Recall an
+installed association read-only with
+`workvcs project capture-group-recall --project-ref-id <id> [--registry <path>]`.
+The current source candidate is fixture-only and must not be pointed at the
+live registry or substituted for installation and activation.
 
 ## No-Plan to Plan
 

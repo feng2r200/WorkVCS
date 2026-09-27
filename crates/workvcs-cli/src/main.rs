@@ -1,4 +1,6 @@
-use clap::{ArgGroup, Parser, Subcommand, ValueEnum, error::ErrorKind};
+mod locator_adapter;
+
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::{MatchOptions, Pattern, glob_with};
 use serde::Deserialize;
 use std::ffi::OsStr;
@@ -9,6 +11,25 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use workvcs_core::control_plane::{
+    BoundedAdapterContext, CanonicalPath, CaptureAdmissionOutcome, CaptureCompletedPayload,
+    CaptureEventAppendOutcome, CaptureEventPayload, CaptureGroupMemberDelivery,
+    CaptureGroupResolvedPayload, CaptureIntent, CaptureJournal, CapturePayloadKind,
+    CaptureProjectionWriteOutcome, CaptureRecoveryState, ControlPlaneDigest,
+    DeliveryAppliedPayload, DeliveryFailedPayload, DeliveryFailureCode, DeliveryStartedPayload,
+    FirstWriteProjectBinding, JournalAdmissionActivationCandidate, JournalQuiescenceLock,
+    LocatorAssurance, LocatorAuthority, LocatorEvidence, LocatorRole, LocatorState,
+    MigrationBindingValidation, MigrationHistoricalIdentityDisposition, MigrationNamespaceStrategy,
+    MigrationOwnershipRepairManifest, MigrationPreviewMapping, MigrationTargetCoincidence,
+    PathLocatorEvidence, ProjectBinding as ProjectBindingV2, ProjectBindingReadyPayload,
+    ProjectBindingV1, ProjectBootstrapOutcome, ProjectMaturity, ProjectRegistryJournalAlias,
+    ProjectRegistryV1, ProjectRegistryV2, ReferenceAppliedPayload, RegistryMigrationPreview,
+    ResolutionBasis, ResolutionDiagnostic, ResolutionMode, ResolutionRank,
+    ResolutionRecordedPayload, ResolutionStatus, RoutingActivationCandidate, UnifiedLocatorInput,
+    UtcTimestamp, build_primary_delivery_receipt, build_registry_v1_migration_preview_with_repairs,
+    materialize_registry_v1_migration_candidate, prepare_primary_delivery_from_projection,
+    project_registry_journal_quiescence_lock_path, resolve_project, resolve_unbound_project,
+};
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
@@ -26,7 +47,7 @@ use workvcs_core::{
     BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
     BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue, CaptureId,
     ChangeOperationListResult, ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot,
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
@@ -42,24 +63,25 @@ use workvcs_core::{
     CloseoutInspectStoreFileMetadata, CloseoutInspectTargetDigestStatus, CloseoutInspectTargetKind,
     CloseoutInspectTargetResolution, CloseoutInspectTaskProjection,
     CloseoutInspectVerificationTargetKind, CognitionCaptureManifest, CognitionCaptureOptions,
-    CognitionCaptureResult, CommitId, CommitSnapshot, ContextItemCategory, ContextOverview,
-    ContextOverviewOptions, ContextPacket, ContextPacketId, ContextPacketListOptions,
-    ContextPacketListResult, ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot,
-    ContextPacketSnapshotSchemaMigrationResult, ContextProfile, DecisionRecordSupersedeCommit,
-    DecisionRecordSupersedeOptions, Digest, Engine, EntityId, EntityTransitionCommit,
-    EntityTransitionOptions, EntityVersionId, EventId, EventListOptions, EventListResult,
-    EventSnapshot, EvidenceContentInput, EvidenceContentReadResult, EvidenceContentSnapshot,
-    EvidenceCreateOptions, EvidenceCreateResult, EvidenceId, EvidenceListOptions,
-    EvidenceListResult, EvidenceSnapshot, ExposureId, ExposureTransitionId, ExternalObjectId,
-    ExternalObjectRefListOptions, ExternalObjectRefListResult, ExternalObjectRefRecordOptions,
-    ExternalObjectRefRecordResult, ExternalObjectRefSnapshot, ExternalObjectReferenceScope,
-    ExternalRefId, ExternalVersionId, FindingRecordCorrectionCommit,
-    FindingRecordCorrectionOptions, GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalStatus,
-    GoalTransitionCommit, GoalTransitionOptions, HistoryEntry, HistoryQueryOptions, ImportId,
-    IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
-    KnowledgeExposureAdoptResult, KnowledgeExposureAdoptionCandidateOptions,
-    KnowledgeExposureAdoptionCandidateResult, KnowledgeExposureCreateLocalOptions,
-    KnowledgeExposureCreateResult, KnowledgeExposureDerivedFromRelationCreateCommit,
+    CognitionCaptureOutcome, CognitionCaptureResult, CommitId, CommitSnapshot, ContextItemCategory,
+    ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketId,
+    ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
+    ContextPacketSaveResult, ContextPacketSnapshot, ContextPacketSnapshotSchemaMigrationResult,
+    ContextProfile, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine,
+    EntityId, EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId,
+    EventListOptions, EventListResult, EventSnapshot, EvidenceContentInput,
+    EvidenceContentReadResult, EvidenceContentSnapshot, EvidenceCreateOptions,
+    EvidenceCreateResult, EvidenceId, EvidenceListOptions, EvidenceListResult, EvidenceSnapshot,
+    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
+    ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
+    ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
+    FindingRecordCorrectionCommit, FindingRecordCorrectionOptions, GoalCreateCommit,
+    GoalCreateOptions, GoalSnapshot, GoalStatus, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryEntry, HistoryQueryOptions, ImportId, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeExposureAdoptOptions, KnowledgeExposureAdoptResult,
+    KnowledgeExposureAdoptionCandidateOptions, KnowledgeExposureAdoptionCandidateResult,
+    KnowledgeExposureCreateLocalOptions, KnowledgeExposureCreateResult,
+    KnowledgeExposureDerivedFromRelationCreateCommit,
     KnowledgeExposureDerivedFromRelationCreateOptions, KnowledgeExposureLifecycleStatus,
     KnowledgeExposureListOptions, KnowledgeExposureListResult,
     KnowledgeExposureRefreshSourceStatusOptions, KnowledgeExposureRefreshSourceStatusResult,
@@ -86,7 +108,7 @@ use workvcs_core::{
     PlanCreateCommit, PlanCreateOptions, PlanEvolutionManifest, PlanEvolutionOptions,
     PlanEvolutionOutcome, PlanEvolutionResult, PlanSnapshot, PlanStatus, PlanTransitionCommit,
     PlanTransitionOptions, PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
-    PrimaryContainmentSnapshot, RecordCreateCommit, RecordCreateOptions,
+    PrimaryContainmentSnapshot, ProjectRefId, RecordCreateCommit, RecordCreateOptions,
     RecordCurrentnessAuditItem, RecordCurrentnessAuditOptions, RecordCurrentnessAuditResult,
     RecordKind, RecordKnowledgeRelationCreateCommit, RecordKnowledgeRelationCreateOptions,
     RecordKnowledgeRelationListOptions, RecordKnowledgeRelationListResult,
@@ -147,7 +169,7 @@ Commands:
   id            Generate and validate typed WorkVCS identifiers
   store         Inspect Store metadata, lineage, and migrations
   config        Inspect effective WorkVCS configuration
-  project       Ensure, bind, discover, and audit project Store entrypoints
+  project       Manage project bindings and controlled registry migration
   history       List commit history from a branch or commit
   changeset     Inspect changesets and change operations
   commit        Inspect commit metadata and causal anchors
@@ -254,6 +276,12 @@ enum RecallProfileArg {
     Retrospective,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum MigrationPreviewFormatArg {
+    Text,
+    Json,
+}
+
 impl RecallProfileArg {
     fn as_str(self) -> &'static str {
         match self {
@@ -342,7 +370,7 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    #[command(about = "Ensure, bind, discover, and audit project Store entrypoints")]
+    #[command(about = "Manage project bindings and preview registry migration")]
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
@@ -667,6 +695,9 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         registry: Option<PathBuf>,
 
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
+
         #[arg(long)]
         session: Option<String>,
 
@@ -686,8 +717,8 @@ enum Command {
         expected_state_digest: Option<String>,
     },
     #[command(
-        about = "Atomically record standalone cognition without requiring a Session or Plan",
-        long_about = "Atomically and idempotently create Records, Knowledge, Evidence metadata, and valid semantic relations from a JSON manifest. This command does not require or create a Goal, Plan, Task, Session, or Claim."
+        about = "Record or journal standalone cognition without requiring a Session or Plan",
+        long_about = "On registry v1, the legacy form atomically writes the bound Store; adding --value-reason instead admits one target-neutral immutable journal intent. On registry v2, --value-reason plus the exact read-routing and journal-admission activations route the same tool-neutral locator input into the registry-coupled journal. Journal admission does not bootstrap a ProjectRef or write a target Store. All forms are idempotent by the manifest key and do not require or create a Goal, Plan, Task, Session, or Claim."
     )]
     Capture {
         #[arg(
@@ -703,6 +734,16 @@ enum Command {
             help = "One-command registry override; otherwise use WorkVCS configuration precedence"
         )]
         registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
+
+        #[arg(
+            long,
+            value_name = "TEXT",
+            help = "Why this content passed the external durable-value gate; required for ProjectRef-v2 journal admission"
+        )]
+        value_reason: Option<String>,
 
         #[arg(
             long,
@@ -729,6 +770,9 @@ enum Command {
             help = "One-command registry override; otherwise use WorkVCS configuration precedence"
         )]
         registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
 
         #[arg(long, value_enum, default_value_t = RecallProfileArg::Brief, help = "Projection purpose: active work, Agent handoff, or reasoning-first retrospective")]
         profile: RecallProfileArg,
@@ -1599,6 +1643,30 @@ enum StoreCommand {
     },
 }
 
+#[derive(Clone, Debug, Default, Args)]
+struct ProjectLocatorArgs {
+    #[arg(
+        long,
+        value_name = "PROJECT_REF",
+        help = "Explicit ProjectRef owner; missing or unknown values fail closed"
+    )]
+    project_ref: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Strict tool-neutral semantic locator evidence envelope"
+    )]
+    locator_context: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Strict adapter-dispatch envelope for bounded semantic Project context"
+    )]
+    locator_adapter_context: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 enum ProjectCommand {
     #[command(about = "Ensure a project has a verified default Store binding")]
@@ -1656,6 +1724,9 @@ enum ProjectCommand {
 
         #[arg(long, value_name = "PATH", help = "One-command registry override")]
         registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
     },
     #[command(about = "List and verify every project binding in the selected registry")]
     List {
@@ -1667,6 +1738,253 @@ enum ProjectCommand {
             help = "Fail if any binding, Store identity, project identity, or local Evidence object is invalid"
         )]
         require_valid: bool,
+    },
+    #[command(about = "Preview, apply, roll back, or inspect registry v1/v2 recovery")]
+    #[command(group(
+        ArgGroup::new("registry-migration-action")
+            .required(true)
+            .multiple(false)
+            .args(["preview", "apply", "rollback_check", "rollback"])
+    ))]
+    #[command(group(
+        ArgGroup::new("registry-rollback-action")
+            .required(false)
+            .multiple(false)
+            .args(["rollback_check", "rollback"])
+    ))]
+    RegistryMigrate {
+        #[arg(long, help = "Run the read-only migration preview")]
+        preview: bool,
+
+        #[arg(
+            long,
+            requires_all = ["expected_source_digest", "expected_preview_digest"],
+            help = "Apply the exactly digest-locked migration candidate"
+        )]
+        apply: bool,
+
+        #[arg(
+            long,
+            requires_all = ["expected_installed_digest", "expected_backup_digest"],
+            help = "Read-only probe of v2 rollback readiness or exact v1 restored state"
+        )]
+        rollback_check: bool,
+
+        #[arg(
+            long,
+            requires_all = ["expected_installed_digest", "expected_backup_digest"],
+            help = "Restore the exactly verified v1 backup through an atomic replacement"
+        )]
+        rollback: bool,
+
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Explicit semantic ownership repair manifest used by preview and the matching apply"
+        )]
+        repair_manifest: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected canonical digest of the locked v1 source"
+        )]
+        expected_source_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected digest of the recomputed migration preview"
+        )]
+        expected_preview_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "registry-rollback-action",
+            help = "Expected canonical digest of the installed v2 registry"
+        )]
+        expected_installed_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "registry-rollback-action",
+            help = "Expected raw-byte digest of the exact v1 backup"
+        )]
+        expected_backup_digest: Option<String>,
+
+        #[arg(long, value_enum, default_value_t = MigrationPreviewFormatArg::Text)]
+        format: MigrationPreviewFormatArg,
+    },
+    #[command(about = "Preview, install, or inspect the digest-bound v2 read-routing gate")]
+    #[command(group(
+        ArgGroup::new("routing-activation-action")
+            .required(true)
+            .multiple(false)
+            .args(["preview", "apply", "status"])
+    ))]
+    RoutingActivation {
+        #[arg(long, help = "Preview the exact activation candidate without writing")]
+        preview: bool,
+
+        #[arg(
+            long,
+            requires_all = ["expected_registry_digest", "expected_candidate_digest"],
+            help = "Install the exactly digest-locked read-routing activation marker"
+        )]
+        apply: bool,
+
+        #[arg(long, help = "Inspect activation state without writing")]
+        status: bool,
+
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected digest of the exact registry v2 snapshot"
+        )]
+        expected_registry_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected digest of the exact activation candidate"
+        )]
+        expected_candidate_digest: Option<String>,
+    },
+    #[command(
+        about = "Preview, install, disable, or inspect the digest-bound v2 journal-admission gate"
+    )]
+    #[command(group(
+        ArgGroup::new("journal-admission-activation-action")
+            .required(true)
+            .multiple(false)
+            .args(["preview", "apply", "disable", "status"])
+    ))]
+    JournalAdmissionActivation {
+        #[arg(
+            long,
+            help = "Preview the exact journal-admission activation candidate without writing"
+        )]
+        preview: bool,
+
+        #[arg(
+            long,
+            help = "Install the exactly digest-locked journal-admission activation marker"
+        )]
+        apply: bool,
+
+        #[arg(
+            long,
+            help = "Remove the exactly digest-locked journal-admission activation marker"
+        )]
+        disable: bool,
+
+        #[arg(
+            long,
+            help = "Inspect journal-admission activation state without writing"
+        )]
+        status: bool,
+
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            help = "Expected digest of the exact registry v2 snapshot for apply or disable"
+        )]
+        expected_registry_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            help = "Expected digest of the exact activation candidate for apply"
+        )]
+        expected_candidate_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            help = "Expected digest of the installed activation marker for disable"
+        )]
+        expected_activation_digest: Option<String>,
+    },
+    #[command(
+        about = "Inspect or explicitly converge one admitted capture through ProjectRef bootstrap"
+    )]
+    #[command(group(
+        ArgGroup::new("capture-recovery-action")
+            .required(true)
+            .multiple(false)
+            .args(["status", "apply"])
+    ))]
+    CaptureRecovery {
+        #[arg(
+            long,
+            help = "Inspect recovery authority and current routing without writing"
+        )]
+        status: bool,
+
+        #[arg(
+            long,
+            requires_all = ["expected_registry_digest", "expected_projection_digest"],
+            help = "Apply exactly digest-locked post-intent recovery and bootstrap"
+        )]
+        apply: bool,
+
+        #[arg(long, value_name = "CAPTURE_ID", help = "Admitted capture identity")]
+        capture_id: String,
+
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Store directory required for unbound bootstrap when the registry locator has no WorkVCS home"
+        )]
+        store_root: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected digest of the exact registry v2 snapshot"
+        )]
+        expected_registry_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected digest of the projection rebuilt from immutable intent and events"
+        )]
+        expected_projection_digest: Option<String>,
+    },
+    #[command(
+        about = "Recall immutable CaptureGroup associations by a secondary ProjectRef without reading or mutating a semantic Store"
+    )]
+    CaptureGroupRecall {
+        #[arg(
+            long,
+            value_name = "PROJECT_REF_ID",
+            help = "Secondary ProjectRef whose immutable associations should be recalled"
+        )]
+        project_ref_id: String,
+
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
     },
 }
 
@@ -4009,6 +4327,9 @@ enum RecordCommand {
             help = "One-command registry override; valid only with --cwd"
         )]
         registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
 
         #[arg(long, help = "Branch to inspect with an explicit STORE")]
         branch: Option<String>,
@@ -6909,14 +7230,179 @@ fn run(cli: Cli) -> Result<String> {
                 workspace,
                 branch,
             } => bind_project(cwd, registry, store, workspace, branch),
-            ProjectCommand::Discover { cwd, registry } => {
-                let discovery = discover_project(cwd, registry)?;
+            ProjectCommand::Discover {
+                cwd,
+                registry,
+                locator,
+            } => {
+                let discovery = discover_project_readonly_with_locator(
+                    cwd,
+                    registry,
+                    locator.project_ref,
+                    locator.locator_context,
+                    locator.locator_adapter_context,
+                )?;
                 Ok(render_project_discovery(&discovery))
             }
             ProjectCommand::List {
                 registry,
                 require_valid,
             } => list_project_bindings(registry, require_valid),
+            ProjectCommand::RegistryMigrate {
+                preview,
+                apply,
+                rollback_check,
+                rollback,
+                registry,
+                repair_manifest,
+                expected_source_digest,
+                expected_preview_digest,
+                expected_installed_digest,
+                expected_backup_digest,
+                format,
+            } => match (preview, apply, rollback_check, rollback) {
+                (true, false, false, false) => {
+                    preview_project_registry_migration(registry, repair_manifest, format)
+                }
+                (false, true, false, false) => apply_project_registry_migration(
+                    registry,
+                    repair_manifest,
+                    required_migration_digest(
+                        "registry migration apply --expected-source-digest",
+                        expected_source_digest,
+                    )?,
+                    required_migration_digest(
+                        "registry migration apply --expected-preview-digest",
+                        expected_preview_digest,
+                    )?,
+                    format,
+                ),
+                (false, false, true, false) => inspect_project_registry_rollback_readiness(
+                    registry,
+                    repair_manifest,
+                    required_migration_digest(
+                        "registry migration rollback-check --expected-installed-digest",
+                        expected_installed_digest,
+                    )?,
+                    required_migration_digest(
+                        "registry migration rollback-check --expected-backup-digest",
+                        expected_backup_digest,
+                    )?,
+                    format,
+                ),
+                (false, false, false, true) => rollback_project_registry_migration(
+                    registry,
+                    repair_manifest,
+                    required_migration_digest(
+                        "registry migration rollback --expected-installed-digest",
+                        expected_installed_digest,
+                    )?,
+                    required_migration_digest(
+                        "registry migration rollback --expected-backup-digest",
+                        expected_backup_digest,
+                    )?,
+                    format,
+                ),
+                _ => unreachable!("clap requires exactly one migration action"),
+            },
+            ProjectCommand::RoutingActivation {
+                preview,
+                apply,
+                status,
+                registry,
+                expected_registry_digest,
+                expected_candidate_digest,
+            } => match (preview, apply, status) {
+                (true, false, false) => preview_project_routing_activation(registry),
+                (false, true, false) => apply_project_routing_activation(
+                    registry,
+                    required_control_plane_digest(
+                        "routing activation apply --expected-registry-digest",
+                        expected_registry_digest,
+                    )?,
+                    required_control_plane_digest(
+                        "routing activation apply --expected-candidate-digest",
+                        expected_candidate_digest,
+                    )?,
+                ),
+                (false, false, true) => inspect_project_routing_activation(registry),
+                _ => unreachable!("clap requires exactly one routing activation action"),
+            },
+            ProjectCommand::JournalAdmissionActivation {
+                preview,
+                apply,
+                disable,
+                status,
+                registry,
+                expected_registry_digest,
+                expected_candidate_digest,
+                expected_activation_digest,
+            } => match (preview, apply, disable, status) {
+                (true, false, false, false) => {
+                    preview_project_journal_admission_activation(registry)
+                }
+                (false, true, false, false) => apply_project_journal_admission_activation(
+                    registry,
+                    required_control_plane_digest(
+                        "journal admission activation apply --expected-registry-digest",
+                        expected_registry_digest,
+                    )?,
+                    required_control_plane_digest(
+                        "journal admission activation apply --expected-candidate-digest",
+                        expected_candidate_digest,
+                    )?,
+                ),
+                (false, false, true, false) => disable_project_journal_admission_activation(
+                    registry,
+                    required_control_plane_digest(
+                        "journal admission activation disable --expected-registry-digest",
+                        expected_registry_digest,
+                    )?,
+                    required_control_plane_digest(
+                        "journal admission activation disable --expected-activation-digest",
+                        expected_activation_digest,
+                    )?,
+                ),
+                (false, false, false, true) => {
+                    inspect_project_journal_admission_activation(registry)
+                }
+                _ => unreachable!("clap requires exactly one journal-admission activation action"),
+            },
+            ProjectCommand::CaptureRecovery {
+                status,
+                apply,
+                capture_id,
+                registry,
+                store_root,
+                expected_registry_digest,
+                expected_projection_digest,
+            } => match (status, apply) {
+                (true, false) => inspect_project_capture_recovery(
+                    registry,
+                    CaptureId::parse_canonical(&capture_id)?,
+                ),
+                (false, true) => apply_project_capture_recovery(
+                    registry,
+                    store_root,
+                    CaptureId::parse_canonical(&capture_id)?,
+                    required_control_plane_digest(
+                        "capture recovery apply --expected-registry-digest",
+                        expected_registry_digest,
+                    )?,
+                    required_control_plane_digest(
+                        "capture recovery apply --expected-projection-digest",
+                        expected_projection_digest,
+                    )?,
+                ),
+                _ => unreachable!("clap requires exactly one capture recovery action"),
+            },
+            ProjectCommand::CaptureGroupRecall {
+                project_ref_id,
+                registry,
+            } => recall_project_capture_groups(
+                registry,
+                ProjectRefId::parse_canonical(&project_ref_id)?,
+            ),
         },
         Command::Closeout { command } => match command {
             CloseoutCommand::Inspect {
@@ -12148,6 +12634,7 @@ fn run(cli: Cli) -> Result<String> {
             store,
             cwd,
             registry,
+            locator,
             session,
             budget_items,
             scope_json,
@@ -12158,6 +12645,7 @@ fn run(cli: Cli) -> Result<String> {
             store,
             cwd,
             registry,
+            locator,
             session,
             budget_items,
             scope_json,
@@ -12168,14 +12656,17 @@ fn run(cli: Cli) -> Result<String> {
         Command::Capture {
             cwd,
             registry,
+            locator,
+            value_reason,
             manifest,
-        } => run_cognition_capture(cwd, registry, manifest),
+        } => run_cognition_capture(cwd, registry, locator, value_reason, manifest),
         Command::Recall {
             cwd,
             registry,
+            locator,
             profile,
             budget_items,
-        } => run_recall(cwd, registry, profile, budget_items),
+        } => run_recall(cwd, registry, locator, profile, budget_items),
         Command::ContextPacket { command } => match command {
             ContextPacketCommand::Save {
                 store,
@@ -12819,6 +13310,7 @@ fn run_record(args: Vec<String>) -> Result<String> {
             store,
             cwd,
             registry,
+            locator,
             branch,
             commit,
             include_current_claims,
@@ -12831,6 +13323,7 @@ fn run_record(args: Vec<String>) -> Result<String> {
             store,
             cwd,
             registry,
+            locator,
             branch,
             commit,
             include_current_claims,
@@ -13680,6 +14173,7 @@ fn run_record_currentness_audit(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
     registry: Option<PathBuf>,
+    locator: ProjectLocatorArgs,
     branch: Option<String>,
     commit: Option<String>,
     include_current_claims: bool,
@@ -13689,8 +14183,8 @@ fn run_record_currentness_audit(
     budget_items: usize,
     expected_candidates: Option<usize>,
 ) -> Result<String> {
-    let (store_path, source) =
-        resolve_record_currentness_audit_source(store, cwd, registry, branch, commit)?;
+    let (store_path, source, discovery) =
+        resolve_record_currentness_audit_source(store, cwd, registry, locator, branch, commit)?;
     let engine = open_verified_store_readonly(&store_path)?;
     let commit_id = match source {
         RecordCurrentnessAuditSource::Branch(branch_id) => {
@@ -13729,6 +14223,9 @@ fn run_record_currentness_audit(
 
     let result = engine.record_currentness_audit(options)?;
     let mut output = render_record_currentness_audit(&result, source)?;
+    if let Some(discovery) = discovery.as_ref() {
+        output.push_str(&render_project_routing_metadata(discovery));
+    }
     if let Some(expected_candidates) = expected_candidates {
         if result.counts.candidates_total != expected_candidates {
             return Err(WorkVcsError::QueryInvalid(format!(
@@ -13745,14 +14242,24 @@ fn resolve_record_currentness_audit_source(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
     registry: Option<PathBuf>,
+    locator: ProjectLocatorArgs,
     branch: Option<String>,
     commit: Option<String>,
-) -> Result<(PathBuf, RecordCurrentnessAuditSource)> {
+) -> Result<(
+    PathBuf,
+    RecordCurrentnessAuditSource,
+    Option<ProjectDiscovery>,
+)> {
     match (store, cwd) {
         (Some(store_path), None) => {
-            if registry.is_some() {
+            if registry.is_some()
+                || locator.project_ref.is_some()
+                || locator.locator_context.is_some()
+                || locator.locator_adapter_context.is_some()
+            {
                 return Err(WorkVcsError::QueryInvalid(
-                    "record currentness-audit explicit STORE does not accept --registry".to_owned(),
+                    "record currentness-audit explicit STORE does not accept --registry, --project-ref, --locator-context, or --locator-adapter-context"
+                        .to_owned(),
                 ));
             }
             let source = match (branch, commit) {
@@ -13772,6 +14279,7 @@ fn resolve_record_currentness_audit_source(
             Ok((
                 canonical_existing_path("record currentness audit store", &store_path)?,
                 source,
+                None,
             ))
         }
         (None, Some(cwd)) => {
@@ -13781,10 +14289,17 @@ fn resolve_record_currentness_audit_source(
                         .to_owned(),
                 ));
             }
-            let discovery = discover_project_readonly(cwd, registry)?;
+            let discovery = discover_project_readonly_with_locator(
+                cwd,
+                registry,
+                locator.project_ref,
+                locator.locator_context,
+                locator.locator_adapter_context,
+            )?;
             Ok((
-                PathBuf::from(discovery.binding.store_path),
+                PathBuf::from(&discovery.binding.store_path),
                 RecordCurrentnessAuditSource::Branch(discovery.binding.branch_id),
+                Some(discovery),
             ))
         }
         _ => Err(WorkVcsError::QueryInvalid(
@@ -15170,7 +15685,7 @@ fn show_effective_config(registry: Option<PathBuf>) -> Result<String> {
             .config_version
             .map(|version| version.to_string())
             .unwrap_or_else(|| "none".to_owned()),
-        registry_path.display(),
+        escape_key_value(&registry_path.display().to_string()),
         effective.source,
         effective
             .configured_home
@@ -15355,8 +15870,69 @@ struct ProjectBinding {
 #[derive(Clone, Debug)]
 struct ProjectDiscovery {
     registry_path: PathBuf,
+    registry_version: u64,
+    registry_revision: Option<u64>,
+    registry_digest: ControlPlaneDigest,
+    migration_required: bool,
+    routing_activation_path: Option<PathBuf>,
+    routing_active: bool,
+    project_ref_id: Option<ProjectRefId>,
+    resolution_status: Option<ResolutionStatus>,
+    resolution_rank: Option<ResolutionRank>,
+    related_project_refs: Vec<ProjectRefId>,
+    unmapped_locators: usize,
+    resolution_diagnostics: Vec<ResolutionDiagnostic>,
+    locator_provider_ids: Vec<String>,
+    read_only: bool,
     current_identity: ProjectIdentity,
     binding: ProjectBinding,
+}
+
+#[derive(Clone, Debug)]
+enum LoadedProjectRegistry {
+    V1 {
+        bindings: Vec<ProjectBinding>,
+        digest: ControlPlaneDigest,
+    },
+    V2 {
+        registry: Box<ProjectRegistryV2>,
+        digest: ControlPlaneDigest,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SemanticLocatorEnvelope {
+    schema_version: u64,
+    #[serde(default)]
+    semantic_locator_evidence: Vec<LocatorEvidence>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoutingActivationState {
+    Absent,
+    Active,
+    Stale,
+    Invalid,
+}
+
+impl RoutingActivationState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Active => "active",
+            Self::Stale => "stale",
+            Self::Invalid => "invalid",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RoutingActivationInspection {
+    path: PathBuf,
+    state: RoutingActivationState,
+    marker_digest: Option<ControlPlaneDigest>,
+    issue: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -15386,11 +15962,7 @@ fn ensure_project(
     match matches.as_slice() {
         [binding] => {
             verify_project_binding_readonly(binding, &identity)?;
-            let discovery = ProjectDiscovery {
-                registry_path,
-                current_identity: identity,
-                binding: binding.clone(),
-            };
+            let discovery = v1_project_discovery(registry_path, identity, binding.clone(), false)?;
             let mut output = render_project_discovery(&discovery);
             output.push_str(
                 "binding_created=false\nstore_created=false\nworkspace_created=false\nbootstrap_recovered=false\n",
@@ -15439,11 +16011,7 @@ fn ensure_project(
     save_project_registry_atomically(&registry_path, &bindings)?;
     verify_project_binding_readonly(&binding, &identity)?;
 
-    let discovery = ProjectDiscovery {
-        registry_path,
-        current_identity: identity,
-        binding,
-    };
+    let discovery = v1_project_discovery(registry_path, identity, binding, false)?;
     let mut output = render_project_discovery(&discovery);
     output.push_str("binding_created=true\n");
     let _ = writeln!(output, "store_created={}", !store_existed);
@@ -15711,41 +16279,231 @@ fn discover_project(cwd: PathBuf, registry: Option<PathBuf>) -> Result<ProjectDi
         }
     };
     verify_project_binding(&binding, &current_identity)?;
-    Ok(ProjectDiscovery {
-        registry_path,
-        current_identity,
-        binding,
-    })
+    v1_project_discovery(registry_path, current_identity, binding, false)
 }
 
 fn discover_project_readonly(cwd: PathBuf, registry: Option<PathBuf>) -> Result<ProjectDiscovery> {
+    discover_project_readonly_with_locator(cwd, registry, None, None, None)
+}
+
+fn discover_project_readonly_with_locator(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    project_ref: Option<String>,
+    locator_context: Option<PathBuf>,
+    locator_adapter_context: Option<PathBuf>,
+) -> Result<ProjectDiscovery> {
     let current_identity = resolve_project_identity(&cwd)?;
-    let registry_path = project_registry_path(registry, false, &current_identity)?;
-    let bindings = load_project_registry(&registry_path, true)?;
-    let matches = bindings
-        .into_iter()
-        .filter(|binding| {
-            binding.identity_kind == current_identity.kind
-                && binding.identity == current_identity.identity
-        })
-        .collect::<Vec<_>>();
-    let binding = match matches.as_slice() {
-        [binding] => binding.clone(),
-        [] => {
-            return Err(project_binding_not_found(&current_identity, &registry_path));
+    let effective = effective_registry_config(registry)?;
+    let registry_path = project_registry_path_from_effective(&effective, false, &current_identity)?;
+    match load_project_registry_readonly(&registry_path, true)? {
+        LoadedProjectRegistry::V1 { bindings, .. } => {
+            if project_ref.is_some()
+                || locator_context.is_some()
+                || locator_adapter_context.is_some()
+            {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "registry v1 cannot safely evaluate explicit ProjectRef or semantic locator input; migrate and activate the exact v2 read-routing snapshot first"
+                        .to_owned(),
+                ));
+            }
+            let matches = bindings
+                .into_iter()
+                .filter(|binding| {
+                    binding.identity_kind == current_identity.kind
+                        && binding.identity == current_identity.identity
+                })
+                .collect::<Vec<_>>();
+            let binding = match matches.as_slice() {
+                [binding] => binding.clone(),
+                [] => {
+                    return Err(project_binding_not_found(&current_identity, &registry_path));
+                }
+                _ => {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "project registry {} has duplicate bindings for {} identity {}",
+                        registry_path.display(),
+                        current_identity.kind,
+                        current_identity.identity
+                    )));
+                }
+            };
+            verify_project_binding_readonly(&binding, &current_identity)?;
+            v1_project_discovery(registry_path, current_identity, binding, true)
         }
-        _ => {
-            return Err(WorkVcsError::QueryInvalid(format!(
-                "project registry {} has duplicate bindings for {} identity {}",
-                registry_path.display(),
-                current_identity.kind,
-                current_identity.identity
-            )));
+        LoadedProjectRegistry::V2 { registry, digest } => {
+            let activation = require_active_read_routing(&effective, &registry_path, &registry)?;
+            let project_ref_id = project_ref
+                .map(|value| ProjectRefId::parse_canonical(&value))
+                .transpose()?;
+            let semantic_evidence = load_semantic_locator_evidence(locator_context.as_deref())?;
+            let locator_input = unified_locator_input_for_identity(
+                project_ref_id,
+                semantic_evidence,
+                locator_adapter_context.as_deref(),
+                &current_identity,
+            )?;
+            let resolution = resolve_project(&registry, locator_input.resolution_context())?;
+            if resolution.status() != ResolutionStatus::Resolved {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "ProjectRef resolution failed closed with status {:?}, diagnostics {:?}; an unbound higher-ranked locator never falls back to Git or CWD",
+                    resolution.status(),
+                    resolution.diagnostics()
+                )));
+            }
+            let resolved_project_ref = resolution.primary_project_ref().ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(
+                    "resolved ProjectRef result did not include its primary owner".to_owned(),
+                )
+            })?;
+            let binding_v2 = registry
+                .bindings()
+                .iter()
+                .find(|binding| binding.project_ref_id() == resolved_project_ref)
+                .ok_or_else(|| WorkVcsError::ProjectBindingNotFound {
+                    identity_kind: "project-ref".to_owned(),
+                    identity: resolved_project_ref.to_string(),
+                    project_root: current_identity.root.clone(),
+                    registry_path: registry_path.display().to_string(),
+                })?;
+            verify_v2_project_binding_readonly(binding_v2, &current_identity)?;
+            let binding = ProjectBinding {
+                identity_kind: "project-ref".to_owned(),
+                identity: resolved_project_ref.to_string(),
+                root: current_identity.root.clone(),
+                store_path: binding_v2.store_path().as_str().to_owned(),
+                store_id: binding_v2.store_id(),
+                workspace_id: binding_v2.workspace_id(),
+                branch_id: binding_v2.branch_id(),
+            };
+            Ok(ProjectDiscovery {
+                registry_path,
+                registry_version: 2,
+                registry_revision: Some(registry.revision()),
+                registry_digest: digest,
+                migration_required: false,
+                routing_activation_path: Some(activation.path),
+                routing_active: true,
+                project_ref_id: Some(resolved_project_ref),
+                resolution_status: Some(resolution.status()),
+                resolution_rank: resolution.primary_basis().map(ResolutionBasis::rank),
+                related_project_refs: resolution.related_project_refs().to_vec(),
+                unmapped_locators: resolution.unmapped_locators().len(),
+                resolution_diagnostics: resolution.diagnostics().to_vec(),
+                locator_provider_ids: locator_input.provider_ids().to_vec(),
+                read_only: true,
+                current_identity,
+                binding,
+            })
         }
+    }
+}
+
+fn load_semantic_locator_evidence(path: Option<&Path>) -> Result<Vec<LocatorEvidence>> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
     };
-    verify_project_binding_readonly(&binding, &current_identity)?;
+    let bytes = fs::read(path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read locator context {}: {error}",
+            path.display()
+        ))
+    })?;
+    let bounded = BoundedAdapterContext::from_json_bytes(&bytes)?;
+    let envelope: SemanticLocatorEnvelope = serde_json::from_slice(bounded.canonical_json_bytes())
+        .map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "locator context {} has an invalid envelope: {error}",
+                path.display()
+            ))
+        })?;
+    if envelope.schema_version != 1 {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "locator context {} has unsupported schema_version {}; expected 1",
+            path.display(),
+            envelope.schema_version
+        )));
+    }
+    Ok(envelope.semantic_locator_evidence)
+}
+
+fn unified_locator_input_for_identity(
+    project_ref_id: Option<ProjectRefId>,
+    semantic_evidence: Vec<LocatorEvidence>,
+    locator_adapter_context: Option<&Path>,
+    identity: &ProjectIdentity,
+) -> Result<UnifiedLocatorInput> {
+    unified_locator_input_for_identity_with_mode(
+        ResolutionMode::ReadOnly,
+        project_ref_id,
+        semantic_evidence,
+        locator_adapter_context,
+        identity,
+    )
+}
+
+fn unified_locator_input_for_identity_with_mode(
+    mode: ResolutionMode,
+    project_ref_id: Option<ProjectRefId>,
+    semantic_evidence: Vec<LocatorEvidence>,
+    locator_adapter_context: Option<&Path>,
+    identity: &ProjectIdentity,
+) -> Result<UnifiedLocatorInput> {
+    let cwd_path = CanonicalPath::parse(identity.root.clone())?;
+    let cwd_digest =
+        ControlPlaneDigest::raw(format!("workvcs-cwd/v1\0{}", cwd_path.as_str()).as_bytes());
+    let cwd = PathLocatorEvidence::new(cwd_path, "workvcs-cwd/v1", cwd_digest)?;
+    let git_common_dir = if identity.kind == "git-common-dir" {
+        let path = CanonicalPath::parse(identity.identity.clone())?;
+        let digest =
+            ControlPlaneDigest::raw(format!("workvcs-git/v1\0{}", path.as_str()).as_bytes());
+        Some(PathLocatorEvidence::new(path, "workvcs-git/v1", digest)?)
+    } else {
+        None
+    };
+    locator_adapter::collect_locator_input(
+        locator_adapter_context,
+        mode,
+        project_ref_id,
+        semantic_evidence,
+        git_common_dir,
+        Some(cwd),
+    )
+}
+
+fn v1_project_discovery(
+    registry_path: PathBuf,
+    current_identity: ProjectIdentity,
+    binding: ProjectBinding,
+    read_only: bool,
+) -> Result<ProjectDiscovery> {
+    let registry =
+        ProjectRegistryV1::from_json_bytes(&fs::read(&registry_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot read project registry {}: {error}",
+                registry_path.display()
+            ))
+        })?)?;
     Ok(ProjectDiscovery {
         registry_path,
+        registry_version: 1,
+        registry_revision: None,
+        registry_digest: registry.source_digest()?,
+        migration_required: true,
+        routing_activation_path: None,
+        routing_active: false,
+        project_ref_id: None,
+        resolution_status: None,
+        resolution_rank: Some(if current_identity.kind == "git-common-dir" {
+            ResolutionRank::Repository
+        } else {
+            ResolutionRank::Cwd
+        }),
+        related_project_refs: Vec::new(),
+        unmapped_locators: 0,
+        resolution_diagnostics: Vec::new(),
+        locator_provider_ids: Vec::new(),
+        read_only,
         current_identity,
         binding,
     })
@@ -15853,31 +16611,166 @@ fn verify_project_binding_readonly(
 }
 
 fn render_project_discovery(discovery: &ProjectDiscovery) -> String {
-    format!(
-        "registry_path={}\nidentity_kind={}\nproject_identity={}\ncurrent_project_root={}\nbound_project_root={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\nbinding_verified=true\n",
-        discovery.registry_path.display(),
+    let mut output = format!(
+        "registry_path={}\nregistry_version={}\nregistry_revision={}\nregistry_digest={}\nmigration_required={}\nrouting_active={}\nrouting_activation_path={}\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nrelated_project_refs={}\nunmapped_locators={}\nresolution_diagnostics={}\nlocator_providers={}\nidentity_kind={}\nproject_identity={}\ncurrent_project_root={}\nbound_project_root={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\nbinding_verified=true\nread_only={}\n",
+        escape_key_value(&discovery.registry_path.display().to_string()),
+        discovery.registry_version,
+        discovery
+            .registry_revision
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        discovery.registry_digest,
+        discovery.migration_required,
+        discovery.routing_active,
+        discovery
+            .routing_activation_path
+            .as_ref()
+            .map(|path| escape_key_value(&path.display().to_string()))
+            .unwrap_or_else(|| "none".to_owned()),
+        discovery
+            .resolution_status
+            .map(resolution_status_text)
+            .unwrap_or("legacy_v1"),
+        discovery
+            .resolution_rank
+            .map(resolution_rank_text)
+            .unwrap_or("none"),
+        discovery
+            .project_ref_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        discovery.related_project_refs.len(),
+        discovery.unmapped_locators,
+        discovery.resolution_diagnostics.len(),
+        discovery.locator_provider_ids.len(),
         discovery.current_identity.kind,
-        discovery.current_identity.identity,
-        discovery.current_identity.root,
-        discovery.binding.root,
-        discovery.binding.store_path,
+        escape_key_value(&discovery.current_identity.identity),
+        escape_key_value(&discovery.current_identity.root),
+        escape_key_value(&discovery.binding.root),
+        escape_key_value(&discovery.binding.store_path),
         discovery.binding.store_id,
         discovery.binding.workspace_id,
         discovery.binding.branch_id,
+        discovery.read_only,
+    );
+    for (index, project_ref_id) in discovery.related_project_refs.iter().enumerate() {
+        writeln!(output, "related_project_ref.{index}={project_ref_id}").expect("write to String");
+    }
+    for (index, diagnostic) in discovery.resolution_diagnostics.iter().enumerate() {
+        writeln!(
+            output,
+            "resolution_diagnostic.{index}={}",
+            resolution_diagnostic_text(*diagnostic)
+        )
+        .expect("write to String");
+    }
+    for (index, provider) in discovery.locator_provider_ids.iter().enumerate() {
+        writeln!(
+            output,
+            "locator_provider.{index}={}",
+            escape_key_value(provider)
+        )
+        .expect("write to String");
+    }
+    output
+}
+
+fn resolution_status_text(status: ResolutionStatus) -> &'static str {
+    match status {
+        ResolutionStatus::Resolved => "resolved",
+        ResolutionStatus::Unbound => "unbound",
+        ResolutionStatus::Unresolved => "unresolved",
+        ResolutionStatus::Conflict => "conflict",
+    }
+}
+
+fn resolution_rank_text(rank: ResolutionRank) -> &'static str {
+    match rank {
+        ResolutionRank::ExplicitProjectRef => "explicit_project_ref",
+        ResolutionRank::SemanticProject => "semantic_project",
+        ResolutionRank::Repository => "repository",
+        ResolutionRank::Cwd => "cwd",
+    }
+}
+
+fn resolution_diagnostic_text(diagnostic: ResolutionDiagnostic) -> &'static str {
+    match diagnostic {
+        ResolutionDiagnostic::ProjectRefNotFound => "project_ref_not_found",
+        ResolutionDiagnostic::ContextMismatch => "context_mismatch",
+        ResolutionDiagnostic::OwnershipConflict => "ownership_conflict",
+        ResolutionDiagnostic::RepositoryFallback => "repository_fallback",
+        ResolutionDiagnostic::CwdFallback => "cwd_fallback",
+    }
+}
+
+fn render_project_routing_metadata(discovery: &ProjectDiscovery) -> String {
+    format!(
+        "registry_path={}\nregistry_version={}\nregistry_revision={}\nregistry_digest={}\nmigration_required={}\nrouting_active={}\nrouting_activation_path={}\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\n",
+        escape_key_value(&discovery.registry_path.display().to_string()),
+        discovery.registry_version,
+        discovery
+            .registry_revision
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        discovery.registry_digest,
+        discovery.migration_required,
+        discovery.routing_active,
+        discovery
+            .routing_activation_path
+            .as_ref()
+            .map(|path| escape_key_value(&path.display().to_string()))
+            .unwrap_or_else(|| "none".to_owned()),
+        discovery
+            .resolution_status
+            .map(resolution_status_text)
+            .unwrap_or("legacy_v1"),
+        discovery
+            .resolution_rank
+            .map(resolution_rank_text)
+            .unwrap_or("none"),
+        discovery
+            .project_ref_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
     )
 }
 
 fn list_project_bindings(registry: Option<PathBuf>, require_valid: bool) -> Result<String> {
     let effective = effective_registry_config(registry)?;
     let registry_path = canonical_registry_path(
-        absolute_cli_path("project registry", effective.registry_path)?,
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
         false,
     )?;
-    let bindings = load_project_registry(&registry_path, false)?;
+    match load_project_registry_readonly(&registry_path, false)? {
+        LoadedProjectRegistry::V1 { bindings, digest } => list_project_bindings_v1(
+            &effective,
+            &registry_path,
+            &bindings,
+            &digest,
+            require_valid,
+        ),
+        LoadedProjectRegistry::V2 { registry, digest } => list_project_bindings_v2(
+            &effective,
+            &registry_path,
+            &registry,
+            &digest,
+            require_valid,
+        ),
+    }
+}
+
+fn list_project_bindings_v1(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    bindings: &[ProjectBinding],
+    digest: &ControlPlaneDigest,
+    require_valid: bool,
+) -> Result<String> {
     let mut output = format!(
-        "registry_path={}\nregistry_source={}\nbindings={}\n",
-        registry_path.display(),
+        "registry_path={}\nregistry_source={}\nregistry_version=1\nregistry_revision=none\nregistry_digest={}\nmigration_required=true\nrouting_active=false\nrouting_activation_state=not_applicable\nbindings={}\n",
+        escape_key_value(&registry_path.display().to_string()),
         effective.source,
+        digest,
         bindings.len()
     );
     let mut invalid = 0_usize;
@@ -15948,6 +16841,140 @@ fn list_project_bindings(registry: Option<PathBuf>, require_valid: bool) -> Resu
     Ok(output)
 }
 
+fn list_project_bindings_v2(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    digest: &ControlPlaneDigest,
+    require_valid: bool,
+) -> Result<String> {
+    let activation =
+        inspect_read_routing_activation_for_registry(effective, registry_path, registry);
+    let activation_valid = matches!(
+        activation.state,
+        RoutingActivationState::Absent | RoutingActivationState::Active
+    );
+    let mut output = format!(
+        "registry_path={}\nregistry_source={}\nregistry_version=2\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nrouting_active={}\nrouting_activation_state={}\nrouting_activation_path={}\nrouting_activation_valid={}\nprojects={}\nlocators={}\nbindings={}\n",
+        escape_key_value(&registry_path.display().to_string()),
+        effective.source,
+        registry.revision(),
+        digest,
+        activation.state == RoutingActivationState::Active,
+        activation.state.as_str(),
+        escape_key_value(&activation.path.display().to_string()),
+        activation_valid,
+        registry.projects().len(),
+        registry.locators().len(),
+        registry.bindings().len(),
+    );
+    if let Some(marker_digest) = &activation.marker_digest {
+        writeln!(output, "routing_activation_digest={marker_digest}").expect("write to String");
+    } else {
+        output.push_str("routing_activation_digest=none\n");
+    }
+    writeln!(
+        output,
+        "routing_activation_issue={}",
+        activation
+            .issue
+            .as_deref()
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned())
+    )
+    .expect("write to String");
+
+    let mut invalid = 0_usize;
+    for (index, binding) in registry.bindings().iter().enumerate() {
+        let project = registry
+            .projects()
+            .iter()
+            .find(|project| project.project_ref_id() == binding.project_ref_id())
+            .expect("validated registry binding has ProjectRef");
+        writeln!(
+            output,
+            "binding.{index}.project_ref_id={}",
+            binding.project_ref_id()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "binding.{index}.project_maturity={}",
+            project_maturity_text(project.maturity())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "binding.{index}.project_display_name={}",
+            project
+                .display_name()
+                .map(escape_key_value)
+                .unwrap_or_else(|| "none".to_owned())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "binding.{index}.store_path={}",
+            escape_key_value(binding.store_path().as_str())
+        )
+        .expect("write to String");
+        writeln!(output, "binding.{index}.store_id={}", binding.store_id())
+            .expect("write to String");
+        writeln!(
+            output,
+            "binding.{index}.workspace_id={}",
+            binding.workspace_id()
+        )
+        .expect("write to String");
+        writeln!(output, "binding.{index}.branch_id={}", binding.branch_id())
+            .expect("write to String");
+        match verify_v2_registry_binding_readonly(binding) {
+            Ok(local_content_objects_verified) => {
+                writeln!(output, "binding.{index}.verified=true").expect("write to String");
+                writeln!(output, "binding.{index}.verification_error=none")
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "binding.{index}.local_content_objects_verified={local_content_objects_verified}"
+                )
+                .expect("write to String");
+            }
+            Err(error) => {
+                invalid += 1;
+                writeln!(output, "binding.{index}.verified=false").expect("write to String");
+                writeln!(
+                    output,
+                    "binding.{index}.verification_error={}",
+                    escape_key_value(&error.to_string())
+                )
+                .expect("write to String");
+            }
+        }
+    }
+    writeln!(
+        output,
+        "valid_bindings={}",
+        registry.bindings().len() - invalid
+    )
+    .expect("write to String");
+    writeln!(output, "invalid_bindings={invalid}").expect("write to String");
+    if require_valid && (!activation_valid || invalid != 0) {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project registry {} has {invalid} invalid binding(s) and routing activation state {}",
+            registry_path.display(),
+            activation.state.as_str()
+        )));
+    }
+    Ok(output)
+}
+
+fn project_maturity_text(maturity: ProjectMaturity) -> &'static str {
+    match maturity {
+        ProjectMaturity::Provisional => "provisional",
+        ProjectMaturity::Established => "established",
+    }
+}
+
 fn verify_registry_binding_readonly(binding: &ProjectBinding) -> Result<usize> {
     let store_path =
         canonical_existing_path("project binding store", Path::new(&binding.store_path))?;
@@ -15975,6 +17002,5465 @@ fn verify_registry_binding_readonly(binding: &ProjectBinding) -> Result<usize> {
         )));
     }
     engine.validate_local_content_storage()
+}
+
+fn preview_project_registry_migration(
+    registry: Option<PathBuf>,
+    repair_manifest: Option<PathBuf>,
+    format: MigrationPreviewFormatArg,
+) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path)?,
+        false,
+    )?;
+    let source_bytes = fs::read(&registry_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read project registry {}: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let registry = ProjectRegistryV1::from_json_bytes(&source_bytes)?;
+    let repair_manifest = load_migration_repair_manifest(repair_manifest)?;
+    let preview = build_verified_registry_migration_preview(&registry, repair_manifest.as_ref())?;
+    match format {
+        MigrationPreviewFormatArg::Text => {
+            render_project_registry_migration_preview(&registry_path, &preview)
+        }
+        MigrationPreviewFormatArg::Json => {
+            render_project_registry_migration_preview_json(&registry_path, &preview)
+        }
+    }
+}
+
+fn load_migration_repair_manifest(
+    repair_manifest: Option<PathBuf>,
+) -> Result<Option<MigrationOwnershipRepairManifest>> {
+    repair_manifest
+        .map(|path| {
+            let path = absolute_cli_path("migration ownership repair manifest", path)?;
+            let path = canonical_existing_path("migration ownership repair manifest", &path)?;
+            let bytes = fs::read(&path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot read migration ownership repair manifest {}: {error}",
+                    path.display()
+                ))
+            })?;
+            MigrationOwnershipRepairManifest::from_json_bytes(&bytes)
+        })
+        .transpose()
+}
+
+fn build_verified_registry_migration_preview(
+    registry: &ProjectRegistryV1,
+    repair_manifest: Option<&MigrationOwnershipRepairManifest>,
+) -> Result<RegistryMigrationPreview> {
+    if let Some(repair_manifest) = repair_manifest {
+        repair_manifest.validate_for_registry(registry)?;
+    }
+    let validations = registry
+        .bindings()
+        .iter()
+        .enumerate()
+        .map(|(mapping_index, binding)| {
+            let verification = if repair_manifest
+                .as_ref()
+                .is_some_and(|manifest| manifest.contains_binding(&binding.key()))
+            {
+                verify_migration_preview_repaired_binding_readonly(binding)
+            } else {
+                verify_migration_preview_binding_readonly(binding)
+            };
+            match verification {
+                Ok(local_content_objects_verified) => MigrationBindingValidation::passed(
+                    mapping_index,
+                    local_content_objects_verified,
+                ),
+                Err(error) => MigrationBindingValidation::failed(
+                    mapping_index,
+                    error.code().as_str(),
+                    bounded_migration_validation_detail(&error.to_string()),
+                )
+                .expect("WorkVCS error codes and bounded details are valid preview issues"),
+            }
+        })
+        .collect::<Vec<_>>();
+    let preview =
+        build_registry_v1_migration_preview_with_repairs(registry, &validations, repair_manifest)?;
+    Ok(preview)
+}
+
+fn required_migration_digest(label: &str, value: Option<String>) -> Result<ControlPlaneDigest> {
+    let value = value.ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!("{label} is required for this migration action"))
+    })?;
+    ControlPlaneDigest::from_text(&value)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum RegistryMigrationApplyFault {
+    AfterBackupTempWrite,
+    AfterBackupInstalled,
+    AfterCandidateTempWrite,
+    AfterCandidateTempSync,
+    BeforeRegistryRename,
+    AfterRegistryRename,
+    AfterRegistryDirectorySync,
+    BeforePostInstallVerification,
+}
+
+#[derive(Debug)]
+struct RegistryMigrationApplyResult {
+    registry_path: PathBuf,
+    source_digest: ControlPlaneDigest,
+    preview_digest: ControlPlaneDigest,
+    installed_digest: ControlPlaneDigest,
+    backup_path: PathBuf,
+    backup_digest: ControlPlaneDigest,
+    backup_reused: bool,
+    mappings: usize,
+}
+
+fn apply_project_registry_migration(
+    registry: Option<PathBuf>,
+    repair_manifest: Option<PathBuf>,
+    expected_source_digest: ControlPlaneDigest,
+    expected_preview_digest: ControlPlaneDigest,
+    format: MigrationPreviewFormatArg,
+) -> Result<String> {
+    if format != MigrationPreviewFormatArg::Text {
+        return Err(WorkVcsError::QueryInvalid(
+            "registry migration apply currently supports only --format text".to_owned(),
+        ));
+    }
+    let result = apply_project_registry_migration_with_fault(
+        registry,
+        repair_manifest,
+        &expected_source_digest,
+        &expected_preview_digest,
+        None,
+    )?;
+    Ok(render_registry_migration_apply_result(&result))
+}
+
+fn apply_project_registry_migration_with_fault(
+    registry: Option<PathBuf>,
+    repair_manifest: Option<PathBuf>,
+    expected_source_digest: &ControlPlaneDigest,
+    expected_preview_digest: &ControlPlaneDigest,
+    fault: Option<RegistryMigrationApplyFault>,
+) -> Result<RegistryMigrationApplyResult> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path)?,
+        false,
+    )?;
+    require_atomic_registry_replace_support("registry migration apply")?;
+    let _lock = ProjectRegistryLock::acquire(&registry_path).map_err(|error| {
+        WorkVcsError::RegistryMigrationApplyFailed(format!(
+            "cannot acquire the registry lock: {error}"
+        ))
+    })?;
+    let journal_quiescence_lock_path =
+        project_registry_journal_quiescence_lock_path(&registry_path)?;
+    let _journal_quiescence_lock = JournalQuiescenceLock::acquire(&journal_quiescence_lock_path)
+        .map_err(|error| {
+            WorkVcsError::RegistryMigrationApplyFailed(format!(
+                "cannot acquire the shared journal quiescence lock {} after the registry lock: {error}",
+                journal_quiescence_lock_path.display()
+            ))
+        })?;
+
+    let mut authoritative_replaced = false;
+    let mut temporary_paths = Vec::new();
+    let outcome = (|| -> Result<RegistryMigrationApplyResult> {
+        let source_bytes = fs::read(&registry_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot reread v1 project registry {} under lock: {error}",
+                registry_path.display()
+            ))
+        })?;
+        let source_registry = ProjectRegistryV1::from_json_bytes(&source_bytes)?;
+        let source_digest = source_registry.source_digest()?;
+        if &source_digest != expected_source_digest {
+            return Err(WorkVcsError::DigestInvalid(format!(
+                "current v1 source digest {source_digest} does not match expected {expected_source_digest}"
+            )));
+        }
+
+        let repair_manifest = load_migration_repair_manifest(repair_manifest.clone())?;
+        let preview =
+            build_verified_registry_migration_preview(&source_registry, repair_manifest.as_ref())?;
+        if preview.preview_digest() != expected_preview_digest {
+            return Err(WorkVcsError::DigestInvalid(format!(
+                "recomputed migration preview digest {} does not match expected {expected_preview_digest}",
+                preview.preview_digest()
+            )));
+        }
+        if !preview.apply_eligible() {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "recomputed migration preview is not apply-eligible".to_owned(),
+            ));
+        }
+
+        let backup_path = registry_migration_backup_path(&registry_path, &source_digest)?;
+        reject_conflicting_registry_migration_artifacts(
+            &registry_path,
+            &backup_path,
+            &source_bytes,
+            &source_digest,
+        )?;
+        let backup_canonical = CanonicalPath::parse(backup_path.display().to_string())?;
+        let backup_digest = ControlPlaneDigest::raw(&source_bytes);
+        let applied_at = UtcTimestamp::now()?;
+        let candidate = materialize_registry_v1_migration_candidate(
+            &preview,
+            &applied_at,
+            &backup_canonical,
+            &backup_digest,
+        )?;
+        let candidate_bytes = candidate.stored_json_bytes()?;
+        let installed_digest = candidate.digest()?;
+
+        let backup_reused = if backup_path.exists() {
+            verify_exact_registry_migration_backup(&backup_path, &source_bytes, &source_digest)?;
+            true
+        } else {
+            let backup_temp = registry_migration_backup_temp_path(&registry_path, &source_digest)?;
+            temporary_paths.push(backup_temp.clone());
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&backup_temp)
+                .map_err(|error| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "cannot create migration backup temp {}: {error}",
+                        backup_temp.display()
+                    ))
+                })?;
+            file.write_all(&source_bytes).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot write migration backup temp {}: {error}",
+                    backup_temp.display()
+                ))
+            })?;
+            inject_registry_migration_fault(
+                fault,
+                RegistryMigrationApplyFault::AfterBackupTempWrite,
+            )?;
+            fs::set_permissions(
+                &backup_temp,
+                fs::metadata(&registry_path)
+                    .map_err(|error| {
+                        WorkVcsError::QueryInvalid(format!(
+                            "cannot inspect v1 registry permissions {}: {error}",
+                            registry_path.display()
+                        ))
+                    })?
+                    .permissions(),
+            )
+            .map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot preserve v1 registry permissions on backup temp {}: {error}",
+                    backup_temp.display()
+                ))
+            })?;
+            file.sync_all().map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot sync migration backup temp {}: {error}",
+                    backup_temp.display()
+                ))
+            })?;
+            drop(file);
+            verify_exact_registry_migration_backup(&backup_temp, &source_bytes, &source_digest)?;
+            fs::hard_link(&backup_temp, &backup_path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot atomically install migration backup {}: {error}",
+                    backup_path.display()
+                ))
+            })?;
+            fs::remove_file(&backup_temp).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot remove installed migration backup temp {}: {error}",
+                    backup_temp.display()
+                ))
+            })?;
+            temporary_paths.retain(|path| path != &backup_temp);
+            sync_directory(registry_path.parent().expect("registry has parent"))?;
+            verify_exact_registry_migration_backup(&backup_path, &source_bytes, &source_digest)?;
+            inject_registry_migration_fault(
+                fault,
+                RegistryMigrationApplyFault::AfterBackupInstalled,
+            )?;
+            false
+        };
+
+        let candidate_temp =
+            registry_migration_candidate_temp_path(&registry_path, preview.preview_digest())?;
+        temporary_paths.push(candidate_temp.clone());
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate_temp)
+            .map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot create migration candidate temp {}: {error}",
+                    candidate_temp.display()
+                ))
+            })?;
+        file.write_all(&candidate_bytes).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot write migration candidate temp {}: {error}",
+                candidate_temp.display()
+            ))
+        })?;
+        inject_registry_migration_fault(
+            fault,
+            RegistryMigrationApplyFault::AfterCandidateTempWrite,
+        )?;
+        fs::set_permissions(
+            &candidate_temp,
+            fs::metadata(&registry_path)
+                .map_err(|error| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "cannot inspect v1 registry permissions {}: {error}",
+                        registry_path.display()
+                    ))
+                })?
+                .permissions(),
+        )
+        .map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot preserve registry permissions on migration candidate {}: {error}",
+                candidate_temp.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot sync migration candidate temp {}: {error}",
+                candidate_temp.display()
+            ))
+        })?;
+        drop(file);
+        inject_registry_migration_fault(
+            fault,
+            RegistryMigrationApplyFault::AfterCandidateTempSync,
+        )?;
+        let candidate_readback = fs::read(&candidate_temp).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot reread migration candidate temp {}: {error}",
+                candidate_temp.display()
+            ))
+        })?;
+        if candidate_readback != candidate_bytes {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "migration candidate temp bytes changed before installation".to_owned(),
+            ));
+        }
+        let candidate_readback_registry = ProjectRegistryV2::from_json_bytes(&candidate_readback)?;
+        verify_registry_migration_candidate_receipt(
+            &candidate_readback_registry,
+            &source_digest,
+            preview.preview_digest(),
+            &backup_canonical,
+            &backup_digest,
+            preview.mappings().len(),
+        )?;
+        let source_bytes_before_rename = fs::read(&registry_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot recheck v1 registry {} immediately before replacement: {error}",
+                registry_path.display()
+            ))
+        })?;
+        if source_bytes_before_rename != source_bytes {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "v1 registry bytes changed after digest lock and before replacement".to_owned(),
+            ));
+        }
+        inject_registry_migration_fault(fault, RegistryMigrationApplyFault::BeforeRegistryRename)?;
+
+        fs::rename(&candidate_temp, &registry_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot atomically replace registry {} with migration candidate {}: {error}",
+                registry_path.display(),
+                candidate_temp.display()
+            ))
+        })?;
+        authoritative_replaced = true;
+        temporary_paths.retain(|path| path != &candidate_temp);
+        inject_registry_migration_fault(fault, RegistryMigrationApplyFault::AfterRegistryRename)?;
+        sync_directory(registry_path.parent().expect("registry has parent"))?;
+        inject_registry_migration_fault(
+            fault,
+            RegistryMigrationApplyFault::AfterRegistryDirectorySync,
+        )?;
+        inject_registry_migration_fault(
+            fault,
+            RegistryMigrationApplyFault::BeforePostInstallVerification,
+        )?;
+
+        let installed_bytes = fs::read(&registry_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot reopen installed v2 registry {}: {error}",
+                registry_path.display()
+            ))
+        })?;
+        if installed_bytes != candidate_bytes {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "installed v2 registry bytes do not match the validated candidate".to_owned(),
+            ));
+        }
+        let installed_registry = ProjectRegistryV2::from_json_bytes(&installed_bytes)?;
+        if installed_registry.digest()? != installed_digest {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "installed v2 registry digest does not match the in-memory candidate".to_owned(),
+            ));
+        }
+        verify_registry_migration_candidate_receipt(
+            &installed_registry,
+            &source_digest,
+            preview.preview_digest(),
+            &backup_canonical,
+            &backup_digest,
+            preview.mappings().len(),
+        )?;
+        verify_v2_registry_bindings_readonly(&installed_registry)?;
+        verify_exact_registry_migration_backup(&backup_path, &source_bytes, &source_digest)?;
+
+        Ok(RegistryMigrationApplyResult {
+            registry_path: registry_path.clone(),
+            source_digest,
+            preview_digest: preview.preview_digest().clone(),
+            installed_digest,
+            backup_path,
+            backup_digest,
+            backup_reused,
+            mappings: preview.mappings().len(),
+        })
+    })();
+
+    let mut cleanup_failures = Vec::new();
+    if outcome.is_err() && !authoritative_replaced {
+        for path in temporary_paths.iter().rev() {
+            if let Err(error) = fs::remove_file(path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                cleanup_failures.push(format!("{}: {error}", path.display()));
+            }
+        }
+    }
+    outcome.map_err(|error| {
+        if authoritative_replaced {
+            WorkVcsError::RegistryMigrationInstallIndeterminate(format!(
+                "the atomic registry rename completed; inspect the actual registry version and digest with --rollback-check before any recovery action; cause: {error}"
+            ))
+        } else {
+            let cleanup = if cleanup_failures.is_empty() {
+                "temporary cleanup completed".to_owned()
+            } else {
+                format!(
+                    "temporary cleanup also failed for {}",
+                    cleanup_failures.join(", ")
+                )
+            };
+            WorkVcsError::RegistryMigrationApplyFailed(format!(
+                "the v1 registry remains authoritative; {cleanup}; cause: {error}"
+            ))
+        }
+    })
+}
+
+fn inject_registry_migration_fault(
+    configured: Option<RegistryMigrationApplyFault>,
+    current: RegistryMigrationApplyFault,
+) -> Result<()> {
+    if configured == Some(current) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "injected registry migration fault at {current:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn require_atomic_registry_replace_support(action: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let _ = action;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        Err(WorkVcsError::QueryUnsupported(format!(
+            "{action} requires Unix same-filesystem rename-over-existing semantics; this candidate is not enabled on the current platform"
+        )))
+    }
+}
+
+fn registry_migration_backup_path(
+    registry_path: &Path,
+    source_digest: &ControlPlaneDigest,
+) -> Result<PathBuf> {
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let file_name = registry_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry path {} has no UTF-8 file name",
+                registry_path.display()
+            ))
+        })?;
+    Ok(parent.join(format!("{file_name}.v1.{}.bak", source_digest.digest())))
+}
+
+fn registry_migration_backup_temp_path(
+    registry_path: &Path,
+    source_digest: &ControlPlaneDigest,
+) -> Result<PathBuf> {
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let file_name = registry_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry path {} has no UTF-8 file name",
+                registry_path.display()
+            ))
+        })?;
+    Ok(parent.join(format!(
+        ".{file_name}.migration-v1-{}.backup.tmp",
+        source_digest.digest()
+    )))
+}
+
+fn registry_migration_candidate_temp_path(
+    registry_path: &Path,
+    preview_digest: &ControlPlaneDigest,
+) -> Result<PathBuf> {
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let file_name = registry_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry path {} has no UTF-8 file name",
+                registry_path.display()
+            ))
+        })?;
+    Ok(parent.join(format!(
+        ".{file_name}.migration-v2-{}.candidate.tmp",
+        preview_digest.digest()
+    )))
+}
+
+fn reject_conflicting_registry_migration_artifacts(
+    registry_path: &Path,
+    expected_backup_path: &Path,
+    source_bytes: &[u8],
+    source_digest: &ControlPlaneDigest,
+) -> Result<()> {
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let file_name = registry_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry path {} has no UTF-8 file name",
+                registry_path.display()
+            ))
+        })?;
+    let backup_prefix = format!("{file_name}.v1.");
+    let temp_prefix = format!(".{file_name}.");
+    for entry in fs::read_dir(parent).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect project registry directory {}: {error}",
+            parent.display()
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot inspect an entry in project registry directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if name.starts_with(&backup_prefix) && name.ends_with(".bak") {
+            if path != expected_backup_path {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "conflicting migration backup exists at {}",
+                    path.display()
+                )));
+            }
+            verify_exact_registry_migration_backup(
+                expected_backup_path,
+                source_bytes,
+                source_digest,
+            )?;
+        }
+        if name.starts_with(&temp_prefix) && name.ends_with(".tmp") {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "conflicting registry temp artifact exists at {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn verify_exact_registry_migration_backup(
+    backup_path: &Path,
+    source_bytes: &[u8],
+    source_digest: &ControlPlaneDigest,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(backup_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect migration backup {}: {error}",
+            backup_path.display()
+        ))
+    })?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "migration backup {} must be a regular non-symlink file",
+            backup_path.display()
+        )));
+    }
+    let backup_bytes = fs::read(backup_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read migration backup {}: {error}",
+            backup_path.display()
+        ))
+    })?;
+    if backup_bytes != source_bytes {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "migration backup {} does not contain the exact v1 source bytes",
+            backup_path.display()
+        )));
+    }
+    let backup_registry = ProjectRegistryV1::from_json_bytes(&backup_bytes)?;
+    if backup_registry.source_digest()? != *source_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "migration backup {} digest does not match locked source {source_digest}",
+            backup_path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn verify_registry_migration_candidate_receipt(
+    registry: &ProjectRegistryV2,
+    source_digest: &ControlPlaneDigest,
+    preview_digest: &ControlPlaneDigest,
+    backup_path: &CanonicalPath,
+    backup_digest: &ControlPlaneDigest,
+    expected_mappings: usize,
+) -> Result<()> {
+    if registry.revision() != 1 {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "migration candidate revision {} is not 1",
+            registry.revision()
+        )));
+    }
+    let receipt = registry.migration().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid("migration candidate has no migration receipt".to_owned())
+    })?;
+    if receipt.from_version() != 1
+        || receipt.source_digest() != source_digest
+        || receipt.preview_digest() != preview_digest
+        || receipt.backup_path() != backup_path
+        || receipt.backup_digest() != backup_digest
+        || receipt.mappings().len() != expected_mappings
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "migration candidate receipt does not match the locked source, preview, backup, and mapping count"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_v2_registry_bindings_readonly(registry: &ProjectRegistryV2) -> Result<usize> {
+    let mut local_content_objects_verified = 0_usize;
+    for binding in registry.bindings() {
+        local_content_objects_verified +=
+            verify_v2_registry_binding_readonly(binding).map_err(|error| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "migrated ProjectRef {} target verification failed: {error}",
+                    binding.project_ref_id()
+                ))
+            })?;
+    }
+    Ok(local_content_objects_verified)
+}
+
+fn verify_v2_registry_binding_readonly(binding: &ProjectBindingV2) -> Result<usize> {
+    let project_ref = binding.project_ref_id().to_string();
+    verify_registry_binding_readonly(&ProjectBinding {
+        identity_kind: "project-ref".to_owned(),
+        identity: project_ref.clone(),
+        root: project_ref,
+        store_path: binding.store_path().as_str().to_owned(),
+        store_id: binding.store_id(),
+        workspace_id: binding.workspace_id(),
+        branch_id: binding.branch_id(),
+    })
+}
+
+fn verify_v2_project_binding_readonly(
+    binding: &ProjectBindingV2,
+    current_identity: &ProjectIdentity,
+) -> Result<usize> {
+    let store_path = canonical_existing_path(
+        "project binding store",
+        Path::new(binding.store_path().as_str()),
+    )?;
+    reject_project_local_path("project binding store", &store_path, current_identity)?;
+    verify_v2_registry_binding_readonly(binding)
+}
+
+fn render_registry_migration_apply_result(result: &RegistryMigrationApplyResult) -> String {
+    format!(
+        "registry_path={}\nread_only=false\naction=apply\nsource_digest={}\npreview_digest={}\ninstalled_digest={}\nbackup_path={}\nbackup_digest={}\nbackup_reused={}\nmappings={}\nregistry_written=true\nbackup_verified=true\npost_install_verified=true\njournal_written=false\nstore_written=false\nrouting_activated=false\nrollback_performed=false\n",
+        escape_key_value(&result.registry_path.display().to_string()),
+        result.source_digest,
+        result.preview_digest,
+        result.installed_digest,
+        escape_key_value(&result.backup_path.display().to_string()),
+        result.backup_digest,
+        result.backup_reused,
+        result.mappings,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum RegistryRollbackFault {
+    AfterSnapshotTempWrite,
+    AfterSnapshotInstalled,
+    AfterCandidateTempWrite,
+    AfterCandidateTempSync,
+    BeforeRegistryRename,
+    AfterRegistryRename,
+    AfterRegistryDirectorySync,
+    BeforePostInstallVerification,
+}
+
+#[derive(Debug)]
+struct RegistryRollbackResult {
+    registry_path: PathBuf,
+    source_digest: ControlPlaneDigest,
+    installed_digest: ControlPlaneDigest,
+    backup_path: PathBuf,
+    backup_digest: ControlPlaneDigest,
+    snapshot_path: PathBuf,
+    snapshot_reused: bool,
+    mappings: usize,
+    registry_written: bool,
+    rollback_reused: bool,
+}
+
+#[derive(Debug)]
+struct RegistryRollbackInspection {
+    registry_version: u64,
+    registry_revision: Option<u64>,
+    registry_digest: ControlPlaneDigest,
+    registry_bytes: Vec<u8>,
+    installed_digest: Option<ControlPlaneDigest>,
+    source_digest: Option<ControlPlaneDigest>,
+    backup_path: Option<PathBuf>,
+    backup_digest: Option<ControlPlaneDigest>,
+    backup_bytes: Option<Vec<u8>>,
+    migration_receipt_present: bool,
+    mappings: usize,
+    bindings: usize,
+    bindings_verified: usize,
+    journal_roots: Vec<PathBuf>,
+    journal_entries: usize,
+    journal_quiescence_lock_path: PathBuf,
+    journal_quiescence_lock_state: &'static str,
+    routing_activation: RoutingActivationInspection,
+    routing_activation_paths: Vec<PathBuf>,
+    journal_admission_activation: RoutingActivationInspection,
+    journal_admission_activation_paths: Vec<PathBuf>,
+    snapshot_path: PathBuf,
+    snapshot_digest: Option<ControlPlaneDigest>,
+    snapshot_bytes: Option<Vec<u8>>,
+    installed_v2: Option<ProjectRegistryV2>,
+    issues: Vec<String>,
+}
+
+impl RegistryRollbackInspection {
+    fn rollback_ready(&self) -> bool {
+        self.registry_version == 2 && self.issues.is_empty()
+    }
+
+    fn rollback_restored(&self) -> bool {
+        self.registry_version == 1 && self.issues.is_empty()
+    }
+
+    fn state(&self) -> &'static str {
+        if self.rollback_ready() {
+            "v2_ready"
+        } else if self.rollback_restored() {
+            "v1_restored"
+        } else {
+            "blocked"
+        }
+    }
+}
+
+fn rollback_project_registry_migration(
+    registry: Option<PathBuf>,
+    repair_manifest: Option<PathBuf>,
+    expected_installed_digest: ControlPlaneDigest,
+    expected_backup_digest: ControlPlaneDigest,
+    format: MigrationPreviewFormatArg,
+) -> Result<String> {
+    if repair_manifest.is_some() {
+        return Err(WorkVcsError::QueryInvalid(
+            "registry migration --rollback does not accept --repair-manifest".to_owned(),
+        ));
+    }
+    if format != MigrationPreviewFormatArg::Text {
+        return Err(WorkVcsError::QueryInvalid(
+            "registry migration rollback currently supports only --format text".to_owned(),
+        ));
+    }
+    let result = rollback_project_registry_migration_with_fault(
+        registry,
+        &expected_installed_digest,
+        &expected_backup_digest,
+        None,
+    )?;
+    Ok(render_registry_rollback_result(&result))
+}
+
+fn rollback_project_registry_migration_with_fault(
+    registry: Option<PathBuf>,
+    expected_installed_digest: &ControlPlaneDigest,
+    expected_backup_digest: &ControlPlaneDigest,
+    fault: Option<RegistryRollbackFault>,
+) -> Result<RegistryRollbackResult> {
+    rollback_project_registry_migration_with_fault_and_hook(
+        registry,
+        expected_installed_digest,
+        expected_backup_digest,
+        fault,
+        None,
+    )
+}
+
+fn rollback_project_registry_migration_with_fault_and_hook(
+    registry: Option<PathBuf>,
+    expected_installed_digest: &ControlPlaneDigest,
+    expected_backup_digest: &ControlPlaneDigest,
+    fault: Option<RegistryRollbackFault>,
+    after_quiescence_acquired: Option<&dyn Fn()>,
+) -> Result<RegistryRollbackResult> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    require_atomic_registry_replace_support("registry migration rollback")?;
+    let _lock = ProjectRegistryLock::acquire(&registry_path).map_err(|error| {
+        WorkVcsError::RegistryRollbackFailed(format!("cannot acquire the registry lock: {error}"))
+    })?;
+    let journal_quiescence_lock_path =
+        project_registry_journal_quiescence_lock_path(&registry_path)?;
+    let journal_quiescence_lock = JournalQuiescenceLock::acquire(&journal_quiescence_lock_path)
+        .map_err(|error| {
+            WorkVcsError::RegistryRollbackFailed(format!(
+                "cannot acquire the shared journal quiescence lock {} after the registry lock: {error}",
+                journal_quiescence_lock_path.display()
+            ))
+        })?;
+    if let Some(hook) = after_quiescence_acquired {
+        hook();
+    }
+
+    let mut authoritative_replaced = false;
+    let mut temporary_paths = Vec::new();
+    let outcome = (|| -> Result<RegistryRollbackResult> {
+        let initial = inspect_registry_rollback_state(
+            &effective,
+            &registry_path,
+            expected_installed_digest,
+            expected_backup_digest,
+            None,
+            Some(&journal_quiescence_lock),
+        )?;
+
+        if initial.rollback_restored() {
+            return Ok(RegistryRollbackResult {
+                registry_path: registry_path.clone(),
+                source_digest: initial
+                    .source_digest
+                    .expect("restored inspection has source digest"),
+                installed_digest: initial
+                    .installed_digest
+                    .expect("restored inspection has v2 snapshot digest"),
+                backup_path: initial
+                    .backup_path
+                    .expect("restored inspection has v1 backup path"),
+                backup_digest: initial
+                    .backup_digest
+                    .expect("restored inspection has v1 backup digest"),
+                snapshot_path: initial.snapshot_path,
+                snapshot_reused: true,
+                mappings: initial.mappings,
+                registry_written: false,
+                rollback_reused: true,
+            });
+        }
+        if !initial.rollback_ready() {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "registry rollback preconditions are not satisfied: {}",
+                initial.issues.join("; ")
+            )));
+        }
+
+        let installed_v2 = initial
+            .installed_v2
+            .as_ref()
+            .expect("ready v2 inspection has registry");
+        let source_digest = initial
+            .source_digest
+            .clone()
+            .expect("ready v2 inspection has source digest");
+        let backup_path = initial
+            .backup_path
+            .clone()
+            .expect("ready v2 inspection has backup path");
+        let backup_bytes = initial
+            .backup_bytes
+            .clone()
+            .expect("ready v2 inspection has backup bytes");
+        let backup_digest = initial
+            .backup_digest
+            .clone()
+            .expect("ready v2 inspection has backup digest");
+        let mappings = initial.mappings;
+        let snapshot_path = initial.snapshot_path.clone();
+
+        let snapshot_reused = if initial.snapshot_bytes.is_some() {
+            verify_exact_registry_rollback_snapshot(
+                &snapshot_path,
+                &initial.registry_bytes,
+                expected_installed_digest,
+                expected_backup_digest,
+            )?;
+            true
+        } else {
+            let snapshot_temp =
+                registry_rollback_snapshot_temp_path(&registry_path, expected_installed_digest)?;
+            temporary_paths.push(snapshot_temp.clone());
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&snapshot_temp)
+                .map_err(|error| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "cannot create registry rollback snapshot temp {}: {error}",
+                        snapshot_temp.display()
+                    ))
+                })?;
+            file.write_all(&initial.registry_bytes).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot write registry rollback snapshot temp {}: {error}",
+                    snapshot_temp.display()
+                ))
+            })?;
+            inject_registry_rollback_fault(fault, RegistryRollbackFault::AfterSnapshotTempWrite)?;
+            fs::set_permissions(
+                &snapshot_temp,
+                fs::metadata(&registry_path)
+                    .map_err(|error| {
+                        WorkVcsError::QueryInvalid(format!(
+                            "cannot inspect v2 registry permissions {}: {error}",
+                            registry_path.display()
+                        ))
+                    })?
+                    .permissions(),
+            )
+            .map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot preserve v2 registry permissions on rollback snapshot {}: {error}",
+                    snapshot_temp.display()
+                ))
+            })?;
+            file.sync_all().map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot sync registry rollback snapshot temp {}: {error}",
+                    snapshot_temp.display()
+                ))
+            })?;
+            drop(file);
+            verify_exact_registry_rollback_snapshot(
+                &snapshot_temp,
+                &initial.registry_bytes,
+                expected_installed_digest,
+                expected_backup_digest,
+            )?;
+            fs::hard_link(&snapshot_temp, &snapshot_path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot atomically install registry rollback snapshot {}: {error}",
+                    snapshot_path.display()
+                ))
+            })?;
+            fs::remove_file(&snapshot_temp).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot remove installed rollback snapshot temp {}: {error}",
+                    snapshot_temp.display()
+                ))
+            })?;
+            temporary_paths.retain(|path| path != &snapshot_temp);
+            sync_directory(registry_path.parent().expect("registry has parent"))?;
+            verify_exact_registry_rollback_snapshot(
+                &snapshot_path,
+                &initial.registry_bytes,
+                expected_installed_digest,
+                expected_backup_digest,
+            )?;
+            inject_registry_rollback_fault(fault, RegistryRollbackFault::AfterSnapshotInstalled)?;
+            false
+        };
+
+        let candidate_temp =
+            registry_rollback_candidate_temp_path(&registry_path, expected_backup_digest)?;
+        temporary_paths.push(candidate_temp.clone());
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate_temp)
+            .map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot create registry rollback candidate temp {}: {error}",
+                    candidate_temp.display()
+                ))
+            })?;
+        file.write_all(&backup_bytes).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot write registry rollback candidate temp {}: {error}",
+                candidate_temp.display()
+            ))
+        })?;
+        inject_registry_rollback_fault(fault, RegistryRollbackFault::AfterCandidateTempWrite)?;
+        fs::set_permissions(
+            &candidate_temp,
+            fs::metadata(&backup_path)
+                .map_err(|error| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "cannot inspect v1 backup permissions {}: {error}",
+                        backup_path.display()
+                    ))
+                })?
+                .permissions(),
+        )
+        .map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot restore v1 registry permissions on rollback candidate {}: {error}",
+                candidate_temp.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot sync registry rollback candidate temp {}: {error}",
+                candidate_temp.display()
+            ))
+        })?;
+        drop(file);
+        inject_registry_rollback_fault(fault, RegistryRollbackFault::AfterCandidateTempSync)?;
+
+        let candidate_readback = fs::read(&candidate_temp).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot reread registry rollback candidate temp {}: {error}",
+                candidate_temp.display()
+            ))
+        })?;
+        if candidate_readback != backup_bytes {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "registry rollback candidate bytes changed before installation".to_owned(),
+            ));
+        }
+        let candidate_v1 = ProjectRegistryV1::from_json_bytes(&candidate_readback)?;
+        if candidate_v1.source_digest()? != source_digest {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "registry rollback candidate canonical digest changed before installation"
+                    .to_owned(),
+            ));
+        }
+
+        let final_preflight = inspect_registry_rollback_state(
+            &effective,
+            &registry_path,
+            expected_installed_digest,
+            expected_backup_digest,
+            Some(&candidate_temp),
+            Some(&journal_quiescence_lock),
+        )?;
+        if !final_preflight.rollback_ready()
+            || final_preflight.registry_bytes != initial.registry_bytes
+            || final_preflight.backup_bytes.as_ref() != Some(&backup_bytes)
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "registry rollback inputs changed after the digest lock and before replacement: {}",
+                final_preflight.issues.join("; ")
+            )));
+        }
+        verify_exact_registry_rollback_snapshot(
+            &snapshot_path,
+            &initial.registry_bytes,
+            expected_installed_digest,
+            expected_backup_digest,
+        )?;
+        verify_registry_migration_candidate_receipt(
+            installed_v2,
+            &source_digest,
+            installed_v2
+                .migration()
+                .expect("ready inspection has receipt")
+                .preview_digest(),
+            installed_v2
+                .migration()
+                .expect("ready inspection has receipt")
+                .backup_path(),
+            &backup_digest,
+            mappings,
+        )?;
+        inject_registry_rollback_fault(fault, RegistryRollbackFault::BeforeRegistryRename)?;
+
+        fs::rename(&candidate_temp, &registry_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot atomically restore registry {} from rollback candidate {}: {error}",
+                registry_path.display(),
+                candidate_temp.display()
+            ))
+        })?;
+        authoritative_replaced = true;
+        temporary_paths.retain(|path| path != &candidate_temp);
+        inject_registry_rollback_fault(fault, RegistryRollbackFault::AfterRegistryRename)?;
+        sync_directory(registry_path.parent().expect("registry has parent"))?;
+        inject_registry_rollback_fault(fault, RegistryRollbackFault::AfterRegistryDirectorySync)?;
+        inject_registry_rollback_fault(
+            fault,
+            RegistryRollbackFault::BeforePostInstallVerification,
+        )?;
+
+        let installed_bytes = fs::read(&registry_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot reopen restored v1 registry {}: {error}",
+                registry_path.display()
+            ))
+        })?;
+        if installed_bytes != backup_bytes {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "restored v1 registry bytes do not match the verified backup".to_owned(),
+            ));
+        }
+        let installed_v1 = ProjectRegistryV1::from_json_bytes(&installed_bytes)?;
+        if installed_v1.source_digest()? != source_digest {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "restored v1 registry canonical digest does not match the migration receipt"
+                    .to_owned(),
+            ));
+        }
+        let post_install = inspect_registry_rollback_state(
+            &effective,
+            &registry_path,
+            expected_installed_digest,
+            expected_backup_digest,
+            None,
+            Some(&journal_quiescence_lock),
+        )?;
+        if !post_install.rollback_restored() {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "post-install rollback verification failed: {}",
+                post_install.issues.join("; ")
+            )));
+        }
+
+        Ok(RegistryRollbackResult {
+            registry_path: registry_path.clone(),
+            source_digest,
+            installed_digest: expected_installed_digest.clone(),
+            backup_path,
+            backup_digest,
+            snapshot_path,
+            snapshot_reused,
+            mappings,
+            registry_written: true,
+            rollback_reused: false,
+        })
+    })();
+
+    let mut cleanup_failures = Vec::new();
+    if outcome.is_err() && !authoritative_replaced {
+        for path in temporary_paths.iter().rev() {
+            if let Err(error) = fs::remove_file(path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                cleanup_failures.push(format!("{}: {error}", path.display()));
+            }
+        }
+    }
+    outcome.map_err(|error| {
+        if authoritative_replaced {
+            WorkVcsError::RegistryRollbackInstallIndeterminate(format!(
+                "the atomic v1 restore rename completed; run registry-migrate --rollback-check with the same installed and backup digests before any retry or forward recovery; cause: {error}"
+            ))
+        } else {
+            let cleanup = if cleanup_failures.is_empty() {
+                "temporary cleanup completed".to_owned()
+            } else {
+                format!(
+                    "temporary cleanup also failed for {}",
+                    cleanup_failures.join(", ")
+                )
+            };
+            WorkVcsError::RegistryRollbackFailed(format!(
+                "the authoritative registry was not replaced; an exact v2 rollback snapshot may remain reusable; {cleanup}; cause: {error}"
+            ))
+        }
+    })
+}
+
+fn inject_registry_rollback_fault(
+    configured: Option<RegistryRollbackFault>,
+    current: RegistryRollbackFault,
+) -> Result<()> {
+    if configured == Some(current) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "injected registry rollback fault at {current:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn render_registry_rollback_result(result: &RegistryRollbackResult) -> String {
+    format!(
+        "registry_path={}\nread_only=false\naction=rollback\nrollback_state=v1_restored\nsource_digest={}\ninstalled_digest={}\nbackup_path={}\nbackup_digest={}\nrollback_snapshot_path={}\nrollback_snapshot_digest={}\nrollback_snapshot_reused={}\nmappings={}\nregistry_written={}\nbackup_written=false\nrollback_snapshot_written={}\npost_install_verified=true\njournal_written=false\nstore_written=false\nrouting_activated=false\nrollback_performed={}\nrollback_reused={}\n",
+        escape_key_value(&result.registry_path.display().to_string()),
+        result.source_digest,
+        result.installed_digest,
+        escape_key_value(&result.backup_path.display().to_string()),
+        result.backup_digest,
+        escape_key_value(&result.snapshot_path.display().to_string()),
+        result.installed_digest,
+        result.snapshot_reused,
+        result.mappings,
+        result.registry_written,
+        !result.snapshot_reused,
+        result.registry_written,
+        result.rollback_reused,
+    )
+}
+
+fn inspect_project_registry_rollback_readiness(
+    registry: Option<PathBuf>,
+    repair_manifest: Option<PathBuf>,
+    expected_installed_digest: ControlPlaneDigest,
+    expected_backup_digest: ControlPlaneDigest,
+    format: MigrationPreviewFormatArg,
+) -> Result<String> {
+    if repair_manifest.is_some() {
+        return Err(WorkVcsError::QueryInvalid(
+            "registry migration --rollback-check does not accept --repair-manifest".to_owned(),
+        ));
+    }
+    if format != MigrationPreviewFormatArg::Text {
+        return Err(WorkVcsError::QueryInvalid(
+            "registry migration rollback-check currently supports only --format text".to_owned(),
+        ));
+    }
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    let inspection = inspect_registry_rollback_state(
+        &effective,
+        &registry_path,
+        &expected_installed_digest,
+        &expected_backup_digest,
+        None,
+        None,
+    )?;
+    let mut output = format!(
+        "registry_path={}\nread_only=true\naction=rollback-check\nrollback_state={}\nregistry_version={}\nregistry_revision={}\nregistry_digest={}\ninstalled_digest={}\nexpected_installed_digest={}\ninstalled_digest_matches_expected={}\nbackup_path={}\nbackup_digest={}\nexpected_backup_digest={}\nbackup_digest_matches_expected={}\nmigration_receipt_present={}\nmappings={}\nbindings={}\nbindings_verified={}\ncapture_journal_roots={}\ncapture_journal_entries={}\njournal_quiescence_lock_path={}\njournal_quiescence_lock_state={}\nrouting_activation_state={}\nrouting_activation_path={}\nrouting_activation_paths={}\njournal_admission_activation_state={}\njournal_admission_activation_path={}\njournal_admission_activation_paths={}\nrollback_snapshot_path={}\nrollback_snapshot_digest={}\nrollback_snapshot_present={}\nrollback_ready={}\nrollback_restored={}\nrollback_apply_safe={}\nrollback_reentry_safe={}\nregistry_written=false\nbackup_written=false\nrollback_snapshot_written=false\njournal_written=false\nstore_written=false\nrouting_activated={}\njournal_admission_activated={}\nrollback_performed=false\nissues={}\n",
+        escape_key_value(&registry_path.display().to_string()),
+        inspection.state(),
+        inspection.registry_version,
+        inspection
+            .registry_revision
+            .map(|revision| revision.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        inspection.registry_digest,
+        inspection
+            .installed_digest
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "none".to_owned()),
+        expected_installed_digest,
+        inspection.installed_digest.as_ref() == Some(&expected_installed_digest),
+        inspection
+            .backup_path
+            .as_ref()
+            .map(|path| escape_key_value(&path.display().to_string()))
+            .unwrap_or_else(|| "none".to_owned()),
+        inspection
+            .backup_digest
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "none".to_owned()),
+        expected_backup_digest,
+        inspection.backup_digest.as_ref() == Some(&expected_backup_digest),
+        inspection.migration_receipt_present,
+        inspection.mappings,
+        inspection.bindings,
+        inspection.bindings_verified,
+        inspection.journal_roots.len(),
+        inspection.journal_entries,
+        escape_key_value(
+            &inspection
+                .journal_quiescence_lock_path
+                .display()
+                .to_string()
+        ),
+        inspection.journal_quiescence_lock_state,
+        inspection.routing_activation.state.as_str(),
+        escape_key_value(&inspection.routing_activation.path.display().to_string()),
+        inspection.routing_activation_paths.len(),
+        inspection.journal_admission_activation.state.as_str(),
+        escape_key_value(
+            &inspection
+                .journal_admission_activation
+                .path
+                .display()
+                .to_string()
+        ),
+        inspection.journal_admission_activation_paths.len(),
+        escape_key_value(&inspection.snapshot_path.display().to_string()),
+        inspection
+            .snapshot_digest
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "none".to_owned()),
+        inspection.snapshot_bytes.is_some(),
+        inspection.rollback_ready(),
+        inspection.rollback_restored(),
+        inspection.rollback_ready(),
+        inspection.rollback_restored(),
+        inspection.routing_activation.state == RoutingActivationState::Active,
+        inspection.journal_admission_activation.state == RoutingActivationState::Active,
+        inspection.issues.len(),
+    );
+    for (index, journal_root) in inspection.journal_roots.iter().enumerate() {
+        writeln!(
+            output,
+            "capture_journal_root.{index}={}",
+            escape_key_value(&journal_root.display().to_string())
+        )
+        .expect("write to String");
+    }
+    for (index, activation_path) in inspection.routing_activation_paths.iter().enumerate() {
+        writeln!(
+            output,
+            "routing_activation_path.{index}={}",
+            escape_key_value(&activation_path.display().to_string())
+        )
+        .expect("write to String");
+    }
+    for (index, activation_path) in inspection
+        .journal_admission_activation_paths
+        .iter()
+        .enumerate()
+    {
+        writeln!(
+            output,
+            "journal_admission_activation_path.{index}={}",
+            escape_key_value(&activation_path.display().to_string())
+        )
+        .expect("write to String");
+    }
+    for (index, issue) in inspection.issues.iter().enumerate() {
+        writeln!(output, "issue.{index}={}", escape_key_value(issue)).expect("write to String");
+    }
+    Ok(output)
+}
+
+fn inspect_registry_rollback_state(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    expected_installed_digest: &ControlPlaneDigest,
+    expected_backup_digest: &ControlPlaneDigest,
+    allowed_temp: Option<&Path>,
+    journal_quiescence_lock: Option<&JournalQuiescenceLock>,
+) -> Result<RegistryRollbackInspection> {
+    let registry_bytes = fs::read(registry_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read installed registry {}: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let version = project_registry_version_from_bytes(registry_path, &registry_bytes)?;
+    let snapshot_path = registry_rollback_snapshot_path(registry_path, expected_installed_digest)?;
+    let journal_roots = registry_migration_journal_roots(effective, registry_path);
+    let mut issues = Vec::new();
+    let (journal_quiescence_lock_path, journal_quiescence_lock_state) =
+        inspect_journal_quiescence_lock(registry_path, journal_quiescence_lock, &mut issues)?;
+    let journal_entries = journal_roots
+        .iter()
+        .map(|root| inspect_capture_journal_for_rollback(root, &mut issues))
+        .sum::<usize>();
+    inspect_conflicting_registry_rollback_artifacts(
+        registry_path,
+        &snapshot_path,
+        allowed_temp,
+        &mut issues,
+    );
+
+    match version {
+        2 => {
+            let installed = ProjectRegistryV2::from_json_bytes(&registry_bytes)?;
+            let installed_digest = installed.digest()?;
+            if installed.stored_json_bytes()? != registry_bytes {
+                issues.push("installed_v2_bytes_are_not_canonical_stored_form".to_owned());
+            }
+            if &installed_digest != expected_installed_digest {
+                issues.push(format!(
+                    "installed_digest_mismatch:actual={installed_digest}:expected={expected_installed_digest}"
+                ));
+            }
+            if installed.revision() != 1 {
+                issues.push(format!(
+                    "registry_revision_changed:actual={}",
+                    installed.revision()
+                ));
+            }
+
+            let mut source_digest = None;
+            let mut backup_path = None;
+            let mut backup_digest = None;
+            let mut backup_bytes = None;
+            let mut mappings = 0_usize;
+            if let Some(receipt) = installed.migration() {
+                source_digest = Some(receipt.source_digest().clone());
+                mappings = receipt.mappings().len();
+                if receipt.from_version() != 1 {
+                    issues.push(format!(
+                        "migration_from_version_changed:actual={}",
+                        receipt.from_version()
+                    ));
+                }
+                if receipt.backup_digest() != expected_backup_digest {
+                    issues.push(format!(
+                        "receipt_backup_digest_mismatch:actual={}:expected={expected_backup_digest}",
+                        receipt.backup_digest()
+                    ));
+                }
+                let expected_path =
+                    registry_migration_backup_path(registry_path, receipt.source_digest())?;
+                if receipt.backup_path().as_path() != expected_path {
+                    issues.push(format!(
+                        "receipt_backup_path_mismatch:actual={}:expected={}",
+                        receipt.backup_path().as_str(),
+                        expected_path.display()
+                    ));
+                }
+                backup_path = Some(expected_path.clone());
+                match inspect_registry_migration_backup(
+                    &expected_path,
+                    receipt.source_digest(),
+                    expected_backup_digest,
+                ) {
+                    Ok((bytes, digest)) => {
+                        backup_digest = Some(digest);
+                        backup_bytes = Some(bytes);
+                    }
+                    Err(error) => issues.push(format!("backup_invalid:{error}")),
+                }
+                if receipt.mappings().len() != installed.projects().len() {
+                    issues.push(format!(
+                        "mapping_receipt_count_mismatch:mappings={}:projects={}",
+                        receipt.mappings().len(),
+                        installed.projects().len()
+                    ));
+                }
+            } else {
+                issues.push("migration_receipt_missing".to_owned());
+            }
+
+            let mut bindings_verified = 0_usize;
+            for binding in installed.bindings() {
+                match verify_v2_registry_binding_readonly(binding) {
+                    Ok(_) => bindings_verified += 1,
+                    Err(error) => issues.push(format!(
+                        "binding_invalid:project_ref={}:{}",
+                        binding.project_ref_id(),
+                        error
+                    )),
+                }
+            }
+            let (routing_activation, routing_activation_paths) =
+                inspect_routing_activation_candidates_for_rollback(
+                    effective,
+                    registry_path,
+                    Some(&installed),
+                    &mut issues,
+                );
+            let (journal_admission_activation, journal_admission_activation_paths) =
+                inspect_journal_admission_activation_candidates_for_rollback(
+                    effective,
+                    registry_path,
+                    Some(&installed),
+                    &mut issues,
+                );
+
+            let (snapshot_bytes, snapshot_digest) = match fs::symlink_metadata(&snapshot_path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None),
+                Err(error) => {
+                    issues.push(format!(
+                        "rollback_snapshot_unreadable:path={}:error={error}",
+                        snapshot_path.display()
+                    ));
+                    (None, None)
+                }
+                Ok(_) => match inspect_registry_rollback_snapshot(
+                    &snapshot_path,
+                    expected_installed_digest,
+                ) {
+                    Ok((bytes, snapshot, digest)) => {
+                        if bytes != registry_bytes {
+                            issues.push(
+                                "rollback_snapshot_does_not_match_current_v2_bytes".to_owned(),
+                            );
+                        }
+                        if snapshot.migration().map(|receipt| receipt.backup_digest())
+                            != Some(expected_backup_digest)
+                        {
+                            issues.push(
+                                "rollback_snapshot_receipt_backup_digest_mismatch".to_owned(),
+                            );
+                        }
+                        (Some(bytes), Some(digest))
+                    }
+                    Err(error) => {
+                        issues.push(format!("rollback_snapshot_invalid:{error}"));
+                        (None, None)
+                    }
+                },
+            };
+
+            append_registry_rollback_stability_issues(
+                registry_path,
+                &registry_bytes,
+                backup_path.as_deref(),
+                backup_bytes.as_deref(),
+                Some(&snapshot_path),
+                snapshot_bytes.as_deref(),
+                &mut issues,
+            );
+
+            Ok(RegistryRollbackInspection {
+                registry_version: 2,
+                registry_revision: Some(installed.revision()),
+                registry_digest: installed_digest.clone(),
+                registry_bytes,
+                installed_digest: Some(installed_digest),
+                source_digest,
+                backup_path,
+                backup_digest,
+                backup_bytes,
+                migration_receipt_present: installed.migration().is_some(),
+                mappings,
+                bindings: installed.bindings().len(),
+                bindings_verified,
+                journal_roots,
+                journal_entries,
+                journal_quiescence_lock_path,
+                journal_quiescence_lock_state,
+                routing_activation,
+                routing_activation_paths,
+                journal_admission_activation,
+                journal_admission_activation_paths,
+                snapshot_path,
+                snapshot_digest,
+                snapshot_bytes,
+                installed_v2: Some(installed),
+                issues,
+            })
+        }
+        1 => {
+            let restored = ProjectRegistryV1::from_json_bytes(&registry_bytes)?;
+            let source_digest = restored.source_digest()?;
+            let mut installed_v2 = None;
+            let mut installed_digest = None;
+            let mut snapshot_digest = None;
+            let mut snapshot_bytes = None;
+            match inspect_registry_rollback_snapshot(&snapshot_path, expected_installed_digest) {
+                Ok((bytes, snapshot, digest)) => {
+                    installed_digest = Some(digest.clone());
+                    snapshot_digest = Some(digest);
+                    snapshot_bytes = Some(bytes);
+                    installed_v2 = Some(snapshot);
+                }
+                Err(error) => issues.push(format!("rollback_snapshot_invalid:{error}")),
+            }
+
+            let mut backup_path = None;
+            let mut backup_digest = None;
+            let mut backup_bytes = None;
+            let mut mappings = 0_usize;
+            let mut migration_receipt_present = false;
+            let mut bindings = restored.bindings().len();
+            if let Some(snapshot) = installed_v2.as_ref() {
+                bindings = snapshot.bindings().len();
+                if snapshot.revision() != 1 {
+                    issues.push(format!(
+                        "registry_revision_changed:actual={}",
+                        snapshot.revision()
+                    ));
+                }
+                if let Some(receipt) = snapshot.migration() {
+                    migration_receipt_present = true;
+                    mappings = receipt.mappings().len();
+                    if receipt.from_version() != 1 {
+                        issues.push(format!(
+                            "migration_from_version_changed:actual={}",
+                            receipt.from_version()
+                        ));
+                    }
+                    if receipt.source_digest() != &source_digest {
+                        issues.push(format!(
+                            "restored_source_digest_mismatch:actual={source_digest}:receipt={}",
+                            receipt.source_digest()
+                        ));
+                    }
+                    if receipt.backup_digest() != expected_backup_digest {
+                        issues.push(format!(
+                            "receipt_backup_digest_mismatch:actual={}:expected={expected_backup_digest}",
+                            receipt.backup_digest()
+                        ));
+                    }
+                    let expected_path =
+                        registry_migration_backup_path(registry_path, receipt.source_digest())?;
+                    if receipt.backup_path().as_path() != expected_path {
+                        issues.push(format!(
+                            "receipt_backup_path_mismatch:actual={}:expected={}",
+                            receipt.backup_path().as_str(),
+                            expected_path.display()
+                        ));
+                    }
+                    backup_path = Some(expected_path.clone());
+                    match inspect_registry_migration_backup(
+                        &expected_path,
+                        receipt.source_digest(),
+                        expected_backup_digest,
+                    ) {
+                        Ok((bytes, digest)) => {
+                            if bytes != registry_bytes {
+                                issues
+                                    .push("restored_v1_bytes_do_not_match_exact_backup".to_owned());
+                            }
+                            backup_digest = Some(digest);
+                            backup_bytes = Some(bytes);
+                        }
+                        Err(error) => issues.push(format!("backup_invalid:{error}")),
+                    }
+                    if receipt.mappings().len() != snapshot.projects().len() {
+                        issues.push(format!(
+                            "mapping_receipt_count_mismatch:mappings={}:projects={}",
+                            receipt.mappings().len(),
+                            snapshot.projects().len()
+                        ));
+                    }
+                } else {
+                    issues.push("migration_receipt_missing".to_owned());
+                }
+            }
+
+            let mut bindings_verified = 0_usize;
+            for binding in restored.bindings() {
+                match project_binding_v1_to_cli(binding)
+                    .and_then(|binding| verify_registry_binding_readonly(&binding))
+                {
+                    Ok(_) => bindings_verified += 1,
+                    Err(error) => issues.push(format!(
+                        "restored_binding_invalid:identity_kind={}:identity={}:{}",
+                        binding.identity_kind(),
+                        binding.identity(),
+                        error
+                    )),
+                }
+            }
+            let (routing_activation, routing_activation_paths) =
+                inspect_routing_activation_candidates_for_rollback(
+                    effective,
+                    registry_path,
+                    installed_v2.as_ref(),
+                    &mut issues,
+                );
+            let (journal_admission_activation, journal_admission_activation_paths) =
+                inspect_journal_admission_activation_candidates_for_rollback(
+                    effective,
+                    registry_path,
+                    installed_v2.as_ref(),
+                    &mut issues,
+                );
+            append_registry_rollback_stability_issues(
+                registry_path,
+                &registry_bytes,
+                backup_path.as_deref(),
+                backup_bytes.as_deref(),
+                Some(&snapshot_path),
+                snapshot_bytes.as_deref(),
+                &mut issues,
+            );
+
+            Ok(RegistryRollbackInspection {
+                registry_version: 1,
+                registry_revision: None,
+                registry_digest: source_digest.clone(),
+                registry_bytes,
+                installed_digest,
+                source_digest: Some(source_digest),
+                backup_path,
+                backup_digest,
+                backup_bytes,
+                migration_receipt_present,
+                mappings,
+                bindings,
+                bindings_verified,
+                journal_roots,
+                journal_entries,
+                journal_quiescence_lock_path,
+                journal_quiescence_lock_state,
+                routing_activation,
+                routing_activation_paths,
+                journal_admission_activation,
+                journal_admission_activation_paths,
+                snapshot_path,
+                snapshot_digest,
+                snapshot_bytes,
+                installed_v2,
+                issues,
+            })
+        }
+        other => Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "project registry {} has unsupported version {other}",
+            registry_path.display()
+        ))),
+    }
+}
+
+fn project_registry_version_from_bytes(path: &Path, bytes: &[u8]) -> Result<u64> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry {} is not valid JSON: {error}",
+            path.display()
+        ))
+    })?;
+    value
+        .as_object()
+        .and_then(|object| object.get("version"))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry {} requires unsigned integer version",
+                path.display()
+            ))
+        })
+}
+
+fn registry_rollback_snapshot_path(
+    registry_path: &Path,
+    installed_digest: &ControlPlaneDigest,
+) -> Result<PathBuf> {
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let file_name = registry_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry path {} has no UTF-8 file name",
+                registry_path.display()
+            ))
+        })?;
+    Ok(parent.join(format!(
+        "{file_name}.v2.{}.rollback.bak",
+        installed_digest.digest()
+    )))
+}
+
+fn registry_rollback_snapshot_temp_path(
+    registry_path: &Path,
+    installed_digest: &ControlPlaneDigest,
+) -> Result<PathBuf> {
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let file_name = registry_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry path {} has no UTF-8 file name",
+                registry_path.display()
+            ))
+        })?;
+    Ok(parent.join(format!(
+        ".{file_name}.rollback-v2-{}.backup.tmp",
+        installed_digest.digest()
+    )))
+}
+
+fn registry_rollback_candidate_temp_path(
+    registry_path: &Path,
+    backup_digest: &ControlPlaneDigest,
+) -> Result<PathBuf> {
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let file_name = registry_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry path {} has no UTF-8 file name",
+                registry_path.display()
+            ))
+        })?;
+    Ok(parent.join(format!(
+        ".{file_name}.rollback-v1-{}.candidate.tmp",
+        backup_digest.digest()
+    )))
+}
+
+fn inspect_registry_rollback_snapshot(
+    path: &Path,
+    expected_installed_digest: &ControlPlaneDigest,
+) -> Result<(Vec<u8>, ProjectRegistryV2, ControlPlaneDigest)> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect registry rollback snapshot {}: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "registry rollback snapshot {} must be a regular non-symlink file",
+            path.display()
+        )));
+    }
+    let bytes = fs::read(path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read registry rollback snapshot {}: {error}",
+            path.display()
+        ))
+    })?;
+    let snapshot = ProjectRegistryV2::from_json_bytes(&bytes)?;
+    if snapshot.stored_json_bytes()? != bytes {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "registry rollback snapshot {} is not the canonical stored v2 byte form",
+            path.display()
+        )));
+    }
+    let digest = snapshot.digest()?;
+    if &digest != expected_installed_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "registry rollback snapshot digest {digest} does not match expected installed digest {expected_installed_digest}"
+        )));
+    }
+    Ok((bytes, snapshot, digest))
+}
+
+fn verify_exact_registry_rollback_snapshot(
+    path: &Path,
+    expected_bytes: &[u8],
+    expected_installed_digest: &ControlPlaneDigest,
+    expected_backup_digest: &ControlPlaneDigest,
+) -> Result<()> {
+    let (bytes, snapshot, _) = inspect_registry_rollback_snapshot(path, expected_installed_digest)?;
+    if bytes != expected_bytes {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "registry rollback snapshot {} does not contain the exact installed v2 bytes",
+            path.display()
+        )));
+    }
+    if snapshot.migration().map(|receipt| receipt.backup_digest()) != Some(expected_backup_digest) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "registry rollback snapshot {} does not reference the expected v1 backup digest",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn inspect_conflicting_registry_rollback_artifacts(
+    registry_path: &Path,
+    expected_snapshot_path: &Path,
+    allowed_temp: Option<&Path>,
+    issues: &mut Vec<String>,
+) {
+    let Some(parent) = registry_path.parent() else {
+        issues.push("registry_parent_missing".to_owned());
+        return;
+    };
+    let Some(file_name) = registry_path.file_name().and_then(OsStr::to_str) else {
+        issues.push("registry_file_name_not_utf8".to_owned());
+        return;
+    };
+    let snapshot_prefix = format!("{file_name}.v2.");
+    let temp_prefix = format!(".{file_name}.");
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) => {
+            issues.push(format!(
+                "registry_directory_unreadable:path={}:error={error}",
+                parent.display()
+            ));
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                issues.push(format!(
+                    "registry_directory_entry_unreadable:path={}:error={error}",
+                    parent.display()
+                ));
+                continue;
+            }
+        };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&snapshot_prefix)
+            && name.ends_with(".rollback.bak")
+            && path != expected_snapshot_path
+        {
+            issues.push(format!(
+                "conflicting_rollback_snapshot:path={}",
+                path.display()
+            ));
+        }
+        if name.starts_with(&temp_prefix)
+            && name.ends_with(".tmp")
+            && allowed_temp != Some(path.as_path())
+        {
+            issues.push(format!("conflicting_registry_temp:path={}", path.display()));
+        }
+    }
+}
+
+fn append_registry_rollback_stability_issues(
+    registry_path: &Path,
+    registry_before: &[u8],
+    backup_path: Option<&Path>,
+    backup_before: Option<&[u8]>,
+    snapshot_path: Option<&Path>,
+    snapshot_before: Option<&[u8]>,
+    issues: &mut Vec<String>,
+) {
+    match fs::read(registry_path) {
+        Ok(after) if after == registry_before => {}
+        Ok(_) => issues.push("registry_changed_during_probe".to_owned()),
+        Err(error) => issues.push(format!("registry_disappeared_during_probe:{error}")),
+    }
+    if let (Some(path), Some(before)) = (backup_path, backup_before) {
+        match fs::read(path) {
+            Ok(after) if after == before => {}
+            Ok(_) => issues.push("backup_changed_during_probe".to_owned()),
+            Err(error) => issues.push(format!("backup_disappeared_during_probe:{error}")),
+        }
+    }
+    if let (Some(path), Some(before)) = (snapshot_path, snapshot_before) {
+        match fs::read(path) {
+            Ok(after) if after == before => {}
+            Ok(_) => issues.push("rollback_snapshot_changed_during_probe".to_owned()),
+            Err(error) => issues.push(format!(
+                "rollback_snapshot_disappeared_during_probe:{error}"
+            )),
+        }
+    }
+}
+
+fn append_routing_activation_rollback_issue(
+    inspection: &RoutingActivationInspection,
+    issues: &mut Vec<String>,
+) {
+    if inspection.state != RoutingActivationState::Absent {
+        issues.push(format!(
+            "routing_activation_not_absent:state={}:path={}{}",
+            inspection.state.as_str(),
+            inspection.path.display(),
+            inspection
+                .issue
+                .as_ref()
+                .map(|issue| format!(":issue={issue}"))
+                .unwrap_or_default()
+        ));
+    }
+}
+
+fn inspect_routing_activation_absence_at_path(path: PathBuf) -> RoutingActivationInspection {
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Absent,
+            marker_digest: None,
+            issue: None,
+        },
+        Err(error) => RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Invalid,
+            marker_digest: None,
+            issue: Some(format!("cannot inspect routing activation marker: {error}")),
+        },
+        Ok(_) => RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Invalid,
+            marker_digest: None,
+            issue: Some(
+                "routing activation marker exists while registry v1 is installed".to_owned(),
+            ),
+        },
+    }
+}
+
+fn inspect_routing_activation_candidates_for_rollback(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: Option<&ProjectRegistryV2>,
+    issues: &mut Vec<String>,
+) -> (RoutingActivationInspection, Vec<PathBuf>) {
+    let paths = routing_activation_candidate_paths(effective, registry_path);
+    let inspections = paths
+        .iter()
+        .cloned()
+        .map(|path| match registry {
+            Some(registry) => inspect_read_routing_activation_at_path(path, registry),
+            None => inspect_routing_activation_absence_at_path(path),
+        })
+        .collect::<Vec<_>>();
+    for inspection in &inspections {
+        append_routing_activation_rollback_issue(inspection, issues);
+    }
+    let representative = inspections
+        .iter()
+        .find(|inspection| inspection.state == RoutingActivationState::Active)
+        .or_else(|| {
+            inspections
+                .iter()
+                .find(|inspection| inspection.state != RoutingActivationState::Absent)
+        })
+        .unwrap_or_else(|| {
+            inspections
+                .first()
+                .expect("rollback always has a routing activation candidate path")
+        })
+        .clone();
+    (representative, paths)
+}
+
+fn inspect_journal_admission_activation_candidates_for_rollback(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: Option<&ProjectRegistryV2>,
+    issues: &mut Vec<String>,
+) -> (RoutingActivationInspection, Vec<PathBuf>) {
+    let paths = journal_admission_activation_candidate_paths(effective, registry_path);
+    let inspections = paths
+        .iter()
+        .cloned()
+        .map(|path| match registry {
+            Some(registry) => inspect_journal_admission_activation_at_path(path, registry),
+            None => inspect_routing_activation_absence_at_path(path),
+        })
+        .collect::<Vec<_>>();
+    for inspection in &inspections {
+        if inspection.state != RoutingActivationState::Absent {
+            issues.push(format!(
+                "journal_admission_activation_not_absent:state={}:path={}{}",
+                inspection.state.as_str(),
+                inspection.path.display(),
+                inspection
+                    .issue
+                    .as_ref()
+                    .map(|issue| format!(":issue={issue}"))
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    let representative = inspections
+        .iter()
+        .find(|inspection| inspection.state == RoutingActivationState::Active)
+        .or_else(|| {
+            inspections
+                .iter()
+                .find(|inspection| inspection.state != RoutingActivationState::Absent)
+        })
+        .unwrap_or_else(|| {
+            inspections
+                .first()
+                .expect("rollback always has a journal-admission activation candidate path")
+        })
+        .clone();
+    (representative, paths)
+}
+
+fn inspect_journal_quiescence_lock(
+    registry_path: &Path,
+    held_lock: Option<&JournalQuiescenceLock>,
+    issues: &mut Vec<String>,
+) -> Result<(PathBuf, &'static str)> {
+    let lock_path = project_registry_journal_quiescence_lock_path(registry_path)?;
+    if let Some(held_lock) = held_lock {
+        if held_lock.path() != lock_path {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "held journal quiescence lock {} does not match registry-derived identity {}",
+                held_lock.path().display(),
+                lock_path.display()
+            )));
+        }
+        if let Err(error) = held_lock.verify_owned() {
+            issues.push(format!(
+                "journal_quiescence_lock_ownership_lost:path={}:error={error}",
+                lock_path.display()
+            ));
+            return Ok((lock_path, "invalid"));
+        }
+        return Ok((lock_path, "owned"));
+    }
+
+    match fs::symlink_metadata(&lock_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((lock_path, "absent")),
+        Err(error) => {
+            issues.push(format!(
+                "journal_quiescence_lock_unreadable:path={}:error={error}",
+                lock_path.display()
+            ));
+            Ok((lock_path, "unreadable"))
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            issues.push(format!(
+                "journal_quiescence_lock_invalid:path={}",
+                lock_path.display()
+            ));
+            Ok((lock_path, "invalid"))
+        }
+        Ok(_) => {
+            issues.push(format!(
+                "journal_quiescence_lock_present:path={}",
+                lock_path.display()
+            ));
+            Ok((lock_path, "present"))
+        }
+    }
+}
+
+fn registry_migration_journal_roots(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = effective.configured_home.as_ref() {
+        roots.push(home.join("capture-journal").join("v1"));
+    }
+    let sidecar_root = PathBuf::from(format!("{}.d", registry_path.display()))
+        .join("capture-journal")
+        .join("v1");
+    if !roots.contains(&sidecar_root) {
+        roots.push(sidecar_root);
+    }
+    if registry_path.file_name().and_then(|name| name.to_str()) == Some(PROJECT_REGISTRY_FILE)
+        && let Some(parent) = registry_path.parent()
+    {
+        let sibling_home_root = parent.join("capture-journal").join("v1");
+        let same_configured_home = effective
+            .configured_home
+            .as_ref()
+            .is_some_and(|home| existing_directories_are_same(home, parent));
+        if !same_configured_home && !roots.contains(&sibling_home_root) {
+            roots.push(sibling_home_root);
+        }
+    }
+    roots
+}
+
+fn existing_directories_are_same(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn inspect_registry_migration_backup(
+    backup_path: &Path,
+    expected_source_digest: &ControlPlaneDigest,
+    expected_backup_digest: &ControlPlaneDigest,
+) -> Result<(Vec<u8>, ControlPlaneDigest)> {
+    let metadata = fs::symlink_metadata(backup_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect migration backup {}: {error}",
+            backup_path.display()
+        ))
+    })?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "migration backup {} must be a regular non-symlink file",
+            backup_path.display()
+        )));
+    }
+    let bytes = fs::read(backup_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read migration backup {}: {error}",
+            backup_path.display()
+        ))
+    })?;
+    let actual_backup_digest = ControlPlaneDigest::raw(&bytes);
+    if &actual_backup_digest != expected_backup_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "migration backup raw digest {actual_backup_digest} does not match expected {expected_backup_digest}"
+        )));
+    }
+    let backup_registry = ProjectRegistryV1::from_json_bytes(&bytes)?;
+    let semantic_digest = backup_registry.source_digest()?;
+    if &semantic_digest != expected_source_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "migration backup canonical digest {semantic_digest} does not match receipt source {expected_source_digest}"
+        )));
+    }
+    Ok((bytes, actual_backup_digest))
+}
+
+fn inspect_capture_journal_for_rollback(journal_root: &Path, issues: &mut Vec<String>) -> usize {
+    let root_metadata = match fs::symlink_metadata(journal_root) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            issues.push(format!(
+                "capture_journal_unreadable:root={}:error={error}",
+                journal_root.display()
+            ));
+            return 0;
+        }
+    };
+    let Some(root_metadata) = root_metadata else {
+        return 0;
+    };
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        issues.push(format!(
+            "capture_journal_root_not_regular_directory:root={}",
+            journal_root.display()
+        ));
+        return 0;
+    }
+
+    let mut total = 0_usize;
+    for name in ["intents", "events", "projections", "locks"] {
+        let path = journal_root.join(name);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                issues.push(format!(
+                    "capture_journal_{name}_unreadable:root={}:error={error}",
+                    journal_root.display()
+                ));
+                continue;
+            }
+        };
+        let Some(metadata) = metadata else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            issues.push(format!(
+                "capture_journal_{name}_not_regular_directory:root={}",
+                journal_root.display()
+            ));
+            continue;
+        }
+        match fs::read_dir(&path) {
+            Ok(entries) => {
+                let mut count = 0_usize;
+                for entry in entries {
+                    match entry {
+                        Ok(_) => count += 1,
+                        Err(error) => issues.push(format!(
+                            "capture_journal_{name}_entry_unreadable:root={}:error={error}",
+                            journal_root.display()
+                        )),
+                    }
+                }
+                total += count;
+                if count != 0 {
+                    issues.push(format!(
+                        "capture_journal_{name}_nonempty:root={}:entries={count}",
+                        journal_root.display()
+                    ));
+                }
+            }
+            Err(error) => issues.push(format!(
+                "capture_journal_{name}_unreadable:root={}:error={error}",
+                journal_root.display()
+            )),
+        }
+    }
+    total
+}
+
+const ROUTING_ACTIVATION_FILE: &str = "routing-activation-v1.json";
+const JOURNAL_ADMISSION_ACTIVATION_FILE: &str = "journal-admission-activation-v1.json";
+
+fn routing_activation_path(effective: &EffectiveRegistryConfig, registry_path: &Path) -> PathBuf {
+    effective
+        .configured_home
+        .as_ref()
+        .map(|home| home.join(ROUTING_ACTIVATION_FILE))
+        .unwrap_or_else(|| {
+            PathBuf::from(format!("{}.d", registry_path.display())).join(ROUTING_ACTIVATION_FILE)
+        })
+}
+
+fn routing_activation_candidate_paths(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+) -> Vec<PathBuf> {
+    let mut paths = vec![routing_activation_path(effective, registry_path)];
+    if registry_path.file_name().and_then(OsStr::to_str) == Some(PROJECT_REGISTRY_FILE)
+        && let Some(parent) = registry_path.parent()
+    {
+        let home_marker = parent.join(ROUTING_ACTIVATION_FILE);
+        if !paths
+            .iter()
+            .any(|path| routing_activation_locations_are_same(path, &home_marker))
+        {
+            paths.push(home_marker);
+        }
+        let sidecar_marker =
+            PathBuf::from(format!("{}.d", registry_path.display())).join(ROUTING_ACTIVATION_FILE);
+        if !paths
+            .iter()
+            .any(|path| routing_activation_locations_are_same(path, &sidecar_marker))
+        {
+            paths.push(sidecar_marker);
+        }
+    }
+    paths
+}
+
+fn journal_admission_activation_path(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+) -> PathBuf {
+    effective
+        .configured_home
+        .as_ref()
+        .map(|home| home.join(JOURNAL_ADMISSION_ACTIVATION_FILE))
+        .unwrap_or_else(|| {
+            PathBuf::from(format!("{}.d", registry_path.display()))
+                .join(JOURNAL_ADMISSION_ACTIVATION_FILE)
+        })
+}
+
+fn journal_admission_activation_candidate_paths(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+) -> Vec<PathBuf> {
+    let mut paths = vec![journal_admission_activation_path(effective, registry_path)];
+    if registry_path.file_name().and_then(OsStr::to_str) == Some(PROJECT_REGISTRY_FILE)
+        && let Some(parent) = registry_path.parent()
+    {
+        let home_marker = parent.join(JOURNAL_ADMISSION_ACTIVATION_FILE);
+        if !paths
+            .iter()
+            .any(|path| routing_activation_locations_are_same(path, &home_marker))
+        {
+            paths.push(home_marker);
+        }
+        let sidecar_marker = PathBuf::from(format!("{}.d", registry_path.display()))
+            .join(JOURNAL_ADMISSION_ACTIVATION_FILE);
+        if !paths
+            .iter()
+            .any(|path| routing_activation_locations_are_same(path, &sidecar_marker))
+        {
+            paths.push(sidecar_marker);
+        }
+    }
+    paths
+}
+
+fn project_registry_journal_alias(
+    effective: &EffectiveRegistryConfig,
+) -> ProjectRegistryJournalAlias {
+    if effective.configured_home.is_some() {
+        ProjectRegistryJournalAlias::StandardRegistryHome
+    } else {
+        ProjectRegistryJournalAlias::RegistrySidecar
+    }
+}
+
+fn routing_activation_locations_are_same(left: &Path, right: &Path) -> bool {
+    if left == right || left.file_name() != right.file_name() {
+        return left == right;
+    }
+    match (left.parent(), right.parent()) {
+        (Some(left), Some(right)) => existing_directories_are_same(left, right),
+        _ => false,
+    }
+}
+
+fn inspect_read_routing_activation_for_registry(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+) -> RoutingActivationInspection {
+    let path = routing_activation_path(effective, registry_path);
+    inspect_read_routing_activation_at_path(path, registry)
+}
+
+fn inspect_read_routing_activation_at_path(
+    path: PathBuf,
+    registry: &ProjectRegistryV2,
+) -> RoutingActivationInspection {
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RoutingActivationInspection {
+                path,
+                state: RoutingActivationState::Absent,
+                marker_digest: None,
+                issue: None,
+            };
+        }
+        Err(error) => {
+            return RoutingActivationInspection {
+                path,
+                state: RoutingActivationState::Invalid,
+                marker_digest: None,
+                issue: Some(format!("cannot inspect routing activation marker: {error}")),
+            };
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Invalid,
+            marker_digest: None,
+            issue: Some("routing activation marker must be a regular non-symlink file".to_owned()),
+        };
+    }
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return RoutingActivationInspection {
+                path,
+                state: RoutingActivationState::Invalid,
+                marker_digest: None,
+                issue: Some(format!("cannot read routing activation marker: {error}")),
+            };
+        }
+    };
+    let candidate = match RoutingActivationCandidate::from_json_bytes(&bytes) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            return RoutingActivationInspection {
+                path,
+                state: RoutingActivationState::Invalid,
+                marker_digest: None,
+                issue: Some(error.to_string()),
+            };
+        }
+    };
+    let marker_digest = candidate.digest().ok();
+    match candidate.validate_registry(registry) {
+        Ok(()) => RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Active,
+            marker_digest,
+            issue: None,
+        },
+        Err(error) => RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Stale,
+            marker_digest,
+            issue: Some(error.to_string()),
+        },
+    }
+}
+
+fn inspect_journal_admission_activation_for_registry(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+) -> RoutingActivationInspection {
+    inspect_journal_admission_activation_at_path(
+        journal_admission_activation_path(effective, registry_path),
+        registry,
+    )
+}
+
+fn inspect_journal_admission_activation_at_path(
+    path: PathBuf,
+    registry: &ProjectRegistryV2,
+) -> RoutingActivationInspection {
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RoutingActivationInspection {
+                path,
+                state: RoutingActivationState::Absent,
+                marker_digest: None,
+                issue: None,
+            };
+        }
+        Err(error) => {
+            return RoutingActivationInspection {
+                path,
+                state: RoutingActivationState::Invalid,
+                marker_digest: None,
+                issue: Some(format!(
+                    "cannot inspect journal-admission activation marker: {error}"
+                )),
+            };
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Invalid,
+            marker_digest: None,
+            issue: Some(
+                "journal-admission activation marker must be a regular non-symlink file".to_owned(),
+            ),
+        };
+    }
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return RoutingActivationInspection {
+                path,
+                state: RoutingActivationState::Invalid,
+                marker_digest: None,
+                issue: Some(format!(
+                    "cannot read journal-admission activation marker: {error}"
+                )),
+            };
+        }
+    };
+    let candidate = match JournalAdmissionActivationCandidate::from_json_bytes(&bytes) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            return RoutingActivationInspection {
+                path,
+                state: RoutingActivationState::Invalid,
+                marker_digest: None,
+                issue: Some(error.to_string()),
+            };
+        }
+    };
+    let marker_digest = candidate.digest().ok();
+    match candidate.validate_registry(registry) {
+        Ok(()) => RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Active,
+            marker_digest,
+            issue: None,
+        },
+        Err(error) => RoutingActivationInspection {
+            path,
+            state: RoutingActivationState::Stale,
+            marker_digest,
+            issue: Some(error.to_string()),
+        },
+    }
+}
+
+fn require_active_journal_admission(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+) -> Result<RoutingActivationInspection> {
+    let read_activation =
+        inspect_read_routing_activation_for_registry(effective, registry_path, registry);
+    if read_activation.state != RoutingActivationState::Active {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "ProjectRef v2 journal admission requires active read routing, but its activation state is {} at {}{}",
+            read_activation.state.as_str(),
+            read_activation.path.display(),
+            read_activation
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+    let inspection =
+        inspect_journal_admission_activation_for_registry(effective, registry_path, registry);
+    if inspection.state != RoutingActivationState::Active {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "ProjectRef v2 journal admission is fail-closed with activation state {} at {}{}; inspect or preview the digest-bound candidate before any activation",
+            inspection.state.as_str(),
+            inspection.path.display(),
+            inspection
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+    Ok(inspection)
+}
+
+fn require_active_read_routing(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+) -> Result<RoutingActivationInspection> {
+    let inspection =
+        inspect_read_routing_activation_for_registry(effective, registry_path, registry);
+    if inspection.state != RoutingActivationState::Active {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "ProjectRef v2 read routing is fail-closed with activation state {} at {}{}; inspect or preview the digest-bound candidate before any activation",
+            inspection.state.as_str(),
+            inspection.path.display(),
+            inspection
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+    Ok(inspection)
+}
+
+fn load_registry_v2_for_activation(
+    effective: &EffectiveRegistryConfig,
+) -> Result<(PathBuf, ProjectRegistryV2, ControlPlaneDigest)> {
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    match load_project_registry_readonly(&registry_path, false)? {
+        LoadedProjectRegistry::V1 { .. } => Err(WorkVcsError::ControlPlaneInvalid(
+            "routing activation requires an installed registry v2 snapshot; the selected registry is still v1"
+                .to_owned(),
+        )),
+        LoadedProjectRegistry::V2 { registry, digest } => {
+            Ok((registry_path, *registry, digest))
+        }
+    }
+}
+
+fn preview_project_routing_activation(registry: Option<PathBuf>) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let (registry_path, registry, registry_digest) = load_registry_v2_for_activation(&effective)?;
+    let bindings_verified = verify_v2_registry_bindings_readonly(&registry)?;
+    let candidate = RoutingActivationCandidate::for_registry(&registry)?;
+    let inspection =
+        inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry);
+    render_routing_activation(
+        "preview",
+        true,
+        &registry_path,
+        &registry,
+        &registry_digest,
+        &candidate,
+        &inspection,
+        bindings_verified,
+        false,
+        false,
+    )
+}
+
+fn inspect_project_routing_activation(registry: Option<PathBuf>) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    match load_project_registry_readonly(&registry_path, false)? {
+        LoadedProjectRegistry::V1 { digest, .. } => Ok(format!(
+            "action=status\nread_only=true\nregistry_path={}\nregistry_version=1\nregistry_revision=none\nregistry_digest={}\nmigration_required=true\nactivation_scope=project_ref_v2_read_routing\nactivation_state=not_applicable\nrouting_active=false\nactivation_path={}\nactivation_digest=none\ncandidate_digest=none\nbindings_verified=0\nregistry_written=false\nactivation_written=false\njournal_written=false\nstore_written=false\n",
+            escape_key_value(&registry_path.display().to_string()),
+            digest,
+            escape_key_value(
+                &routing_activation_path(&effective, &registry_path)
+                    .display()
+                    .to_string()
+            ),
+        )),
+        LoadedProjectRegistry::V2 { registry, digest } => {
+            let bindings_verified = verify_v2_registry_bindings_readonly(&registry)?;
+            let candidate = RoutingActivationCandidate::for_registry(&registry)?;
+            let inspection =
+                inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry);
+            render_routing_activation(
+                "status",
+                true,
+                &registry_path,
+                &registry,
+                &digest,
+                &candidate,
+                &inspection,
+                bindings_verified,
+                false,
+                false,
+            )
+        }
+    }
+}
+
+fn apply_project_routing_activation(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+) -> Result<String> {
+    apply_project_routing_activation_with_fault(
+        registry,
+        expected_registry_digest,
+        expected_candidate_digest,
+        None,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum RoutingActivationApplyFault {
+    AfterMarkerInstalled,
+    AfterTempRemoved,
+    AfterActivationDirectorySync,
+    BeforeInstalledVerification,
+}
+
+fn apply_project_routing_activation_with_fault(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+    fault: Option<RoutingActivationApplyFault>,
+) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    let _lock = ProjectRegistryLock::acquire(&registry_path)?;
+    let bytes = fs::read(&registry_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read registry v2 {} under activation lock: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let registry_v2 = ProjectRegistryV2::from_json_bytes(&bytes)?;
+    let registry_digest = registry_v2.digest()?;
+    if registry_digest != expected_registry_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "current registry digest {registry_digest} does not match expected {expected_registry_digest}"
+        )));
+    }
+    let bindings_verified = verify_v2_registry_bindings_readonly(&registry_v2)?;
+    let candidate = RoutingActivationCandidate::for_registry(&registry_v2)?;
+    let candidate_digest = candidate.digest()?;
+    if candidate_digest != expected_candidate_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "current routing activation candidate digest {candidate_digest} does not match expected {expected_candidate_digest}"
+        )));
+    }
+
+    let initial =
+        inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry_v2);
+    if initial.state == RoutingActivationState::Active {
+        return render_routing_activation(
+            "apply",
+            false,
+            &registry_path,
+            &registry_v2,
+            &registry_digest,
+            &candidate,
+            &initial,
+            bindings_verified,
+            false,
+            true,
+        );
+    }
+    if initial.state != RoutingActivationState::Absent {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "refusing to replace routing activation marker {} in state {}{}",
+            initial.path.display(),
+            initial.state.as_str(),
+            initial
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+
+    let current_bytes = fs::read(&registry_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot recheck registry v2 {} before activation: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let current_registry = ProjectRegistryV2::from_json_bytes(&current_bytes)?;
+    if current_registry.digest()? != registry_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "registry v2 changed after digest lock and before activation".to_owned(),
+        ));
+    }
+
+    let activation_path = initial.path.clone();
+    let parent = activation_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "routing activation path {} has no parent directory",
+            activation_path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot create routing activation directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let parent_metadata = fs::symlink_metadata(parent).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect routing activation directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "routing activation directory {} must be a regular non-symlink directory",
+            parent.display()
+        )));
+    }
+
+    let candidate_bytes = candidate.stored_json_bytes()?;
+    let temp_path = unique_routing_activation_temp_path(&activation_path)?;
+    let mut marker_installed = false;
+    let write_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot create routing activation temp {}: {error}",
+                    temp_path.display()
+                ))
+            })?;
+        file.write_all(&candidate_bytes).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot write routing activation temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot sync routing activation temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        drop(file);
+        let reread = fs::read(&temp_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot reread routing activation temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        let reparsed = RoutingActivationCandidate::from_json_bytes(&reread)?;
+        reparsed.validate_registry(&registry_v2)?;
+        if reread != candidate_bytes || reparsed.digest()? != candidate_digest {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "routing activation temp changed before installation".to_owned(),
+            ));
+        }
+        fs::hard_link(&temp_path, &activation_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot atomically install routing activation marker {}: {error}",
+                activation_path.display()
+            ))
+        })?;
+        marker_installed = true;
+        inject_routing_activation_fault(fault, RoutingActivationApplyFault::AfterMarkerInstalled)?;
+        fs::remove_file(&temp_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot remove installed routing activation temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        inject_routing_activation_fault(fault, RoutingActivationApplyFault::AfterTempRemoved)?;
+        sync_directory(parent)?;
+        inject_routing_activation_fault(
+            fault,
+            RoutingActivationApplyFault::AfterActivationDirectorySync,
+        )?;
+        inject_routing_activation_fault(
+            fault,
+            RoutingActivationApplyFault::BeforeInstalledVerification,
+        )?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    if let Err(error) = write_result {
+        if marker_installed {
+            return Err(WorkVcsError::RoutingActivationInstallIndeterminate(
+                format!(
+                    "the marker installation completed or may have completed; run project routing-activation --status against the same registry before any retry or recovery action; cause: {error}"
+                ),
+            ));
+        }
+        return Err(error);
+    }
+
+    let installed =
+        inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry_v2);
+    if installed.state != RoutingActivationState::Active
+        || installed.marker_digest.as_ref() != Some(&candidate_digest)
+    {
+        return Err(WorkVcsError::RoutingActivationInstallIndeterminate(
+            format!(
+                "the marker installation completed, but post-install verification found state {}; run project routing-activation --status against the same registry before any retry or recovery action",
+                installed.state.as_str()
+            ),
+        ));
+    }
+    render_routing_activation(
+        "apply",
+        false,
+        &registry_path,
+        &registry_v2,
+        &registry_digest,
+        &candidate,
+        &installed,
+        bindings_verified,
+        true,
+        false,
+    )
+}
+
+fn inject_routing_activation_fault(
+    configured: Option<RoutingActivationApplyFault>,
+    current: RoutingActivationApplyFault,
+) -> Result<()> {
+    if configured == Some(current) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "injected routing activation fault at {current:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn unique_routing_activation_temp_path(path: &Path) -> Result<PathBuf> {
+    let parent = path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "routing activation path {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    let file_name = path.file_name().and_then(OsStr::to_str).ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "routing activation path {} has no UTF-8 file name",
+            path.display()
+        ))
+    })?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            WorkVcsError::QueryInvalid(format!("system clock before UNIX epoch: {error}"))
+        })?
+        .as_nanos();
+    Ok(parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nanos)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_routing_activation(
+    action: &str,
+    read_only: bool,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    registry_digest: &ControlPlaneDigest,
+    candidate: &RoutingActivationCandidate,
+    inspection: &RoutingActivationInspection,
+    bindings_verified: usize,
+    activation_written: bool,
+    activation_reused: bool,
+) -> Result<String> {
+    Ok(format!(
+        "action={}\nread_only={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nactivation_scope={}\nactivation_state={}\nrouting_active={}\nactivation_path={}\nactivation_digest={}\ncandidate_digest={}\nbindings={}\nbindings_verified={}\nregistry_written=false\nactivation_written={}\nactivation_reused={}\njournal_written=false\nstore_written=false\ndurable_write_routing_activated=false\nactivation_issue={}\n",
+        action,
+        read_only,
+        escape_key_value(&registry_path.display().to_string()),
+        registry.registry_id(),
+        registry.revision(),
+        registry_digest,
+        candidate.scope().as_str(),
+        inspection.state.as_str(),
+        inspection.state == RoutingActivationState::Active,
+        escape_key_value(&inspection.path.display().to_string()),
+        inspection
+            .marker_digest
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "none".to_owned()),
+        candidate.digest()?,
+        registry.bindings().len(),
+        bindings_verified,
+        activation_written,
+        activation_reused,
+        inspection
+            .issue
+            .as_deref()
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+    ))
+}
+
+fn preview_project_journal_admission_activation(registry: Option<PathBuf>) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let (registry_path, registry, registry_digest) = load_registry_v2_for_activation(&effective)?;
+    let bindings_verified = verify_v2_registry_bindings_readonly(&registry)?;
+    let candidate = JournalAdmissionActivationCandidate::for_registry(&registry)?;
+    let inspection =
+        inspect_journal_admission_activation_for_registry(&effective, &registry_path, &registry);
+    let read_activation =
+        inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry);
+    render_journal_admission_activation(
+        "preview",
+        true,
+        &registry_path,
+        &registry,
+        &registry_digest,
+        &candidate,
+        &inspection,
+        read_activation.state == RoutingActivationState::Active,
+        bindings_verified,
+        false,
+        false,
+        false,
+    )
+}
+
+fn inspect_project_journal_admission_activation(registry: Option<PathBuf>) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    match load_project_registry_readonly(&registry_path, false)? {
+        LoadedProjectRegistry::V1 { digest, .. } => Ok(format!(
+            "action=status\nread_only=true\nregistry_path={}\nregistry_version=1\nregistry_revision=none\nregistry_digest={}\nmigration_required=true\nactivation_scope=project_ref_v2_journal_admission\nactivation_state=not_applicable\nread_routing_active=false\njournal_admission_active=false\nactivation_path={}\nactivation_digest=none\ncandidate_digest=none\nbindings_verified=0\nregistry_written=false\nactivation_written=false\nactivation_removed=false\nactivation_reused=false\njournal_written=false\nstore_written=false\ndelivery_activated=false\n",
+            escape_key_value(&registry_path.display().to_string()),
+            digest,
+            escape_key_value(
+                &journal_admission_activation_path(&effective, &registry_path)
+                    .display()
+                    .to_string()
+            ),
+        )),
+        LoadedProjectRegistry::V2 { registry, digest } => {
+            let bindings_verified = verify_v2_registry_bindings_readonly(&registry)?;
+            let candidate = JournalAdmissionActivationCandidate::for_registry(&registry)?;
+            let inspection = inspect_journal_admission_activation_for_registry(
+                &effective,
+                &registry_path,
+                &registry,
+            );
+            let read_activation =
+                inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry);
+            render_journal_admission_activation(
+                "status",
+                true,
+                &registry_path,
+                &registry,
+                &digest,
+                &candidate,
+                &inspection,
+                read_activation.state == RoutingActivationState::Active,
+                bindings_verified,
+                false,
+                false,
+                false,
+            )
+        }
+    }
+}
+
+fn apply_project_journal_admission_activation(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+) -> Result<String> {
+    apply_project_journal_admission_activation_with_fault(
+        registry,
+        expected_registry_digest,
+        expected_candidate_digest,
+        None,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum JournalAdmissionActivationApplyFault {
+    AfterMarkerInstalled,
+    AfterTempRemoved,
+    AfterActivationDirectorySync,
+    BeforeInstalledVerification,
+}
+
+fn apply_project_journal_admission_activation_with_fault(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+    fault: Option<JournalAdmissionActivationApplyFault>,
+) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    let _registry_lock = ProjectRegistryLock::acquire(&registry_path)?;
+    let quiescence_path = project_registry_journal_quiescence_lock_path(&registry_path)?;
+    let _quiescence_lock = JournalQuiescenceLock::acquire(&quiescence_path)?;
+
+    let bytes = fs::read(&registry_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read registry v2 {} under journal-admission activation locks: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let registry_v2 = ProjectRegistryV2::from_json_bytes(&bytes)?;
+    let registry_digest = registry_v2.digest()?;
+    if registry_digest != expected_registry_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "current registry digest {registry_digest} does not match expected {expected_registry_digest}"
+        )));
+    }
+    let bindings_verified = verify_v2_registry_bindings_readonly(&registry_v2)?;
+    let read_activation =
+        inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry_v2);
+    if read_activation.state != RoutingActivationState::Active {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "journal-admission activation requires exact read-routing activation first; found state {} at {}{}",
+            read_activation.state.as_str(),
+            read_activation.path.display(),
+            read_activation
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+    let candidate = JournalAdmissionActivationCandidate::for_registry(&registry_v2)?;
+    let candidate_digest = candidate.digest()?;
+    if candidate_digest != expected_candidate_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "current journal-admission activation candidate digest {candidate_digest} does not match expected {expected_candidate_digest}"
+        )));
+    }
+
+    let initial =
+        inspect_journal_admission_activation_for_registry(&effective, &registry_path, &registry_v2);
+    if initial.state == RoutingActivationState::Active {
+        return render_journal_admission_activation(
+            "apply",
+            false,
+            &registry_path,
+            &registry_v2,
+            &registry_digest,
+            &candidate,
+            &initial,
+            true,
+            bindings_verified,
+            false,
+            false,
+            true,
+        );
+    }
+    if initial.state != RoutingActivationState::Absent {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "refusing to replace journal-admission activation marker {} in state {}{}",
+            initial.path.display(),
+            initial.state.as_str(),
+            initial
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+
+    let current_bytes = fs::read(&registry_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot recheck registry v2 {} before journal-admission activation: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let current_registry = ProjectRegistryV2::from_json_bytes(&current_bytes)?;
+    if current_registry.digest()? != registry_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "registry v2 changed after digest lock and before journal-admission activation"
+                .to_owned(),
+        ));
+    }
+
+    let activation_path = initial.path.clone();
+    let parent = ensure_regular_activation_parent(&activation_path)?;
+    let candidate_bytes = candidate.stored_json_bytes()?;
+    let temp_path = unique_routing_activation_temp_path(&activation_path)?;
+    let mut marker_installed = false;
+    let write_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot create journal-admission activation temp {}: {error}",
+                    temp_path.display()
+                ))
+            })?;
+        file.write_all(&candidate_bytes).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot write journal-admission activation temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot sync journal-admission activation temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        drop(file);
+        let reread = fs::read(&temp_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot reread journal-admission activation temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        let reparsed = JournalAdmissionActivationCandidate::from_json_bytes(&reread)?;
+        reparsed.validate_registry(&registry_v2)?;
+        if reread != candidate_bytes || reparsed.digest()? != candidate_digest {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "journal-admission activation temp changed before installation".to_owned(),
+            ));
+        }
+        fs::hard_link(&temp_path, &activation_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot atomically install journal-admission activation marker {}: {error}",
+                activation_path.display()
+            ))
+        })?;
+        marker_installed = true;
+        inject_journal_admission_activation_apply_fault(
+            fault,
+            JournalAdmissionActivationApplyFault::AfterMarkerInstalled,
+        )?;
+        fs::remove_file(&temp_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot remove installed journal-admission activation temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+        inject_journal_admission_activation_apply_fault(
+            fault,
+            JournalAdmissionActivationApplyFault::AfterTempRemoved,
+        )?;
+        sync_directory(parent)?;
+        inject_journal_admission_activation_apply_fault(
+            fault,
+            JournalAdmissionActivationApplyFault::AfterActivationDirectorySync,
+        )?;
+        inject_journal_admission_activation_apply_fault(
+            fault,
+            JournalAdmissionActivationApplyFault::BeforeInstalledVerification,
+        )?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    if let Err(error) = write_result {
+        if marker_installed {
+            return Err(WorkVcsError::RoutingActivationInstallIndeterminate(
+                format!(
+                    "the journal-admission marker installation completed or may have completed; run project journal-admission-activation --status against the same registry before retry or recovery; cause: {error}"
+                ),
+            ));
+        }
+        return Err(error);
+    }
+
+    let installed =
+        inspect_journal_admission_activation_for_registry(&effective, &registry_path, &registry_v2);
+    if installed.state != RoutingActivationState::Active
+        || installed.marker_digest.as_ref() != Some(&candidate_digest)
+    {
+        return Err(WorkVcsError::RoutingActivationInstallIndeterminate(
+            format!(
+                "the journal-admission marker installation completed, but post-install verification found state {}; run project journal-admission-activation --status before retry or recovery",
+                installed.state.as_str()
+            ),
+        ));
+    }
+    render_journal_admission_activation(
+        "apply",
+        false,
+        &registry_path,
+        &registry_v2,
+        &registry_digest,
+        &candidate,
+        &installed,
+        true,
+        bindings_verified,
+        true,
+        false,
+        false,
+    )
+}
+
+fn inject_journal_admission_activation_apply_fault(
+    configured: Option<JournalAdmissionActivationApplyFault>,
+    current: JournalAdmissionActivationApplyFault,
+) -> Result<()> {
+    if configured == Some(current) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "injected journal-admission activation apply fault at {current:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn disable_project_journal_admission_activation(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_activation_digest: ControlPlaneDigest,
+) -> Result<String> {
+    disable_project_journal_admission_activation_with_fault(
+        registry,
+        expected_registry_digest,
+        expected_activation_digest,
+        None,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum JournalAdmissionActivationDisableFault {
+    AfterMarkerRemoved,
+    AfterActivationDirectorySync,
+    BeforeDisabledVerification,
+}
+
+fn disable_project_journal_admission_activation_with_fault(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_activation_digest: ControlPlaneDigest,
+    fault: Option<JournalAdmissionActivationDisableFault>,
+) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    let _registry_lock = ProjectRegistryLock::acquire(&registry_path)?;
+    let quiescence_path = project_registry_journal_quiescence_lock_path(&registry_path)?;
+    let _quiescence_lock = JournalQuiescenceLock::acquire(&quiescence_path)?;
+    let bytes = fs::read(&registry_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read registry v2 {} under journal-admission disable locks: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let registry_v2 = ProjectRegistryV2::from_json_bytes(&bytes)?;
+    let registry_digest = registry_v2.digest()?;
+    if registry_digest != expected_registry_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "current registry digest {registry_digest} does not match expected {expected_registry_digest}"
+        )));
+    }
+    let bindings_verified = verify_v2_registry_bindings_readonly(&registry_v2)?;
+    let candidate = JournalAdmissionActivationCandidate::for_registry(&registry_v2)?;
+    let candidate_digest = candidate.digest()?;
+    if candidate_digest != expected_activation_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "current journal-admission activation candidate digest {candidate_digest} does not match expected installed activation digest {expected_activation_digest}"
+        )));
+    }
+    let initial =
+        inspect_journal_admission_activation_for_registry(&effective, &registry_path, &registry_v2);
+    if initial.state == RoutingActivationState::Absent {
+        let read_activation =
+            inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry_v2);
+        return render_journal_admission_activation(
+            "disable",
+            false,
+            &registry_path,
+            &registry_v2,
+            &registry_digest,
+            &candidate,
+            &initial,
+            read_activation.state == RoutingActivationState::Active,
+            bindings_verified,
+            false,
+            false,
+            true,
+        );
+    }
+    if initial.state != RoutingActivationState::Active
+        || initial.marker_digest.as_ref() != Some(&expected_activation_digest)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "refusing to remove journal-admission activation marker {} in state {}{}",
+            initial.path.display(),
+            initial.state.as_str(),
+            initial
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+    let activation_path = initial.path.clone();
+    let parent = activation_path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "journal-admission activation path {} has no parent directory",
+            activation_path.display()
+        ))
+    })?;
+    let mut marker_removed = false;
+    let remove_result = (|| -> Result<()> {
+        fs::remove_file(&activation_path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot remove journal-admission activation marker {}: {error}",
+                activation_path.display()
+            ))
+        })?;
+        marker_removed = true;
+        inject_journal_admission_activation_disable_fault(
+            fault,
+            JournalAdmissionActivationDisableFault::AfterMarkerRemoved,
+        )?;
+        sync_directory(parent)?;
+        inject_journal_admission_activation_disable_fault(
+            fault,
+            JournalAdmissionActivationDisableFault::AfterActivationDirectorySync,
+        )?;
+        inject_journal_admission_activation_disable_fault(
+            fault,
+            JournalAdmissionActivationDisableFault::BeforeDisabledVerification,
+        )?;
+        Ok(())
+    })();
+    if let Err(error) = remove_result {
+        if marker_removed {
+            return Err(WorkVcsError::RoutingActivationDisableIndeterminate(
+                format!(
+                    "the journal-admission marker was removed or may have been removed; run project journal-admission-activation --status against the same registry before retry or recovery; cause: {error}"
+                ),
+            ));
+        }
+        return Err(error);
+    }
+    let disabled =
+        inspect_journal_admission_activation_for_registry(&effective, &registry_path, &registry_v2);
+    if disabled.state != RoutingActivationState::Absent {
+        return Err(WorkVcsError::RoutingActivationDisableIndeterminate(
+            format!(
+                "the journal-admission marker removal completed, but post-disable verification found state {}; run project journal-admission-activation --status before retry or recovery",
+                disabled.state.as_str()
+            ),
+        ));
+    }
+    let read_activation =
+        inspect_read_routing_activation_for_registry(&effective, &registry_path, &registry_v2);
+    render_journal_admission_activation(
+        "disable",
+        false,
+        &registry_path,
+        &registry_v2,
+        &registry_digest,
+        &candidate,
+        &disabled,
+        read_activation.state == RoutingActivationState::Active,
+        bindings_verified,
+        false,
+        true,
+        false,
+    )
+}
+
+fn inject_journal_admission_activation_disable_fault(
+    configured: Option<JournalAdmissionActivationDisableFault>,
+    current: JournalAdmissionActivationDisableFault,
+) -> Result<()> {
+    if configured == Some(current) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "injected journal-admission activation disable fault at {current:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_regular_activation_parent(path: &Path) -> Result<&Path> {
+    let parent = path.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid(format!(
+            "activation path {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot create activation directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let metadata = fs::symlink_metadata(parent).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect activation directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "activation directory {} must be a regular non-symlink directory",
+            parent.display()
+        )));
+    }
+    Ok(parent)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_journal_admission_activation(
+    action: &str,
+    read_only: bool,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    registry_digest: &ControlPlaneDigest,
+    candidate: &JournalAdmissionActivationCandidate,
+    inspection: &RoutingActivationInspection,
+    read_routing_active: bool,
+    bindings_verified: usize,
+    activation_written: bool,
+    activation_removed: bool,
+    activation_reused: bool,
+) -> Result<String> {
+    Ok(format!(
+        "action={}\nread_only={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nactivation_scope={}\nactivation_state={}\nread_routing_active={}\njournal_admission_active={}\nactivation_path={}\nactivation_digest={}\ncandidate_digest={}\nbindings={}\nbindings_verified={}\nregistry_written=false\nactivation_written={}\nactivation_removed={}\nactivation_reused={}\njournal_written=false\nstore_written=false\ndelivery_activated=false\nactivation_issue={}\n",
+        action,
+        read_only,
+        escape_key_value(&registry_path.display().to_string()),
+        registry.registry_id(),
+        registry.revision(),
+        registry_digest,
+        candidate.scope().as_str(),
+        inspection.state.as_str(),
+        read_routing_active,
+        inspection.state == RoutingActivationState::Active && read_routing_active,
+        escape_key_value(&inspection.path.display().to_string()),
+        inspection
+            .marker_digest
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "none".to_owned()),
+        candidate.digest()?,
+        registry.bindings().len(),
+        bindings_verified,
+        activation_written,
+        activation_removed,
+        activation_reused,
+        inspection
+            .issue
+            .as_deref()
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+    ))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureRecoveryFault {
+    StoreBootstrap,
+    RegistryTempSync,
+    RegistryReplace,
+    RegistryDirectorySync,
+    BindingEvent,
+    DeliveryStarted,
+    TargetCommit,
+    DeliveryReceipt,
+    CaptureGroupResolution,
+    SecondaryReferencePreInstall,
+    SecondaryReference,
+    CaptureCompleted,
+    ProjectionReplace,
+}
+
+#[derive(Debug)]
+struct RecoveryBindingInspection<'a> {
+    state: &'static str,
+    binding: Option<&'a ProjectBindingV2>,
+    verified_objects: usize,
+    issue: Option<String>,
+}
+
+#[derive(Debug)]
+struct CaptureRecoveryApplyReport {
+    registry_path: PathBuf,
+    journal_root: PathBuf,
+    capture_id: CaptureId,
+    registry: ProjectRegistryV2,
+    registry_digest: ControlPlaneDigest,
+    projection: workvcs_core::control_plane::CaptureProjection,
+    projection_outcome: CaptureProjectionWriteOutcome,
+    resolution_event_written: bool,
+    binding_event_written: bool,
+    registry_written: bool,
+    store_initialized: bool,
+    store_recovered: bool,
+    delivery_started_written: bool,
+    delivery_receipt_written: bool,
+    delivery_failure_written: bool,
+    capture_group_resolution_written: bool,
+    secondary_reference_events_written: usize,
+    capture_completed_written: bool,
+    target_delivery_written: bool,
+    target_delivery_reused: bool,
+    delivery_started: Option<DeliveryStartedPayload>,
+    primary_delivery: Option<DeliveryAppliedPayload>,
+    delivery_failure: Option<DeliveryFailedPayload>,
+    project_ref_id: Option<ProjectRefId>,
+    locator_id: Option<workvcs_core::ProjectLocatorId>,
+    binding: Option<ProjectBindingV2>,
+}
+
+fn capture_recovery_registry(
+    registry: Option<PathBuf>,
+) -> Result<(
+    EffectiveRegistryConfig,
+    PathBuf,
+    ProjectRegistryV2,
+    ControlPlaneDigest,
+)> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    let (registry, digest) = match load_project_registry_readonly(&registry_path, false)? {
+        LoadedProjectRegistry::V2 { registry, digest } => (*registry, digest),
+        LoadedProjectRegistry::V1 { .. } => {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "capture recovery requires registry v2; {} is still v1",
+                registry_path.display()
+            )));
+        }
+    };
+    Ok((effective, registry_path, registry, digest))
+}
+
+fn capture_recovery_journal(registry_path: &Path, capture_id: CaptureId) -> Result<CaptureJournal> {
+    let journals = capture_recovery_journals(registry_path)?;
+    let mut found = Vec::new();
+    for journal in &journals {
+        match fs::symlink_metadata(journal.intent_path(capture_id)) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err(WorkVcsError::CaptureNotPersisted(format!(
+                    "capture intent {} must be a regular non-symlink file",
+                    journal.intent_path(capture_id).display()
+                )));
+            }
+            Ok(_) => found.push(journal.clone()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(WorkVcsError::CaptureNotPersisted(format!(
+                    "cannot inspect capture intent {}: {error}",
+                    journal.intent_path(capture_id).display()
+                )));
+            }
+        }
+    }
+    match found.as_slice() {
+        [journal] => Ok(journal.clone()),
+        [] => Err(WorkVcsError::CaptureNotPersisted(format!(
+            "capture {capture_id} was not found in any registry-derived journal alias: {}",
+            journals
+                .iter()
+                .map(|journal| journal.root().display().to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ))),
+        _ => Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture {capture_id} exists in more than one registry-derived journal alias; refusing ambiguous recovery"
+        ))),
+    }
+}
+
+fn capture_recovery_journals(registry_path: &Path) -> Result<Vec<CaptureJournal>> {
+    let mut journals = vec![CaptureJournal::for_project_registry(
+        registry_path,
+        ProjectRegistryJournalAlias::RegistrySidecar,
+    )?];
+    if registry_path.file_name() == Some(OsStr::new(PROJECT_REGISTRY_FILE)) {
+        journals.push(CaptureJournal::for_project_registry(
+            registry_path,
+            ProjectRegistryJournalAlias::StandardRegistryHome,
+        )?);
+    }
+    journals.sort_by(|left, right| left.root().cmp(right.root()));
+    journals.dedup_by(|left, right| left.root() == right.root());
+    Ok(journals)
+}
+
+fn recall_project_capture_groups(
+    registry: Option<PathBuf>,
+    project_ref_id: ProjectRefId,
+) -> Result<String> {
+    let (_, registry_path, registry, registry_digest) = capture_recovery_registry(registry)?;
+    if registry.project(project_ref_id).is_none() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "secondary CaptureGroup recall ProjectRef {project_ref_id} is absent from registry {}",
+            registry.registry_id()
+        )));
+    }
+    let journals = capture_recovery_journals(&registry_path)?;
+    let mut associations = Vec::new();
+    let mut identities = std::collections::BTreeSet::new();
+    for journal in &journals {
+        for association in journal.recall_secondary_project(project_ref_id)? {
+            let identity = (
+                association.capture_id(),
+                association.capture_group_id(),
+                association.secondary_project_ref(),
+            );
+            if !identities.insert(identity) {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "CaptureGroup association {}:{} for secondary ProjectRef {project_ref_id} exists in more than one journal alias",
+                    association.capture_id(),
+                    association.capture_group_id()
+                )));
+            }
+            associations.push((journal.root().to_path_buf(), association));
+        }
+    }
+    associations
+        .sort_by_key(|(_, association)| (association.capture_group_id(), association.capture_id()));
+
+    let mut output = format!(
+        "action=capture_group_recall\nread_only=true\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nsecondary_project_ref={}\njournal_aliases={}\nassociations={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_opened=false\nstore_written=false\nrouting_activated=false\n",
+        escape_key_value(&registry_path.display().to_string()),
+        registry.registry_id(),
+        registry.revision(),
+        registry_digest,
+        project_ref_id,
+        journals.len(),
+        associations.len(),
+    );
+    for (index, (journal_root, association)) in associations.iter().enumerate() {
+        let canonical = association.canonical_record_ref();
+        writeln!(
+            output,
+            "association.{index}.journal_root={}",
+            escape_key_value(&journal_root.display().to_string())
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.capture_id={}",
+            association.capture_id()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.capture_group_id={}",
+            association.capture_group_id()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.primary_project_ref={}",
+            association.primary_project_ref()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.relation={}",
+            escape_key_value(association.relation())
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.canonical_store_id={}",
+            canonical.store_id()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.canonical_workspace_id={}",
+            canonical.workspace_id()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.canonical_record_id={}",
+            canonical.record_id()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.canonical_record_version_id={}",
+            canonical.record_version_id()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.canonical_record_version_digest={}",
+            canonical.version_digest()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.observed_at={}",
+            association.observed_at().as_str()
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "association.{index}.capture_completed={}",
+            association.capture_completed()
+        )
+        .expect("String writes cannot fail");
+    }
+    Ok(output)
+}
+
+fn inspect_recovery_binding<'a>(
+    registry: &'a ProjectRegistryV2,
+    resolution: &workvcs_core::control_plane::ResolutionResult,
+) -> RecoveryBindingInspection<'a> {
+    let Some(project_ref_id) = resolution.primary_project_ref() else {
+        return RecoveryBindingInspection {
+            state: "not_applicable",
+            binding: None,
+            verified_objects: 0,
+            issue: None,
+        };
+    };
+    let Some(binding) = registry.binding(project_ref_id) else {
+        return RecoveryBindingInspection {
+            state: "missing",
+            binding: None,
+            verified_objects: 0,
+            issue: Some(format!(
+                "resolved ProjectRef {project_ref_id} has no target binding"
+            )),
+        };
+    };
+    match verify_v2_registry_binding_readonly(binding) {
+        Ok(verified_objects) => RecoveryBindingInspection {
+            state: "valid",
+            binding: Some(binding),
+            verified_objects,
+            issue: None,
+        },
+        Err(error) => RecoveryBindingInspection {
+            state: "invalid",
+            binding: Some(binding),
+            verified_objects: 0,
+            issue: Some(error.to_string()),
+        },
+    }
+}
+
+fn projection_binding_matches(
+    projection: &workvcs_core::control_plane::CaptureProjection,
+    binding: Option<&ProjectBindingV2>,
+) -> bool {
+    matches!(
+        (projection.project_binding_ready(), binding),
+        (Some(ready), Some(binding))
+            if ready.project_ref_id() == binding.project_ref_id()
+                && ready.store_path() == binding.store_path()
+                && ready.store_id() == binding.store_id()
+                && ready.workspace_id() == binding.workspace_id()
+                && ready.branch_id() == binding.branch_id()
+    )
+}
+
+fn verify_opened_recovery_target(engine: &Engine, binding: &ProjectBindingV2) -> Result<()> {
+    let store = engine.store_info()?;
+    if store.store_id != binding.store_id() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture recovery target Store changed after binding verification: expected {}, opened {}",
+            binding.store_id(),
+            store.store_id
+        )));
+    }
+    engine.workspace_info(binding.workspace_id())?;
+    let branch = engine.branch_head(binding.branch_id())?;
+    if branch.workspace_id != binding.workspace_id() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture recovery target Branch {} belongs to Workspace {}, not {}",
+            binding.branch_id(),
+            branch.workspace_id,
+            binding.workspace_id()
+        )));
+    }
+    Ok(())
+}
+
+fn effective_capture_recovery_state(
+    resolution: &workvcs_core::control_plane::ResolutionResult,
+    binding: &RecoveryBindingInspection<'_>,
+    projection: &workvcs_core::control_plane::CaptureProjection,
+) -> CaptureRecoveryState {
+    match resolution.status() {
+        ResolutionStatus::Unresolved | ResolutionStatus::Conflict => {
+            CaptureRecoveryState::PendingResolution
+        }
+        ResolutionStatus::Unbound => CaptureRecoveryState::PendingProject,
+        ResolutionStatus::Resolved
+            if binding.state == "valid"
+                && projection_binding_matches(projection, binding.binding) =>
+        {
+            projection.recovery_state()
+        }
+        ResolutionStatus::Resolved => CaptureRecoveryState::PendingProject,
+    }
+}
+
+fn capture_recovery_action(
+    resolution: &workvcs_core::control_plane::ResolutionResult,
+    binding: &RecoveryBindingInspection<'_>,
+    projection: &workvcs_core::control_plane::CaptureProjection,
+    effective_state: CaptureRecoveryState,
+) -> &'static str {
+    if let Some(group) = projection
+        .capture_group()
+        .filter(|group| group.canonical_record_ref().is_some())
+    {
+        if resolution.status() != ResolutionStatus::Resolved
+            || resolution.primary_project_ref() != group.resolved_primary_project_ref()
+        {
+            return "restore_exact_canonical_owner_or_start_new_capture";
+        }
+        if binding.binding.is_some() && !projection_binding_matches(projection, binding.binding) {
+            return "start_new_capture_canonical_target_changed";
+        }
+    }
+    match effective_state {
+        CaptureRecoveryState::PendingResolution => "resolve_ownership_then_retry",
+        CaptureRecoveryState::PendingProject
+            if resolution.status() == ResolutionStatus::Unbound =>
+        {
+            "apply_project_bootstrap"
+        }
+        CaptureRecoveryState::PendingProject
+            if binding.state == "valid"
+                && projection_binding_matches(projection, binding.binding)
+                && projection
+                    .capture_group()
+                    .is_some_and(|group| group.resolved_primary_project_ref().is_none()) =>
+        {
+            "apply_capture_group_resolution"
+        }
+        CaptureRecoveryState::PendingProject if binding.state == "valid" => "apply_binding_receipt",
+        CaptureRecoveryState::PendingProject => "repair_exact_binding_then_retry",
+        CaptureRecoveryState::PendingPrimary => "apply_primary_delivery",
+        CaptureRecoveryState::PendingReferences => "apply_secondary_references",
+        CaptureRecoveryState::LegacyManifestUpgradeRequired => "upgrade_legacy_manifest",
+        CaptureRecoveryState::Completed
+            if projection
+                .capture_group()
+                .is_some_and(|group| group.completion_receipt().is_none()) =>
+        {
+            "apply_capture_completion"
+        }
+        CaptureRecoveryState::Completed => "none",
+    }
+}
+
+fn inspect_project_capture_recovery(
+    registry: Option<PathBuf>,
+    capture_id: CaptureId,
+) -> Result<String> {
+    let (_, registry_path, registry, registry_digest) = capture_recovery_registry(registry)?;
+    let journal = capture_recovery_journal(&registry_path, capture_id)?;
+    let inspection = journal.inspect_projection(capture_id)?;
+    let projection = inspection.projection();
+    let resolution = resolve_project(&registry, journal.load(capture_id)?.resolution_context())?;
+    let binding = inspect_recovery_binding(&registry, &resolution);
+    let effective_state = effective_capture_recovery_state(&resolution, &binding, projection);
+    let resolution_rank = resolution
+        .primary_basis()
+        .map(ResolutionBasis::rank)
+        .map(resolution_rank_text)
+        .unwrap_or("none");
+    let action = capture_recovery_action(&resolution, &binding, projection, effective_state);
+    let delivery_started = projection.delivery_started();
+    let primary_delivery = projection.primary_delivery();
+    let delivery_failure = projection.delivery_failure();
+    let capture_group = projection.capture_group();
+    Ok(format!(
+        "action=status\nread_only=true\ncapture_id={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_root={}\nintent_path={}\nevents={}\nprojection_path={}\nprojection_digest={}\nprojection_stored_state={}\nprojection_issue={}\nprojected_recovery_state={}\neffective_recovery_state={}\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nbinding_state={}\nbinding_verified_objects={}\nbinding_issue={}\nrecovery_action={}\ndelivery_id={}\ndelivery_started={}\ndelivery_receipt={}\ntarget_commit_id={}\ntarget_delivery_reused={}\ncanonical_record_ref={}\ndelivery_failure_code={}\ncapture_group_id={}\ncapture_group_primary_resolved={}\nsecondary_references_required={}\nsecondary_references_applied={}\nsecondary_references_pending={}\ncapture_completed_receipt={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_initialized=false\ntarget_delivery_written=false\nrouting_activated=false\n",
+        capture_id,
+        escape_key_value(&registry_path.display().to_string()),
+        registry.registry_id(),
+        registry.revision(),
+        registry_digest,
+        escape_key_value(&journal.root().display().to_string()),
+        escape_key_value(&journal.intent_path(capture_id).display().to_string()),
+        projection.event_count(),
+        escape_key_value(&journal.projection_path(capture_id).display().to_string()),
+        projection.digest()?,
+        inspection.stored_state().as_str(),
+        inspection
+            .stored_issue()
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+        projection.recovery_state().as_str(),
+        effective_state.as_str(),
+        resolution_status_text(resolution.status()),
+        resolution_rank,
+        resolution
+            .primary_project_ref()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        binding.state,
+        binding.verified_objects,
+        binding
+            .issue
+            .as_deref()
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+        action,
+        delivery_started
+            .map(|value| value.delivery_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        delivery_started.is_some(),
+        primary_delivery.is_some(),
+        primary_delivery
+            .map(|value| value.commit_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        primary_delivery.is_some_and(DeliveryAppliedPayload::reused),
+        primary_delivery
+            .and_then(DeliveryAppliedPayload::canonical_record_ref)
+            .map(|value| format!("{}:{}", value.record_id(), value.record_version_id()))
+            .unwrap_or_else(|| "none".to_owned()),
+        delivery_failure
+            .map(|value| value.failure_code().as_str())
+            .unwrap_or("none"),
+        capture_group
+            .map(|group| group.capture_group_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        capture_group.is_some_and(|group| group.resolved_primary_project_ref().is_some()),
+        capture_group
+            .map(|group| group.required_reference_count())
+            .unwrap_or(0),
+        capture_group
+            .map(|group| group.applied_reference_count())
+            .unwrap_or(0),
+        capture_group
+            .map(|group| group.pending_reference_project_refs().len())
+            .unwrap_or(0),
+        capture_group.is_some_and(|group| group.completion_receipt().is_some()),
+    ))
+}
+
+fn apply_project_capture_recovery(
+    registry: Option<PathBuf>,
+    store_root: Option<PathBuf>,
+    capture_id: CaptureId,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_projection_digest: ControlPlaneDigest,
+) -> Result<String> {
+    let report = apply_project_capture_recovery_with_fault(
+        registry,
+        store_root,
+        capture_id,
+        &expected_registry_digest,
+        &expected_projection_digest,
+        None,
+    )?;
+    render_capture_recovery_apply_report(&report)
+}
+
+fn apply_project_capture_recovery_with_fault(
+    registry: Option<PathBuf>,
+    store_root: Option<PathBuf>,
+    capture_id: CaptureId,
+    expected_registry_digest: &ControlPlaneDigest,
+    expected_projection_digest: &ControlPlaneDigest,
+    fault: Option<CaptureRecoveryFault>,
+) -> Result<CaptureRecoveryApplyReport> {
+    require_atomic_registry_replace_support("capture recovery apply")?;
+    let (effective, registry_path, _observed_registry, observed_digest) =
+        capture_recovery_registry(registry)?;
+    if &observed_digest != expected_registry_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture recovery registry digest changed before lock: expected {expected_registry_digest}, found {observed_digest}"
+        )));
+    }
+    let journal = capture_recovery_journal(&registry_path, capture_id)?;
+    let observed_projection = journal.inspect_projection(capture_id)?;
+    if &observed_projection.projection().digest()? != expected_projection_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture recovery projection digest changed before lock: expected {expected_projection_digest}, found {}",
+            observed_projection.projection().digest()?
+        )));
+    }
+
+    let _registry_lock = ProjectRegistryLock::acquire(&registry_path)?;
+    let quiescence_path = project_registry_journal_quiescence_lock_path(&registry_path)?;
+    let _quiescence = JournalQuiescenceLock::acquire(&quiescence_path)?;
+    let locked_journal = capture_recovery_journal(&registry_path, capture_id)?;
+    if locked_journal.root() != journal.root() {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "capture journal alias changed while acquiring recovery locks".to_owned(),
+        ));
+    }
+    let (_, _, mut registry, mut registry_digest) =
+        capture_recovery_registry(Some(registry_path.clone()))?;
+    if &registry_digest != expected_registry_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture recovery registry digest changed under lock: expected {expected_registry_digest}, found {registry_digest}"
+        )));
+    }
+    let locked_projection = journal.inspect_projection(capture_id)?;
+    if &locked_projection.projection().digest()? != expected_projection_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture recovery projection digest changed under lock: expected {expected_projection_digest}, found {}",
+            locked_projection.projection().digest()?
+        )));
+    }
+    let intent = journal.load(capture_id)?;
+    let recovery_identity = capture_recovery_identity(&intent)?;
+    reject_project_local_path("project registry", &registry_path, &recovery_identity)?;
+    let mut resolution = resolve_project(&registry, intent.resolution_context())?;
+    let resolution_append = journal.append_event_authority_only(
+        capture_id,
+        UtcTimestamp::now()?,
+        CaptureEventPayload::ResolutionRecorded(ResolutionRecordedPayload::new(
+            registry.registry_id(),
+            registry.revision(),
+            registry_digest.clone(),
+            resolution.clone(),
+        )?),
+    )?;
+    let mut resolution_event_written =
+        resolution_append.outcome() == CaptureEventAppendOutcome::Created;
+    let mut binding_event_written = false;
+    let mut registry_written = false;
+    let mut store_initialized = false;
+    let mut store_recovered = false;
+    let mut delivery_started_written = false;
+    let mut delivery_receipt_written = false;
+    let mut delivery_failure_written = false;
+    let mut capture_group_resolution_written = false;
+    let mut secondary_reference_events_written = 0usize;
+    let mut capture_completed_written = false;
+    let mut target_delivery_written = false;
+    let mut target_delivery_reused = false;
+    let mut delivery_started_snapshot = None;
+    let mut primary_delivery_snapshot = None;
+    let mut delivery_failure_snapshot = None;
+    let mut locator_id = None;
+
+    if resolution.status() == ResolutionStatus::Unbound {
+        let evidence = match resolution.primary_basis() {
+            Some(ResolutionBasis::Locator { evidence, .. }) => evidence.clone(),
+            _ => {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "unbound recovery result has no locator evidence".to_owned(),
+                ));
+            }
+        };
+        let store_root = capture_recovery_store_root(&effective, store_root, &recovery_identity)?;
+        let bootstrap = capture_recovery_bootstrap_spec(&evidence, &store_root);
+        let store_existed = bootstrap.store_path.exists();
+        let (store_info, workspace, _) =
+            ensure_project_bootstrap_store(&bootstrap, &recovery_identity)?;
+        let canonical_store =
+            canonical_existing_path("capture recovery bootstrap Store", &bootstrap.store_path)?;
+        if canonical_store != bootstrap.store_path {
+            return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                "capture recovery Store path {} resolves to {}; refusing a path alias",
+                bootstrap.store_path.display(),
+                canonical_store.display()
+            )));
+        }
+        store_initialized = !store_existed;
+        store_recovered = store_existed;
+        inject_capture_recovery_fault(fault, CaptureRecoveryFault::StoreBootstrap)?;
+        let candidate = FirstWriteProjectBinding::new(
+            evidence,
+            Some(capture_recovery_display_name(resolution.primary_basis())),
+            CanonicalPath::parse(canonical_store.display().to_string())?,
+            store_info.store_id,
+            workspace.workspace_id,
+            workspace.initial_branch_id,
+            UtcTimestamp::now()?,
+        )?;
+        let bootstrap_result = registry.converge_first_write_binding(candidate)?;
+        locator_id = Some(bootstrap_result.locator_id());
+        if bootstrap_result.outcome() == ProjectBootstrapOutcome::Created {
+            let candidate_registry = bootstrap_result.into_registry();
+            registry_digest = install_capture_recovery_registry(
+                &registry_path,
+                &registry_digest,
+                &candidate_registry,
+                fault,
+            )?;
+            registry = candidate_registry;
+            registry_written = true;
+        } else {
+            registry = bootstrap_result.into_registry();
+        }
+        resolution = resolve_project(&registry, intent.resolution_context())?;
+        if resolution.status() != ResolutionStatus::Resolved {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "first-write registry bootstrap did not resolve the admitted owner".to_owned(),
+            ));
+        }
+        let post_bootstrap_resolution = journal.append_event_authority_only(
+            capture_id,
+            UtcTimestamp::now()?,
+            CaptureEventPayload::ResolutionRecorded(ResolutionRecordedPayload::new(
+                registry.registry_id(),
+                registry.revision(),
+                registry_digest.clone(),
+                resolution.clone(),
+            )?),
+        )?;
+        resolution_event_written |=
+            post_bootstrap_resolution.outcome() == CaptureEventAppendOutcome::Created;
+    }
+
+    let mut binding_snapshot = None;
+    if resolution.status() == ResolutionStatus::Resolved {
+        let project_ref_id = resolution
+            .primary_project_ref()
+            .expect("resolved recovery has ProjectRef");
+        let binding = registry.binding(project_ref_id).ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "resolved ProjectRef {project_ref_id} has no binding; refusing fallback"
+            ))
+        })?;
+        verify_v2_registry_binding_readonly(binding).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "resolved ProjectRef {project_ref_id} binding is not recovery-ready: {error}"
+            ))
+        })?;
+        let (primary_locator_id, primary_evidence) =
+            primary_identity_locator(&registry, &resolution)?;
+        let primary_evidence_digest = primary_evidence.evidence_digest().clone();
+        locator_id = Some(primary_locator_id);
+        let project = registry.project(project_ref_id).ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "resolved ProjectRef {project_ref_id} disappeared before binding receipt"
+            ))
+        })?;
+        let event = journal.append_event_authority_only(
+            capture_id,
+            UtcTimestamp::now()?,
+            CaptureEventPayload::ProjectBindingReady(ProjectBindingReadyPayload::new(
+                registry.registry_id(),
+                registry.revision(),
+                registry_digest.clone(),
+                project_ref_id,
+                project.maturity(),
+                primary_locator_id,
+                primary_evidence,
+                binding.store_path().clone(),
+                binding.store_id(),
+                binding.workspace_id(),
+                binding.branch_id(),
+            )?),
+        )?;
+        binding_event_written = event.outcome() == CaptureEventAppendOutcome::Created;
+        binding_snapshot = Some(binding.clone());
+        inject_capture_recovery_fault(fault, CaptureRecoveryFault::BindingEvent).map_err(
+            |error| {
+                WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                    "project_binding_ready may already be durable; run project capture-recovery --status before retry; cause: {error}"
+                ))
+            },
+        )?;
+
+        let group_projection = journal.inspect_projection(capture_id)?;
+        if let (Some(intent_group), Some(projected_group)) = (
+            intent.capture_group(),
+            group_projection.projection().capture_group(),
+        ) && projected_group.resolved_primary_project_ref().is_none()
+        {
+            let admitted_digest =
+                intent_group
+                    .primary_locator_evidence_digest()
+                    .ok_or_else(|| {
+                        WorkVcsError::ControlPlaneInvalid(
+                            "unresolved CaptureGroup intent is missing primary locator evidence"
+                                .to_owned(),
+                        )
+                    })?;
+            if admitted_digest != &primary_evidence_digest {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "resolved primary locator evidence does not match the admitted CaptureGroup owner"
+                        .to_owned(),
+                ));
+            }
+            let group_event = journal.append_event_authority_only(
+                capture_id,
+                UtcTimestamp::now()?,
+                CaptureEventPayload::CaptureGroupResolved(CaptureGroupResolvedPayload::new(
+                    intent_group.capture_group_id(),
+                    project_ref_id,
+                    primary_evidence_digest.clone(),
+                    "canonical_owner",
+                )?),
+            )?;
+            capture_group_resolution_written =
+                group_event.outcome() == CaptureEventAppendOutcome::Created;
+            inject_capture_recovery_fault(fault, CaptureRecoveryFault::CaptureGroupResolution)
+                .map_err(|error| {
+                    WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                        "capture_group_resolved may already be durable; run project capture-recovery --status before retry; cause: {error}"
+                    ))
+                })?;
+        }
+
+        let delivery_projection = journal.inspect_projection(capture_id)?;
+        if let Some(receipt) = delivery_projection.projection().primary_delivery() {
+            delivery_started_snapshot =
+                delivery_projection.projection().delivery_started().cloned();
+            primary_delivery_snapshot = Some(receipt.clone());
+            target_delivery_reused = true;
+        } else if let Some(failure) = delivery_projection.projection().delivery_failure() {
+            delivery_started_snapshot =
+                delivery_projection.projection().delivery_started().cloned();
+            delivery_failure_snapshot = Some(failure.clone());
+        } else {
+            let readonly_engine = open_verified_store_readonly(binding.store_path().as_path())?;
+            verify_opened_recovery_target(&readonly_engine, binding)?;
+            let head = readonly_engine.branch_head(binding.branch_id())?;
+            let prepared = prepare_primary_delivery_from_projection(
+                &intent,
+                delivery_projection.projection().capture_group(),
+                project_ref_id,
+                binding.store_id(),
+                binding.workspace_id(),
+                binding.branch_id(),
+                head.head_commit_id,
+                head.state_digest,
+                delivery_projection.projection().delivery_started(),
+            )?;
+            let started = prepared.started().clone();
+            let start_event = journal.append_event_authority_only(
+                capture_id,
+                UtcTimestamp::now()?,
+                CaptureEventPayload::DeliveryStarted(started.clone()),
+            )?;
+            delivery_started_written = start_event.outcome() == CaptureEventAppendOutcome::Created;
+            delivery_started_snapshot = Some(started.clone());
+            inject_capture_recovery_fault(fault, CaptureRecoveryFault::DeliveryStarted).map_err(
+                |error| {
+                    WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                        "delivery_started may already be durable; run project capture-recovery --status before retry; cause: {error}"
+                    ))
+                },
+            )?;
+
+            if prepared.legacy_manifest_upgrade_required() {
+                let failure = DeliveryFailedPayload::new(
+                    started.delivery_id(),
+                    project_ref_id,
+                    binding.store_id(),
+                    binding.workspace_id(),
+                    binding.branch_id(),
+                    DeliveryFailureCode::LegacyManifestUpgradeRequired,
+                    "upgrade_legacy_manifest",
+                )?;
+                let failure_event = journal.append_event_authority_only(
+                    capture_id,
+                    UtcTimestamp::now()?,
+                    CaptureEventPayload::DeliveryFailed(failure.clone()),
+                )?;
+                delivery_failure_written =
+                    failure_event.outcome() == CaptureEventAppendOutcome::Created;
+                delivery_failure_snapshot = Some(failure);
+            } else {
+                let mut engine = open_verified_store(binding.store_path().as_path())?;
+                verify_opened_recovery_target(&engine, binding)?;
+                let result = engine.capture_cognition(CognitionCaptureOptions::new(
+                    binding.branch_id(),
+                    started.expected_head_commit_id(),
+                    started.expected_state_digest(),
+                    prepared.into_manifest(),
+                ))?;
+                target_delivery_written = result.outcome == CognitionCaptureOutcome::Created;
+                target_delivery_reused = result.outcome == CognitionCaptureOutcome::Reused;
+                inject_capture_recovery_fault(fault, CaptureRecoveryFault::TargetCommit).map_err(
+                    |error| {
+                        WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                            "target Store commit completed or may already be durable but its delivery receipt is absent; run project capture-recovery --status and retry with the same capture; cause: {error}"
+                        ))
+                    },
+                )?;
+                let receipt = build_primary_delivery_receipt(&intent, &started, &result)?;
+                let receipt_event = journal.append_event_authority_only(
+                    capture_id,
+                    UtcTimestamp::now()?,
+                    CaptureEventPayload::DeliveryApplied(receipt.clone()),
+                )?;
+                delivery_receipt_written =
+                    receipt_event.outcome() == CaptureEventAppendOutcome::Created;
+                primary_delivery_snapshot = Some(receipt);
+                inject_capture_recovery_fault(fault, CaptureRecoveryFault::DeliveryReceipt)
+                    .map_err(|error| {
+                        WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                            "delivery_applied may already be durable; run project capture-recovery --status before retry; cause: {error}"
+                        ))
+                    })?;
+            }
+        }
+    }
+
+    let reference_projection = journal.inspect_projection(capture_id)?;
+    if let Some(group) = reference_projection.projection().capture_group()
+        && reference_projection
+            .projection()
+            .primary_delivery()
+            .is_some()
+    {
+        let canonical_record_ref = group.canonical_record_ref().cloned().ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(
+                "CaptureGroup primary receipt is missing its canonical Record reference".to_owned(),
+            )
+        })?;
+        for member in group.members() {
+            if member.delivery_mode() != CaptureGroupMemberDelivery::ImmutableReference
+                || member.reference().is_some()
+            {
+                continue;
+            }
+            if registry.project(member.project_ref_id()).is_none() {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "CaptureGroup secondary ProjectRef {} is absent from the current registry; the canonical primary remains committed and the reference stays pending",
+                    member.project_ref_id()
+                )));
+            }
+            inject_capture_recovery_fault(
+                fault,
+                CaptureRecoveryFault::SecondaryReferencePreInstall,
+            )?;
+            let reference_event = journal.append_event_authority_only(
+                capture_id,
+                UtcTimestamp::now()?,
+                CaptureEventPayload::ReferenceApplied(ReferenceAppliedPayload::new(
+                    group.capture_group_id(),
+                    member.project_ref_id(),
+                    canonical_record_ref.clone(),
+                    member.relation(),
+                )?),
+            )?;
+            if reference_event.outcome() == CaptureEventAppendOutcome::Created {
+                secondary_reference_events_written += 1;
+            }
+            inject_capture_recovery_fault(fault, CaptureRecoveryFault::SecondaryReference)
+                .map_err(|error| {
+                    WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                        "reference_applied may already be durable; run project capture-recovery --status before retry; cause: {error}"
+                    ))
+                })?;
+        }
+
+        let completion_projection = journal.inspect_projection(capture_id)?;
+        let completed_group = completion_projection
+            .projection()
+            .capture_group()
+            .expect("CaptureGroup cannot disappear during recovery");
+        if completed_group.required_reference_count() == completed_group.applied_reference_count()
+            && completed_group.completion_receipt().is_none()
+        {
+            let secondary_project_refs = completed_group
+                .members()
+                .iter()
+                .filter(|member| member.reference().is_some())
+                .map(|member| member.project_ref_id())
+                .collect::<Vec<_>>();
+            let completion_event = journal.append_event_authority_only(
+                capture_id,
+                UtcTimestamp::now()?,
+                CaptureEventPayload::CaptureCompleted(CaptureCompletedPayload::new(
+                    completed_group.capture_group_id(),
+                    canonical_record_ref,
+                    secondary_project_refs,
+                )?),
+            )?;
+            capture_completed_written =
+                completion_event.outcome() == CaptureEventAppendOutcome::Created;
+            inject_capture_recovery_fault(fault, CaptureRecoveryFault::CaptureCompleted).map_err(
+                |error| {
+                    WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                        "capture_completed may already be durable; run project capture-recovery --status before retry; cause: {error}"
+                    ))
+                },
+            )?;
+        }
+    }
+
+    let projection_write = journal.rebuild_projection(capture_id)?;
+    inject_capture_recovery_fault(fault, CaptureRecoveryFault::ProjectionReplace).map_err(
+        |error| {
+            WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                "capture projection may already match immutable authority; run project capture-recovery --status before retry; cause: {error}"
+            ))
+        },
+    )?;
+    Ok(CaptureRecoveryApplyReport {
+        registry_path,
+        journal_root: journal.root().to_path_buf(),
+        capture_id,
+        registry,
+        registry_digest,
+        projection: projection_write.projection().clone(),
+        projection_outcome: projection_write.outcome(),
+        resolution_event_written,
+        binding_event_written,
+        registry_written,
+        store_initialized,
+        store_recovered,
+        delivery_started_written,
+        delivery_receipt_written,
+        delivery_failure_written,
+        capture_group_resolution_written,
+        secondary_reference_events_written,
+        capture_completed_written,
+        target_delivery_written,
+        target_delivery_reused,
+        delivery_started: delivery_started_snapshot,
+        primary_delivery: primary_delivery_snapshot,
+        delivery_failure: delivery_failure_snapshot,
+        project_ref_id: resolution.primary_project_ref(),
+        locator_id,
+        binding: binding_snapshot,
+    })
+}
+
+fn capture_recovery_identity(intent: &CaptureIntent) -> Result<ProjectIdentity> {
+    let mut boundary_roots = Vec::new();
+    if let Some(cwd) = intent.resolution_context().cwd() {
+        boundary_roots.push(cwd.canonical_path().as_path().to_path_buf());
+    }
+    if let Some(git) = intent.resolution_context().git_common_dir() {
+        let repository_root = git.canonical_path().as_path().parent().ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "Git common directory {} has no repository parent",
+                git.canonical_path().as_str()
+            ))
+        })?;
+        boundary_roots.push(repository_root.to_path_buf());
+    }
+    boundary_roots.sort();
+    boundary_roots.dedup();
+    let root = boundary_roots
+        .first()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    Ok(ProjectIdentity {
+        kind: "capture-intent".to_owned(),
+        identity: intent.capture_id().to_string(),
+        root,
+        boundary_roots,
+    })
+}
+
+fn capture_recovery_store_root(
+    effective: &EffectiveRegistryConfig,
+    explicit_store_root: Option<PathBuf>,
+    identity: &ProjectIdentity,
+) -> Result<PathBuf> {
+    let raw_path = match explicit_store_root {
+        Some(path) => absolute_cli_path("capture recovery Store root", path)?,
+        None => effective
+            .configured_home
+            .as_ref()
+            .map(|home| home.join("stores").join("projects"))
+            .ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "capture recovery requires --store-root PATH for an unbound owner when the selected registry locator does not define a WorkVCS home"
+                        .to_owned(),
+                )
+            })?,
+    };
+    reject_project_local_unresolved_path("capture recovery Store root", &raw_path, identity)?;
+    let resolved_before_create = if raw_path.exists() {
+        canonical_existing_path("capture recovery Store root", &raw_path)?
+    } else {
+        canonical_nonexistent_path("capture recovery Store root", &raw_path)?
+    };
+    reject_project_local_path(
+        "capture recovery Store root",
+        &resolved_before_create,
+        identity,
+    )?;
+    fs::create_dir_all(&raw_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot create capture recovery Store root {}: {error}",
+            raw_path.display()
+        ))
+    })?;
+    let canonical = canonical_existing_path("capture recovery Store root", &raw_path)?;
+    reject_project_local_path("capture recovery Store root", &canonical, identity)?;
+    Ok(canonical)
+}
+
+fn capture_recovery_bootstrap_spec(
+    evidence: &LocatorEvidence,
+    store_root: &Path,
+) -> ProjectBootstrapSpec {
+    let identity = format!(
+        "{}\0{}\0{}\0{}",
+        evidence.provider(),
+        evidence.namespace(),
+        evidence.kind(),
+        evidence.normalized_value()
+    );
+    let digest = content_object_digest(identity.as_bytes()).to_string();
+    let slug = capture_recovery_slug(evidence);
+    let marker = format!("workvcs-projectref:{digest}");
+    ProjectBootstrapSpec {
+        store_path: store_root.join(format!("{slug}-{digest}.sqlite")),
+        store_display_name: marker.clone(),
+        workspace_display_name: marker,
+    }
+}
+
+fn capture_recovery_slug(evidence: &LocatorEvidence) -> String {
+    let source = Path::new(evidence.normalized_value())
+        .file_name()
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| evidence.provider());
+    let mut slug = String::new();
+    let mut prior_separator = false;
+    for character in source.chars() {
+        let mapped = if character.is_ascii_alphanumeric() {
+            character.to_ascii_lowercase()
+        } else if matches!(character, '-' | '_' | '.') {
+            character
+        } else {
+            '-'
+        };
+        let is_separator = mapped == '-';
+        if is_separator && prior_separator {
+            continue;
+        }
+        slug.push(mapped);
+        prior_separator = is_separator;
+        if slug.len() >= 48 {
+            break;
+        }
+    }
+    let slug = slug.trim_matches(['-', '.']).to_owned();
+    if slug.is_empty() {
+        "project".to_owned()
+    } else {
+        slug
+    }
+}
+
+fn capture_recovery_display_name(basis: Option<&ResolutionBasis>) -> String {
+    match basis {
+        Some(ResolutionBasis::Locator { evidence, .. }) => {
+            format!("{}:{}", evidence.provider(), evidence.normalized_value())
+        }
+        _ => "WorkVCS ProjectRef".to_owned(),
+    }
+}
+
+fn primary_identity_locator(
+    registry: &ProjectRegistryV2,
+    resolution: &workvcs_core::control_plane::ResolutionResult,
+) -> Result<(workvcs_core::ProjectLocatorId, LocatorEvidence)> {
+    let project_ref_id = resolution.primary_project_ref().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "cannot select a primary locator without a resolved ProjectRef".to_owned(),
+        )
+    })?;
+    let basis_evidence = match resolution.primary_basis() {
+        Some(ResolutionBasis::Locator { evidence, .. }) => Some(evidence),
+        _ => None,
+    };
+    let mut candidates = registry
+        .locators()
+        .iter()
+        .filter(|locator| {
+            locator.project_ref_id() == project_ref_id
+                && locator.role() == LocatorRole::Identity
+                && locator.state() == LocatorState::Active
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|locator| {
+        let authority_rank = match locator.authority() {
+            LocatorAuthority::SemanticProject => 1_u8,
+            LocatorAuthority::Repository => 2,
+            LocatorAuthority::Cwd => 3,
+        };
+        let assurance_rank = match locator.assurance() {
+            LocatorAssurance::Authoritative => 0_u8,
+            LocatorAssurance::VerifiedDerived => 1,
+            LocatorAssurance::Observed => 2,
+        };
+        (
+            basis_evidence.is_none_or(|evidence| {
+                evidence.provider() != locator.provider()
+                    || evidence.namespace() != locator.namespace()
+                    || evidence.kind() != locator.kind()
+                    || evidence.normalized_value() != locator.normalized_value()
+            }),
+            authority_rank,
+            assurance_rank,
+            locator.locator_id(),
+        )
+    });
+    let locator = candidates.first().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "resolved ProjectRef {project_ref_id} has no active identity locator for a project_binding_ready event"
+        ))
+    })?;
+    let evidence = LocatorEvidence::new(
+        locator.authority(),
+        locator.provider(),
+        locator.namespace(),
+        locator.kind(),
+        locator.normalized_value(),
+        locator.assurance(),
+        locator.source_adapter(),
+        locator.evidence_digest().clone(),
+    )?;
+    Ok((locator.locator_id(), evidence))
+}
+
+fn install_capture_recovery_registry(
+    registry_path: &Path,
+    expected_digest: &ControlPlaneDigest,
+    candidate: &ProjectRegistryV2,
+    fault: Option<CaptureRecoveryFault>,
+) -> Result<ControlPlaneDigest> {
+    let current_bytes = fs::read(registry_path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot read registry {} before capture recovery replacement: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let current = ProjectRegistryV2::from_json_bytes(&current_bytes)?;
+    let current_digest = current.digest()?;
+    if &current_digest != expected_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture recovery registry changed before replacement: expected {expected_digest}, found {current_digest}"
+        )));
+    }
+    if candidate.registry_id() != current.registry_id()
+        || candidate.revision() != current.revision().saturating_add(1)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "capture recovery registry candidate does not advance the exact registry by one revision"
+                .to_owned(),
+        ));
+    }
+    let candidate_bytes = candidate.stored_json_bytes()?;
+    let candidate_digest = candidate.digest()?;
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let temp = unique_project_registry_temp_path(registry_path)?;
+    let mut registry_replaced = false;
+    let write_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "cannot create capture recovery registry temp {}: {error}",
+                    temp.display()
+                ))
+            })?;
+        file.write_all(&candidate_bytes).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot write capture recovery registry temp {}: {error}",
+                temp.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot sync capture recovery registry temp {}: {error}",
+                temp.display()
+            ))
+        })?;
+        drop(file);
+        inject_capture_recovery_fault(fault, CaptureRecoveryFault::RegistryTempSync)?;
+        fs::rename(&temp, registry_path).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot atomically replace project registry {} from {}: {error}",
+                registry_path.display(),
+                temp.display()
+            ))
+        })?;
+        registry_replaced = true;
+        inject_capture_recovery_fault(fault, CaptureRecoveryFault::RegistryReplace)?;
+        sync_directory(parent)?;
+        inject_capture_recovery_fault(fault, CaptureRecoveryFault::RegistryDirectorySync)?;
+        let installed_bytes = fs::read(registry_path).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot verify capture recovery registry {}: {error}",
+                registry_path.display()
+            ))
+        })?;
+        if installed_bytes != candidate_bytes {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "capture recovery registry bytes differ after atomic replacement".to_owned(),
+            ));
+        }
+        let installed = ProjectRegistryV2::from_json_bytes(&installed_bytes)?;
+        if installed.digest()? != candidate_digest {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "capture recovery registry digest differs after atomic replacement".to_owned(),
+            ));
+        }
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    if let Err(error) = write_result {
+        if registry_replaced {
+            return Err(WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                "the ProjectRef registry replacement completed or may have completed; run project capture-recovery --status before retry and continue forward without automatic rollback; cause: {error}"
+            )));
+        }
+        return Err(error);
+    }
+    Ok(candidate_digest)
+}
+
+fn inject_capture_recovery_fault(
+    configured: Option<CaptureRecoveryFault>,
+    current: CaptureRecoveryFault,
+) -> Result<()> {
+    if configured == Some(current) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "injected capture recovery fault at {current:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn render_capture_recovery_apply_report(report: &CaptureRecoveryApplyReport) -> Result<String> {
+    let project_ref_id = report
+        .project_ref_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let locator_id = report
+        .locator_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let binding = report.binding.as_ref();
+    let delivery_id = report
+        .delivery_started
+        .as_ref()
+        .map(|value| value.delivery_id().to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let capture_group = report.projection.capture_group();
+    Ok(format!(
+        "action=apply\nread_only=false\ncapture_id={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_root={}\nevents={}\nprojection_path={}\nprojection_digest={}\nprojection_write_outcome={}\nrecovery_state={}\nproject_ref_id={}\nlocator_id={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\ndelivery_id={}\ndelivery_started_written={}\ndelivery_receipt_written={}\ndelivery_failure_written={}\ntarget_delivery_written={}\ntarget_delivery_reused={}\ntarget_commit_id={}\ncanonical_record_ref={}\ndelivery_failure_code={}\ncapture_group_id={}\ncapture_group_resolution_written={}\nsecondary_references_required={}\nsecondary_references_applied={}\nsecondary_reference_events_written={}\ncapture_completed_receipt={}\ncapture_completed_written={}\nregistry_written={}\nresolution_event_written={}\nbinding_event_written={}\nprojection_written={}\nstore_initialized={}\nstore_recovered={}\nrouting_activated=false\n",
+        report.capture_id,
+        escape_key_value(&report.registry_path.display().to_string()),
+        report.registry.registry_id(),
+        report.registry.revision(),
+        report.registry_digest,
+        escape_key_value(&report.journal_root.display().to_string()),
+        report.projection.event_count(),
+        escape_key_value(
+            &report
+                .journal_root
+                .join("projections")
+                .join(format!("{}.json", report.capture_id))
+                .display()
+                .to_string()
+        ),
+        report.projection.digest()?,
+        match report.projection_outcome {
+            CaptureProjectionWriteOutcome::Created => "created",
+            CaptureProjectionWriteOutcome::Replaced => "replaced",
+            CaptureProjectionWriteOutcome::Reused => "reused",
+        },
+        report.projection.recovery_state().as_str(),
+        project_ref_id,
+        locator_id,
+        binding
+            .map(|value| escape_key_value(value.store_path().as_str()))
+            .unwrap_or_else(|| "none".to_owned()),
+        binding
+            .map(|value| value.store_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        binding
+            .map(|value| value.workspace_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        binding
+            .map(|value| value.branch_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        delivery_id,
+        report.delivery_started_written,
+        report.delivery_receipt_written,
+        report.delivery_failure_written,
+        report.target_delivery_written,
+        report.target_delivery_reused,
+        report
+            .primary_delivery
+            .as_ref()
+            .map(|value| value.commit_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        report
+            .primary_delivery
+            .as_ref()
+            .and_then(DeliveryAppliedPayload::canonical_record_ref)
+            .map(|value| format!("{}:{}", value.record_id(), value.record_version_id()))
+            .unwrap_or_else(|| "none".to_owned()),
+        report
+            .delivery_failure
+            .as_ref()
+            .map(|value| value.failure_code().as_str())
+            .unwrap_or("none"),
+        capture_group
+            .map(|group| group.capture_group_id().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        report.capture_group_resolution_written,
+        capture_group
+            .map(|group| group.required_reference_count())
+            .unwrap_or(0),
+        capture_group
+            .map(|group| group.applied_reference_count())
+            .unwrap_or(0),
+        report.secondary_reference_events_written,
+        capture_group.is_some_and(|group| group.completion_receipt().is_some()),
+        report.capture_completed_written,
+        report.registry_written,
+        report.resolution_event_written,
+        report.binding_event_written,
+        report.projection_outcome != CaptureProjectionWriteOutcome::Reused,
+        report.store_initialized,
+        report.store_recovered,
+    ))
+}
+
+fn required_control_plane_digest(label: &str, value: Option<String>) -> Result<ControlPlaneDigest> {
+    ControlPlaneDigest::from_text(
+        &value.ok_or_else(|| WorkVcsError::QueryInvalid(format!("{label} is required")))?,
+    )
+}
+
+fn verify_migration_preview_repaired_binding_readonly(binding: &ProjectBindingV1) -> Result<usize> {
+    let store_path =
+        canonical_existing_path("project binding store", Path::new(binding.store_path()))?;
+    if store_path.display().to_string() != binding.store_path() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project binding store path drifted from {} to {}",
+            binding.store_path(),
+            store_path.display()
+        )));
+    }
+    let identity =
+        workvcs_core::control_plane::CanonicalPath::parse(binding.identity().to_owned())?;
+    let root = workvcs_core::control_plane::CanonicalPath::parse(binding.root().to_owned())?;
+    let git_repository_root = if binding.identity_kind() == "git-common-dir" {
+        let repository_root = identity.as_path().parent().ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "v1 git common directory {} has no repository parent",
+                binding.identity()
+            ))
+        })?;
+        Some(workvcs_core::control_plane::CanonicalPath::parse(
+            repository_root.display().to_string(),
+        )?)
+    } else {
+        None
+    };
+    let mut boundaries = vec![("v1 project identity", identity), ("v1 project root", root)];
+    if let Some(repository_root) = git_repository_root {
+        boundaries.push(("v1 git repository root", repository_root));
+    }
+    for (label, boundary) in boundaries {
+        if store_path == boundary.as_path() || store_path.starts_with(boundary.as_path()) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "project binding store {} must remain outside historical {label} {}",
+                store_path.display(),
+                boundary.as_str()
+            )));
+        }
+    }
+    let project_binding = ProjectBinding {
+        identity_kind: binding.identity_kind().to_owned(),
+        identity: binding.identity().to_owned(),
+        root: binding.root().to_owned(),
+        store_path: binding.store_path().to_owned(),
+        store_id: StoreId::parse_canonical(binding.store_id())?,
+        workspace_id: WorkspaceId::parse_canonical(binding.workspace_id())?,
+        branch_id: BranchId::parse_canonical(binding.branch_id())?,
+    };
+    verify_registry_binding_readonly(&project_binding)
+}
+
+fn verify_migration_preview_binding_readonly(binding: &ProjectBindingV1) -> Result<usize> {
+    let identity = migration_preview_project_identity(binding)?;
+    let store_path =
+        canonical_existing_path("project binding store", Path::new(binding.store_path()))?;
+    reject_project_local_path("project binding store", &store_path, &identity)?;
+    let project_binding = ProjectBinding {
+        identity_kind: binding.identity_kind().to_owned(),
+        identity: binding.identity().to_owned(),
+        root: binding.root().to_owned(),
+        store_path: binding.store_path().to_owned(),
+        store_id: StoreId::parse_canonical(binding.store_id())?,
+        workspace_id: WorkspaceId::parse_canonical(binding.workspace_id())?,
+        branch_id: BranchId::parse_canonical(binding.branch_id())?,
+    };
+    verify_project_binding_readonly(&project_binding, &identity)?;
+    verify_registry_binding_readonly(&project_binding)
+}
+
+fn migration_preview_project_identity(binding: &ProjectBindingV1) -> Result<ProjectIdentity> {
+    let identity_path =
+        canonical_existing_path("v1 project identity", Path::new(binding.identity()))?;
+    let root_path = canonical_existing_path("v1 project root", Path::new(binding.root()))?;
+    if identity_path.display().to_string() != binding.identity() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "v1 project identity drifted from {} to {}",
+            binding.identity(),
+            identity_path.display()
+        )));
+    }
+    if root_path.display().to_string() != binding.root() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "v1 project root drifted from {} to {}",
+            binding.root(),
+            root_path.display()
+        )));
+    }
+    let boundary_roots = match binding.identity_kind() {
+        "git-common-dir" => {
+            let common_root = identity_path.parent().ok_or_else(|| {
+                WorkVcsError::QueryInvalid(format!(
+                    "v1 git common directory {} has no repository parent",
+                    identity_path.display()
+                ))
+            })?;
+            let common_root = canonical_existing_path("v1 git repository root", common_root)?;
+            let mut boundaries = vec![root_path, common_root];
+            boundaries.sort();
+            boundaries.dedup();
+            boundaries
+        }
+        "cwd" => {
+            if identity_path != root_path {
+                return Err(WorkVcsError::QueryInvalid(
+                    "v1 cwd identity does not equal its project root".to_owned(),
+                ));
+            }
+            vec![root_path]
+        }
+        other => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "v1 identity kind {other:?} is not supported"
+            )));
+        }
+    };
+    Ok(ProjectIdentity {
+        kind: binding.identity_kind().to_owned(),
+        identity: binding.identity().to_owned(),
+        root: binding.root().to_owned(),
+        boundary_roots,
+    })
+}
+
+fn bounded_migration_validation_detail(detail: &str) -> String {
+    const MAX_BYTES: usize = 4 * 1_024;
+    if detail.len() <= MAX_BYTES {
+        return detail.to_owned();
+    }
+    let mut end = MAX_BYTES.saturating_sub(3);
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &detail[..end])
+}
+
+fn render_project_registry_migration_preview(
+    registry_path: &Path,
+    preview: &RegistryMigrationPreview,
+) -> Result<String> {
+    let valid_bindings = preview
+        .mappings()
+        .iter()
+        .filter(|mapping| mapping.validation().valid())
+        .count();
+    let mut output = format!(
+        "registry_path={}\nread_only=true\npreview_version={}\nregistry_version={}\ntarget_registry_version={}\nmigration_required={}\nsource_digest={}\npreview_digest={}\nmappings={}\nvalid_bindings={}\ninvalid_bindings={}\ntarget_coincidences={}\napply_eligible={}\nregistry_written=false\njournal_written=false\nstore_written=false\n",
+        escape_key_value(&registry_path.display().to_string()),
+        preview.preview_version(),
+        preview.source_registry_version(),
+        preview.target_registry_version(),
+        preview.migration_required(),
+        preview.source_digest(),
+        preview.preview_digest(),
+        preview.mappings().len(),
+        valid_bindings,
+        preview.mappings().len() - valid_bindings,
+        preview.target_coincidences().len(),
+        preview.apply_eligible(),
+    );
+    if let Some(repair_manifest_digest) = preview.repair_manifest_digest() {
+        writeln!(output, "repair_manifest_digest={repair_manifest_digest}")
+            .expect("write to String");
+        writeln!(output, "ownership_repairs={}", preview.ownership_repairs())
+            .expect("write to String");
+    }
+    for mapping in preview.mappings() {
+        render_migration_preview_mapping(&mut output, mapping);
+    }
+    for (index, coincidence) in preview.target_coincidences().iter().enumerate() {
+        render_migration_target_coincidence(&mut output, index, coincidence);
+    }
+    Ok(output)
+}
+
+fn render_migration_preview_mapping(output: &mut String, mapping: &MigrationPreviewMapping) {
+    let prefix = format!("mapping.{}", mapping.mapping_index());
+    let _ = writeln!(
+        output,
+        "{prefix}.identity_kind={}",
+        escape_key_value(mapping.v1_binding_key().identity_kind())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.identity={}",
+        escape_key_value(mapping.v1_binding_key().identity())
+    );
+    let _ = writeln!(output, "{prefix}.root={}", escape_key_value(mapping.root()));
+    let _ = writeln!(
+        output,
+        "{prefix}.planned_maturity={}",
+        mapping
+            .planned_maturity()
+            .map(migration_project_maturity)
+            .unwrap_or("none")
+    );
+    render_migration_locator_plan(
+        output,
+        &format!("{prefix}.identity_locator"),
+        mapping.identity_locator(),
+    );
+    if let Some(historical) = mapping.historical_identity_locator() {
+        render_migration_locator_plan(
+            output,
+            &format!("{prefix}.historical_identity_locator"),
+            Some(historical),
+        );
+    }
+    render_migration_locator_plan(
+        output,
+        &format!("{prefix}.root_context_locator"),
+        mapping.root_context_locator(),
+    );
+    if let Some(repair) = mapping.ownership_repair() {
+        let _ = writeln!(output, "{prefix}.ownership_repair.present=true");
+        let _ = writeln!(
+            output,
+            "{prefix}.ownership_repair.repair_digest={}",
+            repair.repair_digest()
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.ownership_repair.expected_target_digest={}",
+            repair.expected_target_digest()
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.ownership_repair.historical_identity_disposition={}",
+            migration_historical_identity_disposition(repair.historical_identity_disposition())
+        );
+    }
+    let target = mapping.target();
+    let _ = writeln!(
+        output,
+        "{prefix}.store_path={}",
+        escape_key_value(target.store_path())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.store_id={}",
+        escape_key_value(target.store_id())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.workspace_id={}",
+        escape_key_value(target.workspace_id())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.branch_id={}",
+        escape_key_value(target.branch_id())
+    );
+    let _ = writeln!(output, "{prefix}.target_digest={}", mapping.target_digest());
+    let _ = writeln!(
+        output,
+        "{prefix}.validation.valid={}",
+        mapping.validation().valid()
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.validation.local_content_objects_verified={}",
+        mapping
+            .validation()
+            .local_content_objects_verified()
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "none".to_owned())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.validation.issues={}",
+        mapping.validation().issues().len()
+    );
+    for (index, issue) in mapping.validation().issues().iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "{prefix}.validation.issue.{index}.code={}",
+            issue.code()
+        );
+        let _ = writeln!(
+            output,
+            "{prefix}.validation.issue.{index}.detail={}",
+            escape_key_value(issue.detail())
+        );
+    }
+}
+
+fn render_migration_locator_plan(
+    output: &mut String,
+    prefix: &str,
+    locator: Option<&workvcs_core::control_plane::MigrationLocatorPlan>,
+) {
+    let Some(locator) = locator else {
+        let _ = writeln!(output, "{prefix}.present=false");
+        return;
+    };
+    let _ = writeln!(output, "{prefix}.present=true");
+    let _ = writeln!(
+        output,
+        "{prefix}.role={}",
+        migration_locator_role(locator.role())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.authority={}",
+        migration_locator_authority(locator.authority())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.provider={}",
+        escape_key_value(locator.provider())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.namespace_strategy={}",
+        migration_namespace_strategy(locator.namespace_strategy())
+    );
+    if let Some(namespace) = locator.namespace() {
+        let _ = writeln!(output, "{prefix}.namespace={}", escape_key_value(namespace));
+    }
+    let _ = writeln!(output, "{prefix}.kind={}", escape_key_value(locator.kind()));
+    let _ = writeln!(
+        output,
+        "{prefix}.normalized_value={}",
+        escape_key_value(locator.normalized_value())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.assurance={}",
+        migration_locator_assurance(locator.assurance())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.source_adapter={}",
+        escape_key_value(locator.source_adapter())
+    );
+    if let Some(evidence_digest) = locator.evidence_digest() {
+        let _ = writeln!(output, "{prefix}.evidence_digest={evidence_digest}");
+    }
+    if let Some(state) = locator.state() {
+        let _ = writeln!(output, "{prefix}.state={}", migration_locator_state(state));
+    }
+}
+
+fn render_migration_target_coincidence(
+    output: &mut String,
+    index: usize,
+    coincidence: &MigrationTargetCoincidence,
+) {
+    let prefix = format!("target_coincidence.{index}");
+    let _ = writeln!(
+        output,
+        "{prefix}.target_digest={}",
+        coincidence.target_digest()
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.store_path={}",
+        escape_key_value(coincidence.target().store_path())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.store_id={}",
+        escape_key_value(coincidence.target().store_id())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.workspace_id={}",
+        escape_key_value(coincidence.target().workspace_id())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.branch_id={}",
+        escape_key_value(coincidence.target().branch_id())
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}.mappings={}",
+        coincidence.mapping_indices().len()
+    );
+    for (member, mapping_index) in coincidence.mapping_indices().iter().enumerate() {
+        let _ = writeln!(output, "{prefix}.mapping.{member}.index={mapping_index}");
+    }
+}
+
+fn render_project_registry_migration_preview_json(
+    registry_path: &Path,
+    preview: &RegistryMigrationPreview,
+) -> Result<String> {
+    let value = serde_json::json!({
+        "registry_path": registry_path.display().to_string(),
+        "read_only": true,
+        "registry_written": false,
+        "journal_written": false,
+        "store_written": false,
+        "preview": preview,
+    });
+    let raw = serde_json::to_vec(&value).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot serialize registry migration preview output: {error}"
+        ))
+    })?;
+    let canonical = parse_canonical_json(&raw)?;
+    let mut bytes = canonical_bytes(&canonical)?;
+    bytes.push(b'\n');
+    String::from_utf8(bytes).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "registry migration preview output is not UTF-8: {error}"
+        ))
+    })
+}
+
+fn migration_project_maturity(value: ProjectMaturity) -> &'static str {
+    match value {
+        ProjectMaturity::Provisional => "provisional",
+        ProjectMaturity::Established => "established",
+    }
+}
+
+fn migration_locator_role(value: LocatorRole) -> &'static str {
+    match value {
+        LocatorRole::Identity => "identity",
+        LocatorRole::Context => "context",
+    }
+}
+
+fn migration_locator_authority(value: LocatorAuthority) -> &'static str {
+    match value {
+        LocatorAuthority::SemanticProject => "semantic_project",
+        LocatorAuthority::Repository => "repository",
+        LocatorAuthority::Cwd => "cwd",
+    }
+}
+
+fn migration_locator_assurance(value: LocatorAssurance) -> &'static str {
+    match value {
+        LocatorAssurance::Authoritative => "authoritative",
+        LocatorAssurance::VerifiedDerived => "verified_derived",
+        LocatorAssurance::Observed => "observed",
+    }
+}
+
+fn migration_namespace_strategy(value: MigrationNamespaceStrategy) -> &'static str {
+    match value {
+        MigrationNamespaceStrategy::NewRegistryId => "new_registry_id",
+        MigrationNamespaceStrategy::Explicit => "explicit",
+    }
+}
+
+fn migration_locator_state(value: LocatorState) -> &'static str {
+    match value {
+        LocatorState::Active => "active",
+        LocatorState::Retired => "retired",
+    }
+}
+
+fn migration_historical_identity_disposition(
+    value: MigrationHistoricalIdentityDisposition,
+) -> &'static str {
+    match value {
+        MigrationHistoricalIdentityDisposition::Retire => "retire",
+    }
 }
 
 fn render_closeout_inspect_task_projection(projection: &CloseoutInspectTaskProjection) -> String {
@@ -16808,6 +23294,7 @@ fn run_resume(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
     registry: Option<PathBuf>,
+    locator: ProjectLocatorArgs,
     session: Option<String>,
     budget_items: Option<usize>,
     scope_json: Option<String>,
@@ -16815,11 +23302,15 @@ fn run_resume(
     scope_path_prefix: Option<PathBuf>,
     expected_state_digest: Option<String>,
 ) -> Result<String> {
-    let (engine, session_id) = match (store, cwd) {
+    let (engine, session_id, discovery) = match (store, cwd) {
         (Some(store), None) => {
-            if registry.is_some() {
+            if registry.is_some()
+                || locator.project_ref.is_some()
+                || locator.locator_context.is_some()
+                || locator.locator_adapter_context.is_some()
+            {
                 return Err(WorkVcsError::QueryInvalid(
-                    "resume STORE does not accept --registry; use --cwd for registry discovery"
+                    "resume STORE does not accept --registry, --project-ref, --locator-context, or --locator-adapter-context; use --cwd for registry discovery"
                         .to_owned(),
                 ));
             }
@@ -16829,13 +23320,19 @@ fn run_resume(
                 )
             })?;
             let session_id = SessionId::parse_canonical(&session)?;
-            (open_verified_store(&store)?, session_id)
+            (open_verified_store_readonly(&store)?, session_id, None)
         }
         (None, Some(cwd)) => {
-            let discovery = discover_project(cwd, registry)?;
-            let engine = open_verified_store(Path::new(&discovery.binding.store_path))?;
+            let discovery = discover_project_readonly_with_locator(
+                cwd,
+                registry,
+                locator.project_ref,
+                locator.locator_context,
+                locator.locator_adapter_context,
+            )?;
+            let engine = open_verified_store_readonly(Path::new(&discovery.binding.store_path))?;
             let session_id = resolve_resume_session(&engine, &discovery, session)?;
-            (engine, session_id)
+            (engine, session_id, Some(discovery))
         }
         _ => {
             return Err(WorkVcsError::QueryInvalid(
@@ -16859,6 +23356,9 @@ fn run_resume(
     }
     let packet = engine.context_packet(options)?;
     let mut output = render_resume_packet(&packet, budget_items);
+    if let Some(discovery) = discovery.as_ref() {
+        output.push_str(&render_project_routing_metadata(discovery));
+    }
     if let Some(expected_state_digest) = expected_state_digest {
         let expected_state_digest = Digest::from_hex(&expected_state_digest)?;
         if packet.envelope.state_digest != expected_state_digest {
@@ -16875,6 +23375,7 @@ fn run_resume(
 fn run_recall(
     cwd: PathBuf,
     registry: Option<PathBuf>,
+    locator: ProjectLocatorArgs,
     profile: RecallProfileArg,
     budget_items: usize,
 ) -> Result<String> {
@@ -16883,7 +23384,13 @@ fn run_recall(
             "recall --budget-items must be between 1 and 200".to_owned(),
         ));
     }
-    let discovery = discover_project_readonly(cwd, registry)?;
+    let discovery = discover_project_readonly_with_locator(
+        cwd,
+        registry,
+        locator.project_ref,
+        locator.locator_context,
+        locator.locator_adapter_context,
+    )?;
     let engine = open_verified_store_readonly(Path::new(&discovery.binding.store_path))?;
     let head = engine.branch_head(discovery.binding.branch_id)?;
     let commit_id = head.head_commit_id;
@@ -17000,9 +23507,29 @@ fn run_recall(
         + knowledge_relations.len()
         + evidence.len();
     let mut output = format!(
-        "recall_profile={}\nregistry_path={}\nproject_identity={}\nproject_root={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\nstate_digest={}\nwork_state_scope=current_branch_head\nruntime_scope=live\nordering=category_reserved_current_then_newest_semantics\nbudget_items={}\ntotal_items={}\ngoals_total={}\nplans_total={}\ntasks_total={}\nsessions_total={}\nclaims_total={}\nrecords_total={}\nknowledge_total={}\nrecord_relations_total={}\nrecord_knowledge_relations_total={}\nknowledge_relations_total={}\nevidence_total={}\nevidence_scope={}\n",
+        "recall_profile={}\nregistry_path={}\nregistry_version={}\nregistry_revision={}\nregistry_digest={}\nmigration_required={}\nrouting_active={}\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nproject_identity={}\nproject_root={}\nstore_path={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\nhead_commit_id={}\nstate_digest={}\nwork_state_scope=current_branch_head\nruntime_scope=live\nordering=category_reserved_current_then_newest_semantics\nbudget_items={}\ntotal_items={}\ngoals_total={}\nplans_total={}\ntasks_total={}\nsessions_total={}\nclaims_total={}\nrecords_total={}\nknowledge_total={}\nrecord_relations_total={}\nrecord_knowledge_relations_total={}\nknowledge_relations_total={}\nevidence_total={}\nevidence_scope={}\n",
         profile.as_str(),
         discovery.registry_path.display(),
+        discovery.registry_version,
+        discovery
+            .registry_revision
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        discovery.registry_digest,
+        discovery.migration_required,
+        discovery.routing_active,
+        discovery
+            .resolution_status
+            .map(resolution_status_text)
+            .unwrap_or("legacy_v1"),
+        discovery
+            .resolution_rank
+            .map(resolution_rank_text)
+            .unwrap_or("none"),
+        discovery
+            .project_ref_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
         discovery.current_identity.identity,
         discovery.current_identity.root,
         discovery.binding.store_path,
@@ -17717,6 +24244,8 @@ fn record_status_is_current(status: RecordStatus) -> bool {
 fn run_cognition_capture(
     cwd: PathBuf,
     registry: Option<PathBuf>,
+    locator: ProjectLocatorArgs,
+    value_reason: Option<String>,
     manifest_path: PathBuf,
 ) -> Result<String> {
     let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
@@ -17726,6 +24255,141 @@ fn run_cognition_capture(
         ))
     })?;
     let manifest = CognitionCaptureManifest::from_json_bytes(&manifest_bytes)?;
+    let current_identity = resolve_project_identity(&cwd)?;
+    let effective = effective_registry_config(registry.clone())?;
+    let registry_path = project_registry_path_from_effective(&effective, false, &current_identity)?;
+    match load_project_registry_readonly(&registry_path, true)? {
+        LoadedProjectRegistry::V1 { digest, .. } => {
+            if locator.project_ref.is_some() {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "registry v1 cannot evaluate an explicit ProjectRef override; migrate before using --project-ref"
+                        .to_owned(),
+                ));
+            }
+            let Some(value_reason) = value_reason else {
+                if locator.locator_context.is_some() || locator.locator_adapter_context.is_some() {
+                    return Err(WorkVcsError::ControlPlaneInvalid(
+                        "registry-v1 legacy capture cannot evaluate semantic locator input; pass --value-reason to use target-neutral journal admission or migrate to v2"
+                            .to_owned(),
+                    ));
+                }
+                return run_legacy_cognition_capture(cwd, registry, manifest);
+            };
+            let semantic_evidence =
+                load_semantic_locator_evidence(locator.locator_context.as_deref())?;
+            let locator_input = unified_locator_input_for_identity_with_mode(
+                ResolutionMode::DurableWrite,
+                None,
+                semantic_evidence,
+                locator.locator_adapter_context.as_deref(),
+                &current_identity,
+            )?;
+            let resolution = resolve_unbound_project(
+                locator_input.resolution_context(),
+                format!("registry-v1:{digest}"),
+            )?;
+            let semantic_payload = canonical_cognition_payload(&manifest_bytes)?;
+            let intent = CaptureIntent::new(
+                CaptureId::new_v7(),
+                manifest.idempotency_key.clone(),
+                UtcTimestamp::now()?,
+                value_reason,
+                CapturePayloadKind::LegacyCognitionV1,
+                semantic_payload,
+                locator_input.resolution_context().clone(),
+                resolution,
+                None,
+            )?;
+            let journal = CaptureJournal::for_project_registry(
+                &registry_path,
+                project_registry_journal_alias(&effective),
+            )?;
+            let admission = journal.admit_for_project_registry_v1(&intent, &digest)?;
+            render_v1_routed_cognition_admission(
+                &registry_path,
+                &digest,
+                &intent,
+                &admission,
+                locator_input.provider_ids(),
+            )
+        }
+        LoadedProjectRegistry::V2 {
+            registry: registry_v2,
+            digest: registry_digest,
+        } => {
+            let value_reason = value_reason.ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "ProjectRef-v2 capture requires --value-reason TEXT from the external durable-value decision"
+                        .to_owned(),
+                )
+            })?;
+            let project_ref_id = locator
+                .project_ref
+                .map(|value| ProjectRefId::parse_canonical(&value))
+                .transpose()?;
+            let semantic_evidence =
+                load_semantic_locator_evidence(locator.locator_context.as_deref())?;
+            let locator_input = unified_locator_input_for_identity_with_mode(
+                ResolutionMode::DurableWrite,
+                project_ref_id,
+                semantic_evidence,
+                locator.locator_adapter_context.as_deref(),
+                &current_identity,
+            )?;
+            let resolution = resolve_project(&registry_v2, locator_input.resolution_context())?;
+            if resolution
+                .diagnostics()
+                .contains(&ResolutionDiagnostic::ProjectRefNotFound)
+            {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "explicit ProjectRef does not exist in the exact registry snapshot; refusing to journal an invalid override"
+                        .to_owned(),
+                ));
+            }
+            require_active_journal_admission(&effective, &registry_path, &registry_v2)?;
+
+            let semantic_payload = canonical_cognition_payload(&manifest_bytes)?;
+            let intent = CaptureIntent::new(
+                CaptureId::new_v7(),
+                manifest.idempotency_key.clone(),
+                UtcTimestamp::now()?,
+                value_reason,
+                CapturePayloadKind::LegacyCognitionV1,
+                semantic_payload,
+                locator_input.resolution_context().clone(),
+                resolution,
+                None,
+            )?;
+            let journal = CaptureJournal::for_project_registry(
+                &registry_path,
+                project_registry_journal_alias(&effective),
+            )?;
+            let admission = journal.admit_for_project_registry_with_check(
+                &intent,
+                registry_v2.revision(),
+                &registry_digest,
+                |locked_registry| {
+                    require_active_journal_admission(&effective, &registry_path, locked_registry)?;
+                    Ok(())
+                },
+            )?;
+            render_routed_cognition_admission(
+                &registry_path,
+                &registry_v2,
+                &registry_digest,
+                &intent,
+                &admission,
+                locator_input.provider_ids(),
+            )
+        }
+    }
+}
+
+fn run_legacy_cognition_capture(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    manifest: CognitionCaptureManifest,
+) -> Result<String> {
     let discovery = discover_project(cwd, registry)?;
     let mut engine = open_verified_store(Path::new(&discovery.binding.store_path))?;
     let head = engine.branch_head(discovery.binding.branch_id)?;
@@ -17736,6 +24400,103 @@ fn run_cognition_capture(
         manifest,
     ))?;
     Ok(render_cognition_capture(&result))
+}
+
+fn canonical_cognition_payload(input: &[u8]) -> Result<serde_json::Value> {
+    let canonical = parse_canonical_json(input).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cognition capture manifest is not strict canonical-domain JSON: {error}"
+        ))
+    })?;
+    let canonical = canonical_bytes(&canonical).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot encode cognition capture manifest for journal admission: {error}"
+        ))
+    })?;
+    serde_json::from_slice(&canonical).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot decode canonical cognition capture manifest: {error}"
+        ))
+    })
+}
+
+fn render_v1_routed_cognition_admission(
+    registry_path: &Path,
+    registry_digest: &ControlPlaneDigest,
+    intent: &CaptureIntent,
+    admission: &workvcs_core::control_plane::CaptureAdmissionResult,
+    provider_ids: &[String],
+) -> Result<String> {
+    let resolution = intent.initial_resolution();
+    let resolution_rank = resolution
+        .primary_basis()
+        .map(ResolutionBasis::rank)
+        .map(resolution_rank_text)
+        .unwrap_or("none");
+    let outcome = match admission.outcome() {
+        CaptureAdmissionOutcome::Created => "created",
+        CaptureAdmissionOutcome::Reused => "reused",
+    };
+    Ok(format!(
+        "capture_status=admitted\nadmission_outcome={}\ncapture_id={}\nidempotency_key={}\npayload_kind=legacy_cognition_v1\npayload_digest={}\nregistry_path={}\nregistry_version=1\nregistry_revision=none\nregistry_digest={}\nmigration_required=true\nread_routing_active=false\njournal_admission_active=true\njournal_admission_gate=explicit_value_reason\nresolution_status={}\nresolution_rank={}\nproject_ref_id=none\nrelated_project_refs={}\nunmapped_locators={}\nresolution_diagnostics={}\nlocator_providers={}\njournal_path={}\njournal_persisted=true\njournal_written={}\nregistry_written=false\nproject_ref_created=false\nstore_written=false\ndelivery_status=registry_migration_required\ndelivery_activated=false\n",
+        outcome,
+        admission.capture_id(),
+        escape_key_value(intent.idempotency_key()),
+        admission.payload_digest(),
+        escape_key_value(&registry_path.display().to_string()),
+        registry_digest,
+        resolution_status_text(resolution.status()),
+        resolution_rank,
+        resolution.related_project_refs().len(),
+        resolution.unmapped_locators().len(),
+        resolution.diagnostics().len(),
+        provider_ids.len(),
+        escape_key_value(&admission.intent_path().display().to_string()),
+        admission.outcome() == CaptureAdmissionOutcome::Created,
+    ))
+}
+
+fn render_routed_cognition_admission(
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    registry_digest: &ControlPlaneDigest,
+    intent: &CaptureIntent,
+    admission: &workvcs_core::control_plane::CaptureAdmissionResult,
+    provider_ids: &[String],
+) -> Result<String> {
+    let resolution = intent.initial_resolution();
+    let resolution_rank = resolution
+        .primary_basis()
+        .map(ResolutionBasis::rank)
+        .map(resolution_rank_text)
+        .unwrap_or("none");
+    let outcome = match admission.outcome() {
+        CaptureAdmissionOutcome::Created => "created",
+        CaptureAdmissionOutcome::Reused => "reused",
+    };
+    Ok(format!(
+        "capture_status=admitted\nadmission_outcome={}\ncapture_id={}\nidempotency_key={}\npayload_kind=legacy_cognition_v1\npayload_digest={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nread_routing_active=true\njournal_admission_active=true\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nrelated_project_refs={}\nunmapped_locators={}\nresolution_diagnostics={}\nlocator_providers={}\njournal_path={}\njournal_persisted=true\njournal_written={}\nregistry_written=false\nproject_ref_created=false\nstore_written=false\ndelivery_status=not_started\ndelivery_activated=false\n",
+        outcome,
+        admission.capture_id(),
+        escape_key_value(intent.idempotency_key()),
+        admission.payload_digest(),
+        escape_key_value(&registry_path.display().to_string()),
+        registry.registry_id(),
+        registry.revision(),
+        registry_digest,
+        resolution_status_text(resolution.status()),
+        resolution_rank,
+        resolution
+            .primary_project_ref()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        resolution.related_project_refs().len(),
+        resolution.unmapped_locators().len(),
+        resolution.diagnostics().len(),
+        provider_ids.len(),
+        escape_key_value(&admission.intent_path().display().to_string()),
+        admission.outcome() == CaptureAdmissionOutcome::Created,
+    ))
 }
 
 fn resolve_resume_session(
@@ -17962,7 +24723,7 @@ fn run_receipt_show(
 ) -> Result<String> {
     let (store_path, bound_branch_id) =
         resolve_receipt_query_target(store, cwd, registry, "receipt show")?;
-    let engine = open_verified_store(&store_path)?;
+    let engine = open_verified_store_readonly(&store_path)?;
     let commit_id = resolve_receipt_query_commit(&engine, bound_branch_id, branch, commit)?;
     let snapshot =
         engine.authorization_receipt_at(commit_id, EntityId::parse_canonical(&receipt)?)?;
@@ -17995,7 +24756,7 @@ fn run_receipt_list(
 ) -> Result<String> {
     let (store_path, bound_branch_id) =
         resolve_receipt_query_target(store, cwd, registry, "receipt list")?;
-    let engine = open_verified_store(&store_path)?;
+    let engine = open_verified_store_readonly(&store_path)?;
     let commit_id = resolve_receipt_query_commit(&engine, bound_branch_id, branch, commit)?;
     let mut options = AuthorizationReceiptListOptions::new(commit_id);
     if let Some(status) = status {
@@ -18090,7 +24851,7 @@ fn resolve_receipt_query_target(
             Ok((store_path, None))
         }
         (None, Some(cwd)) => {
-            let discovery = discover_project(cwd, registry)?;
+            let discovery = discover_project_readonly(cwd, registry)?;
             Ok((
                 PathBuf::from(discovery.binding.store_path),
                 Some(discovery.binding.branch_id),
@@ -18462,6 +25223,82 @@ fn reject_project_local_unresolved_path(
     Ok(())
 }
 
+fn load_project_registry_readonly(
+    path: &Path,
+    allow_missing: bool,
+) -> Result<LoadedProjectRegistry> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
+            let registry = ProjectRegistryV1::from_json_bytes(b"{\"version\":1,\"bindings\":[]}")?;
+            return Ok(LoadedProjectRegistry::V1 {
+                bindings: Vec::new(),
+                digest: registry.source_digest()?,
+            });
+        }
+        Err(error) => {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "cannot read project registry {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "project registry {} is not valid JSON: {error}",
+            path.display()
+        ))
+    })?;
+    let version = value
+        .as_object()
+        .and_then(|object| object.get("version"))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "project registry {} requires unsigned integer version",
+                path.display()
+            ))
+        })?;
+    match version {
+        1 => {
+            let registry = ProjectRegistryV1::from_json_bytes(&bytes)?;
+            let bindings = registry
+                .bindings()
+                .iter()
+                .map(project_binding_v1_to_cli)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LoadedProjectRegistry::V1 {
+                bindings,
+                digest: registry.source_digest()?,
+            })
+        }
+        2 => {
+            let registry = ProjectRegistryV2::from_json_bytes(&bytes)?;
+            let digest = registry.digest()?;
+            Ok(LoadedProjectRegistry::V2 {
+                registry: Box::new(registry),
+                digest,
+            })
+        }
+        other => Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "project registry {} has unsupported version {other}",
+            path.display()
+        ))),
+    }
+}
+
+fn project_binding_v1_to_cli(binding: &ProjectBindingV1) -> Result<ProjectBinding> {
+    Ok(ProjectBinding {
+        identity_kind: binding.identity_kind().to_owned(),
+        identity: binding.identity().to_owned(),
+        root: binding.root().to_owned(),
+        store_path: binding.store_path().to_owned(),
+        store_id: StoreId::parse_canonical(binding.store_id())?,
+        workspace_id: WorkspaceId::parse_canonical(binding.workspace_id())?,
+        branch_id: BranchId::parse_canonical(binding.branch_id())?,
+    })
+}
+
 fn load_project_registry(path: &Path, allow_missing: bool) -> Result<Vec<ProjectBinding>> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
@@ -18496,6 +25333,12 @@ fn load_project_registry(path: &Path, allow_missing: bool) -> Result<Vec<Project
                 path.display()
             ))
         })?;
+    if version == 2 {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "project registry {} is v2; legacy direct registry/Store mutation is disabled until journal-backed durable routing is separately activated",
+            path.display()
+        )));
+    }
     if version != 1 {
         return Err(WorkVcsError::QueryInvalid(format!(
             "project registry {} has unsupported version {version}",
@@ -30104,7 +36947,13 @@ fn render_structural_reference_list(references: &[StructuralReferenceSnapshot]) 
 mod tests {
     use super::*;
     use clap::CommandFactory;
-    use std::sync::{Arc, Barrier, Mutex};
+    use std::sync::{Arc, Barrier, Mutex, mpsc};
+    use workvcs_core::canonical::{canonical_bytes, parse_canonical_json};
+    use workvcs_core::control_plane::{
+        CaptureAdmissionOutcome, CaptureIntent, CaptureJournal, ControlPlaneDigest,
+        ProjectRegistryJournalAlias, ResolutionContext,
+    };
+    use workvcs_core::{CaptureId, ErrorCode};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -30466,7 +37315,7 @@ mod tests {
             ("config", "Inspect effective WorkVCS configuration"),
             (
                 "project",
-                "Ensure, bind, discover, and audit project Store entrypoints",
+                "Manage project bindings and controlled registry migration",
             ),
             ("history", "List commit history from a branch or commit"),
             ("changeset", "Inspect changesets and change operations"),
@@ -30583,12 +37432,11 @@ mod tests {
         let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
             .expect_err("project help should render through clap DisplayHelp")
             .to_string();
-        assert!(
-            project_help.contains("Ensure, bind, discover, and audit project Store entrypoints")
-        );
+        assert!(project_help.contains("Manage project bindings and preview registry migration"));
         assert!(project_help.contains("ensure"));
         assert!(project_help.contains("bind"));
         assert!(project_help.contains("discover"));
+        assert!(project_help.contains("registry-migrate"));
 
         let resume_help = Cli::try_parse_from(["workvcs", "resume", "--help"])
             .expect_err("resume help should render through clap DisplayHelp")
@@ -54231,6 +61079,278 @@ mod tests {
         }
     }
 
+    fn migration_repair_manifest_value(
+        fixture: &ProjectBindingFixture,
+        expected_source_digest: Option<ControlPlaneDigest>,
+        expected_target_digest: Option<ControlPlaneDigest>,
+    ) -> serde_json::Value {
+        let registry_bytes = fs::read(&fixture.registry_path).expect("read fixture registry");
+        let registry = ProjectRegistryV1::from_json_bytes(&registry_bytes).expect("registry v1");
+        let binding = &registry.bindings()[0];
+        serde_json::json!({
+            "schema_version": 1,
+            "expected_source_digest": expected_source_digest
+                .unwrap_or_else(|| registry.source_digest().expect("source digest")),
+            "repairs": [{
+                "v1_binding_key": {
+                    "identity_kind": binding.identity_kind(),
+                    "identity": binding.identity()
+                },
+                "expected_target_digest": expected_target_digest
+                    .unwrap_or_else(|| binding.target_digest().expect("target digest")),
+                "semantic_locator": {
+                    "authority": "semantic_project",
+                    "provider": "chatgpt",
+                    "namespace": "local-installation:test",
+                    "kind": "project_id",
+                    "normalized_value": "g-p-test-project",
+                    "assurance": "authoritative",
+                    "source_adapter": "test-project-metadata/v1",
+                    "evidence_digest": ControlPlaneDigest::raw(b"test project metadata")
+                },
+                "historical_identity_disposition": "retire"
+            }]
+        })
+    }
+
+    fn write_migration_repair_manifest(
+        fixture: &ProjectBindingFixture,
+        value: &serde_json::Value,
+    ) -> PathBuf {
+        let path = fixture._tempdir.path().join("ownership-repair.json");
+        fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(value).unwrap()),
+        )
+        .expect("write ownership repair manifest");
+        path
+    }
+
+    fn migration_apply_inputs(
+        fixture: &ProjectBindingFixture,
+        repair_manifest: Option<&Path>,
+    ) -> (ControlPlaneDigest, ControlPlaneDigest) {
+        let source_bytes = fs::read(&fixture.registry_path).expect("read migration source");
+        let registry = ProjectRegistryV1::from_json_bytes(&source_bytes).expect("registry v1");
+        let manifest = repair_manifest.map(|path| {
+            MigrationOwnershipRepairManifest::from_json_bytes(
+                &fs::read(path).expect("read repair manifest"),
+            )
+            .expect("repair manifest")
+        });
+        let preview = build_verified_registry_migration_preview(&registry, manifest.as_ref())
+            .expect("verified migration preview");
+        assert!(preview.apply_eligible(), "fixture preview must be eligible");
+        (
+            registry.source_digest().expect("source digest"),
+            preview.preview_digest().clone(),
+        )
+    }
+
+    fn migrate_fixture_registry_to_v2(
+        fixture: &ProjectBindingFixture,
+        repair_manifest: Option<&Path>,
+    ) -> RegistryMigrationApplyResult {
+        let (source_digest, preview_digest) = migration_apply_inputs(fixture, repair_manifest);
+        apply_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            repair_manifest.map(Path::to_path_buf),
+            &source_digest,
+            &preview_digest,
+            None,
+        )
+        .expect("apply fixture migration")
+    }
+
+    fn fixture_capture_intent(
+        _fixture: &ProjectBindingFixture,
+        registry: &ProjectRegistryV2,
+        idempotency_key: &str,
+    ) -> CaptureIntent {
+        let project_ref_id = registry
+            .bindings()
+            .first()
+            .expect("fixture migrated binding")
+            .project_ref_id();
+        let context =
+            ResolutionContext::new(ResolutionMode::DurableWrite).with_project_ref(project_ref_id);
+        let resolution = resolve_project(registry, &context).expect("fixture resolution");
+        assert_eq!(resolution.status(), ResolutionStatus::Resolved);
+        let payload = serde_json::json!({
+            "records": [{
+                "local_id": "race-finding",
+                "kind": "finding",
+                "statement": "Only one side of admission versus rollback may win"
+            }]
+        });
+        let canonical_payload =
+            canonical_bytes(&parse_canonical_json(&serde_json::to_vec(&payload).unwrap()).unwrap())
+                .unwrap();
+        let value = serde_json::json!({
+            "journal_version": 1,
+            "capture_id": CaptureId::new_v7(),
+            "idempotency_key": idempotency_key,
+            "created_at": "2026-09-25T08:00:00Z",
+            "value_reason": "Exercise admission and rollback mutual exclusion",
+            "payload_kind": "cognition_v2",
+            "semantic_payload": payload,
+            "payload_digest": ControlPlaneDigest::raw(&canonical_payload),
+            "resolution_context": context,
+            "initial_resolution": resolution,
+            "capture_group": null
+        });
+        CaptureIntent::from_json_bytes(&serde_json::to_vec(&value).unwrap())
+            .expect("fixture capture intent")
+    }
+
+    struct CaptureRecoveryFixture {
+        binding: ProjectBindingFixture,
+        capture_id: CaptureId,
+        secondary_project_ref: Option<ProjectRefId>,
+        store_root: PathBuf,
+        original_store_snapshots: Vec<(PathBuf, CliFileSnapshot)>,
+        initial_projects: usize,
+        initial_locators: usize,
+        initial_bindings: usize,
+    }
+
+    fn create_capture_recovery_fixture() -> CaptureRecoveryFixture {
+        create_capture_recovery_fixture_with_secondary(false)
+    }
+
+    fn create_capture_recovery_fixture_with_secondary(
+        with_secondary_reference: bool,
+    ) -> CaptureRecoveryFixture {
+        let binding = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&binding, None);
+        let registry_path = fs::canonicalize(&binding.registry_path).unwrap();
+        let registry = ProjectRegistryV2::from_json_bytes(&fs::read(&registry_path).unwrap())
+            .expect("fixture registry v2");
+        let initial_projects = registry.projects().len();
+        let initial_locators = registry.locators().len();
+        let initial_bindings = registry.bindings().len();
+        let original_store_snapshots = cli_sqlite_file_snapshots(&binding.store_path);
+        let evidence = LocatorEvidence::new(
+            LocatorAuthority::SemanticProject,
+            "fixture-tool",
+            "isolated:round-2",
+            "project_id",
+            format!("unbound-{}", CaptureId::new_v7()),
+            LocatorAssurance::Authoritative,
+            "fixture-tool/v1",
+            ControlPlaneDigest::raw(b"round-2 recovery owner"),
+        )
+        .unwrap();
+        let context = ResolutionContext::new(ResolutionMode::DurableWrite)
+            .with_locator_evidence(evidence.clone());
+        let resolution = resolve_project(&registry, &context).unwrap();
+        assert_eq!(resolution.status(), ResolutionStatus::Unbound);
+        let capture_id = CaptureId::new_v7();
+        let secondary_project_ref = with_secondary_reference.then(|| {
+            registry
+                .projects()
+                .first()
+                .expect("migrated fixture has one ProjectRef")
+                .project_ref_id()
+        });
+        let capture_group = secondary_project_ref.map(|secondary| {
+            serde_json::from_value(serde_json::json!({
+                "capture_group_id": workvcs_core::CaptureGroupId::new_v7(),
+                "primary_project_ref": null,
+                "primary_locator_evidence_digest": evidence.evidence_digest(),
+                "canonical_record_local_id": "recovery-finding",
+                "members": [{
+                    "project_ref_id": secondary,
+                    "role": "related",
+                    "relation": "related_context",
+                    "delivery_mode": "immutable_reference"
+                }]
+            }))
+            .expect("round-4 CaptureGroup intent")
+        });
+        let intent = CaptureIntent::new(
+            capture_id,
+            format!("round-2-recovery-{capture_id}"),
+            UtcTimestamp::parse("2026-09-27T08:00:00Z").unwrap(),
+            "Prove post-intent ProjectRef bootstrap convergence",
+            CapturePayloadKind::CognitionV2,
+            serde_json::json!({
+                "records": [{
+                    "local_id": "recovery-finding",
+                    "kind": "finding",
+                    "statement": "The admitted owner converges without semantic Store delivery"
+                }]
+            }),
+            context,
+            resolution,
+            capture_group,
+        )
+        .unwrap();
+        let journal = CaptureJournal::for_project_registry(
+            &registry_path,
+            ProjectRegistryJournalAlias::RegistrySidecar,
+        )
+        .unwrap();
+        journal
+            .admit_for_project_registry(&intent, registry.revision(), &registry.digest().unwrap())
+            .expect("admit recovery fixture intent");
+        let store_root = binding._tempdir.path().join("recovery-stores");
+        CaptureRecoveryFixture {
+            binding,
+            capture_id,
+            secondary_project_ref,
+            store_root,
+            original_store_snapshots,
+            initial_projects,
+            initial_locators,
+            initial_bindings,
+        }
+    }
+
+    fn capture_recovery_status(fixture: &CaptureRecoveryFixture) -> String {
+        inspect_project_capture_recovery(
+            Some(fixture.binding.registry_path.clone()),
+            fixture.capture_id,
+        )
+        .expect("capture recovery status")
+    }
+
+    fn apply_capture_recovery_fixture(
+        fixture: &CaptureRecoveryFixture,
+        fault: Option<CaptureRecoveryFault>,
+    ) -> Result<CaptureRecoveryApplyReport> {
+        let status = capture_recovery_status(fixture);
+        apply_project_capture_recovery_with_fault(
+            Some(fixture.binding.registry_path.clone()),
+            Some(fixture.store_root.clone()),
+            fixture.capture_id,
+            &ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+            fault,
+        )
+    }
+
+    fn require_fixture_registry_v2(path: &Path) -> Result<()> {
+        let bytes = fs::read(path).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot reread fixture registry after journal lock acquisition: {error}"
+            ))
+        })?;
+        ProjectRegistryV2::from_json_bytes(&bytes).map(|_| ())
+    }
+
+    fn wait_for_fixture_path(path: &Path) {
+        let started = Instant::now();
+        while !path.exists() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "timed out waiting for fixture path {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct CliFileSnapshot {
         exists: bool,
@@ -54287,6 +61407,21 @@ mod tests {
                 (path, snapshot)
             })
             .collect()
+    }
+
+    fn directory_entry_names(path: &Path) -> Vec<String> {
+        let mut names = fs::read_dir(path)
+            .expect("read directory")
+            .map(|entry| {
+                entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        names
     }
 
     fn cli_system_time_epoch_nanos(time: SystemTime) -> String {
@@ -55348,6 +62483,4221 @@ mod tests {
             fixture.store_path.display().to_string()
         );
         assert_eq!(value(&discover, "binding_verified"), "true");
+    }
+
+    #[test]
+    fn cli_project_registry_migration_preview_is_repeatable_json_capable_and_readonly() {
+        let fixture = create_project_binding_fixture(false);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("registry bytes before");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+        let registry_parent = fixture.registry_path.parent().unwrap();
+        let directory_before = directory_entry_names(registry_parent);
+
+        let run_preview = || {
+            run(Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "registry-migrate",
+                "--preview",
+                "--registry",
+                &fixture.registry,
+            ])
+            .expect("parse migration preview"))
+            .expect("migration preview")
+        };
+        let first = run_preview();
+        let second = run_preview();
+        assert_eq!(first, second);
+        assert_eq!(value(&first, "read_only"), "true");
+        assert_eq!(value(&first, "registry_version"), "1");
+        assert_eq!(value(&first, "target_registry_version"), "2");
+        assert_eq!(value(&first, "migration_required"), "true");
+        assert_eq!(value(&first, "mappings"), "1");
+        assert_eq!(value(&first, "valid_bindings"), "1");
+        assert_eq!(value(&first, "invalid_bindings"), "0");
+        assert_eq!(value(&first, "apply_eligible"), "true");
+        assert_eq!(value(&first, "registry_written"), "false");
+        assert_eq!(value(&first, "journal_written"), "false");
+        assert_eq!(value(&first, "store_written"), "false");
+        assert_eq!(value(&first, "mapping.0.identity_kind"), "cwd");
+        assert_eq!(value(&first, "mapping.0.planned_maturity"), "provisional");
+
+        let json_output = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+            "--format",
+            "json",
+        ])
+        .expect("parse JSON migration preview"))
+        .expect("JSON migration preview");
+        let json: serde_json::Value =
+            serde_json::from_str(&json_output).expect("preview JSON output");
+        assert_eq!(json["read_only"], serde_json::json!(true));
+        assert_eq!(json["preview"]["source_registry_version"], 1);
+        assert_eq!(json["preview"]["apply_eligible"], true);
+        assert_eq!(
+            json["preview"]["preview_digest"],
+            serde_json::Value::String(value(&first, "preview_digest"))
+        );
+
+        assert_eq!(
+            fs::read(&fixture.registry_path).expect("registry bytes after"),
+            registry_bytes
+        );
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            fs::read(&fixture.store_path).expect("Store bytes after"),
+            store_bytes
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        assert_eq!(directory_entry_names(registry_parent), directory_before);
+        assert!(!fixture.registry_path.with_extension("json.lock").exists());
+        assert!(!PathBuf::from(format!("{}.d", fixture.registry_path.display())).exists());
+    }
+
+    #[test]
+    fn cli_project_registry_migration_repair_preview_is_explicit_repeatable_and_readonly() {
+        let fixture = create_project_binding_fixture(false);
+        fs::remove_dir(Path::new(&fixture.project_text)).expect("remove stale project directory");
+
+        let raw = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse raw migration preview"))
+        .expect("raw preview remains reportable");
+        assert_eq!(value(&raw, "preview_version"), "1");
+        assert_eq!(value(&raw, "valid_bindings"), "0");
+        assert_eq!(value(&raw, "invalid_bindings"), "1");
+        assert_eq!(value(&raw, "apply_eligible"), "false");
+
+        let manifest_value = migration_repair_manifest_value(&fixture, None, None);
+        let manifest_path = write_migration_repair_manifest(&fixture, &manifest_value);
+        let manifest_text = path_text(&manifest_path);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("registry bytes before");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let manifest_bytes = fs::read(&manifest_path).expect("manifest bytes before");
+        let manifest_snapshot = cli_file_snapshot(&manifest_path);
+        let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+        let registry_parent = fixture.registry_path.parent().unwrap();
+        let directory_before = directory_entry_names(registry_parent);
+
+        let run_preview = || {
+            run(Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "registry-migrate",
+                "--preview",
+                "--registry",
+                &fixture.registry,
+                "--repair-manifest",
+                &manifest_text,
+            ])
+            .expect("parse repaired migration preview"))
+            .expect("repaired migration preview")
+        };
+        let first = run_preview();
+        let second = run_preview();
+        assert_eq!(first, second);
+        assert_eq!(value(&first, "read_only"), "true");
+        assert_eq!(value(&first, "preview_version"), "2");
+        assert_eq!(value(&first, "ownership_repairs"), "1");
+        assert_ne!(value(&first, "repair_manifest_digest"), "");
+        assert_eq!(value(&first, "valid_bindings"), "1");
+        assert_eq!(value(&first, "invalid_bindings"), "0");
+        assert_eq!(value(&first, "apply_eligible"), "true");
+        assert_eq!(value(&first, "mapping.0.planned_maturity"), "established");
+        assert_eq!(
+            value(&first, "mapping.0.identity_locator.authority"),
+            "semantic_project"
+        );
+        assert_eq!(
+            value(&first, "mapping.0.identity_locator.provider"),
+            "chatgpt"
+        );
+        assert_eq!(
+            value(&first, "mapping.0.identity_locator.namespace_strategy"),
+            "explicit"
+        );
+        assert_eq!(
+            value(&first, "mapping.0.identity_locator.namespace"),
+            "local-installation:test"
+        );
+        assert_eq!(
+            value(&first, "mapping.0.identity_locator.normalized_value"),
+            "g-p-test-project"
+        );
+        assert_eq!(value(&first, "mapping.0.identity_locator.state"), "active");
+        assert_eq!(
+            value(&first, "mapping.0.historical_identity_locator.authority"),
+            "cwd"
+        );
+        assert_eq!(
+            value(&first, "mapping.0.historical_identity_locator.state"),
+            "retired"
+        );
+        assert_eq!(
+            value(
+                &first,
+                "mapping.0.ownership_repair.historical_identity_disposition"
+            ),
+            "retire"
+        );
+        assert_eq!(
+            value(&first, "mapping.0.ownership_repair.expected_target_digest"),
+            value(&first, "mapping.0.target_digest")
+        );
+        assert_eq!(
+            value(&first, "mapping.0.store_path"),
+            fixture.store_path.display().to_string()
+        );
+        assert_eq!(
+            value(&first, "mapping.0.workspace_id"),
+            fixture.workspace_id
+        );
+        assert_eq!(value(&first, "mapping.0.branch_id"), fixture.branch);
+        assert_eq!(
+            value(&first, "mapping.0.target_digest"),
+            value(&raw, "mapping.0.target_digest")
+        );
+
+        let json_output = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+            "--repair-manifest",
+            &manifest_text,
+            "--format",
+            "json",
+        ])
+        .expect("parse repaired JSON migration preview"))
+        .expect("repaired JSON migration preview");
+        let json: serde_json::Value =
+            serde_json::from_str(&json_output).expect("repaired preview JSON output");
+        assert_eq!(json["preview"]["preview_version"], 2);
+        assert_eq!(json["preview"]["ownership_repairs"], 1);
+        assert_eq!(
+            json["preview"]["mappings"][0]["identity_locator"]["state"],
+            "active"
+        );
+        assert_eq!(
+            json["preview"]["mappings"][0]["historical_identity_locator"]["state"],
+            "retired"
+        );
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(fs::read(&manifest_path).unwrap(), manifest_bytes);
+        assert_eq!(cli_file_snapshot(&manifest_path), manifest_snapshot);
+        assert_eq!(fs::read(&fixture.store_path).unwrap(), store_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        assert_eq!(directory_entry_names(registry_parent), directory_before);
+        assert!(!fixture.registry_path.with_extension("json.lock").exists());
+        assert!(!PathBuf::from(format!("{}.d", fixture.registry_path.display())).exists());
+    }
+
+    #[test]
+    fn cli_project_registry_migration_repair_rejects_store_under_historical_git_repository_root() {
+        let fixture = create_project_binding_fixture(false);
+        let mut registry: serde_json::Value = serde_json::from_slice(
+            &fs::read(&fixture.registry_path).expect("read registry before edit"),
+        )
+        .expect("registry JSON");
+        let historical_repository_root = fixture.store_path.parent().expect("store parent");
+        registry["bindings"][0]["identity_kind"] = serde_json::json!("git-common-dir");
+        registry["bindings"][0]["identity"] =
+            serde_json::json!(path_text(&historical_repository_root.join(".git")));
+        registry["bindings"][0]["root"] = serde_json::json!(path_text(
+            &historical_repository_root.join("historical-linked-worktree")
+        ));
+        fs::write(
+            &fixture.registry_path,
+            format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+        )
+        .expect("write historical git binding");
+        let manifest = migration_repair_manifest_value(&fixture, None, None);
+        let manifest_path = write_migration_repair_manifest(&fixture, &manifest);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("registry bytes before");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let preview = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+            "--repair-manifest",
+            &path_text(&manifest_path),
+        ])
+        .expect("parse repaired git migration preview"))
+        .expect("repaired git preview remains reportable");
+
+        assert_eq!(value(&preview, "apply_eligible"), "false");
+        assert_eq!(value(&preview, "valid_bindings"), "0");
+        assert_eq!(value(&preview, "invalid_bindings"), "1");
+        assert_eq!(
+            value(&preview, "mapping.0.validation.issue.0.code"),
+            "query_invalid"
+        );
+        assert!(preview.contains("v1 git repository root"));
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        assert!(!fixture.registry_path.with_extension("json.lock").exists());
+        assert!(!PathBuf::from(format!("{}.d", fixture.registry_path.display())).exists());
+    }
+
+    #[test]
+    fn cli_project_registry_migration_repair_preview_rejects_drift_without_writes() {
+        let fixture = create_project_binding_fixture(false);
+        fs::remove_dir(Path::new(&fixture.project_text)).expect("remove stale project directory");
+        let registry_bytes = fs::read(&fixture.registry_path).expect("registry bytes before");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        for (label, manifest) in [
+            (
+                "stale-source",
+                migration_repair_manifest_value(
+                    &fixture,
+                    Some(ControlPlaneDigest::raw(b"stale registry")),
+                    None,
+                ),
+            ),
+            (
+                "wrong-target",
+                migration_repair_manifest_value(
+                    &fixture,
+                    None,
+                    Some(ControlPlaneDigest::raw(b"wrong target")),
+                ),
+            ),
+        ] {
+            let manifest_path = fixture._tempdir.path().join(format!("{label}.json"));
+            fs::write(
+                &manifest_path,
+                format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+            )
+            .expect("write invalid repair manifest");
+            let error = run(Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "registry-migrate",
+                "--preview",
+                "--registry",
+                &fixture.registry,
+                "--repair-manifest",
+                &path_text(&manifest_path),
+            ])
+            .expect("parse drifted repair preview"))
+            .expect_err("drifted repair manifest must fail closed");
+            assert!(error.to_string().contains(if label == "stale-source" {
+                "expected source digest"
+            } else {
+                "expected target digest"
+            }));
+        }
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(fs::read(&fixture.store_path).unwrap(), store_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        assert!(!fixture.registry_path.with_extension("json.lock").exists());
+        assert!(!PathBuf::from(format!("{}.d", fixture.registry_path.display())).exists());
+    }
+
+    #[test]
+    fn cli_project_registry_migration_repair_does_not_bypass_invalid_target() {
+        let fixture = create_project_binding_fixture(false);
+        let mut registry: serde_json::Value = serde_json::from_slice(
+            &fs::read(&fixture.registry_path).expect("read registry before edit"),
+        )
+        .expect("registry JSON");
+        registry["bindings"][0]["store_id"] = serde_json::json!(StoreId::new_v7());
+        fs::write(
+            &fixture.registry_path,
+            format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+        )
+        .expect("write invalid fixture registry");
+        fs::remove_dir(Path::new(&fixture.project_text)).expect("remove stale project directory");
+        let manifest = migration_repair_manifest_value(&fixture, None, None);
+        let manifest_path = write_migration_repair_manifest(&fixture, &manifest);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("registry bytes before");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let preview = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+            "--repair-manifest",
+            &path_text(&manifest_path),
+        ])
+        .expect("parse repaired invalid-target preview"))
+        .expect("invalid target remains reportable");
+        assert_eq!(value(&preview, "preview_version"), "2");
+        assert_eq!(value(&preview, "ownership_repairs"), "1");
+        assert_eq!(value(&preview, "apply_eligible"), "false");
+        assert_eq!(value(&preview, "valid_bindings"), "0");
+        assert_eq!(value(&preview, "invalid_bindings"), "1");
+        assert_eq!(value(&preview, "mapping.0.validation.valid"), "false");
+        assert_eq!(
+            value(&preview, "mapping.0.validation.issue.0.code"),
+            "query_invalid"
+        );
+        assert_eq!(
+            value(&preview, "mapping.0.identity_locator.authority"),
+            "semantic_project"
+        );
+        assert_eq!(
+            value(&preview, "mapping.0.historical_identity_locator.state"),
+            "retired"
+        );
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(fs::read(&fixture.store_path).unwrap(), store_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        assert!(!fixture.registry_path.with_extension("json.lock").exists());
+        assert!(!PathBuf::from(format!("{}.d", fixture.registry_path.display())).exists());
+    }
+
+    #[test]
+    fn cli_project_registry_migration_preview_reports_invalid_store_without_writes() {
+        let fixture = create_project_binding_fixture(false);
+        let mut registry: serde_json::Value = serde_json::from_slice(
+            &fs::read(&fixture.registry_path).expect("read registry before edit"),
+        )
+        .expect("registry JSON");
+        registry["bindings"][0]["store_id"] = serde_json::json!(StoreId::new_v7());
+        fs::write(
+            &fixture.registry_path,
+            format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+        )
+        .expect("write invalid fixture registry");
+        let registry_bytes =
+            fs::read(&fixture.registry_path).expect("registry bytes before preview");
+        let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before preview");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let preview = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse invalid migration preview"))
+        .expect("invalid migration preview remains reportable");
+        assert_eq!(value(&preview, "apply_eligible"), "false");
+        assert_eq!(value(&preview, "valid_bindings"), "0");
+        assert_eq!(value(&preview, "invalid_bindings"), "1");
+        assert_eq!(value(&preview, "mapping.0.validation.valid"), "false");
+        assert_eq!(
+            value(&preview, "mapping.0.validation.issue.0.code"),
+            "query_invalid"
+        );
+        assert_eq!(
+            fs::read(&fixture.registry_path).expect("registry bytes after preview"),
+            registry_bytes
+        );
+        assert_eq!(
+            fs::read(&fixture.store_path).expect("Store bytes after preview"),
+            store_bytes
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn cli_project_registry_migration_preview_reports_shared_target_without_aliasing() {
+        let fixture = create_project_binding_fixture(false);
+        let second_project = fixture._tempdir.path().join("second-project");
+        fs::create_dir_all(&second_project).expect("second project");
+        let second_project = fs::canonicalize(second_project).expect("canonical second project");
+        let mut registry: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.registry_path).expect("read registry"))
+                .expect("registry JSON");
+        let mut second = registry["bindings"][0].clone();
+        second["identity"] = serde_json::json!(path_text(&second_project));
+        second["root"] = serde_json::json!(path_text(&second_project));
+        registry["bindings"].as_array_mut().unwrap().push(second);
+        fs::write(
+            &fixture.registry_path,
+            format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+        )
+        .expect("write shared-target fixture");
+
+        let preview = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse shared-target preview"))
+        .expect("shared-target preview");
+        assert_eq!(value(&preview, "mappings"), "2");
+        assert_eq!(value(&preview, "valid_bindings"), "2");
+        assert_eq!(value(&preview, "target_coincidences"), "1");
+        assert_eq!(value(&preview, "target_coincidence.0.mappings"), "2");
+        assert_eq!(value(&preview, "apply_eligible"), "true");
+        assert!(!preview.contains("project_ref_id"));
+        assert!(!preview.contains("project_link"));
+    }
+
+    #[test]
+    fn cli_project_registry_migration_requires_one_explicit_digest_locked_action() {
+        assert!(
+            Cli::try_parse_from(["workvcs", "project", "registry-migrate"]).is_err(),
+            "migration command must require an explicit action"
+        );
+        let apply = Cli::try_parse_from(["workvcs", "project", "registry-migrate", "--apply"])
+            .expect_err("apply must require both digest locks")
+            .to_string();
+        assert!(apply.contains("--expected-source-digest"));
+        let rollback =
+            Cli::try_parse_from(["workvcs", "project", "registry-migrate", "--rollback-check"])
+                .expect_err("rollback probe must require both digest locks")
+                .to_string();
+        assert!(rollback.contains("--expected-installed-digest"));
+        let rollback_apply =
+            Cli::try_parse_from(["workvcs", "project", "registry-migrate", "--rollback"])
+                .expect_err("rollback must require both digest locks")
+                .to_string();
+        assert!(rollback_apply.contains("--expected-installed-digest"));
+        assert!(
+            Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "registry-migrate",
+                "--preview",
+                "--apply",
+                "--expected-source-digest",
+                &ControlPlaneDigest::raw(b"source").to_string(),
+                "--expected-preview-digest",
+                &ControlPlaneDigest::raw(b"preview").to_string(),
+            ])
+            .is_err(),
+            "actions must remain mutually exclusive"
+        );
+    }
+
+    #[test]
+    fn cli_project_registry_migration_apply_installs_verified_v2_and_readonly_rollback_probe() {
+        let fixture = create_project_binding_fixture(false);
+        fs::remove_dir(Path::new(&fixture.project_text)).expect("remove historical project path");
+        let manifest = migration_repair_manifest_value(&fixture, None, None);
+        let manifest_path = write_migration_repair_manifest(&fixture, &manifest);
+        let (source_digest, preview_digest) =
+            migration_apply_inputs(&fixture, Some(&manifest_path));
+        let source_bytes = fs::read(&fixture.registry_path).expect("source bytes");
+        let expected_backup_digest = ControlPlaneDigest::raw(&source_bytes);
+        let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let output = run(Cli::try_parse_from(vec![
+            "workvcs".to_owned(),
+            "project".to_owned(),
+            "registry-migrate".to_owned(),
+            "--apply".to_owned(),
+            "--registry".to_owned(),
+            fixture.registry.clone(),
+            "--repair-manifest".to_owned(),
+            path_text(&manifest_path),
+            "--expected-source-digest".to_owned(),
+            source_digest.to_string(),
+            "--expected-preview-digest".to_owned(),
+            preview_digest.to_string(),
+        ])
+        .expect("parse migration apply"))
+        .expect("apply isolated migration");
+        assert_eq!(value(&output, "action"), "apply");
+        assert_eq!(value(&output, "source_digest"), source_digest.to_string());
+        assert_eq!(value(&output, "preview_digest"), preview_digest.to_string());
+        assert_eq!(
+            value(&output, "backup_digest"),
+            expected_backup_digest.to_string()
+        );
+        assert_eq!(value(&output, "backup_reused"), "false");
+        assert_eq!(value(&output, "post_install_verified"), "true");
+        assert_eq!(value(&output, "journal_written"), "false");
+        assert_eq!(value(&output, "store_written"), "false");
+        assert_eq!(value(&output, "routing_activated"), "false");
+        assert_eq!(value(&output, "rollback_performed"), "false");
+
+        let installed_bytes = fs::read(&fixture.registry_path).expect("installed bytes");
+        let installed = ProjectRegistryV2::from_json_bytes(&installed_bytes).expect("registry v2");
+        let installed_digest = installed.digest().expect("installed digest");
+        assert_eq!(
+            value(&output, "installed_digest"),
+            installed_digest.to_string()
+        );
+        let receipt = installed.migration().expect("migration receipt");
+        assert_eq!(receipt.source_digest(), &source_digest);
+        assert_eq!(receipt.preview_digest(), &preview_digest);
+        assert_eq!(receipt.backup_digest(), &expected_backup_digest);
+        assert_eq!(receipt.mappings().len(), 1);
+        let backup_path = receipt.backup_path().as_path();
+        assert_eq!(fs::read(backup_path).expect("backup bytes"), source_bytes);
+
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let backup_snapshot = cli_file_snapshot(backup_path);
+        let directory_before = directory_entry_names(fixture.registry_path.parent().unwrap());
+        let rollback_output = run(Cli::try_parse_from(vec![
+            "workvcs".to_owned(),
+            "project".to_owned(),
+            "registry-migrate".to_owned(),
+            "--rollback-check".to_owned(),
+            "--registry".to_owned(),
+            fixture.registry.clone(),
+            "--expected-installed-digest".to_owned(),
+            installed_digest.to_string(),
+            "--expected-backup-digest".to_owned(),
+            expected_backup_digest.to_string(),
+        ])
+        .expect("parse rollback probe"))
+        .expect("rollback probe");
+        assert_eq!(value(&rollback_output, "read_only"), "true");
+        assert_eq!(value(&rollback_output, "rollback_ready"), "true");
+        assert_eq!(value(&rollback_output, "issues"), "0");
+        assert_eq!(value(&rollback_output, "bindings_verified"), "1");
+        assert_eq!(value(&rollback_output, "capture_journal_entries"), "0");
+        assert_eq!(value(&rollback_output, "rollback_performed"), "false");
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(cli_file_snapshot(backup_path), backup_snapshot);
+        assert_eq!(
+            directory_entry_names(fixture.registry_path.parent().unwrap()),
+            directory_before
+        );
+        assert_eq!(fs::read(&fixture.store_path).unwrap(), store_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        assert!(!PathBuf::from(format!("{}.d", fixture.registry_path.display())).exists());
+    }
+
+    #[test]
+    fn cli_v1_project_read_routes_report_migration_required_and_remain_readonly() {
+        run_cli_test_with_large_stack(
+            "cli-v1-project-read-routes-test",
+            assert_cli_v1_project_read_routes_report_migration_required_and_remain_readonly,
+        );
+    }
+
+    fn assert_cli_v1_project_read_routes_report_migration_required_and_remain_readonly() {
+        let fixture = create_project_binding_fixture(true);
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("registry bytes");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+        let registry_directory = directory_entry_names(fixture.registry_path.parent().unwrap());
+
+        let discover = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse v1 discover"))
+        .expect("v1 discover");
+        assert_eq!(value(&discover, "registry_version"), "1");
+        assert_eq!(value(&discover, "migration_required"), "true");
+        assert_eq!(value(&discover, "resolution_status"), "legacy_v1");
+        assert_eq!(value(&discover, "read_only"), "true");
+
+        let list = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "list",
+            "--registry",
+            &fixture.registry,
+            "--require-valid",
+        ])
+        .expect("parse v1 list"))
+        .expect("v1 list");
+        assert_eq!(value(&list, "registry_version"), "1");
+        assert_eq!(value(&list, "migration_required"), "true");
+        assert_eq!(value(&list, "routing_active"), "false");
+
+        let recall = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--budget-items",
+            "10",
+        ])
+        .expect("parse v1 recall"))
+        .expect("v1 recall");
+        assert_eq!(value(&recall, "registry_version"), "1");
+        assert_eq!(value(&recall, "migration_required"), "true");
+
+        let resume = run(Cli::try_parse_from([
+            "workvcs",
+            "resume",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse v1 resume"))
+        .expect("v1 resume");
+        assert_eq!(value(&resume, "registry_version"), "1");
+        assert_eq!(value(&resume, "migration_required"), "true");
+
+        let audit = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "currentness-audit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse v1 audit"))
+        .expect("v1 audit");
+        assert_eq!(value(&audit, "registry_version"), "1");
+        assert_eq!(value(&audit, "migration_required"), "true");
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        assert_eq!(
+            directory_entry_names(fixture.registry_path.parent().unwrap()),
+            registry_directory
+        );
+    }
+
+    #[test]
+    fn cli_v2_read_routes_are_default_off_and_digest_activated_only_in_fixture() {
+        run_cli_test_with_large_stack(
+            "cli-v2-read-routing-activation-test",
+            assert_cli_v2_read_routes_are_default_off_and_digest_activated_only_in_fixture,
+        );
+    }
+
+    fn assert_cli_v2_read_routes_are_default_off_and_digest_activated_only_in_fixture() {
+        let fixture = create_project_binding_fixture(true);
+        let migration = migrate_fixture_registry_to_v2(&fixture, None);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let list = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "list",
+            "--registry",
+            &fixture.registry,
+            "--require-valid",
+        ])
+        .expect("parse inactive v2 list"))
+        .expect("inactive v2 list remains inspectable");
+        assert_eq!(value(&list, "registry_version"), "2");
+        assert_eq!(value(&list, "routing_activation_state"), "absent");
+        assert_eq!(value(&list, "routing_active"), "false");
+
+        let inactive = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse inactive v2 discover"))
+        .expect_err("ordinary v2 routing must be default-off");
+        assert!(inactive.to_string().contains("activation state absent"));
+
+        let preview = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "routing-activation",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse activation preview"))
+        .expect("activation preview");
+        assert_eq!(value(&preview, "read_only"), "true");
+        assert_eq!(value(&preview, "activation_state"), "absent");
+        assert_eq!(value(&preview, "durable_write_routing_activated"), "false");
+        let activation_path = PathBuf::from(value(&preview, "activation_path"));
+        assert!(!activation_path.exists());
+
+        let wrong = ControlPlaneDigest::raw(b"wrong activation candidate").to_string();
+        let rejected = run(Cli::try_parse_from(vec![
+            "workvcs".to_owned(),
+            "project".to_owned(),
+            "routing-activation".to_owned(),
+            "--apply".to_owned(),
+            "--registry".to_owned(),
+            fixture.registry.clone(),
+            "--expected-registry-digest".to_owned(),
+            value(&preview, "registry_digest"),
+            "--expected-candidate-digest".to_owned(),
+            wrong,
+        ])
+        .expect("parse rejected activation"))
+        .expect_err("stale candidate digest must fail");
+        assert!(rejected.to_string().contains("candidate digest"));
+        assert!(!activation_path.exists());
+
+        let applied = run(Cli::try_parse_from(vec![
+            "workvcs".to_owned(),
+            "project".to_owned(),
+            "routing-activation".to_owned(),
+            "--apply".to_owned(),
+            "--registry".to_owned(),
+            fixture.registry.clone(),
+            "--expected-registry-digest".to_owned(),
+            value(&preview, "registry_digest"),
+            "--expected-candidate-digest".to_owned(),
+            value(&preview, "candidate_digest"),
+        ])
+        .expect("parse fixture activation"))
+        .expect("activate fixture read routing");
+        assert_eq!(value(&applied, "activation_state"), "active");
+        assert_eq!(value(&applied, "activation_written"), "true");
+        assert_eq!(value(&applied, "registry_written"), "false");
+        assert_eq!(value(&applied, "journal_written"), "false");
+        assert_eq!(value(&applied, "store_written"), "false");
+        assert_eq!(value(&applied, "durable_write_routing_activated"), "false");
+
+        let reapplied = run(Cli::try_parse_from(vec![
+            "workvcs".to_owned(),
+            "project".to_owned(),
+            "routing-activation".to_owned(),
+            "--apply".to_owned(),
+            "--registry".to_owned(),
+            fixture.registry.clone(),
+            "--expected-registry-digest".to_owned(),
+            value(&preview, "registry_digest"),
+            "--expected-candidate-digest".to_owned(),
+            value(&preview, "candidate_digest"),
+        ])
+        .expect("parse exact activation reapply"))
+        .expect("exact activation reapply is idempotent");
+        assert_eq!(value(&reapplied, "activation_reused"), "true");
+        assert_eq!(value(&reapplied, "activation_written"), "false");
+
+        let discover = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse active v2 discover"))
+        .expect("active v2 discover");
+        assert_eq!(value(&discover, "registry_version"), "2");
+        assert_eq!(value(&discover, "migration_required"), "false");
+        assert_eq!(value(&discover, "routing_active"), "true");
+        assert_eq!(value(&discover, "resolution_status"), "resolved");
+        assert_eq!(value(&discover, "resolution_rank"), "cwd");
+        assert_ne!(value(&discover, "project_ref_id"), "none");
+
+        for output in [
+            run(Cli::try_parse_from([
+                "workvcs",
+                "recall",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--budget-items",
+                "10",
+            ])
+            .expect("parse active v2 recall"))
+            .expect("active v2 recall"),
+            run(Cli::try_parse_from([
+                "workvcs",
+                "resume",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+            ])
+            .expect("parse active v2 resume"))
+            .expect("active v2 resume"),
+            run(Cli::try_parse_from([
+                "workvcs",
+                "record",
+                "currentness-audit",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+            ])
+            .expect("parse active v2 audit"))
+            .expect("active v2 audit"),
+        ] {
+            assert_eq!(value(&output, "registry_version"), "2");
+            assert_eq!(value(&output, "routing_active"), "true");
+            assert_eq!(value(&output, "resolution_status"), "resolved");
+        }
+
+        let ensure_error = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "ensure",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse v2 ensure"))
+        .expect_err("legacy direct mutation must remain disabled");
+        assert!(ensure_error.to_string().contains("journal-backed"));
+
+        let rollback = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            migration.installed_digest,
+            migration.backup_digest,
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("rollback readiness with activation");
+        assert_eq!(value(&rollback, "rollback_ready"), "false");
+        assert_eq!(value(&rollback, "routing_activation_state"), "active");
+        assert!(rollback.contains("routing_activation_not_absent"));
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn routing_activation_post_install_faults_are_indeterminate_and_recover_by_status() {
+        for fault in [
+            RoutingActivationApplyFault::AfterMarkerInstalled,
+            RoutingActivationApplyFault::AfterTempRemoved,
+            RoutingActivationApplyFault::AfterActivationDirectorySync,
+            RoutingActivationApplyFault::BeforeInstalledVerification,
+        ] {
+            let fixture = create_project_binding_fixture(false);
+            migrate_fixture_registry_to_v2(&fixture, None);
+            let registry_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+            let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+            let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+            let registry =
+                ProjectRegistryV2::from_json_bytes(&registry_bytes).expect("registry v2");
+            let registry_digest = registry.digest().expect("registry digest");
+            let candidate = RoutingActivationCandidate::for_registry(&registry).expect("candidate");
+            let candidate_digest = candidate.digest().expect("candidate digest");
+
+            let error = apply_project_routing_activation_with_fault(
+                Some(fixture.registry_path.clone()),
+                registry_digest.clone(),
+                candidate_digest.clone(),
+                Some(fault),
+            )
+            .expect_err("post-install fault must report an indeterminate result");
+            assert_eq!(
+                error.code().as_str(),
+                "routing_activation_install_indeterminate"
+            );
+            assert!(error.to_string().contains("--status"));
+
+            let status = inspect_project_routing_activation(Some(fixture.registry_path.clone()))
+                .expect("status resolves installed marker after injected fault");
+            assert_eq!(value(&status, "activation_state"), "active");
+            assert_eq!(
+                value(&status, "activation_digest"),
+                candidate_digest.to_string()
+            );
+            let activation_path = PathBuf::from(value(&status, "activation_path"));
+            assert!(activation_path.is_file());
+            assert!(
+                directory_entry_names(activation_path.parent().expect("activation parent"))
+                    .iter()
+                    .all(|name| !name.ends_with(".tmp")),
+                "fault {fault:?} left a routing activation temp artifact"
+            );
+
+            let reapplied = apply_project_routing_activation(
+                Some(fixture.registry_path.clone()),
+                registry_digest,
+                candidate_digest,
+            )
+            .expect("status-confirmed exact candidate reapply is idempotent");
+            assert_eq!(value(&reapplied, "activation_reused"), "true");
+            assert_eq!(value(&reapplied, "activation_written"), "false");
+
+            assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+            assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.store_path),
+                store_snapshots
+            );
+        }
+    }
+
+    #[test]
+    fn cli_v2_routing_activation_uses_configured_home_marker_path() {
+        let fixture = create_project_binding_fixture(false);
+        let configured_home = fixture._tempdir.path().join("configured-workvcs-home");
+        fs::create_dir_all(&configured_home).expect("create configured home");
+        let home_registry = configured_home.join(PROJECT_REGISTRY_FILE);
+        fs::copy(&fixture.registry_path, &home_registry).expect("copy v1 registry into home");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let _home = EnvVarRestore::set(PROJECT_REGISTRY_ENV, Some(configured_home.as_os_str()));
+        let source = ProjectRegistryV1::from_json_bytes(
+            &fs::read(&home_registry).expect("home v1 registry bytes"),
+        )
+        .expect("home registry v1");
+        let migration_preview = build_verified_registry_migration_preview(&source, None)
+            .expect("configured-home migration preview");
+        let migration = apply_project_registry_migration_with_fault(
+            None,
+            None,
+            &source.source_digest().expect("home source digest"),
+            migration_preview.preview_digest(),
+            None,
+        )
+        .expect("migrate configured-home registry");
+        let registry_before = fs::read(&home_registry).expect("home registry v2 bytes");
+        let preview =
+            run(
+                Cli::try_parse_from(["workvcs", "project", "routing-activation", "--preview"])
+                    .expect("parse configured-home activation preview"),
+            )
+            .expect("configured-home activation preview");
+        let expected_marker = configured_home.join(ROUTING_ACTIVATION_FILE);
+        assert_eq!(
+            PathBuf::from(value(&preview, "activation_path")),
+            expected_marker
+        );
+        assert!(!expected_marker.exists());
+
+        let applied = run(Cli::try_parse_from(vec![
+            "workvcs".to_owned(),
+            "project".to_owned(),
+            "routing-activation".to_owned(),
+            "--apply".to_owned(),
+            "--expected-registry-digest".to_owned(),
+            value(&preview, "registry_digest"),
+            "--expected-candidate-digest".to_owned(),
+            value(&preview, "candidate_digest"),
+        ])
+        .expect("parse configured-home activation"))
+        .expect("activate configured-home fixture");
+        assert_eq!(value(&applied, "activation_state"), "active");
+        assert_eq!(
+            PathBuf::from(value(&applied, "activation_path")),
+            expected_marker
+        );
+        assert!(expected_marker.is_file());
+        assert_eq!(fs::read(&home_registry).unwrap(), registry_before);
+
+        let rollback_probe = inspect_project_registry_rollback_readiness(
+            Some(home_registry.clone()),
+            None,
+            migration.installed_digest.clone(),
+            migration.backup_digest.clone(),
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("explicit-registry rollback probe sees configured-home activation");
+        assert_eq!(value(&rollback_probe, "rollback_ready"), "false");
+        assert_eq!(value(&rollback_probe, "routing_activation_state"), "active");
+        assert_eq!(value(&rollback_probe, "routing_activation_paths"), "2");
+        assert!(rollback_probe.contains(&path_text(&expected_marker)));
+        assert!(rollback_probe.contains("routing_activation_not_absent"));
+        let rollback_error = rollback_project_registry_migration_with_fault(
+            Some(home_registry.clone()),
+            &migration.installed_digest,
+            &migration.backup_digest,
+            None,
+        )
+        .expect_err("configured-home activation must block explicit-registry rollback");
+        assert_eq!(rollback_error.code().as_str(), "registry_rollback_failed");
+        assert_eq!(fs::read(&home_registry).unwrap(), registry_before);
+        assert!(
+            !registry_rollback_snapshot_path(&home_registry, &migration.installed_digest)
+                .unwrap()
+                .exists()
+        );
+
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn registry_rollback_with_configured_home_blocks_sidecar_activation_alias() {
+        let fixture = create_project_binding_fixture(false);
+        let configured_home = fixture._tempdir.path().join("configured-workvcs-home");
+        fs::create_dir_all(&configured_home).expect("create configured home");
+        let home_registry = configured_home.join(PROJECT_REGISTRY_FILE);
+        fs::copy(&fixture.registry_path, &home_registry).expect("copy v1 registry into home");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let _home = EnvVarRestore::set(PROJECT_REGISTRY_ENV, Some(configured_home.as_os_str()));
+        let source = ProjectRegistryV1::from_json_bytes(
+            &fs::read(&home_registry).expect("home v1 registry bytes"),
+        )
+        .expect("home registry v1");
+        let migration_preview = build_verified_registry_migration_preview(&source, None)
+            .expect("configured-home migration preview");
+        let migration = apply_project_registry_migration_with_fault(
+            None,
+            None,
+            &source.source_digest().expect("home source digest"),
+            migration_preview.preview_digest(),
+            None,
+        )
+        .expect("migrate configured-home registry");
+        let registry_bytes = fs::read(&home_registry).expect("home registry v2 bytes");
+        let registry = ProjectRegistryV2::from_json_bytes(&registry_bytes).expect("registry v2");
+        let activation = RoutingActivationCandidate::for_registry(&registry)
+            .expect("sidecar activation candidate");
+        let sidecar_marker =
+            PathBuf::from(format!("{}.d", home_registry.display())).join(ROUTING_ACTIVATION_FILE);
+        fs::create_dir_all(sidecar_marker.parent().expect("sidecar parent"))
+            .expect("create sidecar directory");
+        fs::write(
+            &sidecar_marker,
+            activation.stored_json_bytes().expect("activation bytes"),
+        )
+        .expect("write sidecar activation alias");
+
+        let rollback_probe = inspect_project_registry_rollback_readiness(
+            None,
+            None,
+            migration.installed_digest.clone(),
+            migration.backup_digest.clone(),
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("configured-home rollback probe sees sidecar activation");
+        assert_eq!(value(&rollback_probe, "rollback_ready"), "false");
+        assert_eq!(value(&rollback_probe, "routing_activation_state"), "active");
+        assert_eq!(value(&rollback_probe, "routing_activation_paths"), "2");
+        assert!(rollback_probe.contains(&path_text(&sidecar_marker)));
+        assert!(rollback_probe.contains("routing_activation_not_absent"));
+        let rollback_error = rollback_project_registry_migration_with_fault(
+            None,
+            &migration.installed_digest,
+            &migration.backup_digest,
+            None,
+        )
+        .expect_err("sidecar activation alias must block configured-home rollback");
+        assert_eq!(rollback_error.code().as_str(), "registry_rollback_failed");
+        assert_eq!(fs::read(&home_registry).unwrap(), registry_bytes);
+        assert!(
+            !registry_rollback_snapshot_path(&home_registry, &migration.installed_digest)
+                .unwrap()
+                .exists()
+        );
+
+        fs::remove_file(&sidecar_marker).expect("remove sidecar activation alias");
+        let sidecar_intents = PathBuf::from(format!("{}.d", home_registry.display()))
+            .join("capture-journal")
+            .join("v1")
+            .join("intents");
+        fs::create_dir_all(&sidecar_intents).expect("create sidecar journal intents");
+        fs::write(sidecar_intents.join("capture.json"), b"fixture")
+            .expect("write sidecar journal intent");
+        let journal_probe = inspect_project_registry_rollback_readiness(
+            None,
+            None,
+            migration.installed_digest,
+            migration.backup_digest,
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("configured-home rollback probe sees sidecar journal");
+        assert_eq!(value(&journal_probe, "rollback_ready"), "false");
+        assert_eq!(value(&journal_probe, "capture_journal_roots"), "2");
+        assert_eq!(value(&journal_probe, "capture_journal_entries"), "1");
+        assert!(journal_probe.contains("capture_journal_intents_nonempty"));
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn cli_v2_routing_activation_rejects_malformed_stale_and_symlink_markers() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("registry bytes");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+        let preview = preview_project_routing_activation(Some(fixture.registry_path.clone()))
+            .expect("activation preview");
+        let marker_path = PathBuf::from(value(&preview, "activation_path"));
+        fs::create_dir_all(marker_path.parent().expect("marker parent"))
+            .expect("create marker parent");
+
+        fs::write(&marker_path, b"{not-json\n").expect("write malformed marker");
+        let malformed = inspect_project_routing_activation(Some(fixture.registry_path.clone()))
+            .expect("inspect malformed marker");
+        assert_eq!(value(&malformed, "activation_state"), "invalid");
+        let refused = apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap(),
+        )
+        .expect_err("malformed marker must not be replaced");
+        assert!(refused.to_string().contains("state invalid"));
+
+        fs::remove_file(&marker_path).expect("remove malformed marker");
+        let other = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&other, None);
+        let other_registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&other.registry_path).unwrap())
+                .expect("other registry v2");
+        let stale_candidate = RoutingActivationCandidate::for_registry(&other_registry)
+            .expect("stale activation candidate");
+        fs::write(
+            &marker_path,
+            stale_candidate
+                .stored_json_bytes()
+                .expect("stale marker bytes"),
+        )
+        .expect("write stale marker");
+        let stale = inspect_project_routing_activation(Some(fixture.registry_path.clone()))
+            .expect("inspect stale marker");
+        assert_eq!(value(&stale, "activation_state"), "stale");
+        assert_eq!(value(&stale, "routing_active"), "false");
+        let stale_read = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse read with stale marker"))
+        .expect_err("ordinary read must reject stale marker");
+        assert!(stale_read.to_string().contains("activation state stale"));
+        let stale_apply = apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap(),
+        )
+        .expect_err("apply must not replace stale marker");
+        assert!(stale_apply.to_string().contains("state stale"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            fs::remove_file(&marker_path).expect("remove stale marker");
+            let target = fixture._tempdir.path().join("marker-target.json");
+            fs::write(&target, b"{}\n").expect("write symlink target");
+            symlink(&target, &marker_path).expect("create marker symlink");
+            let symlinked = inspect_project_routing_activation(Some(fixture.registry_path.clone()))
+                .expect("inspect symlink marker");
+            assert_eq!(value(&symlinked, "activation_state"), "invalid");
+            assert!(symlinked.contains("non-symlink"));
+            let symlink_read = run(Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "discover",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+            ])
+            .expect("parse read with symlink marker"))
+            .expect_err("ordinary read must reject symlink marker");
+            assert!(
+                symlink_read
+                    .to_string()
+                    .contains("activation state invalid")
+            );
+            let symlink_apply = apply_project_routing_activation(
+                Some(fixture.registry_path.clone()),
+                ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap(),
+                ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap(),
+            )
+            .expect_err("apply must not replace symlink marker");
+            assert!(symlink_apply.to_string().contains("state invalid"));
+        }
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn cli_v1_routed_capture_is_target_neutral_and_survives_migration() {
+        run_cli_test_with_large_stack(
+            "cli-v1-target-neutral-journal-admission-test",
+            assert_cli_v1_routed_capture_is_target_neutral_and_survives_migration,
+        );
+    }
+
+    fn assert_cli_v1_routed_capture_is_target_neutral_and_survives_migration() {
+        let fixture = create_project_binding_fixture(false);
+        let registry_v1_bytes = fs::read(&fixture.registry_path).unwrap();
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+        let manifest_path = fixture._tempdir.path().join("v1-journal-capture.json");
+        fs::write(
+            &manifest_path,
+            r#"{
+  "schema_version": 1,
+  "idempotency_key": "v1-journal-route-e2e",
+  "records": [{"local_id":"finding","kind":"finding","statement":"Persist before ProjectRef migration","scope":{}}],
+  "knowledge": [],
+  "evidence": [],
+  "relations": [],
+  "rationale": {"source":"v1-compatibility-fixture"}
+}"#,
+        )
+        .unwrap();
+        let locator_path = fixture._tempdir.path().join("v1-semantic-locator.json");
+        fs::write(
+            &locator_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "semantic_locator_evidence": [{
+                    "authority": "semantic_project",
+                    "provider": "fixture-tool",
+                    "namespace": "isolated:test",
+                    "kind": "project_id",
+                    "normalized_value": "v1-unbound-semantic-owner",
+                    "assurance": "authoritative",
+                    "source_adapter": "fixture-tool/v1",
+                    "evidence_digest": ControlPlaneDigest::raw(b"v1 isolated semantic owner")
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "capture",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--locator-context",
+                &path_text(&locator_path),
+                "--value-reason",
+                "Preserve a valuable finding before registry migration",
+                "--manifest",
+                &path_text(&manifest_path),
+            ])
+            .unwrap()
+        };
+        let admitted = run(command()).expect("v1 target-neutral admission");
+        assert_eq!(value(&admitted, "capture_status"), "admitted");
+        assert_eq!(value(&admitted, "registry_version"), "1");
+        assert_eq!(value(&admitted, "migration_required"), "true");
+        assert_eq!(value(&admitted, "resolution_status"), "unbound");
+        assert_eq!(value(&admitted, "resolution_rank"), "semantic_project");
+        assert_eq!(
+            value(&admitted, "delivery_status"),
+            "registry_migration_required"
+        );
+        assert_eq!(value(&admitted, "store_written"), "false");
+        let intent_path = PathBuf::from(value(&admitted, "journal_path"));
+        assert!(intent_path.is_file());
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_v1_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+
+        let replay = run(command()).expect("v1 routed replay");
+        assert_eq!(value(&replay, "admission_outcome"), "reused");
+        assert_eq!(value(&replay, "capture_id"), value(&admitted, "capture_id"));
+
+        let migration = migrate_fixture_registry_to_v2(&fixture, None);
+        assert!(intent_path.is_file());
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        let probe = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            migration.installed_digest,
+            migration.backup_digest,
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("probe migrated registry with retained v1 intent");
+        assert_eq!(value(&probe, "rollback_ready"), "false");
+        assert!(probe.contains("capture_journal_intents_nonempty"));
+    }
+
+    #[test]
+    fn cli_v2_journal_admission_is_default_off_exactly_activated_and_store_free() {
+        run_cli_test_with_large_stack(
+            "cli-v2-journal-admission-routing-test",
+            assert_cli_v2_journal_admission_is_default_off_exactly_activated_and_store_free,
+        );
+    }
+
+    fn assert_cli_v2_journal_admission_is_default_off_exactly_activated_and_store_free() {
+        let fixture = create_project_binding_fixture(false);
+        let migration = migrate_fixture_registry_to_v2(&fixture, None);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("installed registry bytes");
+        let registry_v2 =
+            ProjectRegistryV2::from_json_bytes(&registry_bytes).expect("installed registry v2");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let manifest_path = fixture._tempdir.path().join("journal-capture.json");
+        fs::write(
+            &manifest_path,
+            r#"{
+  "schema_version": 1,
+  "idempotency_key": "journal-route-e2e",
+  "records": [{"local_id":"finding","kind":"finding","statement":"Journal first without Store delivery","scope":{"source":"isolated-fixture"}}],
+  "knowledge": [],
+  "evidence": [],
+  "relations": [],
+  "rationale": {"source":"projectref-round-1"}
+}"#,
+        )
+        .expect("write routed capture manifest");
+
+        let locator_path = fixture._tempdir.path().join("semantic-locator.json");
+        fs::write(
+            &locator_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "semantic_locator_evidence": [{
+                    "authority": "semantic_project",
+                    "provider": "fixture-tool",
+                    "namespace": "isolated:test",
+                    "kind": "project_id",
+                    "normalized_value": "unbound-semantic-owner",
+                    "assurance": "authoritative",
+                    "source_adapter": "fixture-tool/v1",
+                    "evidence_digest": ControlPlaneDigest::raw(b"isolated semantic owner")
+                }]
+            }))
+            .unwrap(),
+        )
+        .expect("write semantic locator context");
+
+        let journal_preview =
+            preview_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .expect("preview journal activation");
+        assert_eq!(value(&journal_preview, "activation_state"), "absent");
+        assert_eq!(value(&journal_preview, "read_routing_active"), "false");
+        assert_eq!(value(&journal_preview, "journal_admission_active"), "false");
+        let journal_marker = PathBuf::from(value(&journal_preview, "activation_path"));
+
+        let premature = apply_project_journal_admission_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "candidate_digest")).unwrap(),
+        )
+        .expect_err("journal activation must require read routing first");
+        assert!(
+            premature
+                .to_string()
+                .contains("read-routing activation first")
+        );
+        assert!(!journal_marker.exists());
+
+        let read_preview =
+            preview_project_routing_activation(Some(fixture.registry_path.clone())).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&read_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&read_preview, "candidate_digest")).unwrap(),
+        )
+        .expect("activate fixture read routing");
+
+        let capture_command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "capture",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--locator-context",
+                &path_text(&locator_path),
+                "--value-reason",
+                "Preserve a confirmed isolated finding",
+                "--manifest",
+                &path_text(&manifest_path),
+            ])
+            .expect("parse routed capture")
+        };
+        let absent = run(capture_command()).expect_err("absent journal marker must fail closed");
+        assert!(absent.to_string().contains("activation state absent"));
+        assert!(!journal_marker.exists());
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+
+        fs::create_dir_all(journal_marker.parent().unwrap()).unwrap();
+        fs::write(
+            &journal_marker,
+            RoutingActivationCandidate::for_registry(&registry_v2)
+                .unwrap()
+                .stored_json_bytes()
+                .unwrap(),
+        )
+        .expect("write wrong-scope marker");
+        let wrong_scope = run(capture_command()).expect_err("wrong marker scope must fail closed");
+        assert!(wrong_scope.to_string().contains("activation state invalid"));
+        fs::remove_file(&journal_marker).unwrap();
+
+        fs::write(&journal_marker, b"{not-json\n").expect("write malformed marker");
+        let malformed = run(capture_command()).expect_err("malformed marker must fail closed");
+        assert!(malformed.to_string().contains("activation state invalid"));
+        fs::remove_file(&journal_marker).unwrap();
+
+        let other = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&other, None);
+        let other_registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&other.registry_path).unwrap()).unwrap();
+        fs::write(
+            &journal_marker,
+            JournalAdmissionActivationCandidate::for_registry(&other_registry)
+                .unwrap()
+                .stored_json_bytes()
+                .unwrap(),
+        )
+        .expect("write stale marker");
+        let stale = run(capture_command()).expect_err("stale marker must fail closed");
+        assert!(stale.to_string().contains("activation state stale"));
+        fs::remove_file(&journal_marker).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let target = fixture._tempdir.path().join("journal-marker-target.json");
+            fs::write(&target, b"{}\n").unwrap();
+            symlink(&target, &journal_marker).unwrap();
+            let symlinked = run(capture_command()).expect_err("symlink marker must fail closed");
+            assert!(symlinked.to_string().contains("activation state invalid"));
+            fs::remove_file(&journal_marker).unwrap();
+        }
+
+        let active_preview =
+            preview_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .expect("preview active-eligible journal candidate");
+        assert_eq!(value(&active_preview, "read_routing_active"), "true");
+        let activated = apply_project_journal_admission_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&active_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&active_preview, "candidate_digest")).unwrap(),
+        )
+        .expect("activate fixture journal admission");
+        assert_eq!(value(&activated, "journal_admission_active"), "true");
+        assert_eq!(value(&activated, "activation_written"), "true");
+        assert_eq!(value(&activated, "store_written"), "false");
+
+        let rollback_probe = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            migration.installed_digest.clone(),
+            migration.backup_digest.clone(),
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("rollback probe with journal activation");
+        assert_eq!(
+            value(&rollback_probe, "journal_admission_activation_state"),
+            "active"
+        );
+        assert!(rollback_probe.contains("journal_admission_activation_not_absent"));
+
+        let admitted = run(capture_command()).expect("journal-backed capture admission");
+        assert_eq!(value(&admitted, "capture_status"), "admitted");
+        assert_eq!(value(&admitted, "admission_outcome"), "created");
+        assert_eq!(value(&admitted, "resolution_status"), "unbound");
+        assert_eq!(value(&admitted, "resolution_rank"), "semantic_project");
+        assert_eq!(value(&admitted, "journal_persisted"), "true");
+        assert_eq!(value(&admitted, "journal_written"), "true");
+        assert_eq!(value(&admitted, "store_written"), "false");
+        assert_eq!(value(&admitted, "delivery_status"), "not_started");
+        let intent_path = PathBuf::from(value(&admitted, "journal_path"));
+        assert!(intent_path.is_file());
+        let capture_id = value(&admitted, "capture_id");
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+
+        let replay = run(capture_command()).expect("idempotent routed capture replay");
+        assert_eq!(value(&replay, "admission_outcome"), "reused");
+        assert_eq!(value(&replay, "capture_id"), capture_id);
+        assert_eq!(value(&replay, "journal_written"), "false");
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+
+        let disabled = disable_project_journal_admission_activation(
+            Some(fixture.registry_path.clone()),
+            migration.installed_digest.clone(),
+            ControlPlaneDigest::from_text(&value(&activated, "activation_digest")).unwrap(),
+        )
+        .expect("disable fixture journal admission");
+        assert_eq!(value(&disabled, "activation_state"), "absent");
+        assert_eq!(value(&disabled, "activation_removed"), "true");
+        assert_eq!(value(&disabled, "journal_admission_active"), "false");
+
+        let disable_replay = disable_project_journal_admission_activation(
+            Some(fixture.registry_path.clone()),
+            migration.installed_digest.clone(),
+            ControlPlaneDigest::from_text(&value(&activated, "activation_digest")).unwrap(),
+        )
+        .expect("idempotent journal disable replay");
+        assert_eq!(value(&disable_replay, "activation_reused"), "true");
+        assert_eq!(value(&disable_replay, "activation_removed"), "false");
+
+        let disabled_capture =
+            run(capture_command()).expect_err("disabled admission must fail before replay lookup");
+        assert!(
+            disabled_capture
+                .to_string()
+                .contains("activation state absent")
+        );
+        assert!(intent_path.is_file());
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn cli_capture_recovery_delivers_primary_once_and_reuses_receipt() {
+        run_cli_test_with_large_stack(
+            "capture-recovery-primary-delivery-once-test",
+            assert_cli_capture_recovery_delivers_primary_once_and_reuses_receipt,
+        );
+    }
+
+    fn assert_cli_capture_recovery_delivers_primary_once_and_reuses_receipt() {
+        let fixture = create_capture_recovery_fixture();
+        let capture_id = fixture.capture_id.to_string();
+        let registry_path = path_text(&fixture.binding.registry_path);
+        let status_command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "capture-recovery",
+                "--status",
+                "--capture-id",
+                &capture_id,
+                "--registry",
+                &registry_path,
+            ])
+            .expect("parse capture recovery status")
+        };
+        let status = run(status_command()).expect("initial capture recovery status");
+        assert_eq!(value(&status, "read_only"), "true");
+        assert_eq!(value(&status, "projection_stored_state"), "absent");
+        assert_eq!(
+            value(&status, "projected_recovery_state"),
+            "pending_project"
+        );
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "pending_project"
+        );
+        assert_eq!(value(&status, "resolution_status"), "unbound");
+        assert_eq!(value(&status, "recovery_action"), "apply_project_bootstrap");
+        assert_eq!(value(&status, "registry_written"), "false");
+        assert_eq!(value(&status, "store_initialized"), "false");
+
+        let registry_digest = value(&status, "registry_digest");
+        let projection_digest = value(&status, "projection_digest");
+        let store_root = path_text(&fixture.store_root);
+        let registry_before_stale_apply = fs::read(&fixture.binding.registry_path).unwrap();
+        let stale_projection = ControlPlaneDigest::raw(b"stale projection").to_string();
+        let stale = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "capture-recovery",
+            "--apply",
+            "--capture-id",
+            &capture_id,
+            "--registry",
+            &registry_path,
+            "--store-root",
+            &store_root,
+            "--expected-registry-digest",
+            &registry_digest,
+            "--expected-projection-digest",
+            &stale_projection,
+        ])
+        .expect("parse stale capture recovery apply"))
+        .expect_err("stale projection digest must fail before writes");
+        assert!(
+            stale
+                .to_string()
+                .contains("projection digest changed before lock")
+        );
+        assert_eq!(
+            fs::read(&fixture.binding.registry_path).unwrap(),
+            registry_before_stale_apply
+        );
+        assert!(!fixture.store_root.exists());
+        let applied = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "capture-recovery",
+            "--apply",
+            "--capture-id",
+            &capture_id,
+            "--registry",
+            &registry_path,
+            "--store-root",
+            &store_root,
+            "--expected-registry-digest",
+            &registry_digest,
+            "--expected-projection-digest",
+            &projection_digest,
+        ])
+        .expect("parse capture recovery apply"))
+        .expect("apply capture recovery");
+        assert_eq!(value(&applied, "recovery_state"), "completed");
+        assert_eq!(value(&applied, "registry_written"), "true");
+        assert_eq!(value(&applied, "resolution_event_written"), "true");
+        assert_eq!(value(&applied, "binding_event_written"), "true");
+        assert_eq!(value(&applied, "projection_written"), "true");
+        assert_eq!(value(&applied, "store_initialized"), "true");
+        assert_eq!(value(&applied, "delivery_started_written"), "true");
+        assert_eq!(value(&applied, "delivery_receipt_written"), "true");
+        assert_eq!(value(&applied, "target_delivery_written"), "true");
+        assert_eq!(value(&applied, "target_delivery_reused"), "false");
+        assert_ne!(value(&applied, "delivery_id"), "none");
+        assert_ne!(value(&applied, "target_commit_id"), "none");
+        assert_ne!(value(&applied, "project_ref_id"), "none");
+        assert_ne!(value(&applied, "locator_id"), "none");
+
+        let registry = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.binding.registry_path).expect("recovered registry bytes"),
+        )
+        .expect("recovered registry validates");
+        assert_eq!(registry.projects().len(), fixture.initial_projects + 1);
+        assert_eq!(registry.locators().len(), fixture.initial_locators + 1);
+        assert_eq!(registry.bindings().len(), fixture.initial_bindings + 1);
+        assert_eq!(
+            registry.migration().unwrap().mappings().len(),
+            fixture.initial_projects
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            fixture.original_store_snapshots
+        );
+
+        let new_store_path = PathBuf::from(value(&applied, "store_path"));
+        let engine = open_verified_store(&new_store_path).expect("delivered Store");
+        let workspaces = engine
+            .workspaces(WorkspaceListOptions::all())
+            .expect("bootstrap workspaces")
+            .workspaces;
+        assert_eq!(workspaces.len(), 1);
+        let branch = engine
+            .branch_head(workspaces[0].initial_branch_id)
+            .expect("bootstrap branch");
+        assert_eq!(branch.head_commit_kind, "normal");
+        assert_eq!(branch.head_operation_type, "cognition.capture");
+        assert_eq!(
+            branch.head_commit_id.to_string(),
+            value(&applied, "target_commit_id")
+        );
+        let history = engine
+            .history(HistoryQueryOptions::from_branch(branch.branch_id))
+            .expect("delivery history");
+        assert_eq!(
+            history.entries.len(),
+            2,
+            "exactly one semantic delivery occurred"
+        );
+
+        let recovered_status = run(status_command()).expect("recovered status");
+        assert_eq!(
+            value(&recovered_status, "projection_stored_state"),
+            "current"
+        );
+        assert_eq!(
+            value(&recovered_status, "effective_recovery_state"),
+            "completed"
+        );
+        assert_eq!(value(&recovered_status, "events"), "5");
+        assert_eq!(value(&recovered_status, "delivery_receipt"), "true");
+        assert_eq!(value(&recovered_status, "recovery_action"), "none");
+
+        let replayed = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "capture-recovery",
+            "--apply",
+            "--capture-id",
+            &capture_id,
+            "--registry",
+            &registry_path,
+            "--store-root",
+            &store_root,
+            "--expected-registry-digest",
+            &value(&recovered_status, "registry_digest"),
+            "--expected-projection-digest",
+            &value(&recovered_status, "projection_digest"),
+        ])
+        .expect("parse capture recovery replay"))
+        .expect("replay capture recovery");
+        assert_eq!(value(&replayed, "registry_written"), "false");
+        assert_eq!(value(&replayed, "resolution_event_written"), "false");
+        assert_eq!(value(&replayed, "binding_event_written"), "false");
+        assert_eq!(value(&replayed, "projection_written"), "false");
+        assert_eq!(value(&replayed, "store_initialized"), "false");
+        assert_eq!(value(&replayed, "target_delivery_written"), "false");
+        assert_eq!(value(&replayed, "target_delivery_reused"), "true");
+        assert_eq!(value(&replayed, "delivery_receipt_written"), "false");
+        let replay_registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&fixture.binding.registry_path).unwrap())
+                .unwrap();
+        assert_eq!(
+            replay_registry.projects().len(),
+            fixture.initial_projects + 1
+        );
+        assert_eq!(
+            replay_registry.bindings().len(),
+            fixture.initial_bindings + 1
+        );
+        let replay_engine = open_verified_store(&new_store_path).expect("replayed Store");
+        let replay_history = replay_engine
+            .history(HistoryQueryOptions::from_branch(branch.branch_id))
+            .expect("replayed delivery history");
+        assert_eq!(replay_history.entries.len(), 2);
+    }
+
+    #[test]
+    fn cli_capture_group_recovery_installs_reference_and_recalls_from_secondary_project() {
+        run_cli_test_with_large_stack(
+            "capture-group-secondary-recall-test",
+            assert_cli_capture_group_recovery_installs_reference_and_recalls_from_secondary_project,
+        );
+    }
+
+    fn assert_cli_capture_group_recovery_installs_reference_and_recalls_from_secondary_project() {
+        let fixture = create_capture_recovery_fixture_with_secondary(true);
+        let secondary = fixture
+            .secondary_project_ref
+            .expect("group fixture secondary ProjectRef");
+        let initial_status = capture_recovery_status(&fixture);
+        assert_eq!(value(&initial_status, "secondary_references_required"), "1");
+        assert_eq!(value(&initial_status, "secondary_references_applied"), "0");
+        assert_eq!(
+            value(&initial_status, "capture_group_primary_resolved"),
+            "false"
+        );
+
+        let applied = apply_capture_recovery_fixture(&fixture, None)
+            .expect("CaptureGroup recovery must converge");
+        let unresolved = resolve_project(
+            &applied.registry,
+            &ResolutionContext::new(ResolutionMode::DurableWrite),
+        )
+        .expect("empty context is a valid unresolved probe");
+        let current_binding = RecoveryBindingInspection {
+            state: "valid",
+            binding: applied.binding.as_ref(),
+            verified_objects: 0,
+            issue: None,
+        };
+        assert_eq!(
+            capture_recovery_action(
+                &unresolved,
+                &current_binding,
+                &applied.projection,
+                CaptureRecoveryState::PendingResolution,
+            ),
+            "restore_exact_canonical_owner_or_start_new_capture"
+        );
+        let changed_target = applied
+            .registry
+            .binding(secondary)
+            .expect("secondary fixture ProjectRef has its original binding");
+        let changed_binding = RecoveryBindingInspection {
+            state: "valid",
+            binding: Some(changed_target),
+            verified_objects: 0,
+            issue: None,
+        };
+        assert_eq!(
+            capture_recovery_action(
+                applied.projection.latest_resolution(),
+                &changed_binding,
+                &applied.projection,
+                CaptureRecoveryState::PendingProject,
+            ),
+            "start_new_capture_canonical_target_changed"
+        );
+        let rendered = render_capture_recovery_apply_report(&applied).unwrap();
+        assert_eq!(value(&rendered, "recovery_state"), "completed");
+        assert_eq!(value(&rendered, "capture_group_resolution_written"), "true");
+        assert_eq!(value(&rendered, "secondary_references_required"), "1");
+        assert_eq!(value(&rendered, "secondary_references_applied"), "1");
+        assert_eq!(value(&rendered, "secondary_reference_events_written"), "1");
+        assert_eq!(value(&rendered, "capture_completed_receipt"), "true");
+        assert_eq!(value(&rendered, "capture_completed_written"), "true");
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            fixture.original_store_snapshots,
+            "secondary association must not open or mutate the secondary semantic Store"
+        );
+
+        let final_status = capture_recovery_status(&fixture);
+        assert_eq!(value(&final_status, "events"), "8");
+        assert_eq!(value(&final_status, "secondary_references_pending"), "0");
+        assert_eq!(value(&final_status, "capture_completed_receipt"), "true");
+        assert_eq!(value(&final_status, "recovery_action"), "none");
+
+        let registry_path = path_text(&fixture.binding.registry_path);
+        let secondary_text = secondary.to_string();
+        let recalled = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "capture-group-recall",
+            "--project-ref-id",
+            &secondary_text,
+            "--registry",
+            &registry_path,
+        ])
+        .expect("parse secondary CaptureGroup recall"))
+        .expect("secondary CaptureGroup recall");
+        assert_eq!(value(&recalled, "read_only"), "true");
+        assert_eq!(value(&recalled, "secondary_project_ref"), secondary_text);
+        assert_eq!(value(&recalled, "associations"), "1");
+        assert_eq!(
+            value(&recalled, "association.0.capture_id"),
+            fixture.capture_id.to_string()
+        );
+        assert_eq!(value(&recalled, "association.0.capture_completed"), "true");
+        assert_eq!(value(&recalled, "store_opened"), "false");
+        assert_eq!(value(&recalled, "store_written"), "false");
+
+        let replayed = apply_capture_recovery_fixture(&fixture, None)
+            .expect("completed CaptureGroup recovery replay");
+        let replayed = render_capture_recovery_apply_report(&replayed).unwrap();
+        assert_eq!(value(&replayed, "target_delivery_written"), "false");
+        assert_eq!(value(&replayed, "target_delivery_reused"), "true");
+        assert_eq!(
+            value(&replayed, "capture_group_resolution_written"),
+            "false"
+        );
+        assert_eq!(value(&replayed, "secondary_reference_events_written"), "0");
+        assert_eq!(value(&replayed, "capture_completed_written"), "false");
+        assert_eq!(value(&replayed, "projection_written"), "false");
+    }
+
+    #[test]
+    fn capture_group_faults_preserve_primary_and_retry_only_missing_control_plane_steps() {
+        run_cli_test_with_large_stack(
+            "capture-group-fault-recovery-test",
+            assert_capture_group_faults_preserve_primary_and_retry_only_missing_control_plane_steps,
+        );
+    }
+
+    fn assert_capture_group_faults_preserve_primary_and_retry_only_missing_control_plane_steps() {
+        for fault in [
+            CaptureRecoveryFault::CaptureGroupResolution,
+            CaptureRecoveryFault::SecondaryReferencePreInstall,
+            CaptureRecoveryFault::SecondaryReference,
+            CaptureRecoveryFault::CaptureCompleted,
+        ] {
+            let fixture = create_capture_recovery_fixture_with_secondary(true);
+            let error = apply_capture_recovery_fixture(&fixture, Some(fault))
+                .expect_err("injected CaptureGroup fault must stop the attempt");
+            if fault == CaptureRecoveryFault::SecondaryReferencePreInstall {
+                assert_eq!(error.code().as_str(), "control_plane_invalid");
+            } else {
+                assert_eq!(
+                    error.code().as_str(),
+                    "capture_recovery_install_indeterminate",
+                    "fault {fault:?}"
+                );
+                assert!(error.to_string().contains("--status"));
+            }
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.binding.store_path),
+                fixture.original_store_snapshots,
+                "fault {fault:?} touched the secondary semantic Store"
+            );
+
+            let status = capture_recovery_status(&fixture);
+            match fault {
+                CaptureRecoveryFault::CaptureGroupResolution => {
+                    assert_eq!(value(&status, "events"), "4");
+                    assert_eq!(value(&status, "capture_group_primary_resolved"), "true");
+                    assert_eq!(value(&status, "delivery_receipt"), "false");
+                    assert_eq!(
+                        value(&status, "effective_recovery_state"),
+                        "pending_primary"
+                    );
+                }
+                CaptureRecoveryFault::SecondaryReferencePreInstall => {
+                    assert_eq!(value(&status, "events"), "6");
+                    assert_eq!(value(&status, "delivery_receipt"), "true");
+                    assert_eq!(
+                        value(&status, "effective_recovery_state"),
+                        "pending_references"
+                    );
+                    assert_eq!(value(&status, "secondary_references_applied"), "0");
+                    assert_eq!(
+                        value(&status, "recovery_action"),
+                        "apply_secondary_references"
+                    );
+                }
+                CaptureRecoveryFault::SecondaryReference => {
+                    assert_eq!(value(&status, "events"), "7");
+                    assert_eq!(value(&status, "secondary_references_applied"), "1");
+                    assert_eq!(value(&status, "capture_completed_receipt"), "false");
+                    assert_eq!(
+                        value(&status, "recovery_action"),
+                        "apply_capture_completion"
+                    );
+                }
+                CaptureRecoveryFault::CaptureCompleted => {
+                    assert_eq!(value(&status, "events"), "8");
+                    assert_eq!(value(&status, "capture_completed_receipt"), "true");
+                    assert_eq!(value(&status, "recovery_action"), "none");
+                }
+                _ => unreachable!(),
+            }
+
+            let recovered = apply_capture_recovery_fixture(&fixture, None)
+                .expect("status-driven CaptureGroup recovery must converge");
+            assert_eq!(
+                recovered.projection.recovery_state(),
+                CaptureRecoveryState::Completed,
+                "fault {fault:?}"
+            );
+            assert_eq!(recovered.projection.event_count(), 8, "fault {fault:?}");
+            let final_group = recovered.projection.capture_group().unwrap();
+            assert_eq!(final_group.required_reference_count(), 1);
+            assert_eq!(final_group.applied_reference_count(), 1);
+            assert!(final_group.completion_receipt().is_some());
+
+            let delivered_binding = recovered
+                .registry
+                .bindings()
+                .iter()
+                .find(|binding| binding.store_path().as_path() != fixture.binding.store_path)
+                .expect("canonical delivery binding");
+            let delivered_engine = open_verified_store(delivered_binding.store_path().as_path())
+                .expect("canonical fixture Store");
+            let history = delivered_engine
+                .history(HistoryQueryOptions::from_branch(
+                    delivered_binding.branch_id(),
+                ))
+                .expect("canonical delivery history");
+            assert_eq!(
+                history.entries.len(),
+                2,
+                "fault {fault:?} duplicated the canonical semantic delivery"
+            );
+        }
+    }
+
+    #[test]
+    fn capture_recovery_faults_converge_forward_without_duplicate_identity() {
+        run_cli_test_with_large_stack(
+            "capture-recovery-fault-convergence-test",
+            assert_capture_recovery_faults_converge_forward_without_duplicate_identity,
+        );
+    }
+
+    fn assert_capture_recovery_faults_converge_forward_without_duplicate_identity() {
+        for fault in [
+            CaptureRecoveryFault::StoreBootstrap,
+            CaptureRecoveryFault::RegistryTempSync,
+            CaptureRecoveryFault::RegistryReplace,
+            CaptureRecoveryFault::RegistryDirectorySync,
+            CaptureRecoveryFault::BindingEvent,
+            CaptureRecoveryFault::DeliveryStarted,
+            CaptureRecoveryFault::TargetCommit,
+            CaptureRecoveryFault::DeliveryReceipt,
+            CaptureRecoveryFault::ProjectionReplace,
+        ] {
+            let fixture = create_capture_recovery_fixture();
+            let error = apply_capture_recovery_fixture(&fixture, Some(fault))
+                .expect_err("injected recovery fault must stop the attempt");
+            if matches!(
+                fault,
+                CaptureRecoveryFault::RegistryReplace
+                    | CaptureRecoveryFault::RegistryDirectorySync
+                    | CaptureRecoveryFault::BindingEvent
+                    | CaptureRecoveryFault::DeliveryStarted
+                    | CaptureRecoveryFault::TargetCommit
+                    | CaptureRecoveryFault::DeliveryReceipt
+                    | CaptureRecoveryFault::ProjectionReplace
+            ) {
+                assert_eq!(
+                    error.code().as_str(),
+                    "capture_recovery_install_indeterminate",
+                    "fault {fault:?}"
+                );
+                assert!(error.to_string().contains("--status"));
+            } else {
+                assert_eq!(error.code().as_str(), "control_plane_invalid");
+            }
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.binding.store_path),
+                fixture.original_store_snapshots,
+                "fault {fault:?} touched the pre-existing target Store"
+            );
+            assert!(
+                directory_entry_names(fixture.binding.registry_path.parent().unwrap())
+                    .iter()
+                    .all(|name| !name.ends_with(".tmp")),
+                "fault {fault:?} left a registry temp artifact"
+            );
+
+            let status = capture_recovery_status(&fixture);
+            let after_fault = ProjectRegistryV2::from_json_bytes(
+                &fs::read(&fixture.binding.registry_path).unwrap(),
+            )
+            .unwrap();
+            if matches!(
+                fault,
+                CaptureRecoveryFault::StoreBootstrap | CaptureRecoveryFault::RegistryTempSync
+            ) {
+                assert_eq!(after_fault.projects().len(), fixture.initial_projects);
+                assert_eq!(value(&status, "resolution_status"), "unbound");
+                assert_eq!(value(&status, "events"), "1");
+            } else {
+                assert_eq!(after_fault.projects().len(), fixture.initial_projects + 1);
+                assert_eq!(value(&status, "resolution_status"), "resolved");
+            }
+            if fault == CaptureRecoveryFault::BindingEvent {
+                assert_eq!(value(&status, "events"), "3");
+                assert_eq!(value(&status, "projection_stored_state"), "absent");
+                assert_eq!(
+                    value(&status, "effective_recovery_state"),
+                    "pending_primary"
+                );
+            }
+            if fault == CaptureRecoveryFault::DeliveryStarted {
+                assert_eq!(value(&status, "events"), "4");
+                assert_eq!(value(&status, "delivery_started"), "true");
+                assert_eq!(value(&status, "delivery_receipt"), "false");
+                assert_eq!(
+                    value(&status, "effective_recovery_state"),
+                    "pending_primary"
+                );
+            }
+            if fault == CaptureRecoveryFault::TargetCommit {
+                assert_eq!(value(&status, "events"), "4");
+                assert_eq!(value(&status, "delivery_receipt"), "false");
+                assert_eq!(
+                    value(&status, "effective_recovery_state"),
+                    "pending_primary"
+                );
+            }
+            if fault == CaptureRecoveryFault::DeliveryReceipt {
+                assert_eq!(value(&status, "events"), "5");
+                assert_eq!(value(&status, "delivery_receipt"), "true");
+                assert_eq!(value(&status, "effective_recovery_state"), "completed");
+            }
+            if fault == CaptureRecoveryFault::ProjectionReplace {
+                assert_eq!(value(&status, "projection_stored_state"), "current");
+                assert_eq!(value(&status, "effective_recovery_state"), "completed");
+            }
+
+            let recovered = apply_capture_recovery_fixture(&fixture, None)
+                .expect("status-driven forward recovery must converge");
+            assert_eq!(
+                recovered.projection.recovery_state(),
+                CaptureRecoveryState::Completed,
+                "fault {fault:?}"
+            );
+            let final_registry = ProjectRegistryV2::from_json_bytes(
+                &fs::read(&fixture.binding.registry_path).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                final_registry.projects().len(),
+                fixture.initial_projects + 1,
+                "fault {fault:?} duplicated or lost a ProjectRef"
+            );
+            assert_eq!(
+                final_registry.locators().len(),
+                fixture.initial_locators + 1,
+                "fault {fault:?} duplicated or lost a locator"
+            );
+            assert_eq!(
+                final_registry.bindings().len(),
+                fixture.initial_bindings + 1,
+                "fault {fault:?} duplicated or lost a binding"
+            );
+            let final_status = capture_recovery_status(&fixture);
+            assert_eq!(value(&final_status, "events"), "5");
+            assert_eq!(value(&final_status, "projection_stored_state"), "current");
+            assert_eq!(
+                value(&final_status, "effective_recovery_state"),
+                "completed"
+            );
+            if fault == CaptureRecoveryFault::TargetCommit {
+                assert_eq!(
+                    value(&final_status, "target_delivery_reused"),
+                    "true",
+                    "commit-before-receipt recovery must persist a reused target receipt"
+                );
+            }
+            let delivered_binding = final_registry
+                .bindings()
+                .iter()
+                .find(|binding| binding.store_path().as_path() != fixture.binding.store_path)
+                .expect("new delivery binding");
+            let delivered_engine = open_verified_store(delivered_binding.store_path().as_path())
+                .expect("delivered fixture Store");
+            let delivered_history = delivered_engine
+                .history(HistoryQueryOptions::from_branch(
+                    delivered_binding.branch_id(),
+                ))
+                .expect("delivered history");
+            assert_eq!(
+                delivered_history.entries.len(),
+                2,
+                "fault {fault:?} duplicated the semantic delivery"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_legacy_manifest_requires_upgrade_without_target_store_write() {
+        run_cli_test_with_large_stack(
+            "capture-recovery-stale-legacy-test",
+            assert_stale_legacy_manifest_requires_upgrade_without_target_store_write,
+        );
+    }
+
+    fn assert_stale_legacy_manifest_requires_upgrade_without_target_store_write() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry_path = fs::canonicalize(&fixture.registry_path).unwrap();
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&registry_path).unwrap()).unwrap();
+        let binding = registry.bindings().first().expect("fixture binding");
+        let project_ref_id = binding.project_ref_id();
+        let context =
+            ResolutionContext::new(ResolutionMode::DurableWrite).with_project_ref(project_ref_id);
+        let resolution = resolve_project(&registry, &context).unwrap();
+        let stale_manifest = serde_json::json!({
+            "schema_version": 1,
+            "idempotency_key": format!("legacy-stale-{}", CaptureId::new_v7()),
+            "expected_head_commit_id": CommitId::new_v7(),
+            "expected_state_digest": Digest::raw(b"stale legacy state"),
+            "records": [{
+                "local_id": "legacy-finding",
+                "kind": "finding",
+                "statement": "The original guarded manifest must remain intact"
+            }],
+            "knowledge": [],
+            "evidence": [],
+            "relations": [],
+            "rationale": {"source": "legacy-v1"}
+        });
+        let capture_id = CaptureId::new_v7();
+        let intent = CaptureIntent::new(
+            capture_id,
+            format!("legacy-intent-{capture_id}"),
+            UtcTimestamp::parse("2026-09-27T09:00:00Z").unwrap(),
+            "Preserve the stale legacy manifest for an explicit upgrade decision",
+            CapturePayloadKind::LegacyCognitionV1,
+            stale_manifest,
+            context,
+            resolution,
+            None,
+        )
+        .unwrap();
+        let journal = CaptureJournal::for_project_registry(
+            &registry_path,
+            ProjectRegistryJournalAlias::RegistrySidecar,
+        )
+        .unwrap();
+        let admission = journal
+            .admit_for_project_registry(&intent, registry.revision(), &registry.digest().unwrap())
+            .unwrap();
+        let intent_before = fs::read(admission.intent_path()).unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let status = inspect_project_capture_recovery(Some(registry_path.clone()), capture_id)
+            .expect("legacy status");
+        let applied = apply_project_capture_recovery(
+            Some(registry_path.clone()),
+            None,
+            capture_id,
+            ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+        )
+        .expect("record legacy upgrade requirement");
+        assert_eq!(
+            value(&applied, "recovery_state"),
+            "legacy_manifest_upgrade_required"
+        );
+        assert_eq!(value(&applied, "delivery_started_written"), "true");
+        assert_eq!(value(&applied, "delivery_failure_written"), "true");
+        assert_eq!(value(&applied, "delivery_receipt_written"), "false");
+        assert_eq!(value(&applied, "target_delivery_written"), "false");
+        assert_eq!(
+            value(&applied, "delivery_failure_code"),
+            "legacy_manifest_upgrade_required"
+        );
+        assert_eq!(fs::read(admission.intent_path()).unwrap(), intent_before);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let engine = open_verified_store_readonly(&fixture.store_path).unwrap();
+        let history = engine
+            .history(HistoryQueryOptions::from_branch(binding.branch_id()))
+            .unwrap();
+        assert_eq!(
+            history.entries.len(),
+            1,
+            "stale legacy target must stay pristine"
+        );
+
+        let final_status =
+            inspect_project_capture_recovery(Some(registry_path), capture_id).unwrap();
+        assert_eq!(value(&final_status, "events"), "4");
+        assert_eq!(
+            value(&final_status, "effective_recovery_state"),
+            "legacy_manifest_upgrade_required"
+        );
+        assert_eq!(
+            value(&final_status, "recovery_action"),
+            "upgrade_legacy_manifest"
+        );
+        assert_eq!(value(&final_status, "delivery_receipt"), "false");
+    }
+
+    #[test]
+    fn capture_recovery_conflict_records_status_without_bootstrap_or_fallback() {
+        run_cli_test_with_large_stack(
+            "capture-recovery-conflict-test",
+            assert_capture_recovery_conflict_records_status_without_bootstrap_or_fallback,
+        );
+    }
+
+    fn assert_capture_recovery_conflict_records_status_without_bootstrap_or_fallback() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry_path = fs::canonicalize(&fixture.registry_path).unwrap();
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&registry_path).unwrap()).unwrap();
+        let semantic = |value: &str| {
+            LocatorEvidence::new(
+                LocatorAuthority::SemanticProject,
+                "fixture-tool",
+                "isolated:conflict",
+                "project_id",
+                value,
+                LocatorAssurance::Authoritative,
+                "fixture-tool/v1",
+                ControlPlaneDigest::raw(value.as_bytes()),
+            )
+            .unwrap()
+        };
+        let context = ResolutionContext::new(ResolutionMode::DurableWrite)
+            .with_locator_evidence(semantic("owner-a"))
+            .with_locator_evidence(semantic("owner-b"));
+        let resolution = resolve_project(&registry, &context).unwrap();
+        assert_eq!(resolution.status(), ResolutionStatus::Conflict);
+        let capture_id = CaptureId::new_v7();
+        let intent = CaptureIntent::new(
+            capture_id,
+            format!("conflicting-recovery-{capture_id}"),
+            UtcTimestamp::parse("2026-09-27T08:00:00Z").unwrap(),
+            "Retain conflict evidence without guessing an owner",
+            CapturePayloadKind::CognitionV2,
+            serde_json::json!({"records": [{"local_id": "conflict", "statement": "two owners"}]}),
+            context,
+            resolution,
+            None,
+        )
+        .unwrap();
+        let journal = CaptureJournal::for_project_registry(
+            &registry_path,
+            ProjectRegistryJournalAlias::RegistrySidecar,
+        )
+        .unwrap();
+        journal
+            .admit_for_project_registry(&intent, registry.revision(), &registry.digest().unwrap())
+            .unwrap();
+        let before = fs::read(&registry_path).unwrap();
+        let store_root = fixture._tempdir.path().join("must-not-bootstrap");
+        let status = inspect_project_capture_recovery(Some(registry_path.clone()), capture_id)
+            .expect("conflict status");
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "pending_resolution"
+        );
+        assert_eq!(value(&status, "resolution_status"), "conflict");
+        assert_eq!(
+            value(&status, "recovery_action"),
+            "resolve_ownership_then_retry"
+        );
+        let applied = apply_project_capture_recovery(
+            Some(registry_path.clone()),
+            Some(store_root.clone()),
+            capture_id,
+            ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+        )
+        .expect("record conflict resolution event");
+        assert_eq!(value(&applied, "recovery_state"), "pending_resolution");
+        assert_eq!(value(&applied, "project_ref_id"), "none");
+        assert_eq!(value(&applied, "registry_written"), "false");
+        assert_eq!(value(&applied, "resolution_event_written"), "true");
+        assert_eq!(value(&applied, "binding_event_written"), "false");
+        assert_eq!(value(&applied, "store_initialized"), "false");
+        assert_eq!(value(&applied, "target_delivery_written"), "false");
+        assert_eq!(fs::read(&registry_path).unwrap(), before);
+        assert!(!store_root.exists());
+        let final_status =
+            inspect_project_capture_recovery(Some(registry_path), capture_id).unwrap();
+        assert_eq!(value(&final_status, "events"), "1");
+        assert_eq!(value(&final_status, "projection_stored_state"), "current");
+    }
+
+    #[test]
+    fn journal_admission_activation_faults_are_indeterminate_and_recover_by_status() {
+        run_cli_test_with_large_stack(
+            "journal-admission-activation-fault-recovery-test",
+            assert_journal_admission_activation_faults_are_indeterminate_and_recover_by_status,
+        );
+    }
+
+    fn assert_journal_admission_activation_faults_are_indeterminate_and_recover_by_status() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let read_preview =
+            preview_project_routing_activation(Some(fixture.registry_path.clone())).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&read_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&read_preview, "candidate_digest")).unwrap(),
+        )
+        .expect("activate fixture read routing");
+
+        let preview =
+            preview_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .expect("preview journal-admission activation");
+        let registry_digest =
+            ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap();
+        let candidate_digest =
+            ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap();
+        let activation_path = PathBuf::from(value(&preview, "activation_path"));
+
+        for fault in [
+            JournalAdmissionActivationApplyFault::AfterMarkerInstalled,
+            JournalAdmissionActivationApplyFault::AfterTempRemoved,
+            JournalAdmissionActivationApplyFault::AfterActivationDirectorySync,
+            JournalAdmissionActivationApplyFault::BeforeInstalledVerification,
+        ] {
+            let error = apply_project_journal_admission_activation_with_fault(
+                Some(fixture.registry_path.clone()),
+                registry_digest.clone(),
+                candidate_digest.clone(),
+                Some(fault),
+            )
+            .expect_err("post-install fault must report an indeterminate result");
+            assert_eq!(
+                error.code().as_str(),
+                "routing_activation_install_indeterminate"
+            );
+            assert!(error.to_string().contains("--status"));
+
+            let status =
+                inspect_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                    .expect("status resolves installed journal-admission marker");
+            assert_eq!(value(&status, "activation_state"), "active");
+            assert_eq!(
+                value(&status, "activation_digest"),
+                candidate_digest.to_string()
+            );
+            assert!(activation_path.is_file());
+            assert!(
+                directory_entry_names(activation_path.parent().expect("activation parent"))
+                    .iter()
+                    .all(|name| !name.ends_with(".tmp")),
+                "fault {fault:?} left a journal-admission activation temp artifact"
+            );
+
+            let recovered = apply_project_journal_admission_activation(
+                Some(fixture.registry_path.clone()),
+                registry_digest.clone(),
+                candidate_digest.clone(),
+            )
+            .expect("status-confirmed exact apply is idempotent");
+            assert_eq!(value(&recovered, "activation_reused"), "true");
+            assert_eq!(value(&recovered, "activation_written"), "false");
+
+            disable_project_journal_admission_activation(
+                Some(fixture.registry_path.clone()),
+                registry_digest.clone(),
+                candidate_digest.clone(),
+            )
+            .expect("reset fixture journal-admission activation");
+            assert!(!activation_path.exists());
+        }
+
+        for fault in [
+            JournalAdmissionActivationDisableFault::AfterMarkerRemoved,
+            JournalAdmissionActivationDisableFault::AfterActivationDirectorySync,
+            JournalAdmissionActivationDisableFault::BeforeDisabledVerification,
+        ] {
+            apply_project_journal_admission_activation(
+                Some(fixture.registry_path.clone()),
+                registry_digest.clone(),
+                candidate_digest.clone(),
+            )
+            .expect("activate fixture before injected disable fault");
+
+            let error = disable_project_journal_admission_activation_with_fault(
+                Some(fixture.registry_path.clone()),
+                registry_digest.clone(),
+                candidate_digest.clone(),
+                Some(fault),
+            )
+            .expect_err("post-removal fault must report an indeterminate result");
+            assert_eq!(
+                error.code().as_str(),
+                "routing_activation_disable_indeterminate"
+            );
+            assert!(error.to_string().contains("--status"));
+
+            let status =
+                inspect_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                    .expect("status resolves removed journal-admission marker");
+            assert_eq!(value(&status, "activation_state"), "absent");
+            assert!(!activation_path.exists());
+
+            let recovered = disable_project_journal_admission_activation(
+                Some(fixture.registry_path.clone()),
+                registry_digest.clone(),
+                candidate_digest.clone(),
+            )
+            .expect("status-confirmed exact disable is idempotent");
+            assert_eq!(value(&recovered, "activation_reused"), "true");
+            assert_eq!(value(&recovered, "activation_removed"), "false");
+        }
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn cli_v2_cwd_durable_write_matrix_fails_closed_without_registry_or_store_changes() {
+        run_cli_test_with_large_stack(
+            "cli-v2-cwd-durable-write-rejection-matrix-test",
+            assert_cli_v2_cwd_durable_write_matrix_fails_closed_without_registry_or_store_changes,
+        );
+    }
+
+    fn assert_cli_v2_cwd_durable_write_matrix_fails_closed_without_registry_or_store_changes() {
+        let fixture = create_project_binding_fixture(false);
+        let initial_head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse initial head"))
+        .expect("initial head");
+
+        let seed_admit_path = fixture._tempdir.path().join("v2-write-seed-admit.json");
+        fs::write(
+            &seed_admit_path,
+            minimal_admit_manifest(
+                &value(&initial_head, "head_commit_id"),
+                &value(&initial_head, "state_digest"),
+                "v2-write-seed-admit",
+            ),
+        )
+        .expect("write seed admission manifest");
+        let seed_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&seed_admit_path),
+        ])
+        .expect("parse seed admission"))
+        .expect("seed admission");
+        let goal = create_cli_receipt_goal(
+            &fixture.store,
+            &fixture.branch,
+            &value(&seed_plan, "commit_id"),
+        );
+        let seed_receipt_path = fixture._tempdir.path().join("v2-write-seed-receipt.json");
+        write_cli_receipt_manifest(
+            &seed_receipt_path,
+            &goal,
+            "v2-write-seed-receipt",
+            "seed-action",
+        );
+        let issued = run(Cli::try_parse_from([
+            "workvcs",
+            "receipt",
+            "issue",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&seed_receipt_path),
+        ])
+        .expect("parse seed receipt"))
+        .expect("issue seed receipt");
+
+        let current_head = value(&issued, "commit_id");
+        let current_state = value(&issued, "work_state_digest");
+        let capture_path = fixture._tempdir.path().join("v2-write-capture.json");
+        fs::write(
+            &capture_path,
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "idempotency_key": "v2-write-reject-capture",
+  "expected_head_commit_id": "{current_head}",
+  "expected_state_digest": "{current_state}",
+  "records": [{{"local_id":"finding","kind":"finding","statement":"must not persist","scope":{{"source":"v2-write-rejection"}}}}],
+  "knowledge": [],
+  "evidence": [],
+  "relations": [],
+  "rationale": {{"source":"cli-test"}}
+}}"#
+            ),
+        )
+        .expect("write capture rejection manifest");
+        let admit_path = fixture._tempdir.path().join("v2-write-admit.json");
+        fs::write(
+            &admit_path,
+            minimal_admit_manifest(&current_head, &current_state, "v2-write-reject-admit"),
+        )
+        .expect("write admission rejection manifest");
+        let evolve_path = fixture._tempdir.path().join("v2-write-evolve.json");
+        fs::write(
+            &evolve_path,
+            format!(
+                r#"{{
+  "mode": "in_place",
+  "schema_version": 1,
+  "idempotency_key": "v2-write-reject-evolve",
+  "expected_head_commit_id": "{current_head}",
+  "expected_state_digest": "{current_state}",
+  "target_plan_entity_id": "{plan_id}",
+  "expected_plan_entity_version_id": "{plan_version}",
+  "expected_plan_state_digest": "{plan_digest}",
+  "plan": {{"strategy": "must not persist"}},
+  "tasks": [],
+  "records": [],
+  "evidence": [],
+  "rationale": {{"source":"cli-test"}}
+}}"#,
+                plan_id = value(&seed_plan, "plan_entity_id"),
+                plan_version = value(&seed_plan, "plan_entity_version_id"),
+                plan_digest = value(&seed_plan, "plan_state_digest"),
+            ),
+        )
+        .expect("write evolution rejection manifest");
+        let issue_path = fixture._tempdir.path().join("v2-write-issue.json");
+        write_cli_receipt_manifest(
+            &issue_path,
+            &goal,
+            "v2-write-reject-issue",
+            "blocked-action",
+        );
+        let consume_path = fixture._tempdir.path().join("v2-write-consume.json");
+        write_cli_receipt_consume_manifest(
+            &consume_path,
+            &goal,
+            &issued,
+            "v2-write-reject-consume",
+            "seed-action",
+        );
+
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let registry_directory =
+            directory_entry_names(fixture.registry_path.parent().expect("registry parent"));
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let assert_rejected = |label: &str, command: Cli| {
+            let error = run(command).expect_err(label);
+            assert!(
+                error.to_string().contains("journal-backed"),
+                "{label} returned unexpected error: {error}"
+            );
+        };
+        let capture_error = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--value-reason",
+            "Preserve valuable fixture cognition",
+            "--manifest",
+            &path_text(&capture_path),
+        ])
+        .expect("parse rejected capture"))
+        .expect_err("capture must remain fail-closed while activation is absent");
+        assert!(capture_error.to_string().contains("read routing"));
+        assert_rejected(
+            "plan admit must reject registry v2",
+            Cli::try_parse_from([
+                "workvcs",
+                "plan",
+                "admit",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--manifest",
+                &path_text(&admit_path),
+            ])
+            .expect("parse rejected admit"),
+        );
+        assert_rejected(
+            "plan evolve must reject registry v2",
+            Cli::try_parse_from([
+                "workvcs",
+                "plan",
+                "evolve",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--manifest",
+                &path_text(&evolve_path),
+            ])
+            .expect("parse rejected evolve"),
+        );
+        assert_rejected(
+            "receipt issue must reject registry v2",
+            Cli::try_parse_from([
+                "workvcs",
+                "receipt",
+                "issue",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--manifest",
+                &path_text(&issue_path),
+            ])
+            .expect("parse rejected receipt issue"),
+        );
+        assert_rejected(
+            "receipt consume must reject registry v2",
+            Cli::try_parse_from([
+                "workvcs",
+                "receipt",
+                "consume",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--manifest",
+                &path_text(&consume_path),
+            ])
+            .expect("parse rejected receipt consume"),
+        );
+        assert_rejected(
+            "project ensure must reject registry v2",
+            Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "ensure",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+            ])
+            .expect("parse rejected ensure"),
+        );
+        assert_rejected(
+            "project bind must reject registry v2",
+            Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "bind",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--store",
+                &fixture.store,
+                "--workspace",
+                &fixture.workspace_id,
+                "--branch",
+                &fixture.branch,
+            ])
+            .expect("parse rejected bind"),
+        );
+
+        let after_head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse final head"))
+        .expect("final head");
+        assert_eq!(value(&after_head, "head_commit_id"), current_head);
+        assert_eq!(value(&after_head, "state_digest"), current_state);
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            directory_entry_names(fixture.registry_path.parent().unwrap()),
+            registry_directory
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn cli_v2_unbound_semantic_locator_blocks_bound_cwd_fallback() {
+        run_cli_test_with_large_stack(
+            "cli-v2-semantic-locator-priority-test",
+            assert_cli_v2_unbound_semantic_locator_blocks_bound_cwd_fallback,
+        );
+    }
+
+    fn assert_cli_v2_unbound_semantic_locator_blocks_bound_cwd_fallback() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&fixture.registry_path).unwrap())
+                .expect("registry v2");
+        let candidate = RoutingActivationCandidate::for_registry(&registry).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            registry.digest().unwrap(),
+            candidate.digest().unwrap(),
+        )
+        .expect("activate fixture");
+
+        let context_path = fixture._tempdir.path().join("locator-context.json");
+        let evidence_digest = ControlPlaneDigest::raw(b"generic semantic project evidence");
+        fs::write(
+            &context_path,
+            format!(
+                "{{\"schema_version\":1,\"semantic_locator_evidence\":[{{\"authority\":\"semantic_project\",\"provider\":\"generic\",\"namespace\":\"tenant-a\",\"kind\":\"project_id\",\"normalized_value\":\"unbound-project\",\"assurance\":\"authoritative\",\"source_adapter\":\"generic-project-context/v1\",\"evidence_digest\":\"{evidence_digest}\"}}]}}\n"
+            ),
+        )
+        .expect("write generic locator context");
+
+        let unbound = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--locator-context",
+            &path_text(&context_path),
+        ])
+        .expect("parse semantic discover"))
+        .expect_err("unbound semantic owner must block CWD fallback");
+        assert!(unbound.to_string().contains("status Unbound"));
+        assert!(unbound.to_string().contains("never falls back"));
+
+        let project_ref = registry.projects()[0].project_ref_id().to_string();
+        let explicit = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--project-ref",
+            &project_ref,
+            "--locator-context",
+            &path_text(&context_path),
+        ])
+        .expect("parse explicit ProjectRef discover"))
+        .expect("explicit ProjectRef wins");
+        assert_eq!(value(&explicit, "project_ref_id"), project_ref);
+        assert_eq!(value(&explicit, "resolution_rank"), "explicit_project_ref");
+        assert_eq!(value(&explicit, "locator_providers"), "1");
+        assert_eq!(
+            value(&explicit, "locator_provider.0"),
+            "generic-project-context/v1"
+        );
+    }
+
+    #[test]
+    fn cli_codex_project_adapter_routes_mirror_capture_to_semantic_owner_end_to_end() {
+        run_cli_test_with_large_stack(
+            "codex-project-adapter-end-to-end-test",
+            assert_cli_codex_project_adapter_routes_mirror_capture_to_semantic_owner_end_to_end,
+        );
+    }
+
+    fn assert_cli_codex_project_adapter_routes_mirror_capture_to_semantic_owner_end_to_end() {
+        let fixture = create_project_binding_fixture(false);
+        let project_id = "g-p-0123456789abcdef0123456789abcdef";
+        let thread_id = "01900000-0000-7000-8000-000000000001";
+        let codex_home = fixture._tempdir.path().join("codex-home");
+        let mirror = codex_home.join(".chatgpt-projects").join(project_id);
+        fs::create_dir_all(&mirror).expect("create canonical Project mirror fixture");
+        let adapter_path = fixture._tempdir.path().join("locator-adapter-context.json");
+        fs::write(
+            &adapter_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "adapter_id": locator_adapter::CODEX_APP_PROJECT_ADAPTER_ID,
+                "context": {
+                    "codex_home": codex_home,
+                    "project_metadata": {
+                        "host_id": "local",
+                        "project_id": project_id,
+                        "project_kind": "chatgpt",
+                        "thread_id": thread_id,
+                        "verification_sources": [
+                            "codex_app.list_projects",
+                            "codex_app.read_thread"
+                        ]
+                    },
+                    "mirror_path": mirror
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("write adapter context fixture");
+
+        let adapter_input = locator_adapter::collect_locator_input(
+            Some(&adapter_path),
+            ResolutionMode::ReadOnly,
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .expect("collect concrete adapter evidence");
+        let authoritative = adapter_input
+            .resolution_context()
+            .locator_evidence()
+            .iter()
+            .find(|evidence| evidence.assurance() == LocatorAssurance::Authoritative)
+            .expect("authoritative task Project evidence")
+            .clone();
+        let mut repair = migration_repair_manifest_value(&fixture, None, None);
+        repair["repairs"][0]["semantic_locator"] =
+            serde_json::to_value(&authoritative).expect("serialize adapter locator");
+        let repair_path = write_migration_repair_manifest(&fixture, &repair);
+        migrate_fixture_registry_to_v2(&fixture, Some(&repair_path));
+
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&fixture.registry_path).unwrap())
+                .expect("semantic fixture registry v2");
+        assert_eq!(registry.projects().len(), 1);
+        assert_eq!(registry.bindings().len(), 1);
+        let project_ref_id = registry.projects()[0].project_ref_id();
+        let initial_locator_count = registry.locators().len();
+        let activation = RoutingActivationCandidate::for_registry(&registry).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            registry.digest().unwrap(),
+            activation.digest().unwrap(),
+        )
+        .expect("activate fixture read routing");
+
+        let adapter_text = path_text(&adapter_path);
+        let mirror_text = path_text(&fs::canonicalize(&mirror).expect("canonical mirror fixture"));
+        let discovery = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "discover",
+            "--cwd",
+            &mirror_text,
+            "--registry",
+            &fixture.registry,
+            "--locator-adapter-context",
+            &adapter_text,
+        ])
+        .expect("parse adapter-backed discovery"))
+        .expect("semantic Project resolves from an otherwise-unbound mirror");
+        assert_eq!(
+            value(&discovery, "project_ref_id"),
+            project_ref_id.to_string()
+        );
+        assert_eq!(value(&discovery, "resolution_rank"), "semantic_project");
+        assert_eq!(value(&discovery, "identity_kind"), "cwd");
+        assert_eq!(value(&discovery, "project_identity"), mirror_text);
+        assert_eq!(value(&discovery, "locator_providers"), "1");
+        assert_eq!(
+            value(&discovery, "locator_provider.0"),
+            locator_adapter::CODEX_APP_PROJECT_ADAPTER_ID
+        );
+
+        let journal_preview =
+            preview_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .expect("preview fixture journal activation");
+        let activated = apply_project_journal_admission_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "candidate_digest")).unwrap(),
+        )
+        .expect("activate fixture journal admission");
+        assert_eq!(value(&activated, "journal_admission_active"), "true");
+
+        let target_head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse semantic target head"))
+        .expect("read semantic target head");
+        let expected_head = value(&target_head, "head_commit_id");
+        let expected_state = value(&target_head, "state_digest");
+        let manifest_path = fixture._tempdir.path().join("adapter-capture.json");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "idempotency_key": "codex-project-adapter-end-to-end",
+  "expected_head_commit_id": "{expected_head}",
+  "expected_state_digest": "{expected_state}",
+  "records": [{{"local_id":"finding","kind":"finding","statement":"Semantic Project owns a capture admitted from its desktop mirror","scope":{{"source":"isolated-adapter-fixture"}}}}],
+  "knowledge": [],
+  "evidence": [],
+  "relations": [],
+  "rationale": {{"source":"adr-0513-round-5"}}
+}}"#
+            ),
+        )
+        .expect("write adapter capture manifest");
+        let capture_command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "capture",
+                "--cwd",
+                &mirror_text,
+                "--registry",
+                &fixture.registry,
+                "--locator-adapter-context",
+                &adapter_text,
+                "--value-reason",
+                "Preserve a confirmed cross-context Project finding",
+                "--manifest",
+                &path_text(&manifest_path),
+            ])
+            .expect("parse adapter-backed capture")
+        };
+        let admitted = run(capture_command()).expect("admit adapter-backed capture");
+        assert_eq!(value(&admitted, "capture_status"), "admitted");
+        assert_eq!(value(&admitted, "resolution_status"), "resolved");
+        assert_eq!(value(&admitted, "resolution_rank"), "semantic_project");
+        assert_eq!(
+            value(&admitted, "project_ref_id"),
+            project_ref_id.to_string()
+        );
+        assert_eq!(value(&admitted, "store_written"), "false");
+        assert_eq!(value(&admitted, "locator_providers"), "1");
+        let intent_path = PathBuf::from(value(&admitted, "journal_path"));
+        let intent_text = fs::read_to_string(&intent_path).expect("read admitted intent");
+        assert!(intent_text.contains(project_id));
+        assert!(!intent_text.contains("codex_app.list_projects"));
+        assert!(!intent_text.contains(thread_id));
+
+        let capture_id = CaptureId::parse_canonical(&value(&admitted, "capture_id")).unwrap();
+        let status =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .expect("inspect adapter-backed capture");
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "pending_project"
+        );
+        assert_eq!(value(&status, "binding_state"), "valid");
+        assert_eq!(value(&status, "recovery_action"), "apply_binding_receipt");
+        let applied = apply_project_capture_recovery_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            capture_id,
+            &ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+            None,
+        )
+        .expect("deliver adapter-backed capture to semantic owner");
+        assert_eq!(
+            applied.projection.recovery_state(),
+            CaptureRecoveryState::Completed
+        );
+        assert!(applied.target_delivery_written);
+        assert!(!applied.registry_written);
+        assert_eq!(
+            applied
+                .registry
+                .bindings()
+                .first()
+                .expect("semantic binding retained")
+                .project_ref_id(),
+            project_ref_id
+        );
+        assert_eq!(applied.registry.projects().len(), 1);
+        assert_eq!(applied.registry.locators().len(), initial_locator_count);
+        assert!(
+            applied
+                .registry
+                .locators()
+                .iter()
+                .all(|locator| locator.normalized_value() != mirror_text)
+        );
+
+        let replay = run(capture_command()).expect("replay adapter-backed capture");
+        assert_eq!(value(&replay, "admission_outcome"), "reused");
+        assert_eq!(value(&replay, "capture_id"), capture_id.to_string());
+        let completed =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .expect("inspect completed adapter-backed capture");
+        assert_eq!(value(&completed, "effective_recovery_state"), "completed");
+    }
+
+    #[test]
+    fn registry_migration_apply_pre_rename_faults_preserve_v1_and_clean_candidate_temp() {
+        for fault in [
+            RegistryMigrationApplyFault::AfterBackupTempWrite,
+            RegistryMigrationApplyFault::AfterBackupInstalled,
+            RegistryMigrationApplyFault::AfterCandidateTempWrite,
+            RegistryMigrationApplyFault::AfterCandidateTempSync,
+            RegistryMigrationApplyFault::BeforeRegistryRename,
+        ] {
+            let fixture = create_project_binding_fixture(false);
+            let (source_digest, preview_digest) = migration_apply_inputs(&fixture, None);
+            let source_bytes = fs::read(&fixture.registry_path).expect("source bytes");
+            let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before");
+            let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+            let error = apply_project_registry_migration_with_fault(
+                Some(fixture.registry_path.clone()),
+                None,
+                &source_digest,
+                &preview_digest,
+                Some(fault),
+            )
+            .expect_err("pre-rename fault must fail apply");
+            assert_eq!(error.code().as_str(), "registry_migration_apply_failed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("v1 registry remains authoritative")
+            );
+            assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+            assert!(ProjectRegistryV1::from_json_bytes(&source_bytes).is_ok());
+            let backup_path =
+                registry_migration_backup_path(&fixture.registry_path, &source_digest).unwrap();
+            if fault == RegistryMigrationApplyFault::AfterBackupTempWrite {
+                assert!(!backup_path.exists());
+            } else {
+                assert_eq!(fs::read(&backup_path).unwrap(), source_bytes);
+            }
+            assert_eq!(fs::read(&fixture.store_path).unwrap(), store_bytes);
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.store_path),
+                store_snapshots
+            );
+            assert!(
+                directory_entry_names(fixture.registry_path.parent().unwrap())
+                    .iter()
+                    .all(|name| !name.ends_with(".tmp")),
+                "fault {fault:?} left a temp artifact"
+            );
+            assert!(!fixture.registry_path.with_extension("json.lock").exists());
+        }
+    }
+
+    #[test]
+    fn registry_migration_apply_reuses_verified_backup_after_recoverable_failure() {
+        let fixture = create_project_binding_fixture(false);
+        let (source_digest, preview_digest) = migration_apply_inputs(&fixture, None);
+        let source_bytes = fs::read(&fixture.registry_path).expect("source bytes");
+        let backup_path =
+            registry_migration_backup_path(&fixture.registry_path, &source_digest).unwrap();
+
+        let error = apply_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            &source_digest,
+            &preview_digest,
+            Some(RegistryMigrationApplyFault::AfterBackupInstalled),
+        )
+        .expect_err("injected failure");
+        assert_eq!(error.code().as_str(), "registry_migration_apply_failed");
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+        assert_eq!(fs::read(&backup_path).unwrap(), source_bytes);
+
+        let result = apply_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            &source_digest,
+            &preview_digest,
+            None,
+        )
+        .expect("retry with exact backup");
+        assert!(result.backup_reused);
+        assert!(
+            ProjectRegistryV2::from_json_bytes(&fs::read(&fixture.registry_path).unwrap()).is_ok()
+        );
+        assert_eq!(fs::read(&backup_path).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn registry_migration_apply_post_rename_faults_are_indeterminate_and_never_auto_rollback() {
+        for fault in [
+            RegistryMigrationApplyFault::AfterRegistryRename,
+            RegistryMigrationApplyFault::AfterRegistryDirectorySync,
+            RegistryMigrationApplyFault::BeforePostInstallVerification,
+        ] {
+            let fixture = create_project_binding_fixture(false);
+            let (source_digest, preview_digest) = migration_apply_inputs(&fixture, None);
+            let source_bytes = fs::read(&fixture.registry_path).expect("source bytes");
+            let backup_digest = ControlPlaneDigest::raw(&source_bytes);
+            let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before");
+            let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+            let error = apply_project_registry_migration_with_fault(
+                Some(fixture.registry_path.clone()),
+                None,
+                &source_digest,
+                &preview_digest,
+                Some(fault),
+            )
+            .expect_err("post-rename fault must be indeterminate");
+            assert_eq!(
+                error.code().as_str(),
+                "registry_migration_install_indeterminate"
+            );
+            assert!(error.to_string().contains("--rollback-check"));
+            let installed = ProjectRegistryV2::from_json_bytes(
+                &fs::read(&fixture.registry_path).expect("installed registry"),
+            )
+            .expect("v2 remains installed; no automatic rollback");
+            let backup_path = installed.migration().unwrap().backup_path().as_path();
+            assert_eq!(fs::read(backup_path).unwrap(), source_bytes);
+            assert_eq!(fs::read(&fixture.store_path).unwrap(), store_bytes);
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.store_path),
+                store_snapshots
+            );
+            let probe = inspect_project_registry_rollback_readiness(
+                Some(fixture.registry_path.clone()),
+                None,
+                installed.digest().unwrap(),
+                backup_digest,
+                MigrationPreviewFormatArg::Text,
+            )
+            .expect("read-only rollback probe");
+            assert_eq!(value(&probe, "rollback_ready"), "true");
+            assert_eq!(value(&probe, "rollback_performed"), "false");
+        }
+    }
+
+    #[test]
+    fn registry_migration_apply_rejects_stale_digests_and_conflicting_artifacts_before_replace() {
+        for case in ["source", "preview", "temp", "backup", "expected-backup"] {
+            let fixture = create_project_binding_fixture(false);
+            let (source_digest, preview_digest) = migration_apply_inputs(&fixture, None);
+            let source_bytes = fs::read(&fixture.registry_path).expect("source bytes");
+            let mut expected_source = source_digest.clone();
+            let mut expected_preview = preview_digest.clone();
+            if case == "source" {
+                expected_source = ControlPlaneDigest::raw(b"stale source");
+            } else if case == "preview" {
+                expected_preview = ControlPlaneDigest::raw(b"stale preview");
+            } else if case == "temp" {
+                let name = fixture.registry_path.file_name().unwrap().to_str().unwrap();
+                fs::write(
+                    fixture
+                        .registry_path
+                        .parent()
+                        .unwrap()
+                        .join(format!(".{name}.stale.tmp")),
+                    b"stale",
+                )
+                .expect("stale temp");
+            } else if case == "backup" {
+                let name = fixture.registry_path.file_name().unwrap().to_str().unwrap();
+                fs::write(
+                    fixture
+                        .registry_path
+                        .parent()
+                        .unwrap()
+                        .join(format!("{name}.v1.conflicting.bak")),
+                    b"conflicting",
+                )
+                .expect("conflicting backup");
+            } else {
+                let expected_backup =
+                    registry_migration_backup_path(&fixture.registry_path, &source_digest).unwrap();
+                fs::write(expected_backup, b"not the v1 source").expect("mismatched exact backup");
+            }
+
+            let error = apply_project_registry_migration_with_fault(
+                Some(fixture.registry_path.clone()),
+                None,
+                &expected_source,
+                &expected_preview,
+                None,
+            )
+            .expect_err("stale or conflicting apply must fail");
+            assert_eq!(error.code().as_str(), "registry_migration_apply_failed");
+            assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+            assert!(ProjectRegistryV1::from_json_bytes(&source_bytes).is_ok());
+        }
+    }
+
+    #[test]
+    fn registry_migration_apply_rereads_exact_repair_manifest_under_lock() {
+        let fixture = create_project_binding_fixture(false);
+        fs::remove_dir(Path::new(&fixture.project_text)).expect("remove historical project path");
+        let manifest = migration_repair_manifest_value(&fixture, None, None);
+        let manifest_path = write_migration_repair_manifest(&fixture, &manifest);
+        let (source_digest, preview_digest) =
+            migration_apply_inputs(&fixture, Some(&manifest_path));
+        let source_bytes = fs::read(&fixture.registry_path).expect("source bytes");
+
+        let mut changed = manifest;
+        changed["repairs"][0]["semantic_locator"]["normalized_value"] =
+            serde_json::json!("g-p-changed-after-preview");
+        fs::write(
+            &manifest_path,
+            format!("{}\n", serde_json::to_string_pretty(&changed).unwrap()),
+        )
+        .expect("change repair manifest after preview");
+
+        let error = apply_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            Some(manifest_path),
+            &source_digest,
+            &preview_digest,
+            None,
+        )
+        .expect_err("manifest drift must invalidate preview lock");
+        assert_eq!(error.code().as_str(), "registry_migration_apply_failed");
+        assert!(error.to_string().contains("preview digest"));
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+        assert!(
+            !registry_migration_backup_path(&fixture.registry_path, &source_digest)
+                .unwrap()
+                .exists()
+        );
+    }
+
+    #[test]
+    fn registry_migration_apply_rejects_invalid_target_before_backup() {
+        let fixture = create_project_binding_fixture(false);
+        let mut registry_value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.registry_path).unwrap()).unwrap();
+        registry_value["bindings"][0]["store_id"] = serde_json::json!(StoreId::new_v7());
+        fs::write(
+            &fixture.registry_path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&registry_value).unwrap()
+            ),
+        )
+        .expect("write invalid target fixture");
+        let source_bytes = fs::read(&fixture.registry_path).expect("invalid source bytes");
+        let source = ProjectRegistryV1::from_json_bytes(&source_bytes).expect("registry v1");
+        let preview =
+            build_verified_registry_migration_preview(&source, None).expect("invalid preview");
+        assert!(!preview.apply_eligible());
+        let source_digest = source.source_digest().unwrap();
+
+        let error = apply_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            &source_digest,
+            preview.preview_digest(),
+            None,
+        )
+        .expect_err("invalid target must not apply");
+        assert_eq!(error.code().as_str(), "registry_migration_apply_failed");
+        assert!(error.to_string().contains("not apply-eligible"));
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+        assert!(
+            !registry_migration_backup_path(&fixture.registry_path, &source_digest)
+                .unwrap()
+                .exists()
+        );
+    }
+
+    #[test]
+    fn registry_migration_apply_lock_contention_preserves_v1_without_backup() {
+        let fixture = create_project_binding_fixture(false);
+        let (source_digest, preview_digest) = migration_apply_inputs(&fixture, None);
+        let source_bytes = fs::read(&fixture.registry_path).expect("source bytes");
+        let lock_path = fixture.registry_path.with_extension("json.lock");
+        let _held_lock = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+            .expect("hold registry lock");
+
+        let error = apply_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            &source_digest,
+            &preview_digest,
+            None,
+        )
+        .expect_err("concurrent lock must reject apply");
+        assert_eq!(error.code().as_str(), "registry_migration_apply_failed");
+        assert!(error.to_string().contains("already held"));
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+        assert!(
+            !registry_migration_backup_path(&fixture.registry_path, &source_digest)
+                .unwrap()
+                .exists()
+        );
+    }
+
+    #[test]
+    fn registry_migration_rollback_probe_blocks_on_journal_or_backup_byte_drift_without_writes() {
+        let fixture = create_project_binding_fixture(false);
+        let (source_digest, preview_digest) = migration_apply_inputs(&fixture, None);
+        let result = apply_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            &source_digest,
+            &preview_digest,
+            None,
+        )
+        .expect("fixture apply");
+        let backup_bytes = fs::read(&result.backup_path).expect("backup bytes");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+        let journal_intents = PathBuf::from(format!("{}.d", fixture.registry_path.display()))
+            .join("capture-journal")
+            .join("v1")
+            .join("intents");
+        fs::create_dir_all(&journal_intents).expect("fixture journal");
+        fs::write(journal_intents.join("capture.json"), b"fixture").expect("fixture intent");
+
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let probe = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            result.installed_digest.clone(),
+            result.backup_digest.clone(),
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("blocked rollback probe");
+        assert_eq!(value(&probe, "rollback_ready"), "false");
+        assert_eq!(value(&probe, "capture_journal_roots"), "2");
+        assert_eq!(value(&probe, "capture_journal_entries"), "1");
+        assert!(probe.contains("capture_journal_intents_nonempty"));
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+
+        fs::remove_dir_all(PathBuf::from(format!(
+            "{}.d",
+            fixture.registry_path.display()
+        )))
+        .expect("remove fixture journal");
+
+        let sibling_home_journal = fixture
+            .registry_path
+            .parent()
+            .expect("registry parent")
+            .join("capture-journal");
+        let sibling_home_intents = sibling_home_journal.join("v1").join("intents");
+        fs::create_dir_all(&sibling_home_intents).expect("fixture sibling-home journal");
+        fs::write(sibling_home_intents.join("capture.json"), b"fixture")
+            .expect("fixture sibling-home intent");
+        let probe = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            result.installed_digest.clone(),
+            result.backup_digest.clone(),
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("sibling-home journal blocks rollback probe");
+        assert_eq!(value(&probe, "rollback_ready"), "false");
+        assert_eq!(value(&probe, "capture_journal_roots"), "2");
+        assert_eq!(value(&probe, "capture_journal_entries"), "1");
+        assert!(probe.contains("capture_journal_intents_nonempty"));
+        assert!(probe.contains(&path_text(&sibling_home_journal.join("v1"))));
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+        fs::remove_dir_all(&sibling_home_journal).expect("remove sibling-home journal");
+
+        let mut drifted = backup_bytes;
+        drifted.push(b'\n');
+        fs::write(&result.backup_path, drifted).expect("drift backup bytes");
+        let probe = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            result.installed_digest,
+            result.backup_digest,
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("backup drift probe");
+        assert_eq!(value(&probe, "rollback_ready"), "false");
+        assert!(probe.contains("backup raw digest"));
+        assert_eq!(value(&probe, "rollback_performed"), "false");
+    }
+
+    #[test]
+    fn registry_rollback_restores_exact_v1_and_reentry_is_verified_noop() {
+        let fixture = create_project_binding_fixture(false);
+        let source_bytes = fs::read(&fixture.registry_path).expect("source v1 bytes");
+        let store_bytes = fs::read(&fixture.store_path).expect("Store bytes before");
+        let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+        let migration = migrate_fixture_registry_to_v2(&fixture, None);
+        let installed_v2_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+
+        let ready_probe = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            migration.installed_digest.clone(),
+            migration.backup_digest.clone(),
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("ready-state probe");
+        assert_eq!(value(&ready_probe, "rollback_state"), "v2_ready");
+        assert_eq!(value(&ready_probe, "rollback_apply_safe"), "true");
+        assert_eq!(value(&ready_probe, "rollback_reentry_safe"), "false");
+
+        let output = run(Cli::try_parse_from(vec![
+            "workvcs".to_owned(),
+            "project".to_owned(),
+            "registry-migrate".to_owned(),
+            "--rollback".to_owned(),
+            "--registry".to_owned(),
+            fixture.registry.clone(),
+            "--expected-installed-digest".to_owned(),
+            migration.installed_digest.to_string(),
+            "--expected-backup-digest".to_owned(),
+            migration.backup_digest.to_string(),
+        ])
+        .expect("parse rollback"))
+        .expect("rollback fixture registry");
+        assert_eq!(value(&output, "action"), "rollback");
+        assert_eq!(value(&output, "rollback_state"), "v1_restored");
+        assert_eq!(value(&output, "registry_written"), "true");
+        assert_eq!(value(&output, "rollback_snapshot_written"), "true");
+        assert_eq!(value(&output, "rollback_performed"), "true");
+        assert_eq!(value(&output, "rollback_reused"), "false");
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+        assert_eq!(
+            fs::read(value(&output, "rollback_snapshot_path")).unwrap(),
+            installed_v2_bytes
+        );
+        assert_eq!(
+            fs::read(&migration.backup_path).unwrap(),
+            fs::read(&fixture.registry_path).unwrap()
+        );
+        assert_eq!(fs::read(&fixture.store_path).unwrap(), store_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+
+        let probe = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            migration.installed_digest.clone(),
+            migration.backup_digest.clone(),
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("restored-state probe");
+        assert_eq!(value(&probe, "rollback_state"), "v1_restored");
+        assert_eq!(value(&probe, "registry_version"), "1");
+        assert_eq!(value(&probe, "rollback_ready"), "false");
+        assert_eq!(value(&probe, "rollback_restored"), "true");
+        assert_eq!(value(&probe, "rollback_apply_safe"), "false");
+        assert_eq!(value(&probe, "rollback_reentry_safe"), "true");
+        assert_eq!(value(&probe, "issues"), "0");
+
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let backup_snapshot = cli_file_snapshot(&migration.backup_path);
+        let rollback_snapshot_path = PathBuf::from(value(&output, "rollback_snapshot_path"));
+        let rollback_snapshot = cli_file_snapshot(&rollback_snapshot_path);
+        let directory_before = directory_entry_names(fixture.registry_path.parent().unwrap());
+        let replay = rollback_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            &migration.installed_digest,
+            &migration.backup_digest,
+            None,
+        )
+        .expect("verified idempotent rollback replay");
+        assert!(!replay.registry_written);
+        assert!(replay.rollback_reused);
+        assert!(replay.snapshot_reused);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(cli_file_snapshot(&migration.backup_path), backup_snapshot);
+        assert_eq!(
+            cli_file_snapshot(&rollback_snapshot_path),
+            rollback_snapshot
+        );
+        assert_eq!(
+            directory_entry_names(fixture.registry_path.parent().unwrap()),
+            directory_before
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+    }
+
+    #[test]
+    fn journal_admission_first_persists_intent_and_forces_rollback_to_fail_closed() {
+        let fixture = create_project_binding_fixture(false);
+        let migration = migrate_fixture_registry_to_v2(&fixture, None);
+        let installed_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+        let installed = ProjectRegistryV2::from_json_bytes(&installed_bytes).expect("registry v2");
+        let canonical_registry_path = fs::canonicalize(&fixture.registry_path).unwrap();
+        let lock_path =
+            project_registry_journal_quiescence_lock_path(&canonical_registry_path).unwrap();
+        let home_journal_root = fixture
+            .registry_path
+            .parent()
+            .unwrap()
+            .join("capture-journal/v1");
+        let journal = Arc::new(
+            CaptureJournal::for_project_registry(
+                &canonical_registry_path,
+                ProjectRegistryJournalAlias::StandardRegistryHome,
+            )
+            .expect("home-alias journal"),
+        );
+        let intent = Arc::new(fixture_capture_intent(
+            &fixture,
+            &installed,
+            "admission-first-race",
+        ));
+        let (admission_holds_tx, admission_holds_rx) = mpsc::channel();
+        let (release_admission_tx, release_admission_rx) = mpsc::channel();
+        let admission_handle = {
+            let journal = Arc::clone(&journal);
+            let intent = Arc::clone(&intent);
+            let registry_path = fixture.registry_path.clone();
+            let expected_revision = installed.revision();
+            let expected_digest = installed.digest().unwrap();
+            thread::spawn(move || {
+                journal.admit_for_project_registry_with_check(
+                    &intent,
+                    expected_revision,
+                    &expected_digest,
+                    |_| {
+                        require_fixture_registry_v2(&registry_path)?;
+                        admission_holds_tx.send(()).unwrap();
+                        release_admission_rx.recv().unwrap();
+                        Ok(())
+                    },
+                )
+            })
+        };
+        admission_holds_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("admission holds shared lock");
+        assert!(lock_path.is_file());
+        assert!(!home_journal_root.exists());
+
+        let registry_lock_path = fixture.registry_path.with_extension("json.lock");
+        let registry_path = fixture.registry_path.clone();
+        let installed_digest = migration.installed_digest.clone();
+        let backup_digest = migration.backup_digest.clone();
+        let rollback_handle = thread::spawn(move || {
+            rollback_project_registry_migration_with_fault(
+                Some(registry_path),
+                &installed_digest,
+                &backup_digest,
+                None,
+            )
+        });
+        wait_for_fixture_path(&registry_lock_path);
+        release_admission_tx.send(()).unwrap();
+
+        let admission = admission_handle
+            .join()
+            .unwrap()
+            .expect("admission wins the race");
+        assert_eq!(admission.outcome(), CaptureAdmissionOutcome::Created);
+        let rollback_error = rollback_handle
+            .join()
+            .unwrap()
+            .expect_err("durable intent must block rollback");
+        assert_eq!(rollback_error.code().as_str(), "registry_rollback_failed");
+        assert!(
+            rollback_error
+                .to_string()
+                .contains("capture_journal_intents_nonempty")
+        );
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), installed_bytes);
+        assert!(admission.intent_path().is_file());
+        assert!(!lock_path.exists());
+        assert!(!registry_lock_path.exists());
+        assert!(
+            !registry_rollback_snapshot_path(&fixture.registry_path, &migration.installed_digest)
+                .unwrap()
+                .exists()
+        );
+    }
+
+    #[test]
+    fn registry_rollback_first_restores_v1_and_admission_persists_nothing() {
+        let fixture = create_project_binding_fixture(false);
+        let source_bytes = fs::read(&fixture.registry_path).expect("source v1 bytes");
+        let migration = migrate_fixture_registry_to_v2(&fixture, None);
+        let installed_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+        let installed = ProjectRegistryV2::from_json_bytes(&installed_bytes).expect("registry v2");
+        let canonical_registry_path = fs::canonicalize(&fixture.registry_path).unwrap();
+        let lock_path =
+            project_registry_journal_quiescence_lock_path(&canonical_registry_path).unwrap();
+        let sidecar_journal_root = PathBuf::from(format!("{}.d", fixture.registry_path.display()))
+            .join("capture-journal/v1");
+        let journal = Arc::new(
+            CaptureJournal::for_project_registry(
+                &canonical_registry_path,
+                ProjectRegistryJournalAlias::RegistrySidecar,
+            )
+            .expect("sidecar-alias journal"),
+        );
+        let intent = Arc::new(fixture_capture_intent(
+            &fixture,
+            &installed,
+            "rollback-first-race",
+        ));
+
+        let (rollback_holds_tx, rollback_holds_rx) = mpsc::channel();
+        let (release_rollback_tx, release_rollback_rx) = mpsc::channel();
+        let registry_path = fixture.registry_path.clone();
+        let installed_digest = migration.installed_digest.clone();
+        let backup_digest = migration.backup_digest.clone();
+        let rollback_handle = thread::spawn(move || {
+            let hook = || {
+                rollback_holds_tx.send(()).unwrap();
+                release_rollback_rx.recv().unwrap();
+            };
+            rollback_project_registry_migration_with_fault_and_hook(
+                Some(registry_path),
+                &installed_digest,
+                &backup_digest,
+                None,
+                Some(&hook),
+            )
+        });
+        rollback_holds_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("rollback holds shared lock");
+        assert!(lock_path.is_file());
+
+        let (admission_started_tx, admission_started_rx) = mpsc::channel();
+        let (admission_result_tx, admission_result_rx) = mpsc::channel();
+        let admission_handle = {
+            let journal = Arc::clone(&journal);
+            let intent = Arc::clone(&intent);
+            let expected_revision = installed.revision();
+            let expected_digest = installed.digest().unwrap();
+            thread::spawn(move || {
+                admission_started_tx.send(()).unwrap();
+                let result = journal.admit_for_project_registry(
+                    &intent,
+                    expected_revision,
+                    &expected_digest,
+                );
+                admission_result_tx.send(result).unwrap();
+            })
+        };
+        admission_started_rx.recv().unwrap();
+        assert!(
+            admission_result_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "admission must wait while rollback owns the shared lock"
+        );
+        assert!(!sidecar_journal_root.exists());
+        release_rollback_tx.send(()).unwrap();
+
+        let rollback = rollback_handle
+            .join()
+            .unwrap()
+            .expect("rollback wins the race");
+        assert!(rollback.registry_written);
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+        let admission_error = admission_result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("admission exits after rollback")
+            .expect_err("v1 revalidation must block admission");
+        match admission_error.code() {
+            ErrorCode::ControlPlaneInvalid => {}
+            ErrorCode::CaptureNotPersisted => {
+                assert!(admission_error.to_string().contains("already held"));
+                let expected_digest = installed.digest().unwrap();
+                let retry = journal
+                    .admit_for_project_registry(&intent, installed.revision(), &expected_digest)
+                    .expect_err("post-rollback retry must fail v2 eligibility");
+                assert_eq!(retry.code(), ErrorCode::ControlPlaneInvalid);
+            }
+            other => panic!("unexpected admission failure after rollback: {other:?}"),
+        }
+        admission_handle.join().unwrap();
+        assert!(!sidecar_journal_root.exists());
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn orphan_journal_quiescence_lock_blocks_rollback_until_exact_fixture_recovery() {
+        let fixture = create_project_binding_fixture(false);
+        let source_bytes = fs::read(&fixture.registry_path).expect("source v1 bytes");
+        let migration = migrate_fixture_registry_to_v2(&fixture, None);
+        let installed_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+        let canonical_registry_path = fs::canonicalize(&fixture.registry_path).unwrap();
+        let lock_path =
+            project_registry_journal_quiescence_lock_path(&canonical_registry_path).unwrap();
+        fs::write(&lock_path, b"orphaned-after-crash\n").expect("orphan lock fixture");
+
+        let probe = inspect_project_registry_rollback_readiness(
+            Some(fixture.registry_path.clone()),
+            None,
+            migration.installed_digest.clone(),
+            migration.backup_digest.clone(),
+            MigrationPreviewFormatArg::Text,
+        )
+        .expect("read-only orphan probe");
+        assert_eq!(value(&probe, "journal_quiescence_lock_state"), "present");
+        assert_eq!(value(&probe, "rollback_apply_safe"), "false");
+        assert!(probe.contains("journal_quiescence_lock_present"));
+
+        let error = rollback_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            &migration.installed_digest,
+            &migration.backup_digest,
+            None,
+        )
+        .expect_err("orphan lock must fail closed");
+        assert_eq!(error.code().as_str(), "registry_rollback_failed");
+        assert!(error.to_string().contains("exact lock owner is resolved"));
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), installed_bytes);
+        assert!(!fixture.registry_path.with_extension("json.lock").exists());
+        assert!(lock_path.is_file());
+
+        fs::remove_file(&lock_path).expect("fixture-only exact orphan recovery");
+        let recovered = rollback_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            &migration.installed_digest,
+            &migration.backup_digest,
+            None,
+        )
+        .expect("rollback after exact orphan recovery");
+        assert!(recovered.registry_written);
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn registry_rollback_pre_rename_faults_preserve_v2_and_clean_candidate_temp() {
+        for fault in [
+            RegistryRollbackFault::AfterSnapshotTempWrite,
+            RegistryRollbackFault::AfterSnapshotInstalled,
+            RegistryRollbackFault::AfterCandidateTempWrite,
+            RegistryRollbackFault::AfterCandidateTempSync,
+            RegistryRollbackFault::BeforeRegistryRename,
+        ] {
+            let fixture = create_project_binding_fixture(false);
+            let migration = migrate_fixture_registry_to_v2(&fixture, None);
+            let installed_v2_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+            let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+            let snapshot_path = registry_rollback_snapshot_path(
+                &fixture.registry_path,
+                &migration.installed_digest,
+            )
+            .unwrap();
+
+            let error = rollback_project_registry_migration_with_fault(
+                Some(fixture.registry_path.clone()),
+                &migration.installed_digest,
+                &migration.backup_digest,
+                Some(fault),
+            )
+            .expect_err("pre-rename rollback fault must fail closed");
+            assert_eq!(error.code().as_str(), "registry_rollback_failed");
+            assert!(error.to_string().contains("was not replaced"));
+            assert_eq!(
+                fs::read(&fixture.registry_path).unwrap(),
+                installed_v2_bytes
+            );
+            assert!(ProjectRegistryV2::from_json_bytes(&installed_v2_bytes).is_ok());
+            if fault == RegistryRollbackFault::AfterSnapshotTempWrite {
+                assert!(!snapshot_path.exists());
+            } else {
+                assert_eq!(fs::read(&snapshot_path).unwrap(), installed_v2_bytes);
+            }
+            assert!(
+                directory_entry_names(fixture.registry_path.parent().unwrap())
+                    .iter()
+                    .all(|name| !name.ends_with(".tmp")),
+                "fault {fault:?} left a temp artifact"
+            );
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.store_path),
+                store_snapshots
+            );
+            assert!(!fixture.registry_path.with_extension("json.lock").exists());
+        }
+    }
+
+    #[test]
+    fn registry_rollback_reuses_verified_v2_snapshot_after_recoverable_failure() {
+        let fixture = create_project_binding_fixture(false);
+        let source_bytes = fs::read(&fixture.registry_path).expect("source v1 bytes");
+        let migration = migrate_fixture_registry_to_v2(&fixture, None);
+
+        let error = rollback_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            &migration.installed_digest,
+            &migration.backup_digest,
+            Some(RegistryRollbackFault::AfterSnapshotInstalled),
+        )
+        .expect_err("injected rollback snapshot failure");
+        assert_eq!(error.code().as_str(), "registry_rollback_failed");
+
+        let recovered = rollback_project_registry_migration_with_fault(
+            Some(fixture.registry_path.clone()),
+            &migration.installed_digest,
+            &migration.backup_digest,
+            None,
+        )
+        .expect("reuse exact v2 snapshot and complete rollback");
+        assert!(recovered.snapshot_reused);
+        assert!(recovered.registry_written);
+        assert!(!recovered.rollback_reused);
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn registry_rollback_post_rename_faults_are_indeterminate_and_probe_recovers_state() {
+        for fault in [
+            RegistryRollbackFault::AfterRegistryRename,
+            RegistryRollbackFault::AfterRegistryDirectorySync,
+            RegistryRollbackFault::BeforePostInstallVerification,
+        ] {
+            let fixture = create_project_binding_fixture(false);
+            let source_bytes = fs::read(&fixture.registry_path).expect("source v1 bytes");
+            let migration = migrate_fixture_registry_to_v2(&fixture, None);
+            let installed_v2_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+            let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+
+            let error = rollback_project_registry_migration_with_fault(
+                Some(fixture.registry_path.clone()),
+                &migration.installed_digest,
+                &migration.backup_digest,
+                Some(fault),
+            )
+            .expect_err("post-rename rollback fault must be indeterminate");
+            assert_eq!(
+                error.code().as_str(),
+                "registry_rollback_install_indeterminate"
+            );
+            assert!(error.to_string().contains("--rollback-check"));
+            assert_eq!(fs::read(&fixture.registry_path).unwrap(), source_bytes);
+            let snapshot_path = registry_rollback_snapshot_path(
+                &fixture.registry_path,
+                &migration.installed_digest,
+            )
+            .unwrap();
+            assert_eq!(fs::read(snapshot_path).unwrap(), installed_v2_bytes);
+
+            let probe = inspect_project_registry_rollback_readiness(
+                Some(fixture.registry_path.clone()),
+                None,
+                migration.installed_digest.clone(),
+                migration.backup_digest.clone(),
+                MigrationPreviewFormatArg::Text,
+            )
+            .expect("probe indeterminate rollback result");
+            assert_eq!(value(&probe, "rollback_state"), "v1_restored");
+            assert_eq!(value(&probe, "rollback_restored"), "true");
+            assert_eq!(value(&probe, "issues"), "0");
+
+            let replay = rollback_project_registry_migration_with_fault(
+                Some(fixture.registry_path.clone()),
+                &migration.installed_digest,
+                &migration.backup_digest,
+                None,
+            )
+            .expect("reentry after explicit probe");
+            assert!(!replay.registry_written);
+            assert!(replay.rollback_reused);
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.store_path),
+                store_snapshots
+            );
+        }
+    }
+
+    #[test]
+    fn registry_rollback_blocks_activation_journal_and_digest_drift_before_snapshot() {
+        for case in [
+            "activation",
+            "journal",
+            "installed-digest",
+            "backup-digest",
+            "temp",
+        ] {
+            let fixture = create_project_binding_fixture(false);
+            let migration = migrate_fixture_registry_to_v2(&fixture, None);
+            let installed_v2_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+            let store_snapshots = cli_sqlite_file_snapshots(&fixture.store_path);
+            let mut expected_installed = migration.installed_digest.clone();
+            let mut expected_backup = migration.backup_digest.clone();
+
+            if case == "activation" {
+                let installed =
+                    ProjectRegistryV2::from_json_bytes(&installed_v2_bytes).expect("registry v2");
+                let activation = RoutingActivationCandidate::for_registry(&installed)
+                    .expect("activation candidate");
+                apply_project_routing_activation_with_fault(
+                    Some(fixture.registry_path.clone()),
+                    installed.digest().unwrap(),
+                    activation.digest().unwrap(),
+                    None,
+                )
+                .expect("fixture-only activation");
+            } else if case == "journal" {
+                let intents = PathBuf::from(format!("{}.d", fixture.registry_path.display()))
+                    .join("capture-journal")
+                    .join("v1")
+                    .join("intents");
+                fs::create_dir_all(&intents).expect("fixture journal intents");
+                fs::write(intents.join("capture.json"), b"fixture").expect("fixture intent");
+            } else if case == "installed-digest" {
+                expected_installed = ControlPlaneDigest::raw(b"wrong installed digest");
+            } else if case == "backup-digest" {
+                expected_backup = ControlPlaneDigest::raw(b"wrong backup digest");
+            } else {
+                let file_name = fixture.registry_path.file_name().unwrap().to_string_lossy();
+                fs::write(
+                    fixture
+                        .registry_path
+                        .parent()
+                        .unwrap()
+                        .join(format!(".{file_name}.stale.tmp")),
+                    b"stale",
+                )
+                .expect("stale registry temp");
+            }
+
+            let error = rollback_project_registry_migration_with_fault(
+                Some(fixture.registry_path.clone()),
+                &expected_installed,
+                &expected_backup,
+                None,
+            )
+            .expect_err("rollback precondition must block");
+            assert_eq!(error.code().as_str(), "registry_rollback_failed");
+            assert_eq!(
+                fs::read(&fixture.registry_path).unwrap(),
+                installed_v2_bytes
+            );
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.store_path),
+                store_snapshots
+            );
+            let snapshot_path =
+                registry_rollback_snapshot_path(&fixture.registry_path, &expected_installed)
+                    .unwrap();
+            assert!(!snapshot_path.exists());
+            assert!(
+                directory_entry_names(fixture.registry_path.parent().unwrap())
+                    .iter()
+                    .all(|name| !name.contains("rollback-v") || !name.ends_with(".tmp"))
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_rollback_rejects_noncanonical_symlinked_and_conflicting_snapshots() {
+        use std::os::unix::fs::symlink;
+
+        for case in ["noncanonical", "symlink", "dangling-symlink", "conflicting"] {
+            let fixture = create_project_binding_fixture(false);
+            let migration = migrate_fixture_registry_to_v2(&fixture, None);
+            let installed_v2_bytes = fs::read(&fixture.registry_path).expect("installed v2 bytes");
+            let snapshot_path = registry_rollback_snapshot_path(
+                &fixture.registry_path,
+                &migration.installed_digest,
+            )
+            .unwrap();
+
+            if case == "noncanonical" {
+                rollback_project_registry_migration_with_fault(
+                    Some(fixture.registry_path.clone()),
+                    &migration.installed_digest,
+                    &migration.backup_digest,
+                    Some(RegistryRollbackFault::AfterSnapshotInstalled),
+                )
+                .expect_err("install fixture snapshot then stop");
+                let value: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&snapshot_path).unwrap()).unwrap();
+                fs::write(
+                    &snapshot_path,
+                    format!("{}\n", serde_json::to_string_pretty(&value).unwrap()),
+                )
+                .expect("rewrite snapshot with noncanonical whitespace");
+            } else if case == "symlink" {
+                symlink(&fixture.registry_path, &snapshot_path).expect("symlink snapshot fixture");
+            } else if case == "dangling-symlink" {
+                symlink(fixture._tempdir.path().join("missing-v2"), &snapshot_path)
+                    .expect("dangling symlink snapshot fixture");
+            } else {
+                let file_name = fixture.registry_path.file_name().unwrap().to_string_lossy();
+                fs::write(
+                    fixture
+                        .registry_path
+                        .parent()
+                        .unwrap()
+                        .join(format!("{file_name}.v2.conflicting.rollback.bak")),
+                    b"conflicting",
+                )
+                .expect("conflicting rollback snapshot");
+            }
+
+            let error = rollback_project_registry_migration_with_fault(
+                Some(fixture.registry_path.clone()),
+                &migration.installed_digest,
+                &migration.backup_digest,
+                None,
+            )
+            .expect_err("unsafe snapshot state must block rollback");
+            assert_eq!(error.code().as_str(), "registry_rollback_failed");
+            assert_eq!(
+                fs::read(&fixture.registry_path).unwrap(),
+                installed_v2_bytes
+            );
+            assert!(
+                directory_entry_names(fixture.registry_path.parent().unwrap())
+                    .iter()
+                    .all(|name| !name.ends_with(".tmp"))
+            );
+        }
+    }
+
+    #[test]
+    fn cli_project_registry_migration_preview_escapes_untrusted_text_fields() {
+        let fixture = create_project_binding_fixture(false);
+        let mut registry: serde_json::Value = serde_json::from_slice(
+            &fs::read(&fixture.registry_path).expect("read registry before edit"),
+        )
+        .expect("registry JSON");
+        registry["bindings"][0]["store_id"] = serde_json::json!("invalid\ninjected=true");
+        fs::write(
+            &fixture.registry_path,
+            format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+        )
+        .expect("write adversarial fixture registry");
+
+        let preview = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--preview",
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse adversarial migration preview"))
+        .expect("adversarial migration preview remains reportable");
+        assert!(preview.contains("mapping.0.store_id=invalid\\ninjected=true\n"));
+        assert!(!preview.lines().any(|line| line == "injected=true"));
+        assert_eq!(value(&preview, "apply_eligible"), "false");
     }
 
     #[test]

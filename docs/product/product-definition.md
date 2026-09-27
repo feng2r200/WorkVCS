@@ -32,6 +32,9 @@ state is lost or becomes difficult to distinguish from stale discussion:
 - goals, plans, and tasks drift without a durable lineage;
 - decisions lose their rationale and supporting evidence;
 - findings and failed attempts are rediscovered or repeated;
+- valuable cognition can be silently skipped or written under the wrong
+  project when an ambient repository, mirror, or CWD is mistaken for semantic
+  ownership;
 - a new Session cannot deterministically recover the smallest sufficient
   context;
 - concurrent Sessions lack explicit focus and claim coordination;
@@ -45,7 +48,9 @@ do and why its current state should be believed.
 
 ## Product promise
 
-WorkVCS provides:
+The confirmed product promise spans active capability and accepted capability
+whose core foundation is not yet integrated. Runtime support is stated
+separately under Current product stage. The product contract provides:
 
 - semantic operations to create and update work objects, change Task status,
   adjust ordering, and query current or historical work state without fixing
@@ -58,7 +63,13 @@ WorkVCS provides:
 - explicit coordination state for focus, claims, and merge-in-progress;
 - a deterministic Context Resolver for `context`, `next`, and `why`;
 - low-coupling source-state drift evidence without making Git the database;
-- portable Stores and cross-Workspace Knowledge Spaces.
+- portable Stores and cross-Workspace Knowledge Spaces;
+- stable ProjectRef ownership resolved from tool-neutral semantic Project,
+  repository, and CWD locators without equating any locator with the project;
+- journal-first durable capture after value admission, including recoverable
+  pending routing when the owning project is not yet bound; and
+- explicit cross-project CaptureGroups with one canonical mutable Record and
+  immutable secondary references that are not semantic authorities.
 
 ## Primary user and interaction model
 
@@ -118,6 +129,12 @@ records from a transcript.
    than LLM or embedding inference.
 7. **History is preserved by default.** Terminal state exits the current
    working set but remains queryable for `why`, `history`, and restoration.
+8. **Value admission precedes routing.** A missing ProjectRef or binding cannot
+   turn valuable content into a no-record decision; read-only/no-record remains
+   zero-write, and admitted content is journaled before Store delivery.
+9. **Project ownership is semantic and tool-neutral.** Explicit ProjectRef,
+   verified semantic Project, Git, and CWD are ranked locator evidence;
+   provider-specific adapters do not become core product dependencies.
 
 ## Current product stage
 
@@ -140,3 +157,26 @@ Commit/ChangeSet history, immutable Entity/Relation versions, rebuildable
 projections, checkpoints, KnowledgeExposure, and portable Bundle semantics. It
 also defines ObjectIdentity/typed-family ownership and Runtime/Provenance/
 Resource/Federation infrastructure boundaries.
+
+ADR-0513 additionally confirms the ProjectRef control plane, journal-first
+capture routing, cross-project CaptureGroup, and registry v2 migration
+contracts. Those contracts are current product authority but are not yet the
+live write route. The core registry/resolver/intent and generic adapter-input
+foundations exist, and the CLI exposes a read-only migration preview plus an
+optional evidence-bound historical ownership-repair preview. The source tree
+also contains digest-locked migration apply and rollback candidates, a
+read-only rollback state probe, versioned ordinary reads, separate
+read-routing and journal-admission activation candidates, and an actual
+value-qualified `capture` route that journals without ProjectRef bootstrap or
+Store delivery. A following source candidate implements immutable recovery
+events, deterministic projections, read-only recovery status, and explicit
+digest-locked first-write ProjectRef/binding convergence with genesis-only
+Store bootstrap. The round-3 source slice adds one guarded primary cognition
+delivery, a complete immutable result receipt, commit-before-receipt replay,
+and fail-closed legacy-manifest staleness. Round 4 adds authority-derived
+CaptureGroup state, immutable secondary references pinned to the exact
+canonical Record version, missing-only retry, completion receipts, and
+read-only recall by secondary ProjectRef without opening a secondary Store.
+All mutation evidence is from isolated fixtures. Provider adapters, live
+migration or rollback, installation, and live activation or delivery remain
+separate future work.

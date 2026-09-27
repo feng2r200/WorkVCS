@@ -214,6 +214,74 @@ V1 includes:
   stable Relation-key reuse, staged import, and required Bundle local-reference
   closure;
 
+## Accepted post-V1 ProjectRef control plane
+
+ADR-0513 confirms a focused post-V1 entry and durability layer. Registry format
+v2 in this section is the ProjectRef registry format; it is not the broad
+WorkVCS product V2 boundary.
+
+The accepted target includes:
+
+- stable ProjectRef identity separate from locators and Store targets;
+- ownership order of explicit ProjectRef, verified semantic Project, Git
+  common directory, CWD, then pending, with unbound higher-ranked ownership
+  blocking lower-ranked fallback;
+- tool-neutral `ContextLocatorProvider` adapters with provider/tenant
+  namespaces; the first concrete CLI integration handles verified desktop
+  Project metadata/mirror evidence without making ChatGPT or Codex a core
+  dependency;
+- an external write-ahead capture journal under the effective WorkVCS control
+  plane, admitted only after the value gate and before target Store writes;
+- one canonical mutable Record per cross-project CaptureGroup, immutable
+  secondary control-plane references, and separately derived local Records
+  only when a project needs its own conclusion;
+- idempotent convergence across registry, journal, and Store atomicity
+  boundaries without a cross-Store transaction claim; and
+- explicit preview-gated, one-to-one registry migration that preserves every
+  existing Store/Workspace/Branch target and never infers identity from a
+  shared target.
+
+The target is accepted and its round-5 source candidate is implemented. The
+core remains tool-neutral; the CLI integration layer includes the first
+concrete adapter behind the generic input contract. The source-tree CLI can
+produce a deterministic, read-only v1-to-v2 migration preview and contains
+digest-locked apply and rollback candidates plus a read-only rollback state probe. It
+also contains versioned ordinary reads and a separate, default-off activation
+candidate bound to the exact registry v2 ID, revision, and digest. A second,
+separate exact marker now guards journal admission. On activated fixtures, the
+actual `capture` route follows explicit ProjectRef, semantic Project, Git
+common directory, and CWD order, persists one immutable intent, and performs
+no ProjectRef bootstrap or target Store write. A value-qualified v1 capture
+can also persist a target-neutral intent before migration. All mutation paths
+are fixture-only and uninstalled. Other binding and semantic mutation paths
+continue to use registry v1; no live migration or activation has occurred,
+and neither marker activates target delivery.
+
+The fixture-only recovery candidate adds immutable post-intent events,
+rebuildable projections, read-only `project capture-recovery --status`, and an
+explicit digest-locked recovery apply. Apply can converge one unbound
+semantic/Git/CWD owner to one ProjectRef and pristine binding; conflict or
+unresolved ownership never falls back. Once binding is ready, the same explicit
+operator action persists exact delivery guards, calls the existing atomic
+cognition capture once, and records a complete receipt. Commit-before-receipt
+replay reuses that result; stale legacy guards preserve the intent and target
+unchanged. The candidate is not installed or authorized against the live
+control plane. The completed fixture-only CaptureGroup slice derives state from
+immutable authority, installs only missing secondary references pinned to the
+exact canonical Record version, records idempotent completion, and exposes
+read-only recall by secondary ProjectRef without opening its Store. None of
+these paths is installed or live-authorized.
+
+Rollback checks every supported home/sidecar activation and journal alias for
+the same standard registry. The source candidate now derives one quiescence
+lock from the canonical registry and passes both admission-first and
+rollback-first isolated race fixtures. The source route now uses the
+registry-derived alias API, supplies the observed revision/digest to the
+mandatory guarded post-lock identity check, and rechecks the separate
+journal-admission marker while holding the lock. Live admission remains off
+because no live marker was installed. Registry replacement candidates are
+currently Unix-only.
+
 ## Explicitly deferred beyond V1
 
 - transcript parsing or automatic extraction of Findings and Decisions;
@@ -226,7 +294,8 @@ V1 includes:
 - cloud synchronization, distributed collaboration, and a replication
   protocol for branch refs and object exchange;
 - cross-Store live Knowledge federation, a global Knowledge Space service,
-  remote subscriptions, and live cross-Store references;
+  remote subscriptions, and live semantic cross-Store references; ADR-0513's
+  immutable control-plane index references do not share Work-State;
 - destructive compaction of core Decision, Finding, Knowledge, ChangeSet, or
   WorkStateCommit history;
 - a required TUI, GUI, or human-first storage format.

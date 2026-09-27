@@ -30,6 +30,55 @@ Knowledge Space != Work Graph
 Work Branch != Git branch
 ```
 
+## ProjectRef control plane
+
+ADR-0513 defines an external control plane above Store boundaries:
+
+```text
+ContextLocatorProvider evidence
+              |
+              v
+ProjectRef registry ---- Capture journal
+       |                       |
+       `-- ProjectBinding -----'
+                    |
+                    v
+        one primary Store / Workspace / Branch
+```
+
+ProjectRef is stable logical ownership. Provider Project IDs, Git common
+directories, CWDs, and display names are namespaced locators or labels, not the
+ProjectRef itself. Resolution ranks explicit ProjectRef, verified semantic
+Project, Git, CWD, then pending. A known but unbound higher-ranked owner blocks
+fallback to a lower-ranked bound target.
+
+The registry maps ProjectRefs to Store targets. The journal preserves bounded
+semantic capture intent and routing receipts. Neither contains Workspace Work
+State, and neither replaces the Store as semantic authority. A known WorkVCS
+home is the control-plane root; registry-only configuration uses
+`<canonical-registry-path>.d` for journal state without inferring a Store root.
+
+Journal intent must be durable before a routed Store write. Registry replace,
+journal append/install, and each Store transition have independent atomicity
+boundaries and converge through idempotency. There is no transaction spanning
+the control plane and multiple Stores.
+
+CaptureGroup is control-plane provenance. It names one primary ProjectRef and
+one canonical Record version plus related projects. An immutable secondary
+reference is a ProjectRef-keyed index entry, not a Store-local Record or a
+cross-Workspace relation. A secondary semantic conclusion is a distinct local
+Record with explicit `derived_from` provenance.
+
+This architecture is accepted and its roadmap round-5 source candidate is
+implemented. The core registry/resolver/intent-admission and provider
+interface remain tool-neutral. The CLI integration layer contains the first
+concrete desktop-Project adapter, plus versioned ordinary reads, separate
+default-off exact-registry-bound read and journal-admission markers, and the
+explicit fixture-only recovery/delivery path. The installed/live capability
+remains registry v1/Git-CWD until separately authorized commit, installation,
+migration, and activation. Durable write routing is not enabled by the read
+marker.
+
 ## Store
 
 A Store is the self-contained data and portability boundary. One Store may
@@ -157,6 +206,8 @@ and non-Verification capture policy remain Open.
 
 | State | Owner | Versioned with Work Branch | Immutable history | Restore as current state |
 |---|---|---:|---:|---:|
+| ProjectRef / locator / binding / link | External control-plane registry | No | Registry revision and migration provenance | No |
+| CaptureIntent / CaptureEvent / CaptureGroup reference | External capture journal | No | Yes; projections rebuildable | No |
 | Goal / Plan / Task | Workspace Work State | Yes | Yes | Yes |
 | Decision / Knowledge / Record | Workspace Work State | Yes | Yes | Yes |
 | Verification | Workspace Work State | Yes | Yes | Yes |
@@ -199,6 +250,14 @@ The WorkVCS engine exposes one semantic operation contract through an
 Agent-readable protocol. Codex, Claude, OpenCode, and other harnesses receive
 adapter-specific instructions or skills that translate the same canonical
 workflow. The engine does not launch, select, or orchestrate Agents.
+
+`ContextLocatorProvider` is a narrower tool-neutral adapter boundary for
+project-context evidence. An adapter may normalize and verify a semantic
+Project locator, but cannot select capture value, mutate the registry or Store,
+or override core precedence. The first concrete adapter lives in the CLI
+integration layer and turns a bounded trusted desktop-Project handoff into the
+same generic evidence. Without that adapter, callers may supply verified
+semantic evidence directly and resolution otherwise degrades to Git, then CWD.
 
 Human-friendly presentation may be added above the protocol. It cannot weaken
 accurate Agent interpretation, actionable errors, or machine-readable

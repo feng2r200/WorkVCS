@@ -7,6 +7,7 @@ pub type Result<T> = std::result::Result<T, WorkVcsError>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCategory {
     Canonical,
+    ControlPlane,
     Evidence,
     Goal,
     Identity,
@@ -32,6 +33,7 @@ impl ErrorCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Canonical => "canonical",
+            Self::ControlPlane => "control_plane",
             Self::Evidence => "evidence",
             Self::Goal => "goal",
             Self::Identity => "identity",
@@ -64,6 +66,10 @@ impl fmt::Display for ErrorCategory {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCode {
     CanonicalEncodingInvalid,
+    ControlPlaneInvalid,
+    CaptureNotPersisted,
+    CaptureIdempotencyConflict,
+    CaptureRecoveryInstallIndeterminate,
     DigestInvalid,
     EvidenceInvalid,
     EvidenceNotFound,
@@ -72,6 +78,7 @@ pub enum ErrorCode {
     IntegrityInvalid,
     KnowledgeInvalid,
     KnowledgeNotFound,
+    LocatorAlreadyClaimed,
     MutationPostconditionFailed,
     CommitNotFound,
     BranchHeadConflict,
@@ -87,6 +94,12 @@ pub enum ErrorCode {
     ProjectBindingNotFound,
     QueryInvalid,
     QueryUnsupported,
+    RegistryMigrationApplyFailed,
+    RegistryMigrationInstallIndeterminate,
+    RegistryRollbackFailed,
+    RegistryRollbackInstallIndeterminate,
+    RoutingActivationInstallIndeterminate,
+    RoutingActivationDisableIndeterminate,
     RecordInvalid,
     RecordNotFound,
     RelationInvalid,
@@ -112,6 +125,10 @@ impl ErrorCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CanonicalEncodingInvalid => "canonical_encoding_invalid",
+            Self::ControlPlaneInvalid => "control_plane_invalid",
+            Self::CaptureNotPersisted => "capture_not_persisted",
+            Self::CaptureIdempotencyConflict => "capture_idempotency_conflict",
+            Self::CaptureRecoveryInstallIndeterminate => "capture_recovery_install_indeterminate",
             Self::DigestInvalid => "digest_invalid",
             Self::EvidenceInvalid => "evidence_invalid",
             Self::EvidenceNotFound => "evidence_not_found",
@@ -120,6 +137,7 @@ impl ErrorCode {
             Self::IntegrityInvalid => "integrity_invalid",
             Self::KnowledgeInvalid => "knowledge_invalid",
             Self::KnowledgeNotFound => "knowledge_not_found",
+            Self::LocatorAlreadyClaimed => "locator_already_claimed",
             Self::MutationPostconditionFailed => "mutation_postcondition_failed",
             Self::CommitNotFound => "commit_not_found",
             Self::BranchHeadConflict => "branch_head_conflict",
@@ -135,6 +153,18 @@ impl ErrorCode {
             Self::ProjectBindingNotFound => "project_binding_not_found",
             Self::QueryInvalid => "query_invalid",
             Self::QueryUnsupported => "query_unsupported",
+            Self::RegistryMigrationApplyFailed => "registry_migration_apply_failed",
+            Self::RegistryMigrationInstallIndeterminate => {
+                "registry_migration_install_indeterminate"
+            }
+            Self::RegistryRollbackFailed => "registry_rollback_failed",
+            Self::RegistryRollbackInstallIndeterminate => "registry_rollback_install_indeterminate",
+            Self::RoutingActivationInstallIndeterminate => {
+                "routing_activation_install_indeterminate"
+            }
+            Self::RoutingActivationDisableIndeterminate => {
+                "routing_activation_disable_indeterminate"
+            }
             Self::RecordInvalid => "record_invalid",
             Self::RecordNotFound => "record_not_found",
             Self::RelationInvalid => "relation_invalid",
@@ -169,6 +199,18 @@ pub enum WorkVcsError {
     #[error("canonical encoding invalid: {0}")]
     CanonicalEncodingInvalid(String),
 
+    #[error("control plane invalid: {0}")]
+    ControlPlaneInvalid(String),
+
+    #[error("capture not persisted: {0}")]
+    CaptureNotPersisted(String),
+
+    #[error("capture idempotency conflict: {0}")]
+    CaptureIdempotencyConflict(String),
+
+    #[error("capture recovery installation indeterminate: {0}")]
+    CaptureRecoveryInstallIndeterminate(String),
+
     #[error("digest invalid: {0}")]
     DigestInvalid(String),
 
@@ -192,6 +234,9 @@ pub enum WorkVcsError {
 
     #[error("knowledge not found: {0}")]
     KnowledgeNotFound(String),
+
+    #[error("locator already claimed: {0}")]
+    LocatorAlreadyClaimed(String),
 
     #[error("mutation {operation} completed before result assertion failed: {message}")]
     MutationPostconditionFailed {
@@ -246,6 +291,26 @@ pub enum WorkVcsError {
 
     #[error("query unsupported: {0}")]
     QueryUnsupported(String),
+
+    #[error("registry migration apply failed before authoritative replacement: {0}")]
+    RegistryMigrationApplyFailed(String),
+
+    #[error(
+        "registry migration installation is indeterminate after authoritative replacement: {0}"
+    )]
+    RegistryMigrationInstallIndeterminate(String),
+
+    #[error("registry rollback failed before authoritative replacement: {0}")]
+    RegistryRollbackFailed(String),
+
+    #[error("registry rollback installation is indeterminate after authoritative replacement: {0}")]
+    RegistryRollbackInstallIndeterminate(String),
+
+    #[error("routing activation installation is indeterminate after marker installation: {0}")]
+    RoutingActivationInstallIndeterminate(String),
+
+    #[error("routing activation disable is indeterminate after marker removal: {0}")]
+    RoutingActivationDisableIndeterminate(String),
 
     #[error("record invalid: {0}")]
     RecordInvalid(String),
@@ -309,6 +374,12 @@ impl WorkVcsError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::CanonicalEncodingInvalid(_) => ErrorCode::CanonicalEncodingInvalid,
+            Self::ControlPlaneInvalid(_) => ErrorCode::ControlPlaneInvalid,
+            Self::CaptureNotPersisted(_) => ErrorCode::CaptureNotPersisted,
+            Self::CaptureIdempotencyConflict(_) => ErrorCode::CaptureIdempotencyConflict,
+            Self::CaptureRecoveryInstallIndeterminate(_) => {
+                ErrorCode::CaptureRecoveryInstallIndeterminate
+            }
             Self::DigestInvalid(_) => ErrorCode::DigestInvalid,
             Self::EvidenceInvalid(_) => ErrorCode::EvidenceInvalid,
             Self::EvidenceNotFound(_) => ErrorCode::EvidenceNotFound,
@@ -317,6 +388,7 @@ impl WorkVcsError {
             Self::IntegrityInvalid(_) => ErrorCode::IntegrityInvalid,
             Self::KnowledgeInvalid(_) => ErrorCode::KnowledgeInvalid,
             Self::KnowledgeNotFound(_) => ErrorCode::KnowledgeNotFound,
+            Self::LocatorAlreadyClaimed(_) => ErrorCode::LocatorAlreadyClaimed,
             Self::MutationPostconditionFailed { .. } => ErrorCode::MutationPostconditionFailed,
             Self::CommitNotFound(_) => ErrorCode::CommitNotFound,
             Self::BranchHeadConflict(_) => ErrorCode::BranchHeadConflict,
@@ -332,6 +404,20 @@ impl WorkVcsError {
             Self::ProjectBindingNotFound { .. } => ErrorCode::ProjectBindingNotFound,
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
             Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
+            Self::RegistryMigrationApplyFailed(_) => ErrorCode::RegistryMigrationApplyFailed,
+            Self::RegistryMigrationInstallIndeterminate(_) => {
+                ErrorCode::RegistryMigrationInstallIndeterminate
+            }
+            Self::RegistryRollbackFailed(_) => ErrorCode::RegistryRollbackFailed,
+            Self::RegistryRollbackInstallIndeterminate(_) => {
+                ErrorCode::RegistryRollbackInstallIndeterminate
+            }
+            Self::RoutingActivationInstallIndeterminate(_) => {
+                ErrorCode::RoutingActivationInstallIndeterminate
+            }
+            Self::RoutingActivationDisableIndeterminate(_) => {
+                ErrorCode::RoutingActivationDisableIndeterminate
+            }
             Self::RecordInvalid(_) => ErrorCode::RecordInvalid,
             Self::RecordNotFound(_) => ErrorCode::RecordNotFound,
             Self::RelationInvalid(_) => ErrorCode::RelationInvalid,
@@ -357,6 +443,17 @@ impl WorkVcsError {
     pub fn category(&self) -> ErrorCategory {
         match self {
             Self::CanonicalEncodingInvalid(_) | Self::DigestInvalid(_) => ErrorCategory::Canonical,
+            Self::ControlPlaneInvalid(_)
+            | Self::CaptureNotPersisted(_)
+            | Self::CaptureIdempotencyConflict(_)
+            | Self::CaptureRecoveryInstallIndeterminate(_)
+            | Self::LocatorAlreadyClaimed(_)
+            | Self::RegistryMigrationApplyFailed(_)
+            | Self::RegistryMigrationInstallIndeterminate(_)
+            | Self::RegistryRollbackFailed(_)
+            | Self::RegistryRollbackInstallIndeterminate(_)
+            | Self::RoutingActivationInstallIndeterminate(_)
+            | Self::RoutingActivationDisableIndeterminate(_) => ErrorCategory::ControlPlane,
             Self::EvidenceInvalid(_) | Self::EvidenceNotFound(_) => ErrorCategory::Evidence,
             Self::IdentityInvalid(_) => ErrorCategory::Identity,
             Self::ImmutableImportInvalid(_) => ErrorCategory::Import,
@@ -409,6 +506,26 @@ mod tests {
 
     #[test]
     fn error_codes_render_stable_lower_snake_case() {
+        assert_eq!(
+            ErrorCode::ControlPlaneInvalid.as_str(),
+            "control_plane_invalid"
+        );
+        assert_eq!(
+            ErrorCode::CaptureNotPersisted.as_str(),
+            "capture_not_persisted"
+        );
+        assert_eq!(
+            ErrorCode::CaptureIdempotencyConflict.as_str(),
+            "capture_idempotency_conflict"
+        );
+        assert_eq!(
+            ErrorCode::CaptureRecoveryInstallIndeterminate.as_str(),
+            "capture_recovery_install_indeterminate"
+        );
+        assert_eq!(
+            ErrorCode::LocatorAlreadyClaimed.as_str(),
+            "locator_already_claimed"
+        );
         assert_eq!(ErrorCode::QueryInvalid.as_str(), "query_invalid");
         assert_eq!(
             ErrorCode::ProjectBindingNotFound.as_str(),
@@ -430,10 +547,35 @@ mod tests {
             ErrorCode::MutationPostconditionFailed.as_str(),
             "mutation_postcondition_failed"
         );
+        assert_eq!(
+            ErrorCode::RegistryMigrationApplyFailed.as_str(),
+            "registry_migration_apply_failed"
+        );
+        assert_eq!(
+            ErrorCode::RegistryMigrationInstallIndeterminate.as_str(),
+            "registry_migration_install_indeterminate"
+        );
+        assert_eq!(
+            ErrorCode::RegistryRollbackFailed.as_str(),
+            "registry_rollback_failed"
+        );
+        assert_eq!(
+            ErrorCode::RegistryRollbackInstallIndeterminate.as_str(),
+            "registry_rollback_install_indeterminate"
+        );
+        assert_eq!(
+            ErrorCode::RoutingActivationInstallIndeterminate.as_str(),
+            "routing_activation_install_indeterminate"
+        );
+        assert_eq!(
+            ErrorCode::RoutingActivationDisableIndeterminate.as_str(),
+            "routing_activation_disable_indeterminate"
+        );
     }
 
     #[test]
     fn error_categories_render_stable_lower_snake_case() {
+        assert_eq!(ErrorCategory::ControlPlane.as_str(), "control_plane");
         assert_eq!(ErrorCategory::Query.as_str(), "query");
         assert_eq!(ErrorCategory::Runtime.as_str(), "runtime");
         assert_eq!(ErrorCategory::Resource.as_str(), "resource");
@@ -462,5 +604,10 @@ mod tests {
         );
         assert_eq!(postcondition.category().as_str(), "mutation");
         assert!(!postcondition.retryable());
+
+        let capture = WorkVcsError::CaptureNotPersisted("disk full".to_owned());
+        assert_eq!(capture.code().as_str(), "capture_not_persisted");
+        assert_eq!(capture.category().as_str(), "control_plane");
+        assert!(!capture.retryable());
     }
 }

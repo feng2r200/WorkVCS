@@ -17,6 +17,8 @@ The confirmed model has one authority for each kind of state:
 
 | Concern | Canonical authority |
 |---|---|
+| Logical project ownership and target routing | external ProjectRef registry v2 |
+| Pending capture intent and cross-project routing provenance | external capture journal v1 |
 | Workspace Work State | `Branch HEAD -> WorkStateCommit DAG -> ChangeSet -> ChangeOperation` |
 | Addressable identity | Store-local `ObjectIdentity` plus exactly one matching typed family owner |
 | Entity state | `Entity` plus immutable, complete `EntityVersion` values selected by Work State |
@@ -31,8 +33,30 @@ The confirmed model has one authority for each kind of state:
 | Store format | current Store manifest plus immutable migration provenance |
 | Transport | Bundle manifest plus immutable import-attempt provenance |
 
-No projection, runtime row, Event stream, Checkpoint, or Bundle file becomes a
-second Work-State authority.
+No control-plane projection/reference, runtime row, Event stream, Checkpoint,
+or Bundle file becomes a second Work-State authority.
+
+### External ProjectRef and capture-journal families
+
+ADR-0513 defines the control-plane schema in
+[ProjectRef Control Plane v2](projectref-control-plane-v2.md). ProjectRef,
+ProjectLocator, ProjectBinding, ProjectLink, RegistryObservation, and the
+migration receipt belong to the external registry. CaptureIntent and
+CaptureEvent are immutable journal families; CaptureGroup and secondary lookup
+are reconstructable projections/indexes over those authorities.
+
+These objects select and explain where a semantic operation is delivered. They
+do not participate in a Workspace Commit, do not receive Store-local
+ObjectIdentity ownership, and do not make a cross-Workspace Relation. One
+verified delivery receipt points back into exactly one Store/Workspace/Branch
+and its immutable WorkStateCommit/ChangeSet/entity-version result.
+
+The strict registry/resolver/intent foundation exists in the core library.
+The source-tree CLI can consume this family for ordinary reads only when an
+exact registry-v2 read-routing marker is present; marker absence or mismatch
+fails closed. This candidate has fixture evidence only, is not active in the
+live registry, and does not place the family inside the physical SQLite schema
+or activate journal/Store writes.
 
 ## Identity families
 

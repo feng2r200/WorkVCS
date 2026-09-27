@@ -5,22 +5,33 @@ implementation that violates one must first revise the confirmed design under
 explicit authority. An ADR may record that revision under current repository
 policy, but does not create the authority by itself.
 
-## P0 cutover entry invariants
+A newly accepted target may be explicitly marked implementation-pending. The
+older implementation may continue as a disclosed compatibility state, but it
+must not be described as satisfying the new invariant or used to weaken it.
 
-### INV-081 — Project identity uses the Git common directory
+## Project entry and capture invariants
 
-Project binding identifies a repository through its Git common directory, not
-through a mutable worktree path. Worktree aliases must not create duplicate
-project identities.
+### INV-081 — Project ownership uses stable ProjectRef and ranked locators
 
-### INV-082 — Store discovery is external and double-validated
+ProjectRef is the stable logical project identity. Provider Project ID, Git
+common directory, CWD, Store, Workspace, Branch, display name, and basename are
+locators, targets, or labels rather than ProjectRef identity. Ownership ranks
+explicit ProjectRef, verified semantic Project, Git common directory, CWD,
+then pending. An eligible unbound higher-ranked owner blocks lower-ranked
+fallback. Lower-ranked contexts remain related evidence rather than aliases.
+Git worktree aliases must still resolve through their common-directory locator
+without duplicating a repository ProjectRef.
+
+### INV-082 — The control plane is external and Store use is double-validated
 
 The registry is selected, in order, by explicit `--registry PATH`, the
 `WORKVCS_HOME` environment variable, or the versioned XDG config file at
 `$XDG_CONFIG_HOME/workvcs/config.toml` (falling back to
-`$HOME/.config/workvcs/config.toml`). It is not stored in the repository. A
-discovered Store undergoes a second identity/format/integrity validation
-before use.
+`$HOME/.config/workvcs/config.toml`). Registry, capture journal, and default
+Stores are not stored in a project or repository. A known WorkVCS home is the
+control-plane root; registry-only configuration derives the journal sidecar as
+`<canonical-registry-path>.d` without inferring a Store root. Every discovered
+Store undergoes a second identity/format/integrity validation before use.
 
 ### INV-083 — Ambiguous active Session state fails closed
 
@@ -29,9 +40,11 @@ selected by project bind, resume, admission, or closeout inspection.
 
 ### INV-084 — Read-only entrypoints do not write
 
-Configuration inspection, project discovery/audit, `recall`, `resume --cwd`,
-and current `closeout inspect` must not create or mutate WorkVCS state,
-receipts, Sessions, Claims, or Work-State commits.
+Configuration inspection, project discovery/audit, migration preview,
+migration rollback-state inspection, capture-recovery status, `recall`,
+`resume --cwd`, and current `closeout inspect` must not create or mutate
+ProjectRefs, locator observations, registry or journal state, Stores, receipts,
+Sessions, Claims, or Work-State commits.
 
 ### INV-085 — Plan admission is atomic and idempotent
 
@@ -40,11 +53,13 @@ idempotency key and manifest identity reuses the prior result rather than
 duplicating Goal, Plan, Task, Record, or Evidence state. Expected head/state
 guards are manifest fields, not CLI flags.
 
-### INV-086 — Registry writes are externally serialized and replace atomically
+### INV-086 — Control-plane writes are serialized and independently durable
 
 The external project registry is outside the project/repository. Updates use
 cross-process mutual exclusion and atomic replacement; a partially written
-registry is never an accepted binding source.
+registry is never an accepted binding source. Capture intents and events are
+independently locked and atomically installed before success is reported.
+Registry, journal, and Store writes do not claim one cross-surface transaction.
 
 ### INV-087 — Store use requires complete integrity validation
 
@@ -153,15 +168,107 @@ current Branch-head source from a historical Commit source. It never infers
 staleness, mutates a Record, or turns independent cognition into a Goal, Plan,
 Task, Verification, or closeout gate.
 
-### INV-100 — Project first-use bootstrap is explicit and convergent
+### INV-100 — Valuable first write is journal-first and bootstrap-convergent
 
-Project discovery remains zero-write. Explicit project ensure either verifies
-an existing binding unchanged or converges concurrent and repeated first-use
-calls on one identity-derived external Store, one Workspace, one initial Work
-Branch, and one atomic registry binding. It creates no semantic work objects.
-Interrupted bootstrap may be resumed only from the exact deterministic Store
-marker and a missing or pristine Genesis Workspace; foreign, ambiguous, or
-non-pristine Stores fail closed without overwrite or adoption.
+Project discovery remains zero-write. After an external value gate admits
+content, WorkVCS durably installs one bounded, redacted CaptureIntent before
+any target Store write. Binding absence is a routing state, not a no-record
+decision. Concurrent and repeated first-use delivery converges on one
+ProjectRef, dedicated default Store, Workspace, initial Work Branch, and atomic
+registry binding. Interrupted bootstrap may be resumed only from the exact
+deterministic Store marker and a missing or pristine Genesis Workspace;
+foreign, ambiguous, or non-pristine Stores fail closed without overwrite or
+adoption.
+
+### INV-101 — Cross-project capture has one canonical semantic authority
+
+One CaptureGroup has exactly one primary ProjectRef and one canonical mutable
+Record in its primary Store. Secondary projects receive immutable
+control-plane references pinned to one canonical version/digest, or create
+distinct local Records with explicit `derived_from` provenance. CaptureGroup,
+ProjectLink, and secondary-reference metadata never create a cross-Workspace
+Work Graph or a second mutable copy of the canonical Record.
+
+### INV-102 — Cross-surface completion converges idempotently
+
+Registry replacement, journal installation, and each Store transition have
+their own atomicity boundary. A Store commit whose receipt was interrupted is
+recovered by replaying the same target idempotency key. Primary success is not
+rolled back when a secondary delivery fails; the missing delivery remains
+visible and independently retryable. No completion claim may imply a
+cross-Store all-or-nothing transaction.
+
+### INV-103 — Registry migration is explicit, one-to-one, and recoverable
+
+Registry v1-to-v2 migration requires a zero-write preview digest and an
+unchanged source digest before apply. Each v1 binding becomes exactly one
+ProjectRef with the same Store path, Store ID, Workspace ID, and Branch ID.
+Equal targets create only a `possible_shared_target` observation; they do not
+merge or link ProjectRefs. Apply uses the registry lock, a verified v1 backup,
+and atomic replacement. Read-only operations never migrate, and migration
+never invents historical CaptureGroups.
+
+### INV-104 — Historical ownership repair is evidence-bound and target-preserving
+
+A migration ownership repair requires an exact source-registry digest, v1
+binding key, target digest, namespaced semantic locator, and evidence digest.
+It makes the semantic locator active and retains the v1 path locator as retired
+history. It must not infer a replacement path, change Store/Workspace/Branch,
+merge ProjectRefs, bypass target validation, or perform a write during preview.
+
+### INV-105 — Registry rollback is explicit, exact, and zero-use gated
+
+Registry rollback is never automatic. It requires the exact installed-v2 and
+raw v1-backup digests, a matching revision-1 migration receipt, absence across
+all supported routing-activation aliases, and empty supported journal aliases.
+It preserves exact v2 bytes before atomically restoring exact v1 bytes,
+classifies post-rename failures as indeterminate, and treats repeated exact
+restore as a verified no-write result. Admission and rollback MUST derive one
+quiescence identity from the canonical registry. Admission MUST revalidate
+the expected v2 revision and canonical digest only after acquiring it; this
+core check cannot be replaced by a caller callback and MUST be repeated after
+such a callback before persistence. Its journal root MUST be derived from the
+supported standard-home or registry-sidecar alias, never an arbitrary caller
+path. Rollback MUST hold the lock after the registry lock from the first
+journal scan through replacement verification. A present unowned lock is never
+stolen automatically and blocks both paths.
+
+### INV-106 — Recovery events are authority and projections are rebuildable
+
+Each post-intent recovery transition is an immutable, canonically encoded
+event with contiguous sequence, payload digest, and previous-event digest.
+Missing, reordered, renamed, noncanonical, tampered, or broken-chain events
+fail closed. A projection is never independent truth: absence, staleness, or a
+malformed regular projection is repaired only by deterministic replay of the
+valid intent and event chain.
+
+Recovery status is read-only. Recovery apply is separately explicit and must
+revalidate the exact registry and projection digests after acquiring registry,
+shared-quiescence, and capture locks in that order. An unbound eligible owner
+may converge to exactly one ProjectRef and binding; conflict or unresolved
+ownership creates no fallback. Store bootstrap is limited to pristine Genesis
+state until the separately recorded primary delivery starts. That delivery
+fixes exact Branch guards and one target idempotency key before calling the
+atomic Store capture. A failure after any authoritative install is
+indeterminate and resolves by status-first forward convergence, never guessed
+rollback.
+
+### INV-107 — Primary delivery receipts recover committed-but-unreceipted work
+
+One capture has at most one current canonical primary receipt for its current
+binding. `delivery_started` fixes the delivery ID, target identity, Branch
+guards, target idempotency key, and materialized manifest digest before the
+Store mutation. `delivery_applied` must name the same delivery and contain the
+committed WorkStateCommit, ChangeSet, resulting state digest, all result
+identities/version digests, and the target reuse result. If the Store commit is
+durable before the receipt, replay uses the recorded manifest and key and may
+only install the verified reused receipt. A legacy guarded manifest is never
+rebased: missing or stale guards preserve the intent, create no target write,
+and derive `legacy_manifest_upgrade_required`. Registry re-resolution may
+retain the receipt as inactive history only for the same resolved ProjectRef;
+it becomes current again only after the exact Store/Workspace/Branch target is
+revalidated. A different target clears the current delivery view and requires
+a new guarded delivery rather than reusing a target identity across Stores.
 
 ## State and ownership
 
@@ -187,6 +294,8 @@ identified by any one physical source location.
 Goal, Plan, Task, and their execution relations remain Workspace-local.
 Cross-Workspace reuse uses Store-local KnowledgeExposure bound to one immutable
 source Knowledge version; it does not share a Work Graph.
+ADR-0513 control-plane CaptureGroup and immutable Record references expose
+association only; they are not cross-Workspace semantic sharing or relations.
 
 ### INV-005 — Runtime state is not restored or merged
 

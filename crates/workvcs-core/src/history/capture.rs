@@ -115,6 +115,10 @@ impl CognitionCaptureManifest {
             payload_digest,
         })
     }
+
+    pub fn payload_digest(&self) -> Digest {
+        self.payload_digest
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

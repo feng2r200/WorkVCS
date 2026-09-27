@@ -12,3 +12,18 @@ home = "~/.codex/workvcs"
 
 # Alternatively, point directly at a registry file:
 # registry = "/absolute/path/to/project-bindings.json"
+
+# Accepted ADR-0513 routing target, not current journal behavior: registry-only
+# mode will place capture-journal control-plane state under
+# <canonical-registry-path>.d. No new configuration key is introduced. The
+# current read-only registry migration preview uses this locator but does not
+# create or consume the sidecar. The source-tree apply candidate, rollback
+# probe, versioned ordinary reads, and read-routing activation candidate add no
+# configuration key. With `home`, the activation marker is
+# <home>/routing-activation-v1.json; registry-only mode uses
+# <canonical-registry-path>.d/routing-activation-v1.json. The exact marker
+# activates v2 reads only, not journal or Store writes. Live migration and
+# activation remain separately gated. A command-local repair manifest also
+# adds no key. Concrete locator adapters are likewise command-local through
+# --locator-adapter-context FILE; adapter context never selects this registry
+# or changes the configured WorkVCS home.

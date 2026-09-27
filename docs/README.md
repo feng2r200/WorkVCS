@@ -3,6 +3,55 @@
 This directory is the repository-native source of truth for WorkVCS's
 confirmed product, domain, and architecture state.
 
+## Accepted ProjectRef design and bounded implementation status
+
+The following material is confirmed project authority. Its core registry,
+resolver, intent-admission, and generic adapter-input foundations exist. The
+source-tree CLI also exposes a read-only v1-to-v2 migration preview with an
+optional evidence-bound historical ownership-repair manifest, a digest-locked
+apply candidate, a read-only rollback state probe, an explicit digest-locked
+rollback candidate, versioned ordinary read paths, and a separately
+digest-bound ProjectRef-v2 read-routing activation candidate. The source-tree
+`capture` caller also has actual target-neutral v1 and registry-coupled v2
+journal admission behind a second exact, default-off marker. Immutable capture
+events, authority-derived projections, read-only recovery status, and an
+explicit digest-locked `project capture-recovery --apply` candidate now
+converge an admitted unbound owner to one ProjectRef and pristine
+Store/Workspace/Branch binding, deliver one canonical primary result with an
+immutable receipt, and converge CaptureGroup secondary references without
+opening a secondary Store. Commit-before-receipt recovery reuses the target
+idempotency result, reference retry installs only missing associations, and
+read-only recall resolves them from a secondary ProjectRef. Stale legacy
+guards stop at an explicit upgrade state without changing the Store.
+Migration apply, rollback, both activation surfaces, admission,
+recovery/bootstrap, primary delivery, and secondary association have been
+validated only on isolated fixtures. The ordinary `capture` path remains
+admission-only. The first concrete CLI integration adapter now routes verified
+desktop Project metadata and canonical mirror evidence through the generic
+core interface; it is not installed or active in the current runtime. Live
+migration, live rollback, installation, either live activation, and live
+delivery remain separately authorized work:
+
+The authoritative delivery sequence is the eleven-round **Remaining delivery
+roadmap** in ADR-0513; rounds 1 through 5 are complete in the source tree. It
+deliberately separates five source-function rounds from six
+Git/install/migration/activation rounds so a source change never implies
+authority to mutate the live registry, journal, or Stores.
+
+- [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
+- [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
+- [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
+- [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)
+- [ProjectRef Registry Apply Candidate Evidence](provenance/projectref-registry-apply-candidate.md)
+- [ProjectRef Registry Rollback Candidate Evidence](provenance/projectref-registry-rollback-candidate.md)
+- [ProjectRef Journal Admission and Rollback Quiescence Evidence](provenance/projectref-journal-rollback-quiescence-candidate.md)
+- [ProjectRef v2 Read Routing and Activation Candidate Evidence](provenance/projectref-v2-read-routing-activation-candidate.md)
+- [ProjectRef Routed Journal Admission Candidate Evidence](provenance/projectref-routed-journal-admission-candidate.md)
+- [ProjectRef Primary Delivery and Receipt Recovery Evidence](provenance/projectref-primary-delivery-recovery-candidate.md)
+- [ProjectRef CaptureGroup Secondary Reference Evidence](provenance/projectref-capture-group-secondary-reference-candidate.md)
+- [ProjectRef Journal Recovery and Bootstrap Candidate Evidence](provenance/projectref-journal-recovery-bootstrap-candidate.md)
+- [ProjectRef Concrete Adapter and Round-5 Acceptance Evidence](provenance/projectref-concrete-adapter-and-round5-acceptance.md)
+
 ## Implementation readiness
 
 The current V1 implementation-readiness, release gate, and dogfood evidence
@@ -130,6 +179,8 @@ The confirmed baseline contains:
 - [Knowledge federation and Store portability](architecture/knowledge-federation-and-portability.md)
 - [Bundle Local Directory Profile v0.2](architecture/bundle-local-profile-v0.2.md)
 - [Logical schema boundaries](architecture/logical-schema-boundaries.md)
+- [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
+- [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [Physical Schema v0.1 contract](architecture/physical-schema-v0.1.md)
 - [Implementation Contract v0.1](architecture/implementation-contract-v0.1.md)
 - [Executable schema v0.1](../schema/schema-v0.1.sql)
@@ -294,6 +345,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0510: Bounded Record Currentness Audit](decisions/adr/0510-record-currentness-audit.md)
 - [ADR-0511: Idempotent Project First-Use Bootstrap](decisions/adr/0511-idempotent-project-first-use-bootstrap.md)
 - [ADR-0512: Local Object Store v2 Cutover](decisions/adr/0512-local-object-v2-cutover.md)
+- [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

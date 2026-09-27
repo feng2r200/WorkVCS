@@ -1,12 +1,168 @@
 # Local Operator Quickstart and Recovery
 
 Status: Local V1 operator guide for CLI package `0.1.0`
-Last updated: 2026-09-20
+Last updated: 2026-09-27
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
 this repository. It describes the locally release-ready V1 boundary, runnable
 local commands, and the package/install helper. It is not evidence that a
 public release, tag, or remote distribution has occurred.
+
+## Accepted Target Versus Current Commands
+
+ADR-0513 accepts stable ProjectRef ownership, semantic-Project-before-Git/CWD
+resolution, an external write-ahead capture journal, CaptureGroup association,
+and preview-gated registry v2 migration. The core model/resolver/intent and
+generic adapter-input foundations exist. The source tree exposes read-only
+preview plus migration apply and rollback candidates, a rollback state probe, versioned
+ordinary reads, and a separately guarded read-routing activation candidate:
+
+```sh
+workvcs project registry-migrate --preview [--registry "$REGISTRY"] [--repair-manifest PATH] [--format text|json]
+```
+
+Preview strictly reads registry v1, opens each bound Store read-only, and reports a
+deterministic mapping, source/preview digests, validation failures, and target
+coincidences. It creates no lock, sidecar, backup, temp file, ProjectRef, or
+Store object.
+
+```sh
+workvcs project registry-migrate --apply --expected-source-digest DIGEST --expected-preview-digest DIGEST [--repair-manifest PATH] [--registry "$REGISTRY"]
+workvcs project registry-migrate --rollback-check --expected-installed-digest DIGEST --expected-backup-digest DIGEST [--registry "$REGISTRY"]
+workvcs project registry-migrate --rollback --expected-installed-digest DIGEST --expected-backup-digest DIGEST [--registry "$REGISTRY"]
+```
+
+Apply revalidates all facts under the registry lock, preserves an exact
+raw-byte v1 backup, and atomically replaces the registry. `--rollback-check`
+is read-only and reports either `v2_ready`, `v1_restored`, or `blocked`.
+`--rollback` additionally requires activation absence and empty supported
+journal layouts, preserves the exact installed v2 bytes in a digest-named
+snapshot, then atomically restores the verified v1 backup. A repeated rollback
+is a verified no-op only when the current v1 bytes, retained v1 backup, v2
+snapshot, receipt, and both supplied digests all match. These mutation paths
+have been validated only on isolated fixtures. Do not run apply or rollback
+against the configured live registry: the candidates have not been installed,
+and a successful preview or probe is not mutation authorization.
+
+For a standard `project-bindings.json`, rollback checks both the WorkVCS-home
+and registry-sidecar activation/journal aliases even if the command used only
+one of those paths. `rollback_apply_safe=true` means a v2 restore is ready for
+separate authorization; `rollback_reentry_safe=true` means an exact v1 restore
+has already been verified and a repeat would be a no-write result. Apply and
+rollback currently fail closed on non-Unix platforms. The empty-journal check
+is now protected in the source candidate by
+`<canonical-registry-path>.journal-quiescence.lock`; `--rollback-check`
+reports the lock path and state. Both race orders are fixture-tested, but v2
+journal admission remains disabled because the source route is not installed
+and no live activation is authorized.
+
+The source tree can inspect and prepare the exact v2 read-routing gate:
+
+```sh
+workvcs project routing-activation --status [--registry "$REGISTRY"]
+workvcs project routing-activation --preview [--registry "$REGISTRY"]
+workvcs project routing-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST [--registry "$REGISTRY"]
+```
+
+Absence of `<control-plane-root>/routing-activation-v1.json` means off. The
+marker is bound to one registry ID, revision, and digest; a stale, malformed,
+or mismatched marker fails closed. Only the apply candidate writes, and it has
+been tested only on isolated fixtures. Do not apply it to the configured live
+control plane without separate authorization. Its scope enables ProjectRef-v2
+reads only; journal delivery and Store writes remain inactive.
+If apply returns `routing_activation_install_indeterminate`, the marker may
+already be active. Do not delete it or replay apply blindly. Run
+`workvcs project routing-activation --status` against the same registry first;
+only an exact active marker supports idempotent reuse, and every other state
+remains fail-closed.
+
+The source tree has a separate journal-admission gate:
+
+```sh
+workvcs project journal-admission-activation --status [--registry "$REGISTRY"]
+workvcs project journal-admission-activation --preview [--registry "$REGISTRY"]
+workvcs project journal-admission-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST [--registry "$REGISTRY"]
+workvcs project journal-admission-activation --disable --expected-registry-digest DIGEST --expected-activation-digest DIGEST [--registry "$REGISTRY"]
+```
+
+Apply additionally requires exact read activation; disable acquires the shared
+quiescence lock before removing the exact marker. Both remain fixture-only and
+uninstalled. The marker permits only `capture --value-reason` intent admission;
+it does not bootstrap a ProjectRef, process journal events, or write a Store.
+If disable returns `routing_activation_disable_indeterminate`, inspect
+`journal-admission-activation --status` before any retry.
+
+The next source-only recovery surface is intentionally separate from both
+activation markers:
+
+```sh
+workvcs project capture-recovery --status --capture-id "$CAPTURE_ID" [--registry "$REGISTRY"]
+workvcs project capture-recovery --apply --capture-id "$CAPTURE_ID" \
+  --expected-registry-digest "$REGISTRY_DIGEST" \
+  --expected-projection-digest "$PROJECTION_DIGEST" \
+  [--registry "$REGISTRY"] [--store-root "$STORE_ROOT"]
+```
+
+Always start with `--status`. It validates immutable events, derives the
+projection again, compares the stored projection, and reports the current
+owner plus exact recovery action without writing. Apply requires both observed
+digests again after all recovery locks are held. An unbound semantic/Git/CWD
+owner can converge to exactly one ProjectRef and binding; conflict or
+unresolved ownership stays pending and creates no fallback target.
+
+After binding convergence, apply may perform one primary delivery. It first
+persists `delivery_started` with exact target guards and then calls the existing
+atomic/idempotent cognition-capture engine. A successful
+`delivery_applied` receipt names the committed result. If apply stops after
+the target commit but before the receipt, run `--status`, take fresh digests,
+and retry: the same target idempotency key must return the original commit and
+the retry writes only the missing receipt. Never delete the Store or invent an
+inverse operation.
+
+If registry metadata changed, recovery first makes the old binding receipt
+non-current. An unchanged ProjectRef plus the exact same
+Store/Workspace/Branch reuses the existing delivery receipt without a target
+call; any target change returns to `pending_primary` and requires a fresh
+guarded delivery for a non-group capture. After a CaptureGroup has a canonical
+receipt, a primary or target change fails closed; start a new capture rather
+than create a second canonical authority.
+
+A retained legacy manifest with absent or stale guards stops at
+`legacy_manifest_upgrade_required`; its intent is preserved and its target is
+not mutated. `pending_references` means the primary is safe and one or more
+immutable secondary references are missing. Retry with fresh status digests:
+recovery checks that each secondary ProjectRef still exists, appends only the
+missing `reference_applied` events, never opens the secondary Store, and then
+adds the idempotent `capture_completed` summary. If the final reference is
+already present but that summary is missing, state is semantically completed
+and the reported next action is only `apply_capture_completion`.
+
+The associated control-plane references can be inspected from a secondary
+ProjectRef without a semantic Store read:
+
+```sh
+workvcs project capture-group-recall --project-ref-id "$PROJECT_REF_ID" [--registry "$REGISTRY"]
+```
+
+This source candidate is read-only, fixture-tested, and uninstalled. Neither
+it nor capture recovery may be pointed at the configured live registry in this
+round.
+
+`--repair-manifest` is only for an already evidenced historical ownership
+error. The strict manifest pins the current source digest, one exact v1 binding
+key and target digest, and a namespaced semantic locator/evidence digest. A
+valid row previews the semantic locator as active and the old path locator as
+retired while preserving the Store/Workspace/Branch target. It is not a path
+rewrite, does not repair the live registry, and is never inferred from a
+similar directory name.
+
+Until live migration and activation are separately authorized and validated,
+use the current v1 P0 commands below. A missing binding is a routing problem, not
+evidence that valuable content should be discarded: preserve the bounded
+semantic packet, confirm the logical owner, then use current `project ensure`
+immediately before the valuable write. This compatibility packet is not
+durable WorkVCS state; the target journal guarantee is not active yet.
+Read-only/no-record work still creates nothing.
 
 ## P0 Cutover Entry
 
@@ -22,15 +178,46 @@ binding. The registry and Store are forced outside the project/repository. Git
 identity is derived from the repository common directory, and the discovered
 Store receives complete integrity validation before use.
 
-Start with read-only discovery:
+Start with read-only discovery. It reports `registry_version` and
+`migration_required`; a source-tree binary reading an activated v2 registry
+also reports ProjectRef resolution and the exact activation path:
 
 ```sh
 workvcs project discover --cwd "$PROJECT"
 ```
 
+For a verified semantic Project context under registry v2, add the generic
+evidence envelope, a trusted adapter handoff, or an explicitly selected
+ProjectRef:
+
+```sh
+workvcs project discover --cwd "$PROJECT" --locator-context LOCATORS.json
+workvcs project discover --cwd "$PROJECT" --locator-adapter-context ADAPTER.json
+workvcs project discover --cwd "$PROJECT" --project-ref PROJECT_REF
+```
+
+The same three options are available on `recall`, cwd-based `resume`, and
+cwd-based `record currentness-audit`; the journal-first `capture` form accepts
+them as well. `--locator-context` contains already-verified tool-neutral
+evidence. `--locator-adapter-context` dispatches bounded provider context; the
+current source candidate supports `codex-app-project-metadata/v1` with
+verified task-Project metadata and/or a canonical ChatGPT Project mirror. They
+are rejected against v1 reads rather than ignored. An unbound semantic owner
+blocks Git/CWD fallback.
+
+Treat the adapter file as a trusted integration handoff. Authoritative Codex
+metadata requires exact `list_projects` and `read_thread` verification;
+mirror-derived evidence must resolve immediately below the canonical
+`<codex-home>/.chatgpt-projects` root. Do not author the file from a Project
+display name. Provider absence can legitimately fall back to Git/CWD, while
+an explicitly supplied malformed or mismatched context must remain visible and
+fail closed where no authoritative winner exists.
+
 If it returns `error_code=project_binding_not_found` and
 `recovery_action=project_ensure`, resolve the logical project rather than using
-an ambient temporary directory, then run:
+an ambient temporary directory. If verified semantic Project context exists,
+do not silently substitute its repository or mirror; retain the pending packet
+until the current v1 logical owner is explicitly chosen, then run:
 
 ```sh
 workvcs project ensure --cwd "$PROJECT"

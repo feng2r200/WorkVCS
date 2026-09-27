@@ -15,7 +15,7 @@ not authorize push, tag, public release, remote deployment, global Hook
 installation, historical CaptureGroup backfill, rollback, or deletion of the
 earlier legacy intent.
 
-## Reviewed and installed revision
+## Reviewed and canary-installed revision
 
 The public route was implemented in local commit
 `050ce23140f0449f527fd0fd92d74452cd099485`. Canary preparation then exposed a
@@ -46,6 +46,26 @@ schema validation, and the complete 93-row ProjectRef acceptance-matrix
 validator. After the typed-ID delta, its focused typed-ID test and the public
 CaptureGroup end-to-end test passed again, followed by strict clippy and both
 validators, before the final live write.
+
+## Post-canary closeout correction
+
+Plan closeout exposed one independent public-CLI omission: the Task core
+correctly requires a non-empty structured rationale when entering
+`cancelled`, but `workvcs task transition` did not expose a rationale input.
+Marking the two replaced legacy Tasks `done` would have falsified their
+outcome, so commit `4c52c040326077c651e7a6640a3ff3fa665e5f28` added
+`--rationale-json`, passed the full workspace suite, strict clippy, schema
+validation, and the 93-row ProjectRef matrix, and was installed before Plan
+reconciliation.
+
+That later package is
+`target/package/workvcs-aarch64-apple-darwin-4c52c0403260-20260927T232419Z-78511`;
+its packaged and installed binary SHA-256 is
+`374080a8b9f858bdc893df5cfc643eee7917cec050fd6a605d56c5ac1b82f74d`.
+The Skill content did not change: its entry and tree-manifest SHA-256 values
+remain the values recorded above. This corrective install does not alter the
+fact that the live CaptureGroup admission, delivery, and replay below were
+executed with the exact clean `615f946c11ea...` canary revision.
 
 ## Live preconditions
 

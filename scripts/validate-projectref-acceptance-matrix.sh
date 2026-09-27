@@ -56,15 +56,15 @@ awk -F '|' '/^\| [RCMN]-[0-9][0-9] \|/ {
 }' "$ledger"
 
 for source in "$skill" "$workflows" "$tool_reference" "$quickstart"; do
-    rg -q -- '--locator-adapter-context' "$source"
+    grep -q -- '--locator-adapter-context' "$source"
 done
-rg -q 'command-local' "$config_reference"
-rg -q 'command-local' "$config_example"
-rg -q 'value decision before binding resolution' "$skill"
-rg -q 'no silent loss after admission' "$skill"
-rg -q 'no silent loss after admission' "$tool_reference"
+grep -q 'command-local' "$config_reference"
+grep -q 'command-local' "$config_example"
+grep -q 'value decision before binding resolution' "$skill"
+grep -q 'no silent loss after admission' "$skill"
+grep -q 'no silent loss after admission' "$tool_reference"
 
-if rg -i -n 'codex|chatgpt' "$repo_root/crates/workvcs-core/src/control_plane"; then
+if grep -R -i -n -E 'codex|chatgpt' "$repo_root/crates/workvcs-core/src/control_plane"; then
     echo "tool-specific term leaked into the generic core control plane" >&2
     exit 1
 fi

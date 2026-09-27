@@ -47,25 +47,25 @@ use workvcs_core::{
     BundleImportAttemptResult, BundleImportAttemptSnapshot, BundleImportPreflightOptions,
     BundleImportPreflightResult, BundleManifestValidationOptions, BundleManifestValidationResult,
     BundlePayloadExport, BundlePayloadExportOptions, BundlePayloadInput,
-    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue, CaptureId,
-    ChangeOperationListResult, ChangeSetCausalAnchorListResult, ChangeSetId, ChangeSetSnapshot,
-    CheckpointCreateOptions, CheckpointCreateResult, CheckpointId, CheckpointLatestOptions,
-    CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
-    CheckpointValidationResult, ClaimForceTakeoverOptions, ClaimForceTakeoverResult,
-    ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason, ClaimGuardResult, ClaimId,
-    ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode, ClaimNextOptions,
-    ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions,
-    ClaimTaskResult, ClaimTransferOptions, ClaimTransferResult, CloseoutInspectCategory,
-    CloseoutInspectGapCategory, CloseoutInspectGoalProjection, CloseoutInspectNonExpandedCategory,
-    CloseoutInspectOptions, CloseoutInspectPlanProjection, CloseoutInspectReadObservation,
-    CloseoutInspectReadProof, CloseoutInspectRuntimeGapCategory, CloseoutInspectRuntimeSummary,
-    CloseoutInspectSource, CloseoutInspectSourceKind, CloseoutInspectStoreFileKind,
-    CloseoutInspectStoreFileMetadata, CloseoutInspectTargetDigestStatus, CloseoutInspectTargetKind,
-    CloseoutInspectTargetResolution, CloseoutInspectTaskProjection,
-    CloseoutInspectVerificationTargetKind, CognitionCaptureManifest, CognitionCaptureOptions,
-    CognitionCaptureOutcome, CognitionCaptureResult, CommitId, CommitSnapshot, ContextItemCategory,
-    ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketId,
-    ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
+    BundlePayloadValidationOptions, BundlePayloadValidationResult, CanonicalValue, CaptureGroupId,
+    CaptureId, ChangeOperationListResult, ChangeSetCausalAnchorListResult, ChangeSetId,
+    ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointId,
+    CheckpointLatestOptions, CheckpointLatestResult, CheckpointListOptions, CheckpointListResult,
+    CheckpointSnapshot, CheckpointValidationResult, ClaimForceTakeoverOptions,
+    ClaimForceTakeoverResult, ClaimGuardAction, ClaimGuardOptions, ClaimGuardReason,
+    ClaimGuardResult, ClaimId, ClaimLifecycleState, ClaimListOptions, ClaimListResult, ClaimMode,
+    ClaimNextOptions, ClaimNextResult, ClaimReleaseOptions, ClaimReleaseResult, ClaimSnapshot,
+    ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions, ClaimTransferResult,
+    CloseoutInspectCategory, CloseoutInspectGapCategory, CloseoutInspectGoalProjection,
+    CloseoutInspectNonExpandedCategory, CloseoutInspectOptions, CloseoutInspectPlanProjection,
+    CloseoutInspectReadObservation, CloseoutInspectReadProof, CloseoutInspectRuntimeGapCategory,
+    CloseoutInspectRuntimeSummary, CloseoutInspectSource, CloseoutInspectSourceKind,
+    CloseoutInspectStoreFileKind, CloseoutInspectStoreFileMetadata,
+    CloseoutInspectTargetDigestStatus, CloseoutInspectTargetKind, CloseoutInspectTargetResolution,
+    CloseoutInspectTaskProjection, CloseoutInspectVerificationTargetKind, CognitionCaptureManifest,
+    CognitionCaptureOptions, CognitionCaptureOutcome, CognitionCaptureResult, CommitId,
+    CommitSnapshot, ContextItemCategory, ContextOverview, ContextOverviewOptions, ContextPacket,
+    ContextPacketId, ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
     ContextPacketSaveResult, ContextPacketSnapshot, ContextPacketSnapshotSchemaMigrationResult,
     ContextProfile, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine,
     EntityId, EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId,
@@ -15562,6 +15562,7 @@ const SUPPORTED_ID_KINDS: &[&str] = &[
     "claim",
     "merge",
     "merge-item",
+    "capture-group",
 ];
 
 fn render_id_kinds() -> String {
@@ -15603,6 +15604,7 @@ fn render_new_id(kind: &str) -> Result<String> {
         "claim" => ClaimId::new_v7().to_string(),
         "merge" => MergeId::new_v7().to_string(),
         "merge-item" => MergeItemId::new_v7().to_string(),
+        "capture-group" => CaptureGroupId::new_v7().to_string(),
         other => {
             return Err(WorkVcsError::IdentityInvalid(format!(
                 "id kind {other:?} is not supported"
@@ -15643,6 +15645,7 @@ fn render_validate_id(kind: &str, id: &str) -> Result<String> {
         "claim" => ClaimId::parse_canonical(id)?.to_string(),
         "merge" => MergeId::parse_canonical(id)?.to_string(),
         "merge-item" => MergeItemId::parse_canonical(id)?.to_string(),
+        "capture-group" => CaptureGroupId::parse_canonical(id)?.to_string(),
         other => {
             return Err(WorkVcsError::IdentityInvalid(format!(
                 "id kind {other:?} is not supported"
@@ -38246,6 +38249,7 @@ mod tests {
         assert_eq!(value(&kinds, "kinds"), SUPPORTED_ID_KINDS.len().to_string());
         assert_eq!(value(&kinds, "kind.0"), "store");
         assert_eq!(value(&kinds, "kind.28"), "merge-item");
+        assert_eq!(value(&kinds, "kind.29"), "capture-group");
 
         let mut generated_entity_id = None;
         for &kind in SUPPORTED_ID_KINDS {

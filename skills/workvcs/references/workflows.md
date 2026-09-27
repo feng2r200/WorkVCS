@@ -110,7 +110,9 @@ It may also receive `--project-ref ID`, a strict `--locator-context FILE` with
 already-verified semantic evidence, or a strict
 `--locator-adapter-context FILE` from a trusted integration. On registry v2 it
 may additionally receive `--capture-group FILE`; the strict group is control-
-plane authority and is part of the idempotency identity. The first concrete
+plane authority and is part of the idempotency identity. Generate its stable
+ID with `workvcs id new --kind capture-group`; do not borrow another typed ID.
+The first concrete
 dispatch target is `codex-app-project-metadata/v1`; its bounded context may
 contain verified task-Project metadata, a canonical Project-mirror path, or
 both. Adapter absence yields no semantic evidence and permits Git/CWD

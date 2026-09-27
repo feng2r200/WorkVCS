@@ -107,7 +107,9 @@ On registry v2 this public entry creates a target-neutral `cognition_v2`
 intent. The manifest must not contain `expected_head_commit_id` or
 `expected_state_digest`; recovery derives fresh target guards later. The
 strict CaptureGroup file names exactly one canonical primary member and any
-explicit immutable-reference members. Reusing the manifest idempotency key is
+explicit immutable-reference members. Generate its ID with
+`workvcs id new --kind capture-group`; do not reuse another typed ID. Reusing
+the manifest idempotency key is
 valid only with the same semantic payload and byte-equivalent canonical group
 meaning; changing either fails closed. Admission itself writes no Store.
 

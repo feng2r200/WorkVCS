@@ -229,6 +229,13 @@ recovery derives them from the selected target after admission.
 CaptureGroup input is strict JSON and requires `--value-reason`. A resolved
 primary plus one related secondary has this shape:
 
+```text
+workvcs id new --kind capture-group
+```
+
+Use the returned UUIDv7 as `capture_group_id`; do not borrow another typed ID
+or generate an unvalidated UUID. The group file then has this shape:
+
 ```json
 {
   "capture_group_id": "01a00000-0000-7000-8000-000000000001",

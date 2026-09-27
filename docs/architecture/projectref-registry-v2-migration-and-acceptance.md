@@ -2,7 +2,7 @@
 
 Status: Accepted implemented contract — complete 93-row acceptance ledger plus bounded live migration, activation, admission, delivery, and replay evidence
 Date: 2026-09-23
-Last updated: 2026-09-27
+Last updated: 2026-09-28
 Parent: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md)
 Schema: [ProjectRef Control Plane v2 Contract](projectref-control-plane-v2.md)
 
@@ -42,8 +42,9 @@ digest locks, target preservation, backup proof, and activation still off.
 Subsequent separately authorized rounds installed the reviewed binary,
 activated exact read routing, activated journal admission, and canaried public
 `cognition_v2` primary delivery plus a secondary immutable association. Live
-rollback was neither authorized nor needed. Push, release, deployment,
-historical backfill, and a global Hook remain outside the completed roadmap.
+rollback was neither authorized nor needed. Source publication, release,
+deployment, historical backfill, and a global Hook remain outside the
+completed roadmap.
 The exact final live proof is the
 [primary and CaptureGroup canary evidence](../provenance/projectref-live-primary-and-capture-group-canary.md).
 

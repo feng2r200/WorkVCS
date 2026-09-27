@@ -39,6 +39,9 @@ review, and restore work.
   remains independent of any Agent runtime.
 - **Evidence-bearing state.** Immutable events, changesets, evidence, resource
   observations, and verification records make completion claims auditable.
+- **Logical-project routing.** ProjectRef keeps semantic project ownership
+  separate from repository and directory location, so durable capture does
+  not disappear merely because the ambient CWD is unbound.
 - **Local-first and portable.** SQLite-backed stores, BLAKE3-addressed objects,
   checkpoints, and bundles keep the system inspectable and movable.
 
@@ -54,6 +57,26 @@ WorkVCS deliberately separates three kinds of state:
 
 That separation avoids two common failure modes: treating transient Agent
 coordination as project truth, and treating a transcript as a database.
+
+## Project-aware capture
+
+ProjectRef v2 resolves ownership in a deterministic order: an explicit
+ProjectRef, a verified semantic project or container, a Git repository, and
+finally the CWD. An eligible stronger owner blocks fallback when it is not yet
+bound, so repository or directory context cannot silently absorb work that
+belongs to another logical project.
+
+After an integration decides that content is worth retaining, v2 `capture`
+first admits a target-neutral intent to the central journal. Delivery remains
+an explicit, digest-locked recovery operation: one primary project owns the
+canonical Record, while related projects can receive immutable, version-pinned
+references through a CaptureGroup. Read-only operations and explicit
+no-record decisions remain zero-write, and routing/admission activation is
+off unless its exact registry snapshot has been enabled.
+
+See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),
+the [ProjectRef control-plane contract](docs/architecture/projectref-control-plane-v2.md),
+and the [migration and acceptance contract](docs/architecture/projectref-registry-v2-migration-and-acceptance.md).
 
 ## Quick start
 
@@ -115,6 +138,9 @@ before using WorkVCS as durable project infrastructure.
 - [Persistence model](docs/architecture/persistence-model.md) and
   [schema contract](docs/architecture/physical-schema-v0.1.md) — local durable
   storage and rebuildable projections.
+- [ProjectRef ownership and durable capture routing](docs/decisions/adr/0513-projectref-durable-capture-routing.md)
+  — logical-project resolution, journal admission, bounded recovery, and
+  cross-project association.
 - [V1 readiness ledger](docs/provenance/v1-readiness-ledger.md) and
   [release gate matrix](docs/provenance/v1-release-gate-matrix.md) — evidence
   behind the bounded maturity claim.
@@ -138,9 +164,10 @@ They keep the engine portable, testable, and independent of any one Agent.
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets
+cargo test --workspace --all-targets --locked
 scripts/validate-schema-v0.1.sh
 scripts/smoke-v0.1-cli-workflow.sh
+scripts/validate-projectref-acceptance-matrix.sh
 ```
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change. Security

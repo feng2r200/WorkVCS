@@ -19,6 +19,7 @@ Git 对文件进行版本控制，任务管理工具描述工作分配，对话�
 - **确定性的恢复。** `context`、`resume`、`next` 和 `why` 根据结构、状态、证据与来源信息重建有界上下文，而不是从冗长对话中猜测。
 - **协调而不负责编排。** Session、focus、claim、handoff 和合并进行中状态帮助多个 Agent 协作，同时 WorkVCS 保持独立于任何 Agent 运行时。
 - **携带证据的状态。** 不可变事件、变更集、证据、资源观测和验证记录让完成声明可以被审计。
+- **按逻辑项目路由。** ProjectRef 将语义项目归属与仓库、目录位置分离，因此不会仅仅因为当前 CWD 尚未绑定就遗漏本应持久化的内容。
 - **本地优先且可移植。** 基于 SQLite 的存储、按 BLAKE3 寻址的对象、检查点和 bundle，让系统保持可检查、可迁移。
 
 ## 状态模型
@@ -32,6 +33,14 @@ WorkVCS 有意区分三类状态：
 | 来源记录（Provenance） | 变更集、事件、证据和已观测的资源基础 | 不可变审计轨迹 |
 
 这种分层可以避免两种常见失败：把临时的 Agent 协调状态当成项目事实，以及把对话记录当成数据库。
+
+## 项目感知的内容沉淀
+
+ProjectRef v2 按确定顺序判断内容归属：显式指定的 ProjectRef、经过验证的语义项目或容器、Git 仓库，最后才是 CWD。只要存在更强且合格的归属，即使它尚未绑定，也会阻止向较弱上下文回退，避免仓库或目录在无提示的情况下接收本属于另一个逻辑项目的内容。
+
+当集成层确认某项内容值得保留后，v2 `capture` 会先把不携带目标地址的意图写入中央日志。交付仍是一个显式且受摘要锁定的恢复操作：主项目拥有唯一的规范 Record，相关项目可以通过 CaptureGroup 获得不可变、固定到具体版本的引用。只读操作和明确的“不记录”决定保持零写入；只有针对注册表精确快照显式启用后，路由和准入才会生效。
+
+进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
 
 ## 快速开始
 
@@ -83,6 +92,7 @@ scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
 - [版本控制引擎（英文）](docs/architecture/versioning-engine.md)——工作状态的提交、分支、diff、合并、恢复和脉络。
 - [语义操作与状态机（英文）](docs/architecture/semantic-operations-and-state-machines.md)——面向 Agent 的行为契约。
 - [持久化模型（英文）](docs/architecture/persistence-model.md)和 [Schema 契约（英文）](docs/architecture/physical-schema-v0.1.md)——本地持久存储与可重建投影。
+- [ProjectRef 归属与持久化捕获路由（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)——逻辑项目解析、日志准入、有界恢复和跨项目关联。
 - [V1 就绪台账（英文）](docs/provenance/v1-readiness-ledger.md)和[发布门矩阵（英文）](docs/provenance/v1-release-gate-matrix.md)——支撑限定成熟度声明的证据。
 - [文档地图（英文）](docs/README.md)——完整的权威资料与证据索引。
 
@@ -103,9 +113,10 @@ WorkVCS 有意不做以下事情：
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets
+cargo test --workspace --all-targets --locked
 scripts/validate-schema-v0.1.sh
 scripts/smoke-v0.1-cli-workflow.sh
+scripts/validate-projectref-acceptance-matrix.sh
 ```
 
 提交改动前请阅读 [CONTRIBUTING.md（英文）](CONTRIBUTING.md)。安全问题请按照 [SECURITY.md（英文）](SECURITY.md)报告；一般帮助请查看 [SUPPORT.md（英文）](SUPPORT.md)。

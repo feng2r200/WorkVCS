@@ -20,8 +20,8 @@ on 2026-09-27. The final exact installed canary wrote one canonical
 work-governance Record, exposed one immutable Hernes association without
 opening or changing the Hernes Store, replayed with zero writes, and preserved
 the earlier legacy intent byte-for-byte. Fault injection remains isolated,
-and live rollback, global per-turn Hook activation, historical backfill, push,
-tag, public release, and remote deployment remain separate decisions.
+and live rollback, global per-turn Hook activation, historical backfill, tag,
+public release, and remote deployment remain separate decisions.
 
 - [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)

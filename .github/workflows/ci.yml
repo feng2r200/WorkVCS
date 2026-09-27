@@ -41,3 +41,6 @@ jobs:
 
       - name: Run CLI smoke workflow
         run: scripts/smoke-v0.1-cli-workflow.sh
+
+      - name: Validate ProjectRef acceptance matrix
+        run: scripts/validate-projectref-acceptance-matrix.sh

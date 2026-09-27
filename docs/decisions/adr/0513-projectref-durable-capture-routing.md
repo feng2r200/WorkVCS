@@ -1,8 +1,8 @@
 # ADR-0513: ProjectRef Ownership and Durable Capture Routing
 
-Status: Accepted and delivered locally — roadmap rounds 1–11 complete with bounded live canary evidence; no push, release, deployment, or global Hook
+Status: Accepted and delivered locally — roadmap rounds 1–11 complete with bounded live canary evidence; no release, deployment, or global Hook
 Date: 2026-09-23
-Last updated: 2026-09-27
+Last updated: 2026-09-28
 
 ## Decision boundary
 

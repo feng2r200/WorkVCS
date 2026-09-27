@@ -12,9 +12,10 @@
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo test --workspace --all-targets`
+- [ ] `cargo test --workspace --all-targets --locked`
 - [ ] `scripts/validate-schema-v0.1.sh`
 - [ ] `scripts/smoke-v0.1-cli-workflow.sh`
+- [ ] `scripts/validate-projectref-acceptance-matrix.sh`
 
 ## Safety
 

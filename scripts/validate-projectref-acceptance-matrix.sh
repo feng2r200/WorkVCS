@@ -9,7 +9,10 @@ workflows="$repo_root/skills/workvcs/references/workflows.md"
 tool_reference="$repo_root/docs/operator/workvcs-tool-reference.md"
 quickstart="$repo_root/docs/operator/quickstart-and-recovery.md"
 config_reference="$repo_root/skills/workvcs/references/configuration.md"
+capability_routing="$repo_root/skills/workvcs/references/capability-routing.md"
 config_example="$repo_root/config.toml.example"
+readme="$repo_root/README.md"
+readme_zh="$repo_root/README.zh-CN.md"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -58,11 +61,22 @@ awk -F '|' '/^\| [RCMN]-[0-9][0-9] \|/ {
 for source in "$skill" "$workflows" "$tool_reference" "$quickstart"; do
     grep -q -- '--locator-adapter-context' "$source"
 done
+for source in "$workflows" "$tool_reference" "$quickstart"; do
+    grep -q -- '--expected-activation-digest' "$source"
+done
 grep -q 'command-local' "$config_reference"
 grep -q 'command-local' "$config_example"
-grep -q 'value decision before binding resolution' "$skill"
 grep -q 'no silent loss after admission' "$skill"
 grep -q 'no silent loss after admission' "$tool_reference"
+grep -q 'Use \*\*required participation\*\*' "$skill"
+grep -q 'changes selection and admission timing only' "$skill"
+grep -q 'workvcs config show' "$skill"
+grep -q 'references/capability-routing.md' "$skill"
+grep -q '^# Capability routing$' "$capability_routing"
+grep -q '^## Bootstrap live WorkVCS state from an existing stage baseline$' "$workflows"
+grep -q 'baseline is a project-native snapshot' "$skill"
+grep -q '^## Agent participation policy$' "$readme"
+grep -q '^## Agent 参与策略$' "$readme_zh"
 
 if grep -R -i -n -E 'codex|chatgpt' "$repo_root/crates/workvcs-core/src/control_plane"; then
     echo "tool-specific term leaked into the generic core control plane" >&2
@@ -74,5 +88,8 @@ echo "matrix_ids_exact=true"
 echo "matrix_statuses_valid=true"
 echo "round5_value_gate_and_no_record_policy_probe=passed"
 echo "round5_durability_claim_wording_probe=passed"
+echo "required_participation_policy_probe=passed"
+echo "activation_refresh_contract_probe=passed"
+echo "control_plane_selection_fallback_probe=passed"
 echo "adapter_docs_aligned=true"
 echo "generic_core_tool_neutral=true"

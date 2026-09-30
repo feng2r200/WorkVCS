@@ -24,6 +24,7 @@ and live rollback, global per-turn Hook activation, historical backfill, tag,
 public release, and remote deployment remain separate decisions.
 
 - [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
+- [ADR-0514: Digest-Locked Same-Lineage Activation Marker Refresh](decisions/adr/0514-activation-marker-same-lineage-refresh.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)
@@ -31,6 +32,7 @@ public release, and remote deployment remain separate decisions.
 - [ProjectRef Registry Rollback Candidate Evidence](provenance/projectref-registry-rollback-candidate.md)
 - [ProjectRef Journal Admission and Rollback Quiescence Evidence](provenance/projectref-journal-rollback-quiescence-candidate.md)
 - [ProjectRef v2 Read Routing and Activation Candidate Evidence](provenance/projectref-v2-read-routing-activation-candidate.md)
+- [ProjectRef Same-Lineage Activation Refresh Live Evidence](provenance/projectref-activation-same-lineage-refresh-live-evidence.md)
 - [ProjectRef Routed Journal Admission Candidate Evidence](provenance/projectref-routed-journal-admission-candidate.md)
 - [ProjectRef Primary Delivery and Receipt Recovery Evidence](provenance/projectref-primary-delivery-recovery-candidate.md)
 - [ProjectRef CaptureGroup Secondary Reference Evidence](provenance/projectref-capture-group-secondary-reference-candidate.md)
@@ -332,6 +334,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0511: Idempotent Project First-Use Bootstrap](decisions/adr/0511-idempotent-project-first-use-bootstrap.md)
 - [ADR-0512: Local Object Store v2 Cutover](decisions/adr/0512-local-object-v2-cutover.md)
 - [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
+- [ADR-0514: Digest-Locked Same-Lineage Activation Marker Refresh](decisions/adr/0514-activation-marker-same-lineage-refresh.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

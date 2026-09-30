@@ -66,9 +66,15 @@ The exact v2 read-routing gate is inspected and prepared separately:
 workvcs project routing-activation --status [--registry PATH]
 workvcs project routing-activation --preview [--registry PATH]
 workvcs project routing-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST [--registry PATH]
+workvcs project routing-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST --expected-activation-digest OLD_DIGEST [--registry PATH]
 ```
 
-Absence is off. Malformed, stale, symlinked, or mismatched markers fail closed.
+Absence is off. Malformed, symlinked, or mismatched markers fail closed. A stale
+marker also fails closed unless apply supplies its exact installed digest and
+the marker names an earlier revision of the same registry ID. That refresh
+locks and rechecks the current registry, new candidate, and old marker before
+atomically replacing it. It never accepts another lineage, an equal/newer
+revision, or manual deletion as recovery.
 The marker activates only v2 reads; it does not activate journal admission or
 Store writes. Presence in source or an installed package does not prove that
 migration or activation happened. Inspect the exact installed revision and
@@ -85,6 +91,7 @@ The separate journal-admission gate is:
 workvcs project journal-admission-activation --status [--registry PATH]
 workvcs project journal-admission-activation --preview [--registry PATH]
 workvcs project journal-admission-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST [--registry PATH]
+workvcs project journal-admission-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST --expected-activation-digest OLD_DIGEST [--registry PATH]
 workvcs project journal-admission-activation --disable --expected-registry-digest DIGEST --expected-activation-digest DIGEST [--registry PATH]
 ```
 
@@ -92,7 +99,9 @@ Apply requires the exact read-routing marker to be active and holds the
 registry lock before the shared journal-quiescence lock. Disable uses the same
 order, requires the exact current registry and installed-marker digests, and
 excludes new admissions before removal. Absence is off; malformed, stale,
-wrong-scope, symlinked, or uncertain state fails closed. This marker permits
+wrong-scope, symlinked, or uncertain state fails closed. The only stale-marker
+exception is an apply that locks the exact old marker digest and proves an
+earlier revision of the same registry lineage before atomic replacement. This marker permits
 only immutable intent admission. It does not authorize ProjectRef bootstrap,
 journal-event processing, target Store delivery, or any live operation.
 

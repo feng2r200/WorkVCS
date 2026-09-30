@@ -78,6 +78,21 @@ See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),
 the [ProjectRef control-plane contract](docs/architecture/projectref-control-plane-v2.md),
 and the [migration and acceptance contract](docs/architecture/projectref-registry-v2-migration-and-acceptance.md).
 
+## Agent participation policy
+
+The bundled Skill is value-gated by default, so merely installing WorkVCS does
+not impose a workflow on every Agent task. A user, project, or environment may
+instead declare required participation. In that mode the Agent selects WorkVCS
+at task start, reads bounded prior state when it can exist, and reconciles the
+smallest durable semantic delta before handoff or closeout. Project documents
+may remain the authority for explanatory content while WorkVCS remains the
+required durable work-state provider; writing both is valid when those roles
+are explicit.
+
+Required participation changes selection policy only. It does not make a Plan
+mandatory and does not bypass the separate authorization and digest locks for
+migration, activation, recovery delivery, rollback, or other mutations.
+
 ## Quick start
 
 Prerequisites: Git and Rust `1.98.1` or newer.

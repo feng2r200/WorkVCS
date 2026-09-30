@@ -42,6 +42,12 @@ ProjectRef v2 按确定顺序判断内容归属：显式指定的 ProjectRef、�
 
 进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
 
+## Agent 参与策略
+
+随附的 Skill 默认按价值触发，因此仅安装 WorkVCS 不会强制每一个 Agent 任务采用同一种工作流。用户、项目或运行环境也可以声明“必须参与”策略。在该模式下，Agent 会在任务开始时选择 WorkVCS，在可能存在既有状态时进行有界读取，并在交接或结束前同步最小且真实的语义增量。项目文档可以继续作为说明性内容的权威来源，同时由 WorkVCS 作为必须使用的持久工作状态提供者；只要两者职责明确，双写是有效的。
+
+“必须参与”只改变选择策略：它不会强制建立 Plan，也不会绕过迁移、激活、恢复交付、回滚或其他变更操作各自独立的授权与摘要锁。
+
 ## 快速开始
 
 前置要求：Git 和 Rust `1.98.1` 或更高版本。

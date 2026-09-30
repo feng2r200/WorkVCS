@@ -62,11 +62,18 @@ The CLI can inspect and prepare the exact v2 read-routing gate:
 workvcs project routing-activation --status [--registry "$REGISTRY"]
 workvcs project routing-activation --preview [--registry "$REGISTRY"]
 workvcs project routing-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST [--registry "$REGISTRY"]
+workvcs project routing-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST --expected-activation-digest OLD_DIGEST [--registry "$REGISTRY"]
 ```
 
 Absence of `<control-plane-root>/routing-activation-v1.json` means off. The
 marker is bound to one registry ID, revision, and digest; a stale, malformed,
-or mismatched marker fails closed. Only apply writes. Fault behavior has
+or mismatched marker fails closed. When registry bootstrap advances the same
+registry lineage, the second apply form may refresh only an earlier-revision
+stale marker whose installed digest exactly matches `OLD_DIGEST`. The registry,
+new candidate, and old marker are all checked under the registry lock before
+one atomic replacement; another registry lineage, an equal/newer revision,
+an absent or invalid marker, or a digest mismatch remains fail-closed. Never
+delete or hand-edit the old marker. Only apply writes. Fault behavior has
 isolated-fixture validation, and the configured local marker also has bounded
 live evidence. Do not apply it to another live control plane without separate
 authorization. Its scope enables ProjectRef-v2
@@ -83,11 +90,14 @@ The CLI has a separate journal-admission gate:
 workvcs project journal-admission-activation --status [--registry "$REGISTRY"]
 workvcs project journal-admission-activation --preview [--registry "$REGISTRY"]
 workvcs project journal-admission-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST [--registry "$REGISTRY"]
+workvcs project journal-admission-activation --apply --expected-registry-digest DIGEST --expected-candidate-digest DIGEST --expected-activation-digest OLD_DIGEST [--registry "$REGISTRY"]
 workvcs project journal-admission-activation --disable --expected-registry-digest DIGEST --expected-activation-digest DIGEST [--registry "$REGISTRY"]
 ```
 
-Apply additionally requires exact read activation; disable acquires the shared
-quiescence lock before removing the exact marker. Both have isolated-fixture
+Apply additionally requires exact read activation. Its stale-marker form has
+the same digest-locked, same-registry earlier-revision constraint as read
+routing and also holds the shared quiescence lock. Disable acquires that lock
+before removing the exact marker. Both have isolated-fixture
 validation and require exact live-state verification and operation authority. The marker
 permits only `capture --value-reason` intent admission; it does not bootstrap a
 ProjectRef, process journal events, or write a Store.

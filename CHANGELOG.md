@@ -15,6 +15,8 @@ and released versions will follow [Semantic Versioning](https://semver.org/).
 - Read-only v1-to-v2 migration preview, digest-locked migration and rollback,
   independently activated v2 reads and journal admission, status-first
   recovery, and isolated fault-injection coverage.
+- Digest-locked, same-registry-lineage atomic refresh for stale read-routing
+  and journal-admission markers after a registry revision advances.
 - Target-neutral `cognition_v2` capture with one canonical primary Record,
   idempotent delivery receipts, CaptureGroup secondary references, and
   Store-free secondary recall.
@@ -29,6 +31,10 @@ and released versions will follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The bundled Agent Skill now supports an explicit higher-priority
+  required-participation policy: WorkVCS is selected at task start and
+  reconciled before closeout while Plan admission and all mutation authority
+  gates remain independent. The public default remains value-gated.
 - Project discovery and durable capture no longer equate the ambient CWD with
   logical ownership; resolution follows explicit ProjectRef, verified semantic
   project, repository, then CWD precedence and fails closed on ambiguity.
@@ -42,6 +48,9 @@ and released versions will follow [Semantic Versioning](https://semver.org/).
 - Registry replacement, routing activation, journal admission, recovery, and
   rollback use explicit snapshot digests, ordered locks, atomic replacement,
   and fail-closed recovery probes rather than implicit fallback or dual write.
+- Activation refresh additionally locks the exact installed stale-marker
+  digest and rejects wrong-lineage, equal/newer-revision, invalid, symlinked,
+  absent, or concurrently changed markers.
 
 ### Remaining release gates
 

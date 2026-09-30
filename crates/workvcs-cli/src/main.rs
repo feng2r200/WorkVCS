@@ -1868,6 +1868,14 @@ enum ProjectCommand {
             help = "Expected digest of the exact activation candidate"
         )]
         expected_candidate_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected digest of an installed stale marker when atomically refreshing the same registry lineage"
+        )]
+        expected_activation_digest: Option<String>,
     },
     #[command(
         about = "Preview, install, disable, or inspect the digest-bound v2 journal-admission gate"
@@ -1923,7 +1931,7 @@ enum ProjectCommand {
         #[arg(
             long,
             value_name = "DIGEST",
-            help = "Expected digest of the installed activation marker for disable"
+            help = "Expected digest of the installed activation marker for disable or stale-marker apply refresh"
         )]
         expected_activation_digest: Option<String>,
     },
@@ -7322,19 +7330,32 @@ fn run(cli: Cli) -> Result<String> {
                 registry,
                 expected_registry_digest,
                 expected_candidate_digest,
+                expected_activation_digest,
             } => match (preview, apply, status) {
                 (true, false, false) => preview_project_routing_activation(registry),
-                (false, true, false) => apply_project_routing_activation(
-                    registry,
-                    required_control_plane_digest(
+                (false, true, false) => {
+                    let registry_digest = required_control_plane_digest(
                         "routing activation apply --expected-registry-digest",
                         expected_registry_digest,
-                    )?,
-                    required_control_plane_digest(
+                    )?;
+                    let candidate_digest = required_control_plane_digest(
                         "routing activation apply --expected-candidate-digest",
                         expected_candidate_digest,
-                    )?,
-                ),
+                    )?;
+                    match optional_control_plane_digest(expected_activation_digest)? {
+                        Some(activation_digest) => apply_project_routing_activation_refresh(
+                            registry,
+                            registry_digest,
+                            candidate_digest,
+                            activation_digest,
+                        ),
+                        None => apply_project_routing_activation(
+                            registry,
+                            registry_digest,
+                            candidate_digest,
+                        ),
+                    }
+                }
                 (false, false, true) => inspect_project_routing_activation(registry),
                 _ => unreachable!("clap requires exactly one routing activation action"),
             },
@@ -7351,17 +7372,31 @@ fn run(cli: Cli) -> Result<String> {
                 (true, false, false, false) => {
                     preview_project_journal_admission_activation(registry)
                 }
-                (false, true, false, false) => apply_project_journal_admission_activation(
-                    registry,
-                    required_control_plane_digest(
+                (false, true, false, false) => {
+                    let registry_digest = required_control_plane_digest(
                         "journal admission activation apply --expected-registry-digest",
                         expected_registry_digest,
-                    )?,
-                    required_control_plane_digest(
+                    )?;
+                    let candidate_digest = required_control_plane_digest(
                         "journal admission activation apply --expected-candidate-digest",
                         expected_candidate_digest,
-                    )?,
-                ),
+                    )?;
+                    match optional_control_plane_digest(expected_activation_digest)? {
+                        Some(activation_digest) => {
+                            apply_project_journal_admission_activation_refresh(
+                                registry,
+                                registry_digest,
+                                candidate_digest,
+                                activation_digest,
+                            )
+                        }
+                        None => apply_project_journal_admission_activation(
+                            registry,
+                            registry_digest,
+                            candidate_digest,
+                        ),
+                    }
+                }
                 (false, false, true, false) => disable_project_journal_admission_activation(
                     registry,
                     required_control_plane_digest(
@@ -19781,10 +19816,26 @@ fn apply_project_routing_activation(
     expected_registry_digest: ControlPlaneDigest,
     expected_candidate_digest: ControlPlaneDigest,
 ) -> Result<String> {
-    apply_project_routing_activation_with_fault(
+    apply_project_routing_activation_with_refresh_and_fault(
         registry,
         expected_registry_digest,
         expected_candidate_digest,
+        None,
+        None,
+    )
+}
+
+fn apply_project_routing_activation_refresh(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+    expected_activation_digest: ControlPlaneDigest,
+) -> Result<String> {
+    apply_project_routing_activation_with_refresh_and_fault(
+        registry,
+        expected_registry_digest,
+        expected_candidate_digest,
+        Some(expected_activation_digest),
         None,
     )
 }
@@ -19798,10 +19849,27 @@ enum RoutingActivationApplyFault {
     BeforeInstalledVerification,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn apply_project_routing_activation_with_fault(
     registry: Option<PathBuf>,
     expected_registry_digest: ControlPlaneDigest,
     expected_candidate_digest: ControlPlaneDigest,
+    fault: Option<RoutingActivationApplyFault>,
+) -> Result<String> {
+    apply_project_routing_activation_with_refresh_and_fault(
+        registry,
+        expected_registry_digest,
+        expected_candidate_digest,
+        None,
+        fault,
+    )
+}
+
+fn apply_project_routing_activation_with_refresh_and_fault(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+    expected_activation_digest: Option<ControlPlaneDigest>,
     fault: Option<RoutingActivationApplyFault>,
 ) -> Result<String> {
     let effective = effective_registry_config(registry)?;
@@ -19848,17 +19916,46 @@ fn apply_project_routing_activation_with_fault(
             true,
         );
     }
-    if initial.state != RoutingActivationState::Absent {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "refusing to replace routing activation marker {} in state {}{}",
-            initial.path.display(),
-            initial.state.as_str(),
-            initial
-                .issue
-                .as_ref()
-                .map(|issue| format!(" ({issue})"))
-                .unwrap_or_default()
-        )));
+    let refresh_stale = match initial.state {
+        RoutingActivationState::Absent => {
+            if expected_activation_digest.is_some() {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "routing activation refresh expected an installed stale marker at {}, but the marker is absent",
+                    initial.path.display()
+                )));
+            }
+            false
+        }
+        RoutingActivationState::Stale => {
+            let expected_activation_digest = expected_activation_digest.as_ref().ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "refusing to replace stale routing activation marker {} without --expected-activation-digest",
+                    initial.path.display()
+                ))
+            })?;
+            validate_routing_activation_refresh_source(
+                &initial.path,
+                &registry_v2,
+                expected_activation_digest,
+            )?;
+            true
+        }
+        RoutingActivationState::Invalid => {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "refusing to replace routing activation marker {} in state {}{}",
+                initial.path.display(),
+                initial.state.as_str(),
+                initial
+                    .issue
+                    .as_ref()
+                    .map(|issue| format!(" ({issue})"))
+                    .unwrap_or_default()
+            )));
+        }
+        RoutingActivationState::Active => unreachable!("active marker returned above"),
+    };
+    if refresh_stale {
+        require_atomic_registry_replace_support("routing activation stale-marker refresh")?;
     }
 
     let current_bytes = fs::read(&registry_path).map_err(|error| {
@@ -19940,20 +20037,38 @@ fn apply_project_routing_activation_with_fault(
                 "routing activation temp changed before installation".to_owned(),
             ));
         }
-        fs::hard_link(&temp_path, &activation_path).map_err(|error| {
-            WorkVcsError::QueryInvalid(format!(
-                "cannot atomically install routing activation marker {}: {error}",
-                activation_path.display()
-            ))
-        })?;
+        if refresh_stale {
+            validate_routing_activation_refresh_source(
+                &activation_path,
+                &registry_v2,
+                expected_activation_digest
+                    .as_ref()
+                    .expect("stale refresh requires expected activation digest"),
+            )?;
+            fs::rename(&temp_path, &activation_path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot atomically refresh routing activation marker {}: {error}",
+                    activation_path.display()
+                ))
+            })?;
+        } else {
+            fs::hard_link(&temp_path, &activation_path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot atomically install routing activation marker {}: {error}",
+                    activation_path.display()
+                ))
+            })?;
+        }
         marker_installed = true;
         inject_routing_activation_fault(fault, RoutingActivationApplyFault::AfterMarkerInstalled)?;
-        fs::remove_file(&temp_path).map_err(|error| {
-            WorkVcsError::QueryInvalid(format!(
-                "cannot remove installed routing activation temp {}: {error}",
-                temp_path.display()
-            ))
-        })?;
+        if !refresh_stale {
+            fs::remove_file(&temp_path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot remove installed routing activation temp {}: {error}",
+                    temp_path.display()
+                ))
+            })?;
+        }
         inject_routing_activation_fault(fault, RoutingActivationApplyFault::AfterTempRemoved)?;
         sync_directory(parent)?;
         inject_routing_activation_fault(
@@ -20013,6 +20128,50 @@ fn inject_routing_activation_fault(
     if configured == Some(current) {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "injected routing activation fault at {current:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_routing_activation_refresh_source(
+    path: &Path,
+    registry: &ProjectRegistryV2,
+    expected_digest: &ControlPlaneDigest,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot inspect stale routing activation marker {}: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "stale routing activation marker {} must be a regular non-symlink file",
+            path.display()
+        )));
+    }
+    let bytes = fs::read(path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot read stale routing activation marker {}: {error}",
+            path.display()
+        ))
+    })?;
+    let previous = RoutingActivationCandidate::from_json_bytes(&bytes)?;
+    let actual_digest = previous.digest()?;
+    if &actual_digest != expected_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "installed stale routing activation digest {actual_digest} does not match expected {expected_digest}"
+        )));
+    }
+    if previous.registry_id() != registry.registry_id()
+        || previous.registry_revision() >= registry.revision()
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "stale routing activation marker does not belong to an earlier revision of the same registry: marker registry_id={} revision={}, current registry_id={} revision={}",
+            previous.registry_id(),
+            previous.registry_revision(),
+            registry.registry_id(),
+            registry.revision()
         )));
     }
     Ok(())
@@ -20158,10 +20317,26 @@ fn apply_project_journal_admission_activation(
     expected_registry_digest: ControlPlaneDigest,
     expected_candidate_digest: ControlPlaneDigest,
 ) -> Result<String> {
-    apply_project_journal_admission_activation_with_fault(
+    apply_project_journal_admission_activation_with_refresh_and_fault(
         registry,
         expected_registry_digest,
         expected_candidate_digest,
+        None,
+        None,
+    )
+}
+
+fn apply_project_journal_admission_activation_refresh(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+    expected_activation_digest: ControlPlaneDigest,
+) -> Result<String> {
+    apply_project_journal_admission_activation_with_refresh_and_fault(
+        registry,
+        expected_registry_digest,
+        expected_candidate_digest,
+        Some(expected_activation_digest),
         None,
     )
 }
@@ -20175,10 +20350,27 @@ enum JournalAdmissionActivationApplyFault {
     BeforeInstalledVerification,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn apply_project_journal_admission_activation_with_fault(
     registry: Option<PathBuf>,
     expected_registry_digest: ControlPlaneDigest,
     expected_candidate_digest: ControlPlaneDigest,
+    fault: Option<JournalAdmissionActivationApplyFault>,
+) -> Result<String> {
+    apply_project_journal_admission_activation_with_refresh_and_fault(
+        registry,
+        expected_registry_digest,
+        expected_candidate_digest,
+        None,
+        fault,
+    )
+}
+
+fn apply_project_journal_admission_activation_with_refresh_and_fault(
+    registry: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+    expected_activation_digest: Option<ControlPlaneDigest>,
     fault: Option<JournalAdmissionActivationApplyFault>,
 ) -> Result<String> {
     let effective = effective_registry_config(registry)?;
@@ -20244,17 +20436,48 @@ fn apply_project_journal_admission_activation_with_fault(
             true,
         );
     }
-    if initial.state != RoutingActivationState::Absent {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "refusing to replace journal-admission activation marker {} in state {}{}",
-            initial.path.display(),
-            initial.state.as_str(),
-            initial
-                .issue
-                .as_ref()
-                .map(|issue| format!(" ({issue})"))
-                .unwrap_or_default()
-        )));
+    let refresh_stale = match initial.state {
+        RoutingActivationState::Absent => {
+            if expected_activation_digest.is_some() {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "journal-admission activation refresh expected an installed stale marker at {}, but the marker is absent",
+                    initial.path.display()
+                )));
+            }
+            false
+        }
+        RoutingActivationState::Stale => {
+            let expected_activation_digest = expected_activation_digest.as_ref().ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "refusing to replace stale journal-admission activation marker {} without --expected-activation-digest",
+                    initial.path.display()
+                ))
+            })?;
+            validate_journal_admission_activation_refresh_source(
+                &initial.path,
+                &registry_v2,
+                expected_activation_digest,
+            )?;
+            true
+        }
+        RoutingActivationState::Invalid => {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "refusing to replace journal-admission activation marker {} in state {}{}",
+                initial.path.display(),
+                initial.state.as_str(),
+                initial
+                    .issue
+                    .as_ref()
+                    .map(|issue| format!(" ({issue})"))
+                    .unwrap_or_default()
+            )));
+        }
+        RoutingActivationState::Active => unreachable!("active marker returned above"),
+    };
+    if refresh_stale {
+        require_atomic_registry_replace_support(
+            "journal-admission activation stale-marker refresh",
+        )?;
     }
 
     let current_bytes = fs::read(&registry_path).map_err(|error| {
@@ -20313,23 +20536,41 @@ fn apply_project_journal_admission_activation_with_fault(
                 "journal-admission activation temp changed before installation".to_owned(),
             ));
         }
-        fs::hard_link(&temp_path, &activation_path).map_err(|error| {
-            WorkVcsError::QueryInvalid(format!(
-                "cannot atomically install journal-admission activation marker {}: {error}",
-                activation_path.display()
-            ))
-        })?;
+        if refresh_stale {
+            validate_journal_admission_activation_refresh_source(
+                &activation_path,
+                &registry_v2,
+                expected_activation_digest
+                    .as_ref()
+                    .expect("stale refresh requires expected activation digest"),
+            )?;
+            fs::rename(&temp_path, &activation_path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot atomically refresh journal-admission activation marker {}: {error}",
+                    activation_path.display()
+                ))
+            })?;
+        } else {
+            fs::hard_link(&temp_path, &activation_path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot atomically install journal-admission activation marker {}: {error}",
+                    activation_path.display()
+                ))
+            })?;
+        }
         marker_installed = true;
         inject_journal_admission_activation_apply_fault(
             fault,
             JournalAdmissionActivationApplyFault::AfterMarkerInstalled,
         )?;
-        fs::remove_file(&temp_path).map_err(|error| {
-            WorkVcsError::QueryInvalid(format!(
-                "cannot remove installed journal-admission activation temp {}: {error}",
-                temp_path.display()
-            ))
-        })?;
+        if !refresh_stale {
+            fs::remove_file(&temp_path).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot remove installed journal-admission activation temp {}: {error}",
+                    temp_path.display()
+                ))
+            })?;
+        }
         inject_journal_admission_activation_apply_fault(
             fault,
             JournalAdmissionActivationApplyFault::AfterTempRemoved,
@@ -20394,6 +20635,50 @@ fn inject_journal_admission_activation_apply_fault(
     if configured == Some(current) {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "injected journal-admission activation apply fault at {current:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_journal_admission_activation_refresh_source(
+    path: &Path,
+    registry: &ProjectRegistryV2,
+    expected_digest: &ControlPlaneDigest,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot inspect stale journal-admission activation marker {}: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "stale journal-admission activation marker {} must be a regular non-symlink file",
+            path.display()
+        )));
+    }
+    let bytes = fs::read(path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot read stale journal-admission activation marker {}: {error}",
+            path.display()
+        ))
+    })?;
+    let previous = JournalAdmissionActivationCandidate::from_json_bytes(&bytes)?;
+    let actual_digest = previous.digest()?;
+    if &actual_digest != expected_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "installed stale journal-admission activation digest {actual_digest} does not match expected {expected_digest}"
+        )));
+    }
+    if previous.registry_id() != registry.registry_id()
+        || previous.registry_revision() >= registry.revision()
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "stale journal-admission activation marker does not belong to an earlier revision of the same registry: marker registry_id={} revision={}, current registry_id={} revision={}",
+            previous.registry_id(),
+            previous.registry_revision(),
+            registry.registry_id(),
+            registry.revision()
         )));
     }
     Ok(())
@@ -22027,6 +22312,12 @@ fn required_control_plane_digest(label: &str, value: Option<String>) -> Result<C
     ControlPlaneDigest::from_text(
         &value.ok_or_else(|| WorkVcsError::QueryInvalid(format!("{label} is required")))?,
     )
+}
+
+fn optional_control_plane_digest(value: Option<String>) -> Result<Option<ControlPlaneDigest>> {
+    value
+        .map(|value| ControlPlaneDigest::from_text(&value))
+        .transpose()
 }
 
 fn verify_migration_preview_repaired_binding_readonly(binding: &ProjectBindingV1) -> Result<usize> {
@@ -63894,7 +64185,19 @@ mod tests {
             ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap(),
         )
         .expect_err("apply must not replace stale marker");
-        assert!(stale_apply.to_string().contains("state stale"));
+        assert!(
+            stale_apply
+                .to_string()
+                .contains("without --expected-activation-digest")
+        );
+        let wrong_lineage_refresh = apply_project_routing_activation_refresh(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap(),
+            stale_candidate.digest().unwrap(),
+        )
+        .expect_err("refresh must reject another registry lineage");
+        assert!(wrong_lineage_refresh.to_string().contains("same registry"));
 
         #[cfg(unix)]
         {
@@ -63939,6 +64242,138 @@ mod tests {
             cli_sqlite_file_snapshots(&fixture.store_path),
             store_snapshots
         );
+    }
+
+    #[test]
+    fn cli_v2_activation_markers_refresh_after_same_registry_advance() {
+        run_cli_test_with_large_stack(
+            "cli-v2-activation-same-registry-refresh-test",
+            assert_cli_v2_activation_markers_refresh_after_same_registry_advance,
+        );
+    }
+
+    fn assert_cli_v2_activation_markers_refresh_after_same_registry_advance() {
+        let fixture = create_capture_recovery_fixture();
+        let initial_registry = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.binding.registry_path).expect("initial registry bytes"),
+        )
+        .expect("initial registry v2");
+        let initial_registry_digest = initial_registry.digest().unwrap();
+        let initial_routing = RoutingActivationCandidate::for_registry(&initial_registry).unwrap();
+        let initial_journal =
+            JournalAdmissionActivationCandidate::for_registry(&initial_registry).unwrap();
+        let initial_routing_digest = initial_routing.digest().unwrap();
+        let initial_journal_digest = initial_journal.digest().unwrap();
+
+        apply_project_routing_activation(
+            Some(fixture.binding.registry_path.clone()),
+            initial_registry_digest.clone(),
+            initial_routing_digest.clone(),
+        )
+        .expect("activate initial read routing");
+        apply_project_journal_admission_activation(
+            Some(fixture.binding.registry_path.clone()),
+            initial_registry_digest,
+            initial_journal_digest.clone(),
+        )
+        .expect("activate initial journal admission");
+
+        let recovery = apply_capture_recovery_fixture(&fixture, None)
+            .expect("advance registry through ProjectRef bootstrap");
+        assert!(recovery.registry_written);
+
+        let stale_routing =
+            inspect_project_routing_activation(Some(fixture.binding.registry_path.clone()))
+                .expect("inspect stale routing marker");
+        assert_eq!(value(&stale_routing, "activation_state"), "stale");
+        assert_eq!(value(&stale_routing, "routing_active"), "false");
+        let stale_journal = inspect_project_journal_admission_activation(Some(
+            fixture.binding.registry_path.clone(),
+        ))
+        .expect("inspect stale journal marker");
+        assert_eq!(value(&stale_journal, "activation_state"), "stale");
+        assert_eq!(value(&stale_journal, "journal_admission_active"), "false");
+
+        let advanced_registry = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.binding.registry_path).expect("advanced registry bytes"),
+        )
+        .expect("advanced registry v2");
+        assert!(advanced_registry.revision() > initial_registry.revision());
+        let advanced_registry_digest = advanced_registry.digest().unwrap();
+        let advanced_routing =
+            RoutingActivationCandidate::for_registry(&advanced_registry).unwrap();
+        let advanced_journal =
+            JournalAdmissionActivationCandidate::for_registry(&advanced_registry).unwrap();
+
+        let routing_error = apply_project_routing_activation_with_refresh_and_fault(
+            Some(fixture.binding.registry_path.clone()),
+            advanced_registry_digest.clone(),
+            advanced_routing.digest().unwrap(),
+            Some(initial_routing_digest.clone()),
+            Some(RoutingActivationApplyFault::AfterMarkerInstalled),
+        )
+        .expect_err("post-replace routing fault must be indeterminate");
+        assert_eq!(
+            routing_error.code().as_str(),
+            "routing_activation_install_indeterminate"
+        );
+        assert!(routing_error.to_string().contains("--status"));
+        let refreshed_routing =
+            inspect_project_routing_activation(Some(fixture.binding.registry_path.clone()))
+                .expect("status resolves refreshed routing marker");
+        assert_eq!(value(&refreshed_routing, "activation_state"), "active");
+        assert_eq!(value(&refreshed_routing, "routing_active"), "true");
+        let routing_retry = apply_project_routing_activation_refresh(
+            Some(fixture.binding.registry_path.clone()),
+            advanced_registry_digest.clone(),
+            advanced_routing.digest().unwrap(),
+            initial_routing_digest,
+        )
+        .expect("status-confirmed routing refresh retry is idempotent");
+        assert_eq!(value(&routing_retry, "activation_reused"), "true");
+        assert_eq!(value(&routing_retry, "activation_written"), "false");
+
+        let journal_error = apply_project_journal_admission_activation_with_refresh_and_fault(
+            Some(fixture.binding.registry_path.clone()),
+            advanced_registry_digest.clone(),
+            advanced_journal.digest().unwrap(),
+            Some(initial_journal_digest.clone()),
+            Some(JournalAdmissionActivationApplyFault::AfterMarkerInstalled),
+        )
+        .expect_err("post-replace journal fault must be indeterminate");
+        assert_eq!(
+            journal_error.code().as_str(),
+            "routing_activation_install_indeterminate"
+        );
+        assert!(journal_error.to_string().contains("--status"));
+        let refreshed_journal = inspect_project_journal_admission_activation(Some(
+            fixture.binding.registry_path.clone(),
+        ))
+        .expect("status resolves refreshed journal marker");
+        assert_eq!(value(&refreshed_journal, "activation_state"), "active");
+        assert_eq!(
+            value(&refreshed_journal, "journal_admission_active"),
+            "true"
+        );
+        let journal_retry = apply_project_journal_admission_activation_refresh(
+            Some(fixture.binding.registry_path.clone()),
+            advanced_registry_digest,
+            advanced_journal.digest().unwrap(),
+            initial_journal_digest,
+        )
+        .expect("status-confirmed journal refresh retry is idempotent");
+        assert_eq!(value(&journal_retry, "activation_reused"), "true");
+        assert_eq!(value(&journal_retry, "activation_written"), "false");
+
+        let final_routing =
+            inspect_project_routing_activation(Some(fixture.binding.registry_path.clone()))
+                .expect("inspect refreshed routing marker");
+        let final_journal = inspect_project_journal_admission_activation(Some(
+            fixture.binding.registry_path.clone(),
+        ))
+        .expect("inspect refreshed journal marker");
+        assert_eq!(value(&final_routing, "activation_state"), "active");
+        assert_eq!(value(&final_journal, "activation_state"), "active");
     }
 
     #[test]
@@ -64173,16 +64608,20 @@ mod tests {
         migrate_fixture_registry_to_v2(&other, None);
         let other_registry =
             ProjectRegistryV2::from_json_bytes(&fs::read(&other.registry_path).unwrap()).unwrap();
-        fs::write(
-            &journal_marker,
-            JournalAdmissionActivationCandidate::for_registry(&other_registry)
-                .unwrap()
-                .stored_json_bytes()
-                .unwrap(),
-        )
-        .expect("write stale marker");
+        let other_journal =
+            JournalAdmissionActivationCandidate::for_registry(&other_registry).unwrap();
+        fs::write(&journal_marker, other_journal.stored_json_bytes().unwrap())
+            .expect("write stale marker");
         let stale = run(capture_command()).expect_err("stale marker must fail closed");
         assert!(stale.to_string().contains("activation state stale"));
+        let wrong_lineage_refresh = apply_project_journal_admission_activation_refresh(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "candidate_digest")).unwrap(),
+            other_journal.digest().unwrap(),
+        )
+        .expect_err("journal refresh must reject another registry lineage");
+        assert!(wrong_lineage_refresh.to_string().contains("same registry"));
         fs::remove_file(&journal_marker).unwrap();
 
         #[cfg(unix)]

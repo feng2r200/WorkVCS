@@ -82,9 +82,14 @@ mirror as related context.
 `project routing-activation --status` is read-only for registry v1 or v2.
 `--preview` requires v2 and reports the exact registry and candidate digests.
 Activation apply must receive both expected digests and refuses to replace an
-invalid, stale, or existing nonmatching marker. Do not delete or overwrite a
-marker as error recovery: inspect the selected registry, marker path, and
-reported state. A matching existing marker is an idempotent reuse. A successful
+invalid or existing nonmatching marker. An ordinary apply also refuses a stale
+marker. If status proves that registry bootstrap advanced the same registry
+lineage, apply may additionally lock the exact installed old marker with
+`--expected-activation-digest`; only an earlier revision of that same registry
+ID is atomically replaced. Another lineage, an equal/newer revision, an absent
+marker, or an old-marker digest mismatch remains fail-closed. Do not delete or
+hand-edit a marker as error recovery: inspect the selected registry, marker
+path, and reported state. A matching existing marker is an idempotent reuse. A successful
 marker enables v2 reads only and never authorizes journal or Store writes.
 If marker installation has completed or may have completed but temp cleanup,
 directory sync, or post-install verification fails, the command returns
@@ -100,7 +105,9 @@ read-routing marker. Disable requires the exact registry and installed marker
 digests. Both operations hold the registry lock before the shared
 journal-quiescence lock; disable therefore excludes new admissions before
 removing the marker. Never delete or hand-edit this marker. A malformed,
-stale, wrong-scope, or symlinked marker is fail-closed. A failed post-install
+wrong-scope, or symlinked marker is fail-closed. A stale marker can be refreshed
+only with the exact installed marker digest when it is an earlier revision of
+the same registry lineage; all other stale states remain fail-closed. A failed post-install
 step uses `routing_activation_install_indeterminate`; inspect journal-admission
 status before retrying. A failed post-removal step uses
 `routing_activation_disable_indeterminate`; status must prove whether the

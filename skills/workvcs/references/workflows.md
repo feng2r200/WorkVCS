@@ -1,5 +1,39 @@
 # Plan and capture workflows
 
+## Bootstrap live WorkVCS state from an existing stage baseline
+
+Use this only when project policy requires WorkVCS, an accepted stage baseline
+exists, and bounded discovery plus Recall establishes that the logical project
+has no relevant WorkVCS state. An empty bounded projection is not by itself
+proof when the wrong ProjectRef or Store was selected; verify ownership first.
+
+1. Identify the baseline files, their project-defined authority, revision or
+   digest, and `as_of` boundary. Read only the portions needed to recover the
+   active project state.
+2. Separate accepted facts and decisions from proposals, historical narrative,
+   stale status, and unknowns. Revalidate cheap current claims against current
+   artifacts or runtime evidence.
+3. Choose the smallest WorkVCS representation the baseline actually supports:
+   use standalone `capture` for Findings, Decisions, Questions, Risks,
+   Evidence, and Knowledge; use Goal/Plan/Task/Acceptance/Verification structure
+   only when the baseline defines a continuing coordination or acceptance
+   contract whose recovery value justifies it.
+4. Mark the write as reconstructed from the named baseline, including its
+   exact path or stable identifier, revision or digest when available, and
+   `as_of` boundary. Distinguish verified-current statements from historical
+   or unresolved ones. Do not fabricate original event times, Sessions,
+   Attempts, approvals, or causal relations.
+5. Persist through the normal ProjectRef and journal route, then Recall or show
+   the created objects to verify ownership, scope, state, and provenance.
+
+After successful readback, WorkVCS is the live execution-state authority.
+Keep the baseline as a stage snapshot until the project-defined stage closes.
+At stage close, update it from verified artifacts, the work conversation, and
+WorkVCS state, then persist a reference or Evidence item for the resulting
+snapshot. If the bootstrap route is blocked, keep one bounded pending packet
+and report degraded durability; do not silently operate a document-only live
+ledger.
+
 ## First durable write in an unbound project
 
 Keep discovery read-only. If it returns `project_binding_not_found`, first
@@ -8,6 +42,14 @@ Git common directory, CWD, then pending resolution. The work's artifact or
 operation path is evidence and boundary context, not an automatic override of
 a higher-ranked semantic owner. Do not bind an ambient mirror or temporary
 working directory merely because it is the process cwd.
+
+If the default invocation reports an inactive control-plane gate, inspect
+`workvcs config show` before declaring WorkVCS unavailable. A configured home
+and an explicit path to that same standard registry intentionally select
+different home/sidecar marker and journal locations. When one exact route was
+already verified and activated, select it consistently with `--registry`;
+never search arbitrary registries, infer that both aliases are active, or
+activate the other route without separate authority.
 
 Value admission precedes this routing step. Preserve admitted content as one
 bounded pending semantic packet when the installed CLI cannot bind the
@@ -31,6 +73,14 @@ installation plus a separately authorized, digest-locked
 `project journal-admission-activation --apply`; disabling it requires the
 exact installed marker digest. Neither action activates bootstrap, event
 processing, or Store delivery.
+If a separately authorized ProjectRef bootstrap advances the same registry
+lineage, read routing and journal admission become stale by design. Refresh
+each one only through its apply form with the new registry digest, new candidate
+digest, and exact old marker `--expected-activation-digest`. The marker must
+name an earlier revision of the same registry ID. Wrong lineage, equal/newer
+revision, malformed or symlinked state, and digest mismatch remain fail-closed;
+never delete or hand-edit the marker. Refresh read routing before journal
+admission, and retain separate authority for both operations.
 The separate `project capture-recovery` route starts with
 `--status --capture-id <id>`. Status is read-only and produces the registry
 and projection digests needed by an explicit `--apply`. Apply can converge an

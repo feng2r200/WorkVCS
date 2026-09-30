@@ -1,246 +1,160 @@
 ---
 name: workvcs
-description: "Use WorkVCS only for an explicit recall/resume/audit/record request, when already-known durable project state can affect current work, or after current work has actually produced a durable finding, decision, evidence, recovery need, or coordination need. Do not invoke it prospectively at routine task start merely because work might become reusable, and do not make a Plan mandatory."
+description: "Use WorkVCS to recover, coordinate, version, and persist durable project work and knowledge when policy requires participation, the user asks for WorkVCS, prior state matters, or current work yields reusable cross-turn state. It supports No-Plan and Plan work; it does not replace project authority or authorize guarded actions."
 ---
 
 # WorkVCS
 
-Use WorkVCS as an optional durable work-memory provider. It records mechanics;
-the model or an applicable governance Skill still decides policy, scope,
-authorization, validation strength, and completion.
+WorkVCS is the durable provider for explicit work and knowledge state. It can
+preserve semantic records, versioned work graphs, evidence, coordination,
+history, handoffs, and recovery state. It does not capture model internals or
+infer meaning from a transcript. The user, model, or applicable governance
+Skill still decides value, scope, authorization, validation, and completion.
 
-## Decide from durable value
+## Select the participation mode first
 
-Activation is evidence-gated. Do not select or probe WorkVCS at routine task
-start merely because useful state might appear later. Invoke it only when at
-least one condition is already present:
+Use **required participation** when a higher-priority user, project, or
+environment policy says WorkVCS must participate whenever available. Load this
+Skill at the start of every task that consumes, produces, or changes
+continuable project state. In this mode:
 
-- the user asks to recall, resume, audit, or record WorkVCS state;
-- prior durable state can change the current route, ownership, authority, or
-  completion judgment;
-- current work produces a meaningful finding, decision, failed route,
-  evidence item, unresolved question, or reusable conclusion that should
-  survive a turn, handoff, or restart; or
-- durable coordination or recovery would materially help the work.
+- resolve the logical project before material work and perform one bounded
+  read when prior state can exist;
+- persist the smallest truthful delta at narrow semantic checkpoints instead
+  of waiting until closeout;
+- never skip WorkVCS because a document exists, the current directory is a
+  mirror or temporary location, or the task remains No-Plan; and
+- reconcile any pending delta and read back the durable result before handoff
+  or closeout.
 
-Prospective applicability is not a condition. If this Skill was loaded before
-any condition is evidenced, make no WorkVCS call, load no reference, and return
-to the task. Reassess internally when the route, scope, or ownership changes
-and before a handoff, long pause, or meaningful closeout. This reassessment is
-not a required CLI step.
+A narrow semantic checkpoint occurs when the goal or scope changes, the user
+confirms a decision or authority boundary, a Finding or Decision becomes
+evidenced, a failed Attempt changes the route, Verification or Evidence
+arrives, a Task or milestone changes state, a blocker appears or clears, or
+the work pauses, hands off, or closes. Record before another step would make
+reconstruction materially harder. Coalesce consecutive mechanical operations
+that produce no semantic delta; do not store a transcript or chain of thought.
 
-For value produced by current work, require an evidenced result and a concrete
-consumer beyond the current turn. Examples include a shared invariant used by
-multiple named consumers, a confirmed decision that constrains later work, or
-a root cause/evidence item whose absence would make a likely recurrence or
-continuation repeat the investigation. Mere possibility of future usefulness
-does not qualify. When this test is met, finish validation and perform one
-coherent capture before the final response; a response-only summary is not the
-durable record.
+Use the **value-gated default** only when no higher-priority policy requires
+participation. Select WorkVCS when the user asks to recall, resume, audit, or
+record state; prior durable state can change the current route; or current work
+produces a finding, decision, evidence item, recovery need, unresolved issue,
+or reusable conclusion with a concrete consumer beyond this turn. Mere
+possibility of future usefulness is not enough. If none of these conditions is
+present, make no WorkVCS call.
 
-Examples:
+Required participation changes selection and admission timing only. It never
+forces a Plan and never authorizes migration, activation, recovery delivery,
+rollback, Push, release, deployment, or another separately guarded mutation.
 
-- a routine edit with no useful prior state or durable outcome: no call;
-- a small fix that uncovers a reusable root cause: capture that result without
-  admitting a Plan merely because it was recorded;
-- an explicit continuation request: use one bounded recall or resume path; and
-- multi-stage work: admit a Plan only if its coordination or recovery value
-  justifies the durable structure.
+## Resolve ownership and recover bounded state
 
-## Read prior state only when it can matter
+Resolve the logical owner in this order: explicit ProjectRef, verified
+semantic Project, verified Git common directory, canonical CWD, then pending
+resolution. A repository, mirror, temporary directory, coordination checkout,
+or display name is context, not an override of a known higher-ranked owner.
 
-When prior durable state can affect the task, resolve the logical project that
-owns the work and run `workvcs project discover --cwd <path>`. Determine
-ownership in this order: an explicit ProjectRef selected for the operation,
-verified semantic Project context, verified Git common directory, canonical
-CWD, then pending resolution. The directory remains useful context, but an
-ambient repository, mirror, temporary directory, or coordination checkout
-must not replace a known higher-ranked semantic owner. If location or binding
-integrity is actually in doubt, run `workvcs project list --require-valid`.
+Start with `workvcs project discover --cwd <path>`. When existing state can
+change the work, use exactly one bounded path:
 
-When the selected registry is v2 and exact read routing is active, a trusted
-integration may pass its bounded adapter
-handoff with `--locator-adapter-context FILE`. The current concrete adapter
-accepts verified Codex task-Project metadata and/or a canonical ChatGPT
-Project-mirror path, but it runs behind the same tool-neutral provider
-interface used by future integrations. `--locator-context FILE` remains the
-generic path for semantic locator evidence already verified outside WorkVCS.
-Do not manufacture either file from a display name, model memory, arbitrary
-prose, or an unverified path. If the provider is unavailable, omit its evidence
-and continue with verified Git then CWD; if supplied adapter material is
-malformed or contradictory, preserve the diagnostic and fail closed rather
-than silently discarding it.
-
-Describe the durability boundary exactly: the journal-backed route
-provides **no silent loss after admission**. It does not claim complete
-cognition capture while the global per-turn Hook remains deferred.
-
-Then choose one bounded read path:
-
-- `recall --profile brief` for active context;
-- `recall --profile handoff` for a continuation or another Agent;
+- `recall --profile brief` for current project context;
+- `recall --profile handoff` for continuation or delegation;
 - `recall --profile retrospective` for reconstruction and learning; or
-- `resume --cwd` when an active Session is relevant.
+- `resume --cwd` when a live or recoverable Session is relevant.
 
-Read-only discovery, recall, audit, and recovery do not create a Plan or
-Session. Do not scan the whole Store when a bounded projection is enough.
+If continuation depends on one exact predecessor, use its stable identifier or
+a focused Handoff; bounded Recall does not promise that every historical item
+appears. Discovery, Recall, Resume, audits, and recovery status are read-only
+and do not create a Plan or Session.
 
-When durable value emerges from otherwise standalone work, finish and validate
-that work before routing the capture. Discover the owning project immediately
-before the write. Do not Recall merely because a new standalone capture is
-valuable; Recall only when existing state could change its statement, scope,
-duplicate/conflict judgment, relation target, or provenance.
+A trusted integration may pass bounded semantic locator evidence through
+`--locator-adapter-context FILE` or already-verified generic evidence through
+`--locator-context FILE`. Never manufacture either from a display name,
+memory, prose, or an unverified path. Invalid or contradictory evidence fails
+closed; absence may degrade to verified Git and then CWD.
 
-The command forms shown in this Skill and its linked workflows are established.
-Use them directly. A preflight Help call for the shown `project discover`,
-`resume`, or `capture` forms is a routing error. Use
-`workvcs <command> --help` only for a different form whose syntax is genuinely
-unknown or after a command rejects its arguments. Do not probe availability or
-prepend Help to an established form unless an actual failure requires it.
+When a project has an accepted stage baseline but no relevant WorkVCS state,
+read [the baseline bootstrap workflow](references/workflows.md#bootstrap-live-workvcs-state-from-an-existing-stage-baseline)
+before continuing. Reconstruct only what the baseline supports, preserve its
+provenance and as-of boundary, read back the result, and then use WorkVCS as
+the live execution-state authority. Do not invent historical events or promote
+stale baseline text to current fact.
 
-## Write just in time
+## Keep WorkVCS and project documents distinct
 
-Run the value decision before binding resolution. A missing binding is a
-routing state, never evidence that admitted content is unworthy. ADR-0513
-accepts journal-first routing and semantic-Project-before-Git/CWD ownership.
-The core accepts bounded, tool-neutral adapter locator input, and the CLI has
-digest-bound gates for ordinary v2 reads and journal admission. The CLI
-integration layer includes the first
-concrete provider adapter and exposes its strict dispatch envelope as
-`--locator-adapter-context FILE`; the core schema and resolver remain
-provider-neutral. Its `capture` caller can persist an explicitly
-value-qualified target-neutral `legacy_cognition_v1` intent on registry v1, or
-a target-neutral `cognition_v2` intent after both exact v2 markers are active.
-The v2 form optionally accepts `--capture-group FILE`; that strict group is
-part of idempotency identity and requires `--value-reason`. It does not
-bootstrap a ProjectRef or write a target Store. Verify the exact installed
-revision plus both read-only marker statuses before treating the route as live
-durability; source availability alone is not evidence.
+WorkVCS owns changing execution state: current progress, next work, pending
+decisions, open execution risks, evidence, recovery, and coordination. A stage
+baseline is a project-native snapshot, not a live activity log. During active
+stage work, keep narrow semantic deltas in WorkVCS. After stage acceptance,
+update the baseline once from verified artifacts, the work conversation, and
+WorkVCS state, then record the resulting snapshot reference or evidence back in
+WorkVCS.
 
-Use `workvcs project registry-migrate --preview` with optional `--registry`,
-`--repair-manifest`, and `--format text|json` only when the task explicitly
-requires migration inspection or registry-v2 readiness evidence. A repair
-manifest is appropriate only after current evidence proves that an exact v1
-path locator is historical context for a namespaced semantic Project; it must
-pin the source digest, binding key, target digest, and evidence digest. The
-preview is strictly read-only and does not repair a missing binding or change
-the live registry. The CLI contains digest-locked migration apply and rollback,
-a read-only rollback state probe, versioned ordinary reads, a separately
-digest-bound `project routing-activation`, and a separate
-`project journal-admission-activation` with exact apply and disable locks.
-These paths have isolated-fixture validation. Never infer installation,
-current marker state, or authority to migrate, roll back, or activate
-from a successful preview or probe. Do not run any mutation path on a live
-registry unless the user separately authorizes that exact operation.
-`--rollback-check` never performs rollback; `--rollback` is explicit, preserves
-an exact v2 snapshot, and requires both digest locks plus proof of zero v2 use.
-For a standard registry name, that proof checks both WorkVCS-home and
-registry-sidecar activation/journal aliases regardless of which input selected
-the registry. Apply and rollback currently require Unix atomic-replace
-semantics. Treat the empty-journal proof as valid only while v2 admission is
-disabled. The source route derives one canonical-registry quiescence lock for
-every journal alias, uses the closed registry-coupled alias constructor,
-supplies the observed v2 revision/digest to the mandatory core check, and
-repeats the identity check after the restrictive activation callback. The
-read-routing marker still activates reads only. The distinct journal-admission
-marker permits intent admission only; it leaves ProjectRef bootstrap,
-journal-event processing, and Store delivery disabled. Neither marker may be
-installed or removed on a live control plane without separate exact authority.
+Architecture contracts, ADRs, and other project authority follow their own
+promotion rules. They may be written alongside WorkVCS when their roles are
+different, but neither a document write nor a WorkVCS record silently replaces
+the other.
 
-The CLI also has an explicit `project capture-recovery` route.
-`--status --capture-id <id>` is read-only: it validates immutable events,
-derives the projection, compares stored projection state, and re-resolves the
-owner. `--apply` additionally requires the exact observed registry and
-projection digests. It may converge one unbound semantic/Git/CWD owner to one
-ProjectRef and pristine Store binding, then record exact Branch guards and
-deliver one canonical primary cognition result through the existing
-idempotent capture engine. A target commit without a receipt is recovered by
-the same target key; a stale legacy manifest stays unchanged and requires an
-explicit upgrade. It never falls back after conflict. For a CaptureGroup it
-derives one primary from exact locator evidence, preserves the canonical
-receipt, and appends only missing immutable secondary references; it never
-opens a secondary Store. The read-only
-`project capture-group-recall --project-ref-id <id>` scans immutable
-journal authority and returns references pinned to one canonical Record
-version. A registry refresh reuses a receipt only after the same ProjectRef and
-exact Store/Workspace/Branch are revalidated; a delivered CaptureGroup cannot
-be retargeted and requires a new capture. An indeterminate install or target
-step always returns
-to `--status` and forward recovery; it never authorizes rollback. Its fault
-boundaries have isolated-fixture validation. Verify the installed revision and
-require explicit authority covering recovery apply before target delivery;
-read activation or journal activation alone never grants that authority.
+## Use the capability that matches the work
 
-If discovery returns `project_binding_not_found`, continue otherwise safe
-work. On a verified registry-v2 journal route, admit the valuable intent first
-and let separately authorized recovery converge the selected owner; do not
-create a CWD fallback. On the legacy v1 direct-Store route, run
-`workvcs project ensure --cwd <logical-project>` only immediately before the
-valuable write.
+Do not reduce WorkVCS to one generic note. It can represent small No-Plan
+cognition, a versioned Goal/Plan/Task graph, acceptance and evidence, runtime
+coordination, historical explanation, alternatives, recovery, and portable
+state. Read [Capability routing](references/capability-routing.md) when choosing
+among those modes.
 
-Ensure creates only the Store/Workspace/Branch binding, not a Plan or semantic
-record. If it fails, keep one small pending semantic packet in the active work
-context, report the exact problem, and persist it after recovery. Do not create
-a second durable queue or silently discard the packet. When verified semantic
-Project context exists, do not replace it with a repository or ambient mirror
-merely because current v1 has a binding there. An active-context packet is not
-durable WorkVCS state; disclose that limitation until exact journal admission
-has succeeded. Do not run a repository-local build against a configured
-registry as a substitute for installation and activation gates.
+For semantic object choice, currentness, and relations, read
+[Semantic recording](references/semantics.md). Prefer the smallest truthful
+objects and explicit provenance. `capture` can atomically create standalone
+Records, Knowledge, Evidence metadata, and supported relations without a Plan.
+Use Goal, Plan, Task, Acceptance Criterion, and Verification Requirement only
+when their structure improves coordination, recovery, or acceptance.
 
-## Keep Plan and persistence independent
+For a first write, ProjectRef bootstrap, CaptureGroup, journal recovery,
+Plan admission or evolution, or focused Handoff, read
+[Plan and capture workflows](references/workflows.md). A missing binding is a
+routing state, never evidence that admitted content is unworthy.
 
-A Plan is a governance choice, not the admission ticket for WorkVCS. Select
-one when durable coordination or recovery adds value, such as dependent stages
-or owners, cross-turn continuation, a confirmation contract that must survive
-handoff, or long-running work whose state is costly to reconstruct. Task size,
-complexity, impact, or labels such as architecture, schema, and migration do
-not decide Plan admission by themselves. A small task can need a Plan, while a
-large or high-impact action can remain No-Plan when its durable route is not
-useful.
+## Preserve control-plane safety
 
-High-impact work still requires exact user authority, the relevant accepted
-ADR or domain contract, confirmation gates, and proportional evidence. Those
-requirements apply whether or not a Plan exists, and a Plan never grants
-authority for the underlying action.
+Before declaring WorkVCS unavailable, run `workvcs config show`. If the same
+canonical registry already has a verified and active explicit-registry route,
+use that exact `--registry`; do not treat configured-home versus
+registry-sidecar selection as global unavailability, scan arbitrary registries,
+or activate a different route. Read
+[Configuration](references/configuration.md) only after an observed
+configuration, locator, registry, binding, or marker problem.
 
-No-Plan work may still persist a valuable Finding, Decision, Assumption,
-Question, Attempt, Evidence item, or Knowledge statement. Use `workvcs capture`
-to create related standalone cognition atomically.
+Registry migration, rollback, read-routing activation, journal-admission
+activation, marker refresh, and capture-recovery apply are separate mutation
+boundaries. Their preview or status forms do not authorize apply. Use current
+digests, status-first recovery, and the exact installed binary; never delete or
+hand-edit a stale marker, substitute a source-tree binary for live
+installation, or infer authority from fixture success.
 
-When work genuinely evolves from No-Plan to Plan, the first admission must say
-why durable planning became useful and carry forward the still-relevant
-findings, decisions, unknowns, constraints, and evidence. See
-[Plan and capture workflows](references/workflows.md).
+The journal-backed route provides no silent loss after admission. It does not
+claim that a caller recognized and submitted every valuable semantic delta
+while a global per-turn Hook remains deferred.
 
-## Route detail only when needed
+If an exact binding, routing, admission, or safety gate prevents a required
+read or write, report degraded durability, retain one bounded pending semantic
+packet in active context, and persist it when the accepted route is restored.
+Do not silently substitute a document-only update or create a second durable
+queue.
 
-Persist information when it improves continuation, review, audit, or future
-work. Prefer the smallest truthful semantic records and justified relations
-over a chronological transcript. Capture the original problem, discoveries,
-choices and tradeoffs, route changes, failed attempts, unresolved questions,
-evidence, and reusable conclusions only when they matter.
+The command forms in this Skill and its references are established. Do not
+prepend Help calls to them. Use command help only for a genuinely different
+form or after an argument rejection.
 
-References are not a startup checklist. Load only the one that answers a
-current need; load another only when a later decision or failure requires it.
+## Keep Plan, records, and authority independent
 
-- Use [Plan and capture workflows](references/workflows.md) when constructing a
-  first durable write, atomic capture, Plan admission/evolution, focused
-  Handoff, or mutation recovery.
-- Use [Semantic recording](references/semantics.md) when object choice,
-  relations, lifecycle closure, or bounded currentness review is unresolved.
-- Use [Configuration](references/configuration.md) only after an observed setup,
-  locator, registry, or binding-integrity problem. Do not load it before
-  ordinary discovery, Recall, Resume, or capture.
+A Plan is useful for dependent stages, handoffs, confirmation contracts, or
+long-running work whose state is costly to reconstruct. Complexity or impact
+alone does not require one. No-Plan work may still persist Findings, Decisions,
+Assumptions, Questions, Risks, Attempts, Evidence, and Knowledge. When work
+evolves into a Plan, carry forward only still-relevant state and record why the
+durable coordination structure became useful.
 
-Prefer raw content when WorkVCS should preserve an evidence body; digest-only
-Evidence may not be locally extractable. For shared work, default to one writer
-per semantic slice and pass stable IDs or a focused Handoff instead of copying
-an unbounded conversation.
-
-## Do not confuse records with authority
-
-Recording WorkVCS state, including a mechanical authorization receipt, needs no
-extra permission by itself. It does not authorize the underlying external,
-destructive, production, release, push, deployment, or credential action.
-Apply the governing authority boundary to that real action.
+Creating or reading WorkVCS state, including a mechanical authorization
+receipt, does not grant authority for the underlying external, destructive,
+production, release, Push, deployment, credential, or data-changing action.

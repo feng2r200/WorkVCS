@@ -47,6 +47,8 @@ index is:
 
 - [V1 Readiness Ledger](provenance/v1-readiness-ledger.md)
 - [V1 Release Gate Matrix](provenance/v1-release-gate-matrix.md)
+- [v0.1.0 Source-only Release Draft](releases/v0.1.0.md)
+- [v0.1.0 Source-release Audit Record](provenance/v0.1.0-source-release-audit.md)
 - [Context Profile Budget Dogfood Evidence](provenance/context-profile-budget-dogfood.md)
 - [Verify Wrapper Dogfood Evidence](provenance/verify-wrapper-dogfood.md)
 - [Verification Cache Refresh Dogfood Evidence](provenance/verification-cache-refresh-dogfood.md)

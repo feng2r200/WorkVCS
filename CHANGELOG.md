@@ -7,6 +7,12 @@ and released versions will follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+This section is the draft change set for the planned first public version
+`v0.1.0`. The planned distribution is source-only; the version is not tagged
+or published, binary archives are deferred, and the Rust packages remain
+unpublished. See the [v0.1.0 source-only release-notes draft](docs/releases/v0.1.0.md)
+and the [candidate dependency audit record](docs/provenance/v0.1.0-source-release-audit.md).
+
 ### Added
 
 - ProjectRef v2 control-plane models, deterministic logical-project
@@ -54,5 +60,10 @@ and released versions will follow [Semantic Versioning](https://semver.org/).
 
 ### Remaining release gates
 
-- Complete the first public release review.
-- Select, tag, and publish the first public version.
+- Recheck the exact final code and documentation candidate after review-only
+  changes, including the recorded dependency and license-policy decisions.
+- Keep the first release source-only; binary archives and crates.io publication
+  remain deferred unless a later scope decision changes them.
+- With separate authorization, select the final commit, create the `v0.1.0`
+  tag, push it, and publish the source-only GitHub Release. No tag or release
+  exists yet.

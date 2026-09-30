@@ -1,7 +1,9 @@
 # V1 Readiness Ledger
 
-Status: current implementation-readiness ledger
-Last refreshed: 2026-09-13 by Phase 5G Record currentness dogfood
+Status: current implementation-readiness and v0.1.0 source-release ledger
+Last refreshed: 2026-09-30 by v0.1.0 source-only release preparation
+Current candidate code commit: `5687a172827e28cd6795e5c3547136c31f55c8b0`
+Current candidate lockfile SHA-256: `a88ee5d887b031762ecebb08de13a6dc367265559a37f377c33b197560b63ecd`
 
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
@@ -14,14 +16,16 @@ expectation-only work.
 Release-maturity judgment is tracked in
 [`v1-release-gate-matrix.md`](v1-release-gate-matrix.md). The current matrix
 records `V1_RELEASE_READY=true`, `V0_1_DOGFOOD_COMPLETE=true`, and
-`RELEASE_CANDIDATE_ALLOWED=true`. Phase 4PA records the current
-user-authorized scope decision that deeper nested, multi-hop, and broader
-Context/Resource/why traversal are deferred post-V1. Phase 4PB validates
-candidate commit `5f12ebd4386377bfeba5998c146b36fe5d3c4b67` with a complete
-local matrix, Phase 4PC records that result after independent review, and Phase
-4PD records the explicitly authorized local release-ready judgment. Release,
-tag, push, deploy, remote, production, and credential operations remain outside
-the current authority.
+`RELEASE_CANDIDATE_ALLOWED=true`; those are bounded local maturity judgments,
+not a public-release claim. The current proposed public source release is
+`v0.1.0` at code commit `5687a172827e28cd6795e5c3547136c31f55c8b0`, with the
+release draft in [`../releases/v0.1.0.md`](../releases/v0.1.0.md) and the
+dependency evidence in
+[`v0.1.0-source-release-audit.md`](v0.1.0-source-release-audit.md).
+Historical Phase 4PA--4PD records remain provenance for the bounded local
+maturity judgment and do not validate this current candidate or its review-only
+documentation delta. Release, tag, push, deploy, remote, production, and
+credential operations remain outside the current authority.
 Release/tag/push/deploy/remote/production/credential operations remain
 separate external-authority actions.
 Phase 4PE records the first post-V1 local improvement: `workvcs resume`
@@ -29,6 +33,28 @@ provides compact read-only recovery over existing brief ContextPacket data.
 It does not change the release gate matrix or authorize release, tag, push,
 deploy, remote, production, credential, or `/usr/local/bin/workvcs`
 installation actions.
+
+## Current v0.1.0 Source-only release preparation
+
+- `SOURCE_RELEASE_CANDIDATE=v0.1.0` and `SOURCE_ONLY_RELEASE_SCOPE=true`.
+- No tag, GitHub Release, crates.io publication, binary archive, or package
+  publication has been created; binary delivery is deferred.
+- Candidate code is fixed to commit
+  `5687a172827e28cd6795e5c3547136c31f55c8b0`; the lockfile baseline is recorded
+  above. The six release-preparation documentation changes are now in the
+  actual checkout and remain uncommitted; no source or lockfile change was
+  made.
+- CI evidence covers x86_64 Linux source compilation/tests through the public
+  `ubuntu-latest` runner. It does not establish Linux release packaging or
+  installation coverage.
+- RustSec and target-scoped cargo-deny checks are recorded in
+  [`v0.1.0-source-release-audit.md`](v0.1.0-source-release-audit.md). The
+  audit is time-bound; duplicate dependency versions and all-lockfile
+  license-policy follow-up remain non-blocking review items.
+- The local WorkVCS durable-record path is currently fail-closed because its
+  routing activation is absent. No routing change or bypass was used; this
+  limits persistent governance-record integration only and does not block the
+  Git-local documentation review.
 
 Wave A hardens the post-V1 operating contract without reopening V1 scope:
 mutating CLI expectations now distinguish rejected preflight conditions from

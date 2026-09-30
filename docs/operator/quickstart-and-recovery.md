@@ -1,7 +1,7 @@
 # Local Operator Quickstart and Recovery
 
 Status: Local operator guide for CLI package `0.1.0`; verify registry version and activation state before selecting a route
-Last updated: 2026-09-27
+Last updated: 2026-09-30
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
 this repository. It describes the locally packaged v1 and ProjectRef-v2
@@ -157,6 +157,37 @@ call; any target change returns to `pending_primary` and requires a fresh
 guarded delivery for a non-group capture. After a CaptureGroup has a canonical
 receipt, a primary or target change fails closed; start a new capture rather
 than create a second canonical authority.
+
+Do not mix a v2 journal admission with an explicit Store-path write for the
+same semantic packet. Commands such as `workvcs record finding STORE ...`
+retain their independent Store-local contract; they do not consume or mark a
+pending Capture intent as delivered. If that mix-up has already happened,
+keep the intent and repair it in this order:
+
+1. Run `capture-recovery --status` against the exact registry and record both
+   current digests.
+2. Apply recovery once with those digests. The journal-delivered Record is the
+   canonical current item; do not delete the journal, Store rows, or create an
+   inverse operation.
+3. Compare the delivered Record with the earlier direct Record. Only when the
+   statement, kind, scope, and other semantic fields are an exact match, use
+   the supported `workvcs record supersede-finding` operation to mark the
+   earlier direct Finding as `superseded`, preserving its history and leaving
+   the journal-delivered Finding active.
+4. Re-run recovery status and a bounded Record query. The expected result is
+   `effective_recovery_state=completed`, `recovery_action=none`, one active
+   semantic Finding, and a supersedes relation from the delivered item to the
+   direct-write item. If the fields are not an exact match, stop and resolve
+   the semantic conflict explicitly; do not supersede by similarity.
+
+For the default route, select exactly one registry locator. If the canonical
+registry-sidecar marker is the active route, configure
+`registry="/absolute/path/to/project-bindings.json"` in
+`$XDG_CONFIG_HOME/workvcs/config.toml` and leave `WORKVCS_HOME` unset. Verify
+the result with `workvcs config show`, `project routing-activation --status`,
+and `project journal-admission-activation --status`. Passing `--registry`
+explicitly is an equivalent one-command override. Do not copy, hand-edit, or
+activate the alternate home marker to make the two routes appear identical.
 
 A retained legacy manifest with absent or stale guards stops at
 `legacy_manifest_upgrade_required`; its intent is preserved and its target is

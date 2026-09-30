@@ -5,6 +5,12 @@ Last refreshed: 2026-09-30 by v0.1.0 source-only release preparation
 Current candidate code commit: `5687a172827e28cd6795e5c3547136c31f55c8b0`
 Current candidate lockfile SHA-256: `a88ee5d887b031762ecebb08de13a6dc367265559a37f377c33b197560b63ecd`
 
+Verified integration baseline: [`64630a821f4ce2a84b4131fd52b25b6e7281df05`](https://github.com/feng2r200/WorkVCS/commit/64630a821f4ce2a84b4131fd52b25b6e7281df05)
+on `main`; `origin/main` matched this commit when this record was refreshed,
+and [CI run 36731457030](https://github.com/feng2r200/WorkVCS/actions/runs/36731457030)
+completed successfully. This is a fixed evidence baseline for the six release
+documents, not a claim about a later documentation-only revision.
+
 This ledger tracks the current WorkVCS V1 implementation state. It is an
 evidence map, not a product specification. Confirmed product, architecture,
 schema, and ADR documents remain the authority for what WorkVCS means.
@@ -24,10 +30,9 @@ dependency evidence in
 [`v0.1.0-source-release-audit.md`](v0.1.0-source-release-audit.md).
 Historical Phase 4PA--4PD records remain provenance for the bounded local
 maturity judgment and do not validate this current candidate or its review-only
-documentation delta. Release, tag, push, deploy, remote, production, and
-credential operations remain outside the current authority.
-Release/tag/push/deploy/remote/production/credential operations remain
-separate external-authority actions.
+documentation delta. The candidate push to `main` is recorded by the fixed
+integration baseline above. The `v0.1.0` tag and GitHub Release remain separate
+external-authority actions and have not been created.
 Phase 4PE records the first post-V1 local improvement: `workvcs resume`
 provides compact read-only recovery over existing brief ContextPacket data.
 It does not change the release gate matrix or authorize release, tag, push,
@@ -37,13 +42,17 @@ installation actions.
 ## Current v0.1.0 Source-only release preparation
 
 - `SOURCE_RELEASE_CANDIDATE=v0.1.0` and `SOURCE_ONLY_RELEASE_SCOPE=true`.
+- The six release-preparation documents are included in the fixed integration
+  baseline `64630a821f4ce2a84b4131fd52b25b6e7281df05`, which was pushed to
+  `origin/main` and passed [CI run 36731457030](https://github.com/feng2r200/WorkVCS/actions/runs/36731457030).
+  This status is intentionally anchored to that baseline rather than chasing a
+  later documentation-only revision.
 - No tag, GitHub Release, crates.io publication, binary archive, or package
   publication has been created; binary delivery is deferred.
 - Candidate code is fixed to commit
   `5687a172827e28cd6795e5c3547136c31f55c8b0`; the lockfile baseline is recorded
-  above. The six release-preparation documentation changes are now in the
-  actual checkout and remain uncommitted; no source or lockfile change was
-  made.
+  above. The integration baseline changed documentation only; no source or
+  lockfile change was made.
 - CI evidence covers x86_64 Linux source compilation/tests through the public
   `ubuntu-latest` runner. It does not establish Linux release packaging or
   installation coverage.

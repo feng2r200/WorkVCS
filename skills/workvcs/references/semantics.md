@@ -38,6 +38,11 @@ Relations express meaning, not ordering decoration:
 - `related_to`: a labeled non-causal association when no stronger relation is
   justified.
 
+A Handoff is coordination continuity rather than a Decision or Knowledge
+claim. When a Handoff summarizes or continues from a Finding, use
+`Handoff --derived_from--> Finding`; omit the relation if that provenance is
+not useful. Do not use `Finding --supports--> Handoff`.
+
 `capture` can atomically create new Records, Knowledge, Evidence metadata, and
 supported relations among newly named local items. Lifecycle-changing
 `invalidates` and `supersedes` operations against existing objects use their

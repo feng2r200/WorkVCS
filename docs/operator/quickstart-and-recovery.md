@@ -191,7 +191,10 @@ activate the alternate home marker to make the two routes appear identical.
 
 A retained legacy manifest with absent or stale guards stops at
 `legacy_manifest_upgrade_required`; its intent is preserved and its target is
-not mutated. `pending_references` means the primary is safe and one or more
+not mutated. A historical immutable intent that fails cognition semantics
+stops at `semantic_manifest_invalid` before target mutation; preserve it and
+start a corrected new Capture. Do not retry or rewrite the invalid payload.
+`pending_references` means the primary is safe and one or more
 immutable secondary references are missing. Retry with fresh status digests:
 recovery checks that each secondary ProjectRef still exists, appends only the
 missing `reference_applied` events, never opens the secondary Store, and then

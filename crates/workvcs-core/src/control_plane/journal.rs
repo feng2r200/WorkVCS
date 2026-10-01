@@ -681,12 +681,14 @@ impl DeliveryAppliedPayload {
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryFailureCode {
     LegacyManifestUpgradeRequired,
+    SemanticManifestInvalid,
 }
 
 impl DeliveryFailureCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::LegacyManifestUpgradeRequired => "legacy_manifest_upgrade_required",
+            Self::SemanticManifestInvalid => "semantic_manifest_invalid",
         }
     }
 }
@@ -1111,6 +1113,7 @@ pub enum CaptureRecoveryState {
     PendingPrimary,
     PendingReferences,
     LegacyManifestUpgradeRequired,
+    SemanticManifestInvalid,
     Completed,
 }
 
@@ -1122,6 +1125,7 @@ impl CaptureRecoveryState {
             Self::PendingPrimary => "pending_primary",
             Self::PendingReferences => "pending_references",
             Self::LegacyManifestUpgradeRequired => "legacy_manifest_upgrade_required",
+            Self::SemanticManifestInvalid => "semantic_manifest_invalid",
             Self::Completed => "completed",
         }
     }
@@ -1952,6 +1956,10 @@ impl CaptureProjection {
                         failure.failure_code() == DeliveryFailureCode::LegacyManifestUpgradeRequired
                     }) {
                         CaptureRecoveryState::LegacyManifestUpgradeRequired
+                    } else if delivery_failure.as_ref().is_some_and(|failure| {
+                        failure.failure_code() == DeliveryFailureCode::SemanticManifestInvalid
+                    }) {
+                        CaptureRecoveryState::SemanticManifestInvalid
                     } else {
                         CaptureRecoveryState::PendingPrimary
                     }
@@ -2163,6 +2171,10 @@ impl CaptureProjection {
                     failure.failure_code() == DeliveryFailureCode::LegacyManifestUpgradeRequired
                 }) {
                     CaptureRecoveryState::LegacyManifestUpgradeRequired
+                } else if self.delivery_failure.as_ref().is_some_and(|failure| {
+                    failure.failure_code() == DeliveryFailureCode::SemanticManifestInvalid
+                }) {
+                    CaptureRecoveryState::SemanticManifestInvalid
                 } else {
                     CaptureRecoveryState::PendingPrimary
                 }

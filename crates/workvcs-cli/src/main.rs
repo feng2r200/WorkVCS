@@ -21320,6 +21320,7 @@ fn capture_recovery_action(
         CaptureRecoveryState::PendingPrimary => "apply_primary_delivery",
         CaptureRecoveryState::PendingReferences => "apply_secondary_references",
         CaptureRecoveryState::LegacyManifestUpgradeRequired => "upgrade_legacy_manifest",
+        CaptureRecoveryState::SemanticManifestInvalid => "start_new_capture_with_corrected_payload",
         CaptureRecoveryState::Completed
             if projection
                 .capture_group()
@@ -21704,6 +21705,15 @@ fn apply_project_capture_recovery_with_fault(
                 head.state_digest,
                 delivery_projection.projection().delivery_started(),
             )?;
+            let semantic_manifest_invalid = if prepared.legacy_manifest_upgrade_required() {
+                false
+            } else {
+                match prepared.manifest().validate_semantics() {
+                    Ok(()) => false,
+                    Err(WorkVcsError::RecordInvalid(_)) => true,
+                    Err(error) => return Err(error),
+                }
+            };
             let started = prepared.started().clone();
             let start_event = journal.append_event_authority_only(
                 capture_id,
@@ -21729,6 +21739,24 @@ fn apply_project_capture_recovery_with_fault(
                     binding.branch_id(),
                     DeliveryFailureCode::LegacyManifestUpgradeRequired,
                     "upgrade_legacy_manifest",
+                )?;
+                let failure_event = journal.append_event_authority_only(
+                    capture_id,
+                    UtcTimestamp::now()?,
+                    CaptureEventPayload::DeliveryFailed(failure.clone()),
+                )?;
+                delivery_failure_written =
+                    failure_event.outcome() == CaptureEventAppendOutcome::Created;
+                delivery_failure_snapshot = Some(failure);
+            } else if semantic_manifest_invalid {
+                let failure = DeliveryFailedPayload::new(
+                    started.delivery_id(),
+                    project_ref_id,
+                    binding.store_id(),
+                    binding.workspace_id(),
+                    binding.branch_id(),
+                    DeliveryFailureCode::SemanticManifestInvalid,
+                    "start_new_capture_with_corrected_payload",
                 )?;
                 let failure_event = journal.append_event_authority_only(
                     capture_id,
@@ -24581,6 +24609,7 @@ fn run_cognition_capture(
         ))
     })?;
     let manifest = CognitionCaptureManifest::from_json_bytes(&manifest_bytes)?;
+    manifest.validate_semantics()?;
     let current_identity = resolve_project_identity(&cwd)?;
     let effective = effective_registry_config(registry.clone())?;
     let registry_path = project_registry_path_from_effective(&effective, false, &current_identity)?;
@@ -61663,6 +61692,62 @@ mod tests {
         initial_bindings: usize,
     }
 
+    struct BoundCaptureRecoveryFixture {
+        binding: ProjectBindingFixture,
+        capture_id: CaptureId,
+        registry_path: PathBuf,
+        target: ProjectBindingV2,
+        intent_path: PathBuf,
+    }
+
+    fn create_bound_capture_recovery_fixture(
+        semantic_payload: serde_json::Value,
+        idempotency_prefix: &str,
+    ) -> BoundCaptureRecoveryFixture {
+        let binding = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&binding, None);
+        let registry_path = fs::canonicalize(&binding.registry_path).unwrap();
+        let registry = ProjectRegistryV2::from_json_bytes(&fs::read(&registry_path).unwrap())
+            .expect("fixture registry v2");
+        let target = registry
+            .bindings()
+            .first()
+            .expect("fixture migrated binding")
+            .clone();
+        let context = ResolutionContext::new(ResolutionMode::DurableWrite)
+            .with_project_ref(target.project_ref_id());
+        let resolution = resolve_project(&registry, &context).expect("fixture resolution");
+        assert_eq!(resolution.status(), ResolutionStatus::Resolved);
+        let capture_id = CaptureId::new_v7();
+        let intent = CaptureIntent::new(
+            capture_id,
+            format!("{idempotency_prefix}-{capture_id}"),
+            UtcTimestamp::parse("2026-10-01T08:00:00Z").unwrap(),
+            "Exercise bound semantic recovery",
+            CapturePayloadKind::CognitionV2,
+            semantic_payload,
+            context,
+            resolution,
+            None,
+        )
+        .unwrap();
+        let journal = CaptureJournal::for_project_registry(
+            &registry_path,
+            ProjectRegistryJournalAlias::RegistrySidecar,
+        )
+        .unwrap();
+        let admission = journal
+            .admit_for_project_registry(&intent, registry.revision(), &registry.digest().unwrap())
+            .expect("admit bound historical fixture intent");
+        BoundCaptureRecoveryFixture {
+            binding,
+            capture_id,
+            registry_path,
+            target,
+            intent_path: admission.intent_path().to_path_buf(),
+        }
+    }
+
     fn create_capture_recovery_fixture() -> CaptureRecoveryFixture {
         create_capture_recovery_fixture_with_secondary(false)
     }
@@ -64650,6 +64735,58 @@ mod tests {
         assert_eq!(value(&activated, "activation_written"), "true");
         assert_eq!(value(&activated, "store_written"), "false");
 
+        let invalid_manifest_path = fixture
+            ._tempdir
+            .path()
+            .join("invalid-supports-handoff.json");
+        fs::write(
+            &invalid_manifest_path,
+            r#"{
+  "schema_version": 1,
+  "idempotency_key": "invalid-supports-handoff",
+  "records": [
+    {"local_id":"finding","kind":"finding","statement":"A verified finding","scope":{"source":"isolated-fixture"}},
+    {"local_id":"handoff","kind":"handoff","statement":"A handoff derived from that finding","scope":{"source":"isolated-fixture"}}
+  ],
+  "knowledge": [],
+  "evidence": [],
+  "relations": [{"local_id":"invalid-relation","type":"supports","source_local_id":"finding","target_local_id":"handoff","rationale":"This must fail before admission"}],
+  "rationale": {"source":"semantic-preflight-test"}
+}"#,
+        )
+        .expect("write invalid semantic manifest");
+        let journal_root = PathBuf::from(format!("{}.d", fixture.registry_path.display()))
+            .join("capture-journal/v1");
+        assert!(!journal_root.exists());
+        let invalid = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--locator-context",
+            &path_text(&locator_path),
+            "--value-reason",
+            "Reject a deterministic semantic error before admission",
+            "--manifest",
+            &path_text(&invalid_manifest_path),
+        ])
+        .expect("parse invalid routed capture"))
+        .expect_err("invalid relation endpoints must fail before journal admission");
+        assert_eq!(invalid.code().as_str(), "record_invalid");
+        assert!(
+            invalid
+                .to_string()
+                .contains("Finding source and Decision or Knowledge target")
+        );
+        assert!(!journal_root.exists());
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_snapshots
+        );
+
         let rollback_probe = inspect_project_registry_rollback_readiness(
             Some(fixture.registry_path.clone()),
             None,
@@ -64757,7 +64894,7 @@ mod tests {
         let v1_manifest_path = v1_fixture._tempdir.path().join("v1-group-capture.json");
         fs::write(
             &v1_manifest_path,
-            r#"{"schema_version":1,"idempotency_key":"v1-group-rejected","records":[],"knowledge":[],"evidence":[],"relations":[],"rationale":{}}"#,
+            r#"{"schema_version":1,"idempotency_key":"v1-group-rejected","records":[{"local_id":"finding","kind":"finding","statement":"CaptureGroup requires registry v2","scope":{}}],"knowledge":[],"evidence":[],"relations":[],"rationale":{}}"#,
         )
         .unwrap();
         let v1_group_path = v1_fixture._tempdir.path().join("v1-group.json");
@@ -65139,6 +65276,242 @@ mod tests {
         assert_eq!(
             cli_sqlite_file_snapshots(&fixture.store_path),
             secondary_store_snapshots
+        );
+    }
+
+    #[test]
+    fn capture_recovery_delivers_handoff_derived_from_finding() {
+        run_cli_test_with_large_stack(
+            "capture-recovery-handoff-derived-from-finding-test",
+            assert_capture_recovery_delivers_handoff_derived_from_finding,
+        );
+    }
+
+    fn assert_capture_recovery_delivers_handoff_derived_from_finding() {
+        let fixture = create_bound_capture_recovery_fixture(
+            serde_json::json!({
+                "records": [
+                    {
+                        "local_id": "verified-finding",
+                        "kind": "finding",
+                        "statement": "The semantic contract was verified",
+                        "scope": {"source": "isolated-fixture"}
+                    },
+                    {
+                        "local_id": "recovery-handoff",
+                        "kind": "handoff",
+                        "statement": "Continue from the verified semantic contract",
+                        "scope": {"source": "isolated-fixture"}
+                    }
+                ],
+                "knowledge": [],
+                "evidence": [],
+                "relations": [{
+                    "local_id": "handoff-provenance",
+                    "type": "derived_from",
+                    "source_local_id": "recovery-handoff",
+                    "target_local_id": "verified-finding",
+                    "rationale": "The handoff was derived from the verified finding"
+                }],
+                "rationale": {"source": "semantic-preflight-valid-fixture"}
+            }),
+            "valid-handoff-derived-from-finding",
+        );
+        let intent_before = fs::read(&fixture.intent_path).unwrap();
+        let status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            fixture.capture_id,
+        )
+        .expect("valid relation recovery status");
+        let applied = apply_project_capture_recovery_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            fixture.capture_id,
+            &ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+            None,
+        )
+        .expect("deliver valid handoff provenance");
+        assert_eq!(
+            applied.projection.recovery_state(),
+            CaptureRecoveryState::Completed
+        );
+        assert!(applied.target_delivery_written);
+        assert!(!applied.delivery_failure_written);
+        let commit_id = applied
+            .primary_delivery
+            .as_ref()
+            .expect("primary receipt")
+            .commit_id()
+            .to_string();
+        let listed = run(Cli::try_parse_from([
+            "workvcs",
+            "record",
+            "relation-list",
+            &path_text(&fixture.binding.store_path),
+            "--commit",
+            &commit_id,
+            "--type",
+            "derived_from",
+        ])
+        .expect("parse delivered relation list"))
+        .expect("list delivered relation");
+        assert_eq!(value(&listed, "relations"), "1");
+        assert_eq!(fs::read(&fixture.intent_path).unwrap(), intent_before);
+    }
+
+    #[test]
+    fn capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write() {
+        run_cli_test_with_large_stack(
+            "capture-recovery-semantic-manifest-invalid-test",
+            assert_capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write,
+        );
+    }
+
+    fn assert_capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write() {
+        let fixture = create_bound_capture_recovery_fixture(
+            serde_json::json!({
+                "records": [
+                    {
+                        "local_id": "invalid-finding",
+                        "kind": "finding",
+                        "statement": "A finding cannot support a handoff",
+                        "scope": {"source": "historical-invalid-fixture"}
+                    },
+                    {
+                        "local_id": "invalid-handoff",
+                        "kind": "handoff",
+                        "statement": "Historical immutable handoff",
+                        "scope": {"source": "historical-invalid-fixture"}
+                    }
+                ],
+                "knowledge": [],
+                "evidence": [],
+                "relations": [{
+                    "local_id": "invalid-supports",
+                    "type": "supports",
+                    "source_local_id": "invalid-finding",
+                    "target_local_id": "invalid-handoff",
+                    "rationale": "Simulate a payload admitted before semantic preflight"
+                }],
+                "rationale": {"source": "historical-semantic-invalid-fixture"}
+            }),
+            "historical-invalid-supports-handoff",
+        );
+        let store_before = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        let intent_before = fs::read(&fixture.intent_path).unwrap();
+        let status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            fixture.capture_id,
+        )
+        .expect("invalid historical recovery status");
+        let interrupted = apply_project_capture_recovery_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            fixture.capture_id,
+            &ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+            Some(CaptureRecoveryFault::DeliveryStarted),
+        )
+        .expect_err("inject interruption after durable delivery_started");
+        assert_eq!(
+            interrupted.code(),
+            workvcs_core::ErrorCode::CaptureRecoveryInstallIndeterminate
+        );
+        assert_eq!(fs::read(&fixture.intent_path).unwrap(), intent_before);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            store_before
+        );
+        let interrupted_status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            fixture.capture_id,
+        )
+        .expect("status after delivery_started interruption");
+        assert_eq!(value(&interrupted_status, "events"), "3");
+        assert_eq!(
+            value(&interrupted_status, "effective_recovery_state"),
+            "pending_primary"
+        );
+        assert_eq!(value(&interrupted_status, "delivery_started"), "true");
+
+        let applied = apply_project_capture_recovery_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            fixture.capture_id,
+            &ControlPlaneDigest::from_text(&value(&interrupted_status, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&interrupted_status, "projection_digest"))
+                .unwrap(),
+            None,
+        )
+        .expect("terminalize invalid semantic manifest");
+        assert_eq!(
+            applied.projection.recovery_state(),
+            CaptureRecoveryState::SemanticManifestInvalid
+        );
+        assert!(!applied.delivery_started_written);
+        assert!(applied.delivery_failure_written);
+        assert!(!applied.delivery_receipt_written);
+        assert!(!applied.target_delivery_written);
+        assert!(!applied.store_initialized);
+        assert_eq!(
+            applied
+                .delivery_failure
+                .as_ref()
+                .expect("semantic failure receipt")
+                .failure_code(),
+            DeliveryFailureCode::SemanticManifestInvalid
+        );
+        assert_eq!(fs::read(&fixture.intent_path).unwrap(), intent_before);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            store_before
+        );
+
+        let terminal = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            fixture.capture_id,
+        )
+        .expect("terminal semantic status");
+        assert_eq!(value(&terminal, "events"), "4");
+        assert_eq!(
+            value(&terminal, "effective_recovery_state"),
+            "semantic_manifest_invalid"
+        );
+        assert_eq!(
+            value(&terminal, "recovery_action"),
+            "start_new_capture_with_corrected_payload"
+        );
+        assert_eq!(
+            value(&terminal, "delivery_failure_code"),
+            "semantic_manifest_invalid"
+        );
+
+        let replayed = apply_project_capture_recovery_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            fixture.capture_id,
+            &ControlPlaneDigest::from_text(&value(&terminal, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&terminal, "projection_digest")).unwrap(),
+            None,
+        )
+        .expect("replay terminal semantic recovery");
+        assert_eq!(
+            replayed.projection.recovery_state(),
+            CaptureRecoveryState::SemanticManifestInvalid
+        );
+        assert!(!replayed.delivery_started_written);
+        assert!(!replayed.delivery_failure_written);
+        assert!(!replayed.target_delivery_written);
+        assert_eq!(replayed.projection.event_count(), 4);
+        assert_eq!(fs::read(&fixture.intent_path).unwrap(), intent_before);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            store_before
+        );
+        assert_eq!(
+            fixture.target.store_path().as_path(),
+            fixture.binding.store_path
         );
     }
 

@@ -134,8 +134,14 @@ shows `pending_primary`, and retry must use the same capture so the Store
 returns the existing commit with `reused=true`. Do not delete or roll back that
 Store. `legacy_manifest_upgrade_required` means the retained v1 manifest did
 not carry guards matching the selected Branch; preserve it and make a separate
-upgrade decision. `pending_references` preserves a successful primary while
-one or more immutable secondary references are missing. Retry from fresh
+upgrade decision. `semantic_manifest_invalid` means a historical immutable
+intent failed deterministic cognition semantics before target mutation;
+preserve it and follow
+`recovery_action=start_new_capture_with_corrected_payload`. For example, a
+Handoff summarized from a Finding uses `Handoff --derived_from--> Finding`,
+not `Finding --supports--> Handoff`. `pending_references` preserves a
+successful primary while one or more immutable secondary references are
+missing. Retry from fresh
 status digests: the recovery path installs only missing reference events and
 must not roll back or redeliver the primary. If all references are present but
 the completion summary is absent, `recovery_action=apply_capture_completion`
@@ -263,7 +269,7 @@ through current CLI output.
 | `project_binding_not_found` | `query` | `false` | Current v1: preserve any valuable semantic packet, confirm the intended logical owner, then run `project ensure`; supply `--store-root` for a direct registry locator. Discovery made no changes. Never interpret the miss as no-record. |
 | `query_invalid` | `query` | `false` | Fix selector syntax, required ids, filter values, or mutually exclusive arguments. Use the relevant subcommand help before rerunning. |
 | `query_unsupported` | `query` | `false` | Choose a supported query shape or defer the workflow. Do not treat this as a transient Store failure. |
-| `record_invalid` | `record` | `false` | Fix Record kind, content, support references, or relation inputs. Keep provenance links explicit. |
+| `record_invalid` | `record` | `false` | Before admission, fix Record kind, content, support references, or relation inputs and submit again. If status for an already-admitted historical Capture is `semantic_manifest_invalid`, preserve that immutable Capture and start a corrected new Capture; do not retry or rewrite the old payload. Keep provenance links explicit. |
 | `record_not_found` | `record` | `false` | Re-check the Record id at the selected branch/head and verify whether it exists in the source Store before importing or recreating it. |
 | `relation_invalid` | `relation` | `false` | Fix relation type, endpoint kind/id, or version-scoped endpoint existence. Do not create dangling semantic relations. |
 | `resource_invalid` | `resource` | `false` | Correct adapter kind, adapter schema version, scope kind, scope schema version, or scope payload. For local-file and Git scopes, compare against the operator quickstart contract. |

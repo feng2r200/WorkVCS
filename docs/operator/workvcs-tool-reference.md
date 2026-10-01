@@ -130,8 +130,11 @@ receipt; it never creates a second Record, Knowledge, Evidence, relation, or
 commit. A legacy v1 manifest is delivered only when both of its original
 guards match; absent or stale guards produce
 `legacy_manifest_upgrade_required` without rewriting the intent or mutating
-the target Store. A primary receipt with requested secondary references stops
-at `pending_references`. Recovery validates the member ProjectRefs, appends
+the target Store. A historical intent whose materialized cognition manifest
+is semantically invalid records the terminal state `semantic_manifest_invalid`
+before opening the target Store for mutation and directs the operator to start
+a corrected new Capture. A primary receipt with requested secondary references
+stops at `pending_references`. Recovery validates the member ProjectRefs, appends
 only missing immutable-reference receipts without opening a secondary Store,
 and installs one idempotent group-completion summary. The read-only command
 `workvcs project capture-group-recall --project-ref-id ID [--registry PATH]`

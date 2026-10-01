@@ -561,6 +561,12 @@ before admission, and rejected if it contains known secret-bearing fields.
 Callers remain responsible for not placing credentials or unbounded raw output
 inside free-text semantic fields.
 
+Validation before admission includes the complete target-neutral cognition
+contract: Record, Knowledge, and Evidence construction; unique local IDs; and
+relation type, endpoint-kind, label, and duplicate checks. Deterministic
+semantic failure is `record_invalid` and occurs before journal layout or intent
+installation. Target Branch guards remain a delivery concern.
+
 ### CaptureGroupIntent
 
 | Field | Type | Required | Rules |
@@ -605,12 +611,13 @@ is:
 | `capture_group_resolved` | An unbound primary context was mapped to one ProjectRef and the group gained its single canonical member. |
 | `delivery_started` | Target, exact Branch guards, delivery mode, and derived idempotency key were fixed. |
 | `delivery_applied` | A Store returned an idempotent committed result. |
-| `delivery_failed` | A bounded error and recovery action were recorded. |
+| `delivery_failed` | A bounded error and recovery action were recorded. Legacy upgrade remains recoverable; a deterministic invalid semantic manifest is terminal for that immutable intent. |
 | `reference_applied` | An immutable secondary reference was installed. |
 | `capture_completed` | All required deliveries have receipts. |
 
-Events never contain credentials or raw Store files. A failed event is not a
-terminal tombstone; a later retry appends new events.
+Events never contain credentials or raw Store files. A recoverable failed
+event may be followed by a later retry. A `semantic_manifest_invalid` failure
+is terminal for that immutable intent and requires a corrected new Capture.
 
 ### DeliveryReceipt and canonical record reference
 
@@ -698,6 +705,7 @@ The current projection is reconstructed from intent plus events:
 | `pending_primary` | Intent is durable but primary delivery has no receipt. |
 | `pending_references` | Primary is applied and at least one required secondary reference lacks a receipt. |
 | `legacy_manifest_upgrade_required` | A retained v1 manifest cannot safely target the current Branch guards. |
+| `semantic_manifest_invalid` | A historical immutable intent fails deterministic cognition semantics and must be replaced by a corrected new Capture. |
 | `completed` | Primary and every required secondary delivery have verified receipts. |
 
 Errors such as an unavailable Store, registry conflict, or failed reference
@@ -707,9 +715,10 @@ generic state that means “silently skipped.”
 The implementation materializes `resolution_recorded`,
 `project_binding_ready`, `capture_group_resolved`, `delivery_started`,
 `delivery_applied`, secondary `reference_applied`, `capture_completed`, and
-the bounded legacy-staleness form of `delivery_failed`. It derives
-`pending_resolution`, `pending_project`, `pending_primary`,
-`legacy_manifest_upgrade_required`, `pending_references`, and `completed`.
+the bounded legacy-staleness and semantic-invalid forms of `delivery_failed`.
+It derives `pending_resolution`, `pending_project`, `pending_primary`,
+`legacy_manifest_upgrade_required`, `semantic_manifest_invalid`,
+`pending_references`, and `completed`.
 `completed` is derived as soon as the primary and every required reference
 receipt are authoritative; `capture_completed` is the idempotent summary
 receipt. A crash between the last reference and that summary therefore reports
@@ -750,6 +759,10 @@ receipt, the next apply uses the recorded manifest and idempotency key, reuses
 the committed target result, and appends the missing receipt. A legacy
 manifest with absent or stale guards records
 `legacy_manifest_upgrade_required` without target mutation or intent rewrite.
+A historical manifest that fails target-neutral cognition semantics records
+`semantic_manifest_invalid` before the Store is opened for mutation. Its
+intent is preserved, replay is idempotent, and recovery directs the operator
+to a corrected new Capture.
 
 ## Cross-surface invariants
 
@@ -804,6 +817,7 @@ The future implementation MUST expose at least these machine-routable codes:
 | `capture_idempotency_conflict` | Use the original payload or a new idempotency key. |
 | `capture_recovery_install_indeterminate` | Registry, event, or projection installation may already be durable; run `project capture-recovery --status` with the same capture and continue forward using the newly reported digests. Never infer rollback. |
 | `legacy_manifest_upgrade_required` | Convert the durable legacy intent to a separately confirmed target-neutral delivery; do not rewrite it implicitly. |
+| `semantic_manifest_invalid` | Preserve the immutable intent, inspect the invalid semantic input, and start a corrected new Capture; do not replay or rewrite the old payload. |
 | `capture_pending_references` | Primary is safe; retry missing secondary deliveries. |
 
 ## Illustrative resolution example

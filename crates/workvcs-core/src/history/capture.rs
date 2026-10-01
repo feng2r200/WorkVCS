@@ -119,6 +119,16 @@ impl CognitionCaptureManifest {
     pub fn payload_digest(&self) -> Digest {
         self.payload_digest
     }
+
+    /// Validate every target-neutral semantic invariant without opening or
+    /// mutating a Store. Routed admission and delivery share this validator so
+    /// an immutable CaptureIntent cannot defer a deterministic semantic error
+    /// until target delivery.
+    pub fn validate_semantics(&self) -> Result<()> {
+        prepare_capture_content(self)
+            .map(|_| ())
+            .map_err(capture_semantic_invalid_from)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -240,6 +250,14 @@ struct PreparedCapture {
     relations: Vec<PreparedCaptureRelation>,
 }
 
+#[derive(Clone, Debug)]
+struct PreparedCaptureContent {
+    records: Vec<super::admission::PreparedRecord>,
+    knowledge: Vec<PreparedKnowledge>,
+    evidence: Vec<PreparedEvidence>,
+    relations: Vec<PreparedCaptureRelation>,
+}
+
 pub(crate) fn capture_cognition(
     connection: &mut StoreConnection,
     options: &CognitionCaptureOptions,
@@ -323,6 +341,35 @@ pub(crate) fn capture_cognition(
 
 fn prepare_capture(options: &CognitionCaptureOptions) -> Result<PreparedCapture> {
     let manifest = &options.manifest;
+    let content = prepare_capture_content(manifest).map_err(capture_semantic_invalid_from)?;
+    let previous_head_commit_id = manifest
+        .expected_head_commit_id
+        .as_deref()
+        .map(CommitId::parse_canonical)
+        .transpose()?
+        .unwrap_or(options.current_head_commit_id);
+    let expected_state_digest = manifest
+        .expected_state_digest
+        .as_deref()
+        .map(Digest::from_hex)
+        .transpose()?
+        .unwrap_or(options.current_state_digest);
+
+    Ok(PreparedCapture {
+        branch_id: options.branch_id,
+        previous_head_commit_id,
+        expected_state_digest,
+        idempotency_key: manifest.idempotency_key.clone(),
+        payload_digest: manifest.payload_digest,
+        rationale: manifest.rationale.clone(),
+        records: content.records,
+        knowledge: content.knowledge,
+        evidence: content.evidence,
+        relations: content.relations,
+    })
+}
+
+fn prepare_capture_content(manifest: &CognitionCaptureManifest) -> Result<PreparedCaptureContent> {
     if manifest.schema_version != 1 {
         return Err(WorkVcsError::RecordInvalid(format!(
             "cognition capture manifest schema_version {} is not supported",
@@ -406,26 +453,8 @@ fn prepare_capture(options: &CognitionCaptureOptions) -> Result<PreparedCapture>
         );
     }
     let relations = prepare_relations(&manifest.relations, &local_entities)?;
-    let previous_head_commit_id = manifest
-        .expected_head_commit_id
-        .as_deref()
-        .map(CommitId::parse_canonical)
-        .transpose()?
-        .unwrap_or(options.current_head_commit_id);
-    let expected_state_digest = manifest
-        .expected_state_digest
-        .as_deref()
-        .map(Digest::from_hex)
-        .transpose()?
-        .unwrap_or(options.current_state_digest);
 
-    Ok(PreparedCapture {
-        branch_id: options.branch_id,
-        previous_head_commit_id,
-        expected_state_digest,
-        idempotency_key: manifest.idempotency_key.clone(),
-        payload_digest: manifest.payload_digest,
-        rationale: manifest.rationale.clone(),
+    Ok(PreparedCaptureContent {
         records,
         knowledge,
         evidence,
@@ -1041,4 +1070,11 @@ fn empty_object() -> CanonicalValue {
 
 fn capture_invalid_from(error: impl std::fmt::Display) -> WorkVcsError {
     WorkVcsError::RecordInvalid(error.to_string())
+}
+
+fn capture_semantic_invalid_from(error: WorkVcsError) -> WorkVcsError {
+    match error {
+        WorkVcsError::RecordInvalid(_) => error,
+        other => WorkVcsError::RecordInvalid(other.to_string()),
+    }
 }

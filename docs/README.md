@@ -25,6 +25,7 @@ public release, and remote deployment remain separate decisions.
 
 - [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
 - [ADR-0514: Digest-Locked Same-Lineage Activation Marker Refresh](decisions/adr/0514-activation-marker-same-lineage-refresh.md)
+- [ADR-0515: Capture Semantic Preflight and Terminal Invalid Intent](decisions/adr/0515-capture-semantic-preflight-and-terminal-invalid-intent.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)
@@ -337,6 +338,7 @@ Recent repository-level CLI smoke gates:
 - [ADR-0512: Local Object Store v2 Cutover](decisions/adr/0512-local-object-v2-cutover.md)
 - [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
 - [ADR-0514: Digest-Locked Same-Lineage Activation Marker Refresh](decisions/adr/0514-activation-marker-same-lineage-refresh.md)
+- [ADR-0515: Capture Semantic Preflight and Terminal Invalid Intent](decisions/adr/0515-capture-semantic-preflight-and-terminal-invalid-intent.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

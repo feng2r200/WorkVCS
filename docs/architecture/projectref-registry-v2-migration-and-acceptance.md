@@ -493,6 +493,8 @@ evidence.
 | C-23 | An immutable event has a sequence gap, filename mismatch, payload drift, or broken digest chain | Recovery fails closed; projection repair never masks authority corruption. |
 | C-24 | Registry metadata changes after a primary receipt | The receipt is retained only for the same resolved ProjectRef and becomes current only after exact Store/Workspace/Branch revalidation; a changed target returns to `pending_primary` without target mutation. |
 | C-25 | A delivery transition is invalid or a CaptureGroup canonical local ID is not a Record | Validation fails before immutable event installation or target Store mutation. |
+| C-26 | A new cognition payload has invalid relation endpoints or other deterministic semantic errors | Admission fails before journal layout or intent persistence; registry and Store remain byte-stable. |
+| C-27 | A historical immutable intent fails cognition semantics during recovery | Recovery records terminal `semantic_manifest_invalid` before target mutation; replay adds no event or Store write and directs the operator to a corrected new Capture. |
 
 ### C. Migration
 
@@ -640,7 +642,13 @@ activation while holding the shared lock. In particular:
   version pinning, missing-only retry, fail-closed transition validation,
   immutable-authority projection rebuild, one-time unbound-primary
   resolution, Store-free recall by secondary ProjectRef, and completion-receipt
-  recovery across the four round-4 fault windows.
+  recovery across the four round-4 fault windows; and
+- `cli_v2_journal_admission_is_default_off_exactly_activated_and_store_free`,
+  `capture_recovery_delivers_handoff_derived_from_finding`, and
+  `capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write`
+  prove pre-admission semantic rejection with zero journal/Store writes,
+  valid Handoff provenance delivery, terminal historical-invalid recovery,
+  target byte stability, and idempotent replay.
 
 M-10 retains isolated-fixture proof. M-11 is proven for the observable
 activation, journal, bootstrap, primary-delivery, and secondary-reference

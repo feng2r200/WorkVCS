@@ -10,6 +10,8 @@ tool_reference="$repo_root/docs/operator/workvcs-tool-reference.md"
 quickstart="$repo_root/docs/operator/quickstart-and-recovery.md"
 config_reference="$repo_root/skills/workvcs/references/configuration.md"
 capability_routing="$repo_root/skills/workvcs/references/capability-routing.md"
+semantics="$repo_root/skills/workvcs/references/semantics.md"
+cli_source="$repo_root/crates/workvcs-cli/src/main.rs"
 config_example="$repo_root/config.toml.example"
 readme="$repo_root/README.md"
 readme_zh="$repo_root/README.zh-CN.md"
@@ -29,12 +31,12 @@ extract_ids() {
 extract_ids "$contract" >"$tmp_dir/contract-ids"
 extract_ids "$ledger" >"$tmp_dir/ledger-ids"
 
-[[ "$(wc -l <"$tmp_dir/contract-ids" | tr -d ' ')" == "93" ]] || {
-    echo "acceptance contract does not contain exactly 93 matrix rows" >&2
+[[ "$(wc -l <"$tmp_dir/contract-ids" | tr -d ' ')" == "95" ]] || {
+    echo "acceptance contract does not contain exactly 95 matrix rows" >&2
     exit 1
 }
-[[ "$(wc -l <"$tmp_dir/ledger-ids" | tr -d ' ')" == "93" ]] || {
-    echo "acceptance ledger does not contain exactly 93 matrix rows" >&2
+[[ "$(wc -l <"$tmp_dir/ledger-ids" | tr -d ' ')" == "95" ]] || {
+    echo "acceptance ledger does not contain exactly 95 matrix rows" >&2
     exit 1
 }
 [[ -z "$(sort "$tmp_dir/contract-ids" | uniq -d)" ]] || {
@@ -77,13 +79,19 @@ grep -q '^## Bootstrap live WorkVCS state from an existing stage baseline$' "$wo
 grep -q 'baseline is a project-native snapshot' "$skill"
 grep -q '^## Agent participation policy$' "$readme"
 grep -q '^## Agent 参与策略$' "$readme_zh"
+grep -q 'semantic_manifest_invalid' "$contract"
+grep -q 'C-26.*cli_v2_journal_admission_is_default_off_exactly_activated_and_store_free' "$ledger"
+grep -q 'C-27.*capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write' "$ledger"
+grep -q 'fn capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write' "$cli_source"
+grep -q 'fn capture_recovery_delivers_handoff_derived_from_finding' "$cli_source"
+grep -q 'Finding --supports--> Handoff' "$semantics"
 
 if grep -R -i -n -E 'codex|chatgpt' "$repo_root/crates/workvcs-core/src/control_plane"; then
     echo "tool-specific term leaked into the generic core control plane" >&2
     exit 1
 fi
 
-echo "matrix_rows=93"
+echo "matrix_rows=95"
 echo "matrix_ids_exact=true"
 echo "matrix_statuses_valid=true"
 echo "round5_value_gate_and_no_record_policy_probe=passed"
@@ -92,4 +100,5 @@ echo "required_participation_policy_probe=passed"
 echo "activation_refresh_contract_probe=passed"
 echo "control_plane_selection_fallback_probe=passed"
 echo "adapter_docs_aligned=true"
+echo "semantic_preflight_and_terminal_invalid_probe=passed"
 echo "generic_core_tool_neutral=true"

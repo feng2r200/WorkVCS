@@ -272,6 +272,16 @@ it becomes current again only after the exact Store/Workspace/Branch target is
 revalidated. A different target clears the current delivery view and requires
 a new guarded delivery rather than reusing a target identity across Stores.
 
+### INV-108 — Capture semantics fail before admission or target mutation
+
+A target-neutral cognition manifest is semantically validated before journal
+admission. A historical intent admitted before that guard remains immutable;
+if materialization proves it semantically invalid, recovery records
+`semantic_manifest_invalid` before opening the target Store for mutation. That
+state is terminal for the intent, is idempotent under replay, and requires a
+corrected new Capture rather than rewriting or repeatedly delivering the old
+payload.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

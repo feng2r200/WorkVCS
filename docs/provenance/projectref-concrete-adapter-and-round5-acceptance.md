@@ -127,6 +127,8 @@ read activation, journal activation, and live delivery as separate gates.
 | C-23 | source-proven | `event_gap_reordering_and_payload_tampering_fail_closed` |
 | C-24 | source-proven | `registry_revalidation_preserves_receipt_only_for_the_exact_target` |
 | C-25 | source-proven | `invalid_delivery_transition_is_rejected_before_event_install`; `capture_group_canonical_record_is_preflighted_before_target_write` |
+| C-26 | source-proven | `cli_v2_journal_admission_is_default_off_exactly_activated_and_store_free` |
+| C-27 | source-proven | `capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write`; `capture_recovery_delivers_handoff_derived_from_finding` |
 
 ### Migration, rollback, activation, and admission
 

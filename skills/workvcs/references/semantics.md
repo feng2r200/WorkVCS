@@ -15,6 +15,12 @@ Choose the smallest truthful object:
 | immutable supporting material | Evidence |
 | reusable conclusion beyond the immediate run | Knowledge |
 
+For a No-Plan test or probe outcome, capture a Finding with the exact input,
+checks, result, and evidence boundary; attach Evidence metadata when useful.
+Verification is a separate requirement judgment, not a `capture` Record kind:
+do not emit `records[].kind=verification` or create a Plan just to record a test
+result.
+
 Record enough scope and provenance to distinguish what was directly observed,
 what was inferred, and what remains unknown. A useful retrospective should be
 able to reconstruct:

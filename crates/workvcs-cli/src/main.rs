@@ -65280,6 +65280,167 @@ mod tests {
     }
 
     #[test]
+    fn cli_bound_checkpoint_recovers_lost_receipt_without_rebinding_or_duplicate() {
+        run_cli_test_with_large_stack(
+            "bound-checkpoint-lost-receipt-test",
+            assert_cli_bound_checkpoint_recovers_lost_receipt_without_rebinding_or_duplicate,
+        );
+    }
+
+    fn assert_cli_bound_checkpoint_recovers_lost_receipt_without_rebinding_or_duplicate() {
+        let statement = "The same-target checkpoint remains recoverable after a lost receipt";
+        let fixture = create_bound_capture_recovery_fixture(
+            serde_json::json!({
+                "records": [{
+                    "local_id": "checkpoint",
+                    "kind": "finding",
+                    "statement": statement,
+                    "scope": {"source": "isolated-bound-checkpoint"}
+                }],
+                "knowledge": [], "evidence": [], "relations": [], "rationale": {}
+            }),
+            "bound-checkpoint",
+        );
+        let registry_before = fs::read(&fixture.registry_path).unwrap();
+        let registry = ProjectRegistryV2::from_json_bytes(&registry_before).unwrap();
+        let activation = RoutingActivationCandidate::for_registry(&registry).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            registry.digest().unwrap(),
+            activation.digest().unwrap(),
+        )
+        .expect("activate isolated fixture read routing");
+        let capture_id = fixture.capture_id.to_string();
+        let registry_path = path_text(&fixture.registry_path);
+        let status_command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "capture-recovery",
+                "--status",
+                "--capture-id",
+                &capture_id,
+                "--registry",
+                &registry_path,
+            ])
+            .expect("parse documented status form")
+        };
+        let apply_command = |status: &str, projection_digest: &str| {
+            Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "capture-recovery",
+                "--apply",
+                "--capture-id",
+                &capture_id,
+                "--registry",
+                &registry_path,
+                "--expected-registry-digest",
+                &value(status, "registry_digest"),
+                "--expected-projection-digest",
+                projection_digest,
+            ])
+            .expect("parse documented existing-target apply without Store root")
+        };
+        let engine = open_verified_store(&fixture.binding.store_path).unwrap();
+        let initial_head = engine.branch_head(fixture.target.branch_id()).unwrap();
+        let initial_history = engine
+            .history(HistoryQueryOptions::from_branch(fixture.target.branch_id()))
+            .unwrap()
+            .entries
+            .len();
+        drop(engine);
+
+        let status = run(status_command()).unwrap();
+        assert_eq!(value(&status, "resolution_status"), "resolved");
+        assert_eq!(value(&status, "binding_state"), "valid");
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "pending_project"
+        );
+        assert_eq!(value(&status, "recovery_action"), "apply_binding_receipt");
+        assert_eq!(value(&status, "delivery_receipt"), "false");
+        let wrong_digest = ControlPlaneDigest::raw(b"wrong checkpoint projection").to_string();
+        run(apply_command(&status, &wrong_digest)).expect_err("reject changed basis");
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        let engine = open_verified_store(&fixture.binding.store_path).unwrap();
+        assert_eq!(
+            engine
+                .branch_head(fixture.target.branch_id())
+                .unwrap()
+                .head_commit_id,
+            initial_head.head_commit_id
+        );
+        drop(engine);
+
+        let failure = apply_project_capture_recovery_with_fault(
+            Some(fixture.registry_path.clone()),
+            None,
+            fixture.capture_id,
+            &ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            &ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+            Some(CaptureRecoveryFault::TargetCommit),
+        )
+        .expect_err("lose receipt after the Store commit");
+        assert_eq!(
+            failure.code().as_str(),
+            "capture_recovery_install_indeterminate"
+        );
+        let engine = open_verified_store(&fixture.binding.store_path).unwrap();
+        let committed_head = engine.branch_head(fixture.target.branch_id()).unwrap();
+        assert_ne!(committed_head.head_commit_id, initial_head.head_commit_id);
+        drop(engine);
+
+        let interrupted = run(status_command()).unwrap();
+        assert_eq!(
+            value(&interrupted, "effective_recovery_state"),
+            "pending_primary"
+        );
+        assert_eq!(value(&interrupted, "delivery_receipt"), "false");
+        let recovered = run(apply_command(
+            &interrupted,
+            &value(&interrupted, "projection_digest"),
+        ))
+        .expect("recover the same capture under fresh status guards");
+        assert_eq!(value(&recovered, "registry_written"), "false");
+        assert_eq!(value(&recovered, "store_initialized"), "false");
+        assert_eq!(value(&recovered, "target_delivery_written"), "false");
+        assert_eq!(value(&recovered, "target_delivery_reused"), "true");
+        assert_eq!(
+            value(&recovered, "target_commit_id"),
+            committed_head.head_commit_id.to_string()
+        );
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        let completed = run(status_command()).unwrap();
+        assert_eq!(value(&completed, "effective_recovery_state"), "completed");
+        assert_eq!(value(&completed, "delivery_receipt"), "true");
+        assert_eq!(value(&completed, "recovery_action"), "none");
+        assert_eq!(value(&completed, "target_delivery_written"), "false");
+        let recalled = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.binding.project_text,
+            "--registry",
+            &registry_path,
+            "--profile",
+            "brief",
+        ])
+        .unwrap())
+        .expect("read back the delivered semantic checkpoint");
+        assert!(recalled.contains(statement));
+        let engine = open_verified_store(&fixture.binding.store_path).unwrap();
+        assert_eq!(
+            engine
+                .history(HistoryQueryOptions::from_branch(fixture.target.branch_id()))
+                .unwrap()
+                .entries
+                .len(),
+            initial_history + 1
+        );
+    }
+
+    #[test]
     fn capture_recovery_delivers_handoff_derived_from_finding() {
         run_cli_test_with_large_stack(
             "capture-recovery-handoff-derived-from-finding-test",

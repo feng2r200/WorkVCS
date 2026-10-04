@@ -179,7 +179,9 @@ Primary delivery is a separate operator action, never an automatic continuation
 of `capture`: first run
 `workvcs project capture-recovery --status --capture-id <id>`, then use the
 fresh registry/projection digests with `--apply` only inside the explicitly
-authorized control plane. Apply records target guards before the Store commit;
+authorized control plane. For status interpretation and the bounded same-target
+sequence, read [Checkpoint delivery](checkpoint-delivery.md). Apply records
+target guards before the Store commit;
 if status remains `pending_primary` after an uncertain result, replay the same
 capture so target idempotency can recover a committed-but-unreceipted result.
 Receipt reuse across a registry refresh additionally requires the same

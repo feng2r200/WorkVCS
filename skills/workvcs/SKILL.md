@@ -142,6 +142,14 @@ packet in active context, and persist it when the accepted route is restored.
 Do not silently substitute a document-only update or create a second durable
 queue.
 
+Journal admission preserves an intent; it does not mean the target Store can
+Recall that checkpoint. When recording or reconciling a continuing checkpoint,
+read [Checkpoint delivery](references/checkpoint-delivery.md) once for the
+selected route to distinguish receipt work from missing ownership and complete
+only the delivery already
+authorized. If delivery is outside scope, retain the admitted capture ID and
+report that exact boundary instead of repeatedly admitting the same content.
+
 The command forms in this Skill and its references are established. Do not
 prepend Help calls to them. Use command help only for a genuinely different
 form or after an argument rejection.

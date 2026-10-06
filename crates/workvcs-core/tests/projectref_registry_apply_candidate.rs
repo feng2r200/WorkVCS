@@ -2,10 +2,11 @@ use serde_json::{Value, json};
 use std::time::{Duration, UNIX_EPOCH};
 use workvcs_core::control_plane::{
     CanonicalPath, ControlPlaneDigest, JournalAdmissionActivationCandidate,
-    JournalAdmissionActivationScope, MigrationBindingValidation, MigrationOwnershipRepairManifest,
-    ProjectRegistryV1, ProjectRegistryV2, RoutingActivationCandidate, RoutingActivationScope,
-    UtcTimestamp, build_registry_v1_migration_preview,
-    build_registry_v1_migration_preview_with_repairs, materialize_registry_v1_migration_candidate,
+    JournalAdmissionActivationScope, JournalAdmissionCapability, MigrationBindingValidation,
+    MigrationOwnershipRepairManifest, ProjectRegistryV1, ProjectRegistryV2,
+    RoutingActivationCandidate, RoutingActivationScope, UtcTimestamp,
+    build_registry_v1_migration_preview, build_registry_v1_migration_preview_with_repairs,
+    materialize_registry_v1_migration_candidate,
 };
 use workvcs_core::{BranchId, StoreId, WorkspaceId};
 
@@ -268,7 +269,15 @@ fn journal_admission_activation_candidate_is_separate_and_exact_snapshot_bound()
     let activation = JournalAdmissionActivationCandidate::for_registry(&installed)
         .expect("journal-admission activation candidate");
 
-    assert_eq!(activation.activation_version(), 1);
+    assert_eq!(activation.activation_version(), 2);
+    assert_eq!(
+        activation.capabilities(),
+        vec![
+            JournalAdmissionCapability::CognitionCapture,
+            JournalAdmissionCapability::PlanAdmit,
+            JournalAdmissionCapability::PlanEvolve,
+        ]
+    );
     assert_eq!(
         activation.scope(),
         JournalAdmissionActivationScope::ProjectRefV2JournalAdmission
@@ -283,6 +292,26 @@ fn journal_admission_activation_candidate_is_separate_and_exact_snapshot_bound()
     .expect("reparse journal-admission activation");
     assert_eq!(reparsed, activation);
     reparsed.validate_registry(&installed).unwrap();
+
+    let mut legacy: Value =
+        serde_json::from_slice(&activation.canonical_json_bytes().unwrap()).unwrap();
+    legacy["activation_version"] = json!(1);
+    legacy.as_object_mut().unwrap().remove("capabilities");
+    let legacy =
+        JournalAdmissionActivationCandidate::from_json_bytes(&serde_json::to_vec(&legacy).unwrap())
+            .expect("legacy v1 marker remains readable");
+    assert!(legacy.supports(JournalAdmissionCapability::CognitionCapture));
+    assert!(!legacy.supports(JournalAdmissionCapability::PlanAdmit));
+    assert!(legacy.is_strict_capability_predecessor_of(&activation));
+
+    let mut lateral: Value =
+        serde_json::from_slice(&activation.canonical_json_bytes().unwrap()).unwrap();
+    lateral["capabilities"] = json!(["cognition_capture", "plan_admit"]);
+    let lateral = JournalAdmissionActivationCandidate::from_json_bytes(
+        &serde_json::to_vec(&lateral).unwrap(),
+    )
+    .expect("a valid partial v2 marker remains inspectable");
+    assert!(!lateral.is_strict_capability_predecessor_of(&activation));
 
     assert!(
         JournalAdmissionActivationCandidate::from_json_bytes(

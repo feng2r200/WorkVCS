@@ -11,7 +11,8 @@ contracts are implemented. The CLI exposes read-only migration preview,
 digest-locked migration/rollback, versioned reads, separate exact read and
 journal activation markers, public target-neutral `cognition_v2` admission,
 explicit status-first recovery, canonical primary delivery, immutable
-secondary association, and Store-free secondary recall. The ordinary
+secondary association, Store-free secondary recall, and typed durable
+`plan_admit_v1`/`plan_evolve_v1` routing through the same receipt protocol. The ordinary
 `capture` path remains admission-only; activation markers never imply target
 delivery authority.
 
@@ -26,6 +27,7 @@ public release, and remote deployment remain separate decisions.
 - [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
 - [ADR-0514: Digest-Locked Same-Lineage Activation Marker Refresh](decisions/adr/0514-activation-marker-same-lineage-refresh.md)
 - [ADR-0515: Capture Semantic Preflight and Terminal Invalid Intent](decisions/adr/0515-capture-semantic-preflight-and-terminal-invalid-intent.md)
+- [ADR-0516: ProjectRef Plan Durable-Operation Routing](decisions/adr/0516-projectref-plan-durable-operation-routing.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)
@@ -40,6 +42,7 @@ public release, and remote deployment remain separate decisions.
 - [ProjectRef Journal Recovery and Bootstrap Candidate Evidence](provenance/projectref-journal-recovery-bootstrap-candidate.md)
 - [ProjectRef Concrete Adapter and Round-5 Acceptance Evidence](provenance/projectref-concrete-adapter-and-round5-acceptance.md)
 - [ProjectRef Live Primary Delivery and CaptureGroup Canary Evidence](provenance/projectref-live-primary-and-capture-group-canary.md)
+- [ProjectRef Plan Durable-Operation Routing Evidence](provenance/projectref-plan-durable-operation-routing.md)
 
 ## Implementation readiness
 

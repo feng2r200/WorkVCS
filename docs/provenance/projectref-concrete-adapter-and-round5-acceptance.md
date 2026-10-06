@@ -1,8 +1,9 @@
 # ProjectRef Concrete Adapter and Round-5 Acceptance Evidence
 
-Status: Round-5 releasable source candidate verified; no live mutation performed or authorized
-Date: 2026-09-27
+Status: Round-5 source evidence retained; acceptance ledger extended for ADR-0516
+Date: 2026-09-27; matrix extension 2026-10-06
 Authority: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md),
+[ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md),
 [ProjectRef control plane v2](../architecture/projectref-control-plane-v2.md), and
 [migration and acceptance contract](../architecture/projectref-registry-v2-migration-and-acceptance.md)
 
@@ -15,6 +16,11 @@ real-registry preview under a zero-write probe. It does not install the source
 candidate, migrate or roll back the real registry, create a live journal or
 activation marker, write a live semantic Store, activate a global Hook, stage
 or commit Git state, push, tag, release, or deploy.
+
+The 2026-10-06 ledger extension adds M-40 through M-42 as source/fixture proof
+for typed Plan durable-operation routing. It does not rewrite the historical
+Round-5 live-mutation boundary; installed-binary and live-adoption evidence is
+kept in the dedicated ADR-0516 provenance record.
 
 ## Concrete adapter and omission closure
 
@@ -173,6 +179,9 @@ read activation, journal activation, and live delivery as separate gates.
 | M-37 | source-proven | `journal_admission_activation_faults_are_indeterminate_and_recover_by_status` |
 | M-38 | source-proven | `cli_v2_journal_admission_is_default_off_exactly_activated_and_store_free`; `cli_codex_project_adapter_routes_mirror_capture_to_semantic_owner_end_to_end` |
 | M-39 | source-proven | `cli_capture_recovery_delivers_primary_once_and_reuses_receipt` |
+| M-40 | source-proven | `cli_v2_plan_admit_and_evolve_use_one_durable_journal`; `cli_v2_plan_retry_after_delivery_started_reports_created_target`; `cli_v2_plan_conflict_is_journaled_without_store_write`; `cli_v2_plan_validation_failure_is_terminal_without_store_write`; `cli_v2_plan_receipt_size_is_preflighted_before_store_write`; `typed_intents_reject_cross_family_receipts_and_failures`; `capture_event_limit_accepts_limit_minus_one_and_limit_but_rejects_limit_plus_one` |
+| M-41 | source-proven | `legacy_journal_marker_requires_explicit_same_snapshot_plan_capability_refresh`; `journal_admission_activation_candidate_is_separate_and_exact_snapshot_bound` |
+| M-42 | source-proven | `cli_v2_plan_commit_before_receipt_recovers_by_idempotent_replay` |
 
 ### Boundaries and non-regression
 
@@ -209,7 +218,7 @@ The final source candidate passed:
   warnings`: passed;
 - `cargo fmt --all -- --check` and `git diff --check`: passed;
 - `scripts/validate-schema-v0.1.sh`: passed;
-- `scripts/validate-projectref-acceptance-matrix.sh`: 93 exact unique rows,
+- `scripts/validate-projectref-acceptance-matrix.sh`: 98 exact unique rows,
   valid statuses, aligned adapter docs, value/durability wording, and a
   tool-neutral core all passed;
 - `scripts/smoke-v0.1-cli-workflow.sh`: `smoke_result=passed`; and

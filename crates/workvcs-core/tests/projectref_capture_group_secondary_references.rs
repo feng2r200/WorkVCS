@@ -216,7 +216,7 @@ fn deliver_primary(fixture: &mut GroupFixture) -> DeliveryAppliedPayload {
             fixture.workspace.initial_branch_id,
             started.expected_head_commit_id(),
             started.expected_state_digest(),
-            prepared.into_manifest(),
+            prepared.into_manifest().expect("cognition manifest"),
         ))
         .unwrap();
     let receipt = build_primary_delivery_receipt(&fixture.intent, &started, &result).unwrap();

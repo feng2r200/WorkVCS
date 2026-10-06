@@ -18,7 +18,7 @@ use crate::identity::{
     OperationId, RelationId, RelationVersionId, WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Deserializer, de};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -93,6 +93,33 @@ impl PlanAdmissionManifest {
             ))
         })
     }
+
+    pub fn idempotency_key(&self) -> &str {
+        &self.idempotency_key
+    }
+
+    pub fn expected_head_commit_id(&self) -> Result<CommitId> {
+        CommitId::parse_canonical(&self.expected_head_commit_id)
+    }
+
+    pub fn expected_state_digest(&self) -> Result<Option<Digest>> {
+        self.expected_state_digest
+            .as_deref()
+            .map(Digest::from_hex)
+            .transpose()
+    }
+
+    pub fn payload_digest(&self) -> Result<Digest> {
+        let value = manifest_to_canonical_value(self)?;
+        Ok(Digest::domain_separated(
+            PAYLOAD_DIGEST_DOMAIN,
+            &canonical_bytes(&value)?,
+        ))
+    }
+
+    pub fn validate_for_delivery(&self) -> Result<()> {
+        validate_plan_admission_manifest_for_delivery(self)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,6 +164,41 @@ impl PlanEvolutionManifest {
             Self::InPlace(_) => "in_place",
             Self::Supersede(_) => "supersede",
         }
+    }
+
+    pub fn idempotency_key(&self) -> &str {
+        match self {
+            Self::InPlace(manifest) => &manifest.idempotency_key,
+            Self::Supersede(manifest) => &manifest.idempotency_key,
+        }
+    }
+
+    pub fn expected_head_commit_id(&self) -> Result<CommitId> {
+        let value = match self {
+            Self::InPlace(manifest) => &manifest.expected_head_commit_id,
+            Self::Supersede(manifest) => &manifest.expected_head_commit_id,
+        };
+        CommitId::parse_canonical(value)
+    }
+
+    pub fn expected_state_digest(&self) -> Result<Option<Digest>> {
+        let value = match self {
+            Self::InPlace(manifest) => manifest.expected_state_digest.as_deref(),
+            Self::Supersede(manifest) => manifest.expected_state_digest.as_deref(),
+        };
+        value.map(Digest::from_hex).transpose()
+    }
+
+    pub fn payload_digest(&self) -> Result<Digest> {
+        let value = evolution_manifest_to_canonical_value(self)?;
+        Ok(Digest::domain_separated(
+            EVOLUTION_PAYLOAD_DIGEST_DOMAIN,
+            &canonical_bytes(&value)?,
+        ))
+    }
+
+    pub fn validate_for_delivery(&self) -> Result<()> {
+        validate_plan_evolution_manifest_for_delivery(self)
     }
 }
 
@@ -311,6 +373,12 @@ pub struct PlanAdmissionRecordManifest {
     pub statement: String,
     #[serde(default = "empty_object")]
     pub scope: CanonicalValue,
+}
+
+impl PlanAdmissionRecordManifest {
+    pub(crate) fn canonical_kind(&self) -> Result<&'static str> {
+        Ok(parse_record_kind(&self.kind)?.as_str())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -655,6 +723,9 @@ pub(crate) fn admit_plan(
     let operation_payload_json = canonical_json_string(&operation_payload)?;
     let rationale_json = canonical_json_string(&prepared.rationale)?;
 
+    let mut result = result_from_payload(&operation_payload)?;
+    result.outcome = PlanAdmissionOutcome::Created;
+
     write_admission(
         &transaction,
         branch.workspace_id,
@@ -675,9 +746,6 @@ pub(crate) fn admit_plan(
         now_us,
     )?;
     transaction.commit().map_err(storage_error)?;
-
-    let mut result = result_from_payload(&operation_payload)?;
-    result.outcome = PlanAdmissionOutcome::Created;
     Ok(result)
 }
 
@@ -769,6 +837,9 @@ pub(crate) fn evolve_plan(
     let operation_payload_json = canonical_json_string(&operation_payload)?;
     let rationale_json = canonical_json_string(&prepared.rationale)?;
 
+    let mut result = evolution_result_from_payload(&operation_payload)?;
+    result.outcome = PlanEvolutionOutcome::Created;
+
     write_evolution(
         &transaction,
         branch.workspace_id,
@@ -789,10 +860,196 @@ pub(crate) fn evolve_plan(
         now_us,
     )?;
     transaction.commit().map_err(storage_error)?;
-
-    let mut result = evolution_result_from_payload(&operation_payload)?;
-    result.outcome = PlanEvolutionOutcome::Created;
     Ok(result)
+}
+
+pub(crate) fn find_plan_admission_result(
+    connection: &StoreConnection,
+    options: &PlanAdmissionOptions,
+) -> Result<Option<PlanAdmissionResult>> {
+    let branch = super::query::branch_head(connection, options.branch_id)?;
+    find_idempotent_admission(
+        connection.inner(),
+        branch.workspace_id,
+        options.branch_id,
+        options.manifest.idempotency_key(),
+        options.manifest.payload_digest()?,
+    )
+}
+
+pub(crate) fn find_plan_evolution_result(
+    connection: &StoreConnection,
+    options: &PlanEvolutionOptions,
+) -> Result<Option<PlanEvolutionResult>> {
+    let branch = super::query::branch_head(connection, options.branch_id)?;
+    find_idempotent_evolution(
+        connection.inner(),
+        branch.workspace_id,
+        options.branch_id,
+        options.manifest.idempotency_key(),
+        options.manifest.payload_digest()?,
+    )
+}
+
+fn validate_plan_admission_manifest_for_delivery(manifest: &PlanAdmissionManifest) -> Result<()> {
+    if manifest.schema_version != 1 {
+        return Err(WorkVcsError::PlanInvalid(format!(
+            "plan admission manifest schema_version {} is not supported",
+            manifest.schema_version
+        )));
+    }
+    validate_idempotency_key(&manifest.idempotency_key)?;
+    require_object("plan admission rationale", &manifest.rationale)?;
+    validate_unique_local_ids("task", manifest.tasks.iter().map(|task| &task.local_id))?;
+    validate_unique_local_ids(
+        "record",
+        manifest.records.iter().map(|record| &record.local_id),
+    )?;
+    validate_unique_local_ids(
+        "evidence",
+        manifest.evidence.iter().map(|evidence| &evidence.local_id),
+    )?;
+    for task in &manifest.tasks {
+        validate_unique_local_ids(
+            "acceptance criterion",
+            task.acceptance_criteria
+                .iter()
+                .map(|criterion| &criterion.local_id),
+        )?;
+        for criterion in &task.acceptance_criteria {
+            validate_unique_local_ids(
+                "verification requirement",
+                criterion
+                    .verification_requirements
+                    .iter()
+                    .map(|requirement| &requirement.local_id),
+            )?;
+        }
+    }
+
+    manifest.expected_head_commit_id()?;
+    manifest.expected_state_digest()?;
+    manifest.payload_digest()?;
+    match &manifest.goal {
+        PlanAdmissionGoalManifest::Create { description } => {
+            super::goal::GoalState::active(description.clone())?.to_canonical_value()?;
+        }
+        PlanAdmissionGoalManifest::Existing {
+            entity_id,
+            expected_entity_version_id,
+        } => {
+            EntityId::parse_canonical(entity_id)?;
+            if let Some(expected_entity_version_id) = expected_entity_version_id {
+                EntityVersionId::parse_canonical(expected_entity_version_id)?;
+            }
+        }
+    }
+    let mut plan = super::plan::PlanState::active(
+        manifest.plan.description.clone(),
+        manifest.plan.strategy.clone(),
+    )?;
+    plan.constraints = manifest.plan.constraints.clone();
+    plan.to_canonical_value()?;
+    prepare_tasks(&manifest.tasks)?;
+    prepare_records(&manifest.records)?;
+    prepare_evidence(&manifest.evidence)?;
+    Ok(())
+}
+
+fn validate_plan_evolution_manifest_for_delivery(manifest: &PlanEvolutionManifest) -> Result<()> {
+    match manifest {
+        PlanEvolutionManifest::InPlace(manifest) => {
+            if manifest.schema_version != 1 {
+                return Err(WorkVcsError::PlanInvalid(format!(
+                    "plan evolution manifest schema_version {} is not supported",
+                    manifest.schema_version
+                )));
+            }
+            validate_idempotency_key(&manifest.idempotency_key)?;
+            require_object("plan evolution rationale", &manifest.rationale)?;
+            validate_evolution_append_manifests(
+                &manifest.tasks,
+                &manifest.records,
+                &manifest.evidence,
+            )?;
+            if manifest.plan.is_empty()
+                && manifest.tasks.is_empty()
+                && manifest.records.is_empty()
+                && manifest.evidence.is_empty()
+            {
+                return Err(WorkVcsError::PlanInvalid(
+                    "plan evolution manifest must update the Plan or append at least one object"
+                        .to_owned(),
+                ));
+            }
+            CommitId::parse_canonical(&manifest.expected_head_commit_id)?;
+            manifest
+                .expected_state_digest
+                .as_deref()
+                .map(Digest::from_hex)
+                .transpose()?;
+            EntityId::parse_canonical(&manifest.target_plan_entity_id)?;
+            EntityVersionId::parse_canonical(&manifest.expected_plan_entity_version_id)?;
+            Digest::from_hex(&manifest.expected_plan_state_digest)?;
+            let mut candidate = PlanState::active("validation", "validation")?;
+            if let Some(description) = &manifest.plan.description {
+                candidate.description = description.clone();
+            }
+            if let Some(strategy) = &manifest.plan.strategy {
+                candidate.strategy = strategy.clone();
+            }
+            if let Some(constraints) = &manifest.plan.constraints {
+                candidate.constraints = constraints.clone();
+            }
+            candidate.to_canonical_value()?;
+            prepare_tasks(&manifest.tasks)?;
+            prepare_records(&manifest.records)?;
+            prepare_evidence(&manifest.evidence)?;
+        }
+        PlanEvolutionManifest::Supersede(manifest) => {
+            if manifest.schema_version != 1 {
+                return Err(WorkVcsError::PlanInvalid(format!(
+                    "plan evolution manifest schema_version {} is not supported",
+                    manifest.schema_version
+                )));
+            }
+            validate_idempotency_key(&manifest.idempotency_key)?;
+            require_non_empty_object("plan supersede rationale", &manifest.rationale)?;
+            validate_evolution_append_manifests(
+                &manifest.tasks,
+                &manifest.records,
+                &manifest.evidence,
+            )?;
+            CommitId::parse_canonical(&manifest.expected_head_commit_id)?;
+            manifest
+                .expected_state_digest
+                .as_deref()
+                .map(Digest::from_hex)
+                .transpose()?;
+            EntityId::parse_canonical(&manifest.target_plan_entity_id)?;
+            EntityVersionId::parse_canonical(&manifest.expected_plan_entity_version_id)?;
+            Digest::from_hex(&manifest.expected_plan_state_digest)?;
+            EntityId::parse_canonical(&manifest.expected_goal_entity_id)?;
+            EntityVersionId::parse_canonical(&manifest.expected_goal_entity_version_id)?;
+            RelationId::parse_canonical(&manifest.expected_goal_plan_relation_id)?;
+            RelationVersionId::parse_canonical(&manifest.expected_goal_plan_relation_version_id)?;
+            let mut candidate = PlanState::active(
+                manifest.plan.description.clone(),
+                manifest.plan.strategy.clone(),
+            )?;
+            if let PlanEvolutionSupersedeConstraintsManifest::Replace { values } =
+                &manifest.plan.constraints
+            {
+                candidate.constraints = values.clone();
+            }
+            candidate.to_canonical_value()?;
+            prepare_tasks(&manifest.tasks)?;
+            prepare_records(&manifest.records)?;
+            prepare_evidence(&manifest.evidence)?;
+        }
+    }
+    manifest.payload_digest()?;
+    Ok(())
 }
 
 fn prepare_evolution(
@@ -2285,13 +2542,13 @@ pub(super) fn move_branch_head(
 }
 
 fn find_idempotent_admission(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     workspace_id: WorkspaceId,
     branch_id: BranchId,
     idempotency_key: &str,
     payload_digest: Digest,
 ) -> Result<Option<PlanAdmissionResult>> {
-    let mut statement = transaction
+    let mut statement = connection
         .prepare(
             "SELECT changeset.operation_payload_json
              FROM changeset
@@ -2344,13 +2601,13 @@ fn find_idempotent_admission(
 }
 
 fn find_idempotent_evolution(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     workspace_id: WorkspaceId,
     branch_id: BranchId,
     idempotency_key: &str,
     payload_digest: Digest,
 ) -> Result<Option<PlanEvolutionResult>> {
-    let mut statement = transaction
+    let mut statement = connection
         .prepare(
             "SELECT changeset.operation_payload_json
              FROM changeset

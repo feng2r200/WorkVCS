@@ -178,6 +178,13 @@ impl Engine {
         self.store.admit_plan(&options)
     }
 
+    pub fn find_plan_admission_result(
+        &self,
+        options: PlanAdmissionOptions,
+    ) -> Result<Option<PlanAdmissionResult>> {
+        self.store.find_plan_admission_result(&options)
+    }
+
     pub fn capture_cognition(
         &mut self,
         options: CognitionCaptureOptions,
@@ -187,6 +194,13 @@ impl Engine {
 
     pub fn evolve_plan(&mut self, options: PlanEvolutionOptions) -> Result<PlanEvolutionResult> {
         self.store.evolve_plan(&options)
+    }
+
+    pub fn find_plan_evolution_result(
+        &self,
+        options: PlanEvolutionOptions,
+    ) -> Result<Option<PlanEvolutionResult>> {
+        self.store.find_plan_evolution_result(&options)
     }
 
     pub fn issue_authorization_receipt(

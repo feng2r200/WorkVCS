@@ -247,7 +247,7 @@ fn assert_commit_before_receipt_recovery(with_secondary_reference: bool) {
             fixture.workspace.initial_branch_id,
             started.expected_head_commit_id(),
             started.expected_state_digest(),
-            prepared.into_manifest(),
+            prepared.into_manifest().expect("cognition manifest"),
         ))
         .unwrap();
     assert_eq!(created.outcome, CognitionCaptureOutcome::Created);
@@ -281,7 +281,7 @@ fn assert_commit_before_receipt_recovery(with_secondary_reference: bool) {
             fixture.workspace.initial_branch_id,
             started.expected_head_commit_id(),
             started.expected_state_digest(),
-            replay.into_manifest(),
+            replay.into_manifest().expect("cognition manifest"),
         ))
         .unwrap();
     assert_eq!(reused.outcome, CognitionCaptureOutcome::Reused);
@@ -392,7 +392,7 @@ fn deliver_primary_once(fixture: &mut DeliveryFixture) -> DeliveryAppliedPayload
             fixture.workspace.initial_branch_id,
             started.expected_head_commit_id(),
             started.expected_state_digest(),
-            prepared.into_manifest(),
+            prepared.into_manifest().expect("cognition manifest"),
         ))
         .unwrap();
     let receipt = build_primary_delivery_receipt(&fixture.intent, &started, &result).unwrap();

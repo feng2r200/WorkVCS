@@ -1,8 +1,8 @@
 # ProjectRef Registry v2 Migration and Acceptance Contract
 
-Status: Accepted implemented contract — complete 93-row acceptance ledger plus bounded live migration, activation, admission, delivery, and replay evidence
+Status: Accepted implemented contract — complete 98-row acceptance ledger plus bounded live migration, activation, admission, delivery, and replay evidence
 Date: 2026-09-23
-Last updated: 2026-09-28
+Last updated: 2026-10-06
 Parent: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md)
 Schema: [ProjectRef Control Plane v2 Contract](projectref-control-plane-v2.md)
 
@@ -524,7 +524,7 @@ evidence.
 | M-22 | Explicit standard-name registry has an intent in the sibling WorkVCS-home journal | Rollback readiness is false; the fallback journal and sibling-home journal are both inspected. |
 | M-23 | Activation fails after atomic marker installation | `routing_activation_install_indeterminate`; status observes the exact active marker and exact reapply is idempotent. |
 | M-24 | Marker is malformed, stale, or symlinked | Status reports invalid or stale and ordinary reads plus apply remain fail-closed; no registry or Store write occurs. |
-| M-25 | Registry v2 is selected by a cwd-based durable-write command | `capture` is journal-only and activation-gated; Plan admit/evolve, Receipt issue/consume, ensure, and bind reject before registry or Store mutation until their ProjectRef-v2 routes exist. |
+| M-25 | Registry v2 is selected by a cwd-based durable-write command before required activation | `capture` and Plan admit/evolve fail before Store mutation; Receipt issue/consume, ensure, and bind remain rejected until their own ProjectRef-v2 routes exist. |
 | M-26 | WorkVCS home supplies the registry | The activation marker is located at the configured home root, not beside the registry, and remains digest-bound to the selected snapshot. |
 | M-27 | Fault before rollback rename | V2 remains authoritative; only exact reusable snapshot state may persist and candidate temps are removed. |
 | M-28 | Fault after rollback rename | `registry_rollback_install_indeterminate`; the probe observes exact `v1_restored` or `blocked` state before any retry. |
@@ -539,10 +539,13 @@ evidence.
 | M-37 | Exact journal-admission apply and disable | Apply requires active read routing plus exact registry/candidate digests; disable requires the exact installed digest and excludes admission with the shared lock; exact repeats are idempotent, and every injected post-install or post-removal fault requires status-first recovery. |
 | M-38 | Routed capture has an unbound semantic owner | The semantic locator remains primary, one immutable intent is admitted and replayed idempotently, and no ProjectRef or Store object is created. |
 | M-39 | A post-migration first-write recovery adds a ProjectRef | The original migration receipt remains valid because its mappings still cover exactly the ProjectRefs created by migration; no false migration row is added. |
+| M-40 | Registry-v2 cwd Plan admission or evolution is activated | The typed Plan intent is durable before the existing atomic Store engine runs; success requires a matching `delivery_applied` receipt and exact replay creates no duplicate commit. |
+| M-41 | A version-1 journal marker is installed on the exact current registry snapshot | Cognition remains active, Plan remains denied, and only an exact-old-digest strict capability-superset refresh enables `plan_admit` and `plan_evolve`. |
+| M-42 | A Plan target commit completes before its receipt | Replaying the identical typed intent reuses the Store result and appends the missing receipt without another Work-State commit. |
 
 The
 [round-5 acceptance ledger](../provenance/projectref-concrete-adapter-and-round5-acceptance.md)
-accounts for all 93 R/C/M/N rows with a focused test, bounded probe, inspection,
+accounts for all 98 R/C/M/N rows with a focused test, bounded probe, inspection,
 or independent review. All executable rows except M-33 have source or
 isolated-fixture proof; the bounded live canary additionally covers installed
 admission, primary delivery, secondary recall, and no-write replay. M-33
@@ -595,7 +598,7 @@ activation while holding the shared lock. In particular:
   exact idempotent reuse;
 - `cli_v2_cwd_durable_write_matrix_fails_closed_without_registry_or_store_changes`
   covers every currently exposed cwd-based durable write and legacy registry
-  mutation surface; and
+  mutation surface before activation; and
 - `cli_v2_routing_activation_uses_configured_home_marker_path` (including the
   inverse explicit-registry rollback probe) plus
   `cli_v2_routing_activation_rejects_malformed_stale_and_symlink_markers`
@@ -611,6 +614,21 @@ activation while holding the shared lock. In particular:
   dedicated indeterminate codes, observes exact active/absent state through
   read-only status, removes candidate temps, and permits only exact idempotent
   recovery; and
+- `cli_v2_plan_admit_and_evolve_use_one_durable_journal`,
+  `cli_v2_plan_commit_before_receipt_recovers_by_idempotent_replay`, and
+  `cli_v2_plan_retry_after_delivery_started_reports_created_target`,
+  `cli_v2_plan_conflict_is_journaled_without_store_write`,
+  `cli_v2_plan_validation_failure_is_terminal_without_store_write`, and
+  `cli_v2_plan_receipt_size_is_preflighted_before_store_write`, plus
+  `legacy_journal_marker_requires_explicit_same_snapshot_plan_capability_refresh`,
+  `capture_event_limit_accepts_limit_minus_one_and_limit_but_rejects_limit_plus_one`,
+  and `typed_intents_reject_cross_family_receipts_and_failures`
+  prove typed Plan admission, in-place and supersede evolution, replay,
+  correct target outcome after journal-only reuse, commit-before-receipt
+  convergence, explicitly staged conflict/validation terminalization, fixed-
+  envelope receipt size boundaries with zero Store mutation, typed event
+  family enforcement, v1 cognition-only compatibility, and explicit same-
+  snapshot capability activation; and
 - `projection_rebuild_is_byte_equivalent_and_replay_has_no_duplicates`,
   `event_chain_gaps_reordering_and_payload_tampering_fail_closed`,
   `first_write_binding_converges_once_and_rejects_target_substitution`, and

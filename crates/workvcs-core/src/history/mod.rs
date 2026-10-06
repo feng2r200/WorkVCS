@@ -222,7 +222,10 @@ pub use why::{
     WhyVerificationClosureChain,
 };
 
-pub(crate) use admission::{admit_plan, evolve_plan, plan_supersedes_relations_at};
+pub(crate) use admission::{
+    admit_plan, evolve_plan, find_plan_admission_result, find_plan_evolution_result,
+    plan_supersedes_relations_at,
+};
 pub(crate) use branch::{fork_branch, list_branches};
 pub(crate) use bundle::{
     apply_bundle_import, bundle_import_attempt, bundle_import_attempts, export_bundle_manifest,

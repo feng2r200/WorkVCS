@@ -132,6 +132,21 @@ digests, status-first recovery, and the exact installed binary; never delete or
 hand-edit a stale marker, substitute a source-tree binary for live
 installation, or infer authority from fixture success.
 
+On registry v2 the journal marker grants named capabilities. Marker version 1
+remains cognition-only; `plan admit --cwd` and `plan evolve --cwd` require an
+explicit old-digest-locked refresh to the version-2 capability superset. The
+compatibility-named `project capture-recovery` surface serves cognition and
+typed Plan operations through the same intent/event/projection/receipt
+protocol. Always read `payload_kind`; never reinterpret a Plan payload as
+cognition or create a second recovery queue.
+For routed Plan output, distinguish `journal_admission_reused` from the target
+`admission_status` or `evolution_status`: an already admitted intent can still
+create its first target commit, while commit-before-receipt recovery reuses the
+target result. Treat a terminal typed preflight as closed before receipt
+construction, and require the durable Plan receipt's operation kind and full
+manifest-derived result shape to match before reporting success. Once that
+receipt exists, render the result through the read-only target lookup.
+
 The journal-backed route provides no silent loss after admission. It does not
 claim that a caller recognized and submitted every valuable semantic delta
 while a global per-turn Hook remains deferred.
@@ -142,13 +157,14 @@ packet in active context, and persist it when the accepted route is restored.
 Do not silently substitute a document-only update or create a second durable
 queue.
 
-Journal admission preserves an intent; it does not mean the target Store can
-Recall that checkpoint. When recording or reconciling a continuing checkpoint,
-read [Checkpoint delivery](references/checkpoint-delivery.md) once for the
-selected route to distinguish receipt work from missing ownership and complete
-only the delivery already
-authorized. If delivery is outside scope, retain the admitted capture ID and
-report that exact boundary instead of repeatedly admitting the same content.
+Journal admission preserves a typed intent; it does not mean the target Store
+can Recall that checkpoint or Plan transition. When recording or reconciling a
+continuing operation, read
+[Checkpoint delivery](references/checkpoint-delivery.md) once for the selected
+route to distinguish receipt work from missing ownership and complete only the
+delivery already authorized. If delivery is outside scope, retain the admitted
+CaptureId and report that exact boundary instead of repeatedly admitting the
+same content.
 
 The command forms in this Skill and its references are established. Do not
 prepend Help calls to them. Use command help only for a genuinely different

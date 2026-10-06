@@ -101,9 +101,13 @@ order, requires the exact current registry and installed-marker digests, and
 excludes new admissions before removal. Absence is off; malformed, stale,
 wrong-scope, symlinked, or uncertain state fails closed. The only stale-marker
 exception is an apply that locks the exact old marker digest and proves an
-earlier revision of the same registry lineage before atomic replacement. This marker permits
-only immutable intent admission. It does not authorize ProjectRef bootstrap,
-journal-event processing, target Store delivery, or any live operation.
+earlier revision of the same registry lineage before atomic replacement.
+Marker version 2 exposes `cognition_capture`, `plan_admit`, and `plan_evolve`.
+A version-1 marker remains cognition-only and may be replaced at the same
+registry revision only through an exact-old-digest strict capability-superset
+refresh. This marker permits only immutable typed-intent admission. It does
+not by itself authorize ProjectRef bootstrap, journal-event processing, target
+Store delivery, or any live operation.
 
 The source tree now also contains a separately explicit recovery surface:
 
@@ -112,7 +116,7 @@ workvcs project capture-recovery --status --capture-id ID [--registry PATH]
 workvcs project capture-recovery --apply --capture-id ID --expected-registry-digest DIGEST --expected-projection-digest DIGEST [--registry PATH] [--store-root PATH]
 ```
 
-`--status` is read-only. It validates the immutable event chain, derives the
+`--status` is read-only. It reports the intent `payload_kind`, validates the immutable event chain, derives the
 authoritative projection, compares any stored projection, re-resolves current
 ownership, and reports the exact next action. `--apply` is not implied by
 either activation marker: it is a distinct Unix-only, digest-locked operator
@@ -293,6 +297,13 @@ manifest can carry prior findings, decisions, questions, constraints, and
 evidence. Admission is one atomic transition and replaying the same
 idempotency key reuses the prior result.
 
+With registry v2, the cwd form requires the exact `plan_admit` capability,
+persists a `plan_admit_v1` intent in the shared durable-operation journal, and
+drives delivery synchronously. Success output includes
+`durable_route=projectref_journal`, the recovery-compatible `capture_id`, and
+`delivery_receipt=true`. Explicit `STORE --branch` and registry-v1 cwd retain
+their direct compatibility behavior.
+
 The live evolve syntax is:
 
 ```text
@@ -304,6 +315,33 @@ only explicitly supplied Plan fields, preserves omitted fields, atomically appen
 Tasks with AC/VR, Records, and Evidence, and does not implicitly delete or
 replace omitted state. Expected guards, target Plan identity/version/digest,
 and idempotency are manifest fields.
+
+With registry v2, the cwd form requires `plan_evolve`, persists
+`plan_evolve_v1`, and uses the same receipt recovery. Repeating an identical
+manifest is idempotent. A process failure after the Store commit but before
+the receipt is repaired by repeating the exact command or by the compatibility
+`project capture-recovery` surface; neither route creates another Plan commit.
+
+The routed Plan path performs pure typed-manifest validation, explicit
+current-snapshot guard comparison, and a fixed maximum-timestamp receipt-
+envelope size check before any first Store write. Proven oversize, guard
+conflict, or manifest rejection records `plan_receipt_too_large`,
+`plan_target_conflict`, or `plan_manifest_rejected` with no Store mutation.
+Terminal manifest/target disposition precedes receipt construction; wrong-kind
+Goal/Plan references are target conflicts. Timestamp precision is capped at
+nine fractional digits, making the preflight envelope an append-safe maximum.
+These captures are preserved for audit but are not replay candidates; start a
+new operation with a smaller manifest, current guards, or corrected content.
+Engine, storage, integrity, transaction, control-plane, or post-commit
+uncertainty remains nonterminal and requires status-first recovery of the same
+operation. Receipt and failure event families are validated against their
+admitted payload kind during append and reconstruction. Plan receipts also
+carry the exact operation kind and must match the complete result shape of the
+admitted create/existing-Goal or in-place/supersede manifest. Once a receipt
+is durable, command output is reconstructed through a read-only Store lookup.
+Receipt preflight canonicalizes Plan record aliases exactly as the Store does
+(`unknown` to `question`). A terminal failure is immutable for the current
+delivery attempt: a later failure or receipt is rejected before event install.
 
 `mode=supersede` is current and performs the guarded old→superseded/new→active
 transition with same-Goal dual `contains` relations and a machine

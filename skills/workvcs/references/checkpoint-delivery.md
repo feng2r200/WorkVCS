@@ -1,8 +1,8 @@
-# Checkpoint delivery
+# Durable-operation delivery
 
-Use this when a continuing checkpoint has been admitted or needs reconciliation.
-It explains the existing explicit recovery route; it adds no automatic delivery,
-authorization, bootstrap, or background queue.
+Use this when continuing cognition or a typed Plan operation has been admitted
+or needs reconciliation. It explains the existing explicit recovery route; it
+adds no automatic delivery, authorization, bootstrap, or background queue.
 
 Reuse this sequence while its version, route, target, and authority remain
 applicable. Each mutation still needs fresh status guards; each checkpoint does
@@ -10,16 +10,20 @@ not need another full read of this reference or the project history.
 
 ## Read the current state once
 
-After admission, keep the capture ID, semantic scope, and exact registry route.
+After admission, keep the compatibility CaptureId, `payload_kind`, semantic
+scope, and exact registry route.
 Run `workvcs project capture-recovery --status --capture-id <id>` using that
 same route. Add `--registry <path>` only when it was the verified selected route.
-Status is read-only. Read these fields together:
+Status is read-only. `payload_kind` identifies `cognition_v2`,
+`plan_admit_v1`, or `plan_evolve_v1`; it is not permission to reinterpret one
+domain payload as another. Read these fields together:
 
 | Current status | Meaning and next boundary |
 | --- | --- |
 | `resolution_status=resolved`, `binding_state=valid`, `recovery_action=apply_binding_receipt` | An existing target is valid but this capture lacks its binding receipt. `pending_project` here does not mean the project is unbound; do not call `project ensure` or create a new binding. |
 | `resolution_status=unbound`, `recovery_action=apply_project_bootstrap` | Missing ownership or binding convergence requires its own authorized recovery. Do not fall back from a known semantic owner. |
-| `pending_primary` | Primary delivery or its receipt is incomplete. After an uncertain apply, inspect status and recover the same capture under fresh guards. |
+| `pending_primary` | Primary delivery or its receipt is incomplete. After an uncertain apply, inspect status and recover the same operation under fresh guards. Plan recovery replays the original manifest idempotently. |
+| `plan_target_conflict`, `plan_manifest_rejected`, or `plan_receipt_too_large` | The typed Plan operation ended deterministically before a Store write. Preserve it for audit and start a new operation with current guards, corrected content, or a smaller manifest; do not replay the terminal Capture ID. |
 | `pending_references` | Primary success does not complete the declared CaptureGroup. Only authorized immutable reference convergence remains. |
 | `effective_recovery_state=completed`, `delivery_receipt=true`, `recovery_action=none` | The recorded delivery completed. Verify its exact target and semantic result once; do not apply again merely to poll. |
 | Conflict, invalid binding, terminal failure, or an unrecognized result | Preserve the capture and diagnose the stated cause. Do not convert it to success, recreate its intent, or bypass a gate. |
@@ -31,7 +35,7 @@ exit code alone is not evidence that the checkpoint is recoverable.
 
 ## Deliver within the existing authority
 
-Explicit delivery authority must cover this capture and the verified target.
+Explicit delivery authority must cover this operation and the verified target.
 An existing user instruction that already covers the current operation is
 sufficient; do not ask for the same permission again. Authority to capture or
 edit source alone does not authorize Store delivery. Newly unbound ownership,
@@ -51,7 +55,7 @@ workvcs project capture-recovery --apply --capture-id <id> \
 Carry the same explicit `--registry <path>` if one was selected. Do not add a
 Store root or invoke activation to make an existing-target delivery work.
 Recheck only the affected state if a guard rejects a changed basis. Following
-an indeterminate result, status comes first; retry only the same capture with
+an indeterminate result, status comes first; retry only the same operation with
 fresh guards inside the existing authority. Changing the idempotency identity
 can duplicate a Store commit that succeeded before its receipt was lost.
 

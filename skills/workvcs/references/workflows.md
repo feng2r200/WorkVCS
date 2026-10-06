@@ -77,9 +77,13 @@ If a separately authorized ProjectRef bootstrap advances the same registry
 lineage, read routing and journal admission become stale by design. Refresh
 each one only through its apply form with the new registry digest, new candidate
 digest, and exact old marker `--expected-activation-digest`. The marker must
-name an earlier revision of the same registry ID. Wrong lineage, equal/newer
-revision, malformed or symlinked state, and digest mismatch remain fail-closed;
-never delete or hand-edit the marker. Refresh read routing before journal
+name an earlier revision of the same registry ID. Read routing continues to
+reject equal/newer revisions. Journal admission has one additional exact case:
+a version-1 marker for the same registry revision and digest may be refreshed
+to the version-2 strict capability superset when its installed digest is
+supplied. Equal-revision lateral replacement, capability removal, wrong
+lineage, malformed or symlinked state, and digest mismatch remain fail-closed;
+never delete or hand-edit either marker. Refresh read routing before journal
 admission, and retain separate authority for both operations.
 The separate `project capture-recovery` route starts with
 `--status --capture-id <id>`. Status is read-only and produces the registry
@@ -210,6 +214,36 @@ Use `plan evolve mode=in_place` for additive or non-contract-breaking changes.
 Use `mode=supersede` when the confirmed Plan contract is being replaced and its
 ancestry must remain visible. Do not maintain parallel Plan versions merely as
 a testing ritual.
+
+With registry v2, the cwd forms are typed durable operations, not direct Store
+writes: `plan admit` requires the `plan_admit` marker capability and admits
+`plan_admit_v1`; `plan evolve` requires `plan_evolve` and admits
+`plan_evolve_v1`. Both use the same journal, recovery projection, target
+idempotency, and receipt protocol as routed cognition while retaining Plan
+manifest semantics. Success requires the durable receipt. If the Store commit
+lands before that receipt, repeat the exact Plan command or use
+`project capture-recovery` with the same CaptureId; never choose a new
+idempotency key merely to escape an uncertain result. Registry v1 cwd and
+explicit `STORE --branch` remain direct compatibility boundaries.
+
+Before either routed Plan operation first mutates the Store, it validates the
+typed manifest, compares explicit guards to one current target snapshot, and
+measures the typed receipt in a fixed maximum-timestamp envelope. Treat
+`plan_receipt_too_large`, `plan_target_conflict`, and
+`plan_manifest_rejected` as terminal, audited zero-write results only when that
+preflight proves the condition: split the manifest, refresh guards, or correct
+content and admit a new operation. Do not replay those Capture IDs. Engine,
+storage, integrity, transaction, control-plane, and uncertain post-commit
+failures remain status-first recovery of the same typed operation.
+Terminal manifest/target results are recorded before receipt construction;
+wrong-kind Goal/Plan entity references are target conflicts. A successful
+receipt carries the exact Plan operation kind and complete manifest-derived
+result shape. After it is durable, the CLI uses only the read-only target
+result lookup to render output.
+Use the canonical Store vocabulary when interpreting receipt results:
+`record.kind=unknown` is the accepted input alias for canonical `question`.
+Once a terminal failure is present for a delivery attempt, never try to append
+a different failure or receipt to that same attempt.
 
 ## Recall and retrospective
 

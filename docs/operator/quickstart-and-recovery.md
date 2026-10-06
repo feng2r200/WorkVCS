@@ -96,11 +96,17 @@ workvcs project journal-admission-activation --disable --expected-registry-diges
 
 Apply additionally requires exact read activation. Its stale-marker form has
 the same digest-locked, same-registry earlier-revision constraint as read
-routing and also holds the shared quiescence lock. Disable acquires that lock
-before removing the exact marker. Both have isolated-fixture
-validation and require exact live-state verification and operation authority. The marker
-permits only `capture --value-reason` intent admission; it does not bootstrap a
-ProjectRef, process journal events, or write a Store.
+routing and also holds the shared quiescence lock. Marker version 2 reports
+the separate `cognition_capture`, `plan_admit`, and `plan_evolve`
+capabilities. A version-1 marker remains cognition-only. The refresh form also
+accepts an exact version-1 marker for the same registry ID, revision, and
+digest only when the candidate is a strict capability superset; this is the
+required explicit Plan-capability upgrade. Disable acquires the lock before
+removing the exact marker. Both operations require exact live-state
+verification and authority. The marker permits only typed intent admission;
+the caller's explicit command or recovery apply supplies delivery authority.
+It does not itself bootstrap a ProjectRef, process journal events, or write a
+Store.
 If disable returns `routing_activation_disable_indeterminate`, inspect
 `journal-admission-activation --status` before any retry.
 
@@ -124,7 +130,9 @@ the manifest idempotency key is
 valid only with the same semantic payload and byte-equivalent canonical group
 meaning; changing either fails closed. Admission itself writes no Store.
 
-Continue only from the admitted Capture ID:
+Continue only from the admitted Capture ID. The compatibility-named recovery
+surface also recognizes `plan_admit_v1` and `plan_evolve_v1`; status reports
+the exact `payload_kind`:
 
 ```sh
 workvcs project capture-recovery --status --capture-id "$CAPTURE_ID" [--registry "$REGISTRY"]
@@ -304,6 +312,17 @@ idempotency are manifest fields, not CLI flags. The manifest may carry prior
 findings, decisions, questions, constraints, and evidence; the admission is
 one atomic transition and same-key replay is idempotent.
 
+When `--cwd` selects registry v2, the command requires read routing plus the
+`plan_admit` journal capability. It first persists `plan_admit_v1`, then drives
+the common delivery state machine and returns only after `delivery_applied` is
+durable. Output includes `durable_route=projectref_journal`, `capture_id`, and
+`delivery_receipt=true`. A version-1 journal marker fails before Store access;
+preview and explicitly refresh the exact marker rather than editing it.
+`journal_admission_reused=true` means only that the typed intent already
+existed. The command's `admission_status` or `evolution_status` describes the
+target Store result: a retry after only `delivery_started` is still `created`,
+while a target commit replayed to repair its receipt is `reused`.
+
 `workvcs plan evolve` requires a manifest with `mode=in_place` or
 `mode=supersede`. In-place mode updates only explicitly supplied Plan fields,
 preserves omitted fields, and atomically
@@ -314,6 +333,24 @@ old active→superseded and creates a new active Plan under the same Goal,
 retaining the old `contains`, adding the new `contains`, and creating the
 `new_plan→old_plan` `supersedes` relation. Constraints require explicit
 `carry_all` or `replace`; old Tasks, Records, and Evidence are not migrated.
+The registry-v2 cwd form analogously requires `plan_evolve`, persists
+`plan_evolve_v1`, and uses the same target-commit/missing-receipt recovery
+contract. Re-running the identical manifest reuses the original intent and
+Store result; if a command stops after the Store commit, use its Capture ID or
+repeat the exact command to converge the missing receipt.
+
+Before the first Plan Store write, WorkVCS validates the typed manifest,
+compares its explicit guards to one current target snapshot, and measures the
+typed receipt with a fixed maximum-length timestamp envelope.
+`plan_receipt_too_large` is therefore a durable zero-Store-write result: split
+the manifest and admit a new operation. `plan_target_conflict` and
+`plan_manifest_rejected` are terminal only when that pre-write analysis proves
+the mismatch or invalid content; use current guards or a corrected manifest in
+a new operation. Do not apply those captures again. Engine execution, storage,
+integrity, transaction, control-plane, or uncertain post-commit errors are not
+terminalized by their generic error code; inspect status and recover the same
+Capture ID.
+
 `workvcs receipt issue`, `receipt show`, `receipt list`, and `receipt consume`
 are current P0-3a/P0-3b commands. They expose only mechanical binding plus
 authority-ref type/digest and a redacted marker. The structured

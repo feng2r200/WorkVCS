@@ -10,8 +10,10 @@ use crate::canonical::{CanonicalValue, canonical_bytes, parse_canonical_json};
 use crate::error::{Result, WorkVcsError};
 use crate::{
     BranchId, CaptureGroupId, CaptureId, ChangeSetId, CommitId, DeliveryId, Digest, EntityId,
-    EntityVersionId, EventId, EvidenceId, ProjectLocatorId, ProjectRefId, RegistryId, RelationId,
-    RelationVersionId, StoreId, WorkspaceId,
+    EntityVersionId, EventId, EvidenceId, PlanAdmissionGoalManifest, PlanAdmissionManifest,
+    PlanAdmissionRecordManifest, PlanAdmissionTaskManifest, PlanEvolutionManifest,
+    ProjectLocatorId, ProjectRefId, RegistryId, RelationId, RelationVersionId, StoreId,
+    WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,12 +37,30 @@ pub const MAX_SEMANTIC_PAYLOAD_BYTES: usize = 64 * 1_024;
 pub const MAX_CAPTURE_INTENT_BYTES: usize = 256 * 1_024;
 pub const MAX_CAPTURE_EVENT_BYTES: usize = 128 * 1_024;
 pub const MAX_CAPTURE_PROJECTION_BYTES: usize = 256 * 1_024;
+const MAX_CAPTURE_EVENT_TIMESTAMP: &str = "9999-12-31T23:59:59.999999999Z";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapturePayloadKind {
     CognitionV2,
     LegacyCognitionV1,
+    PlanAdmitV1,
+    PlanEvolveV1,
+}
+
+impl CapturePayloadKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CognitionV2 => "cognition_v2",
+            Self::LegacyCognitionV1 => "legacy_cognition_v1",
+            Self::PlanAdmitV1 => "plan_admit_v1",
+            Self::PlanEvolveV1 => "plan_evolve_v1",
+        }
+    }
+
+    pub const fn is_cognition(self) -> bool {
+        matches!(self, Self::CognitionV2 | Self::LegacyCognitionV1)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -400,7 +420,12 @@ impl DeliveryResultObject {
                 EntityVersionId::parse_canonical(version)
                     .map_err(|error| parse_error("immutable_version_id", error))?;
             }
-            "knowledge" => {
+            "knowledge"
+            | "goal"
+            | "plan"
+            | "task"
+            | "acceptance_criterion"
+            | "verification_requirement" => {
                 EntityId::parse_canonical(logical)
                     .map_err(|error| parse_error("logical_object_id", error))?;
                 EntityVersionId::parse_canonical(version)
@@ -522,6 +547,8 @@ pub struct DeliveryAppliedPayload {
     state_digest: Digest,
     result_objects: Vec<DeliveryResultObject>,
     reused: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation_payload_kind: Option<CapturePayloadKind>,
     #[serde(default)]
     canonical_record_ref: Nullable<CanonicalRecordRef>,
 }
@@ -541,6 +568,73 @@ impl DeliveryAppliedPayload {
         reused: bool,
         canonical_record_ref: Option<CanonicalRecordRef>,
     ) -> Result<Self> {
+        Self::new_for_operation(
+            delivery_id,
+            project_ref_id,
+            store_id,
+            workspace_id,
+            branch_id,
+            commit_id,
+            changeset_id,
+            state_digest,
+            result_objects,
+            reused,
+            None,
+            canonical_record_ref,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_plan(
+        operation_payload_kind: CapturePayloadKind,
+        delivery_id: DeliveryId,
+        project_ref_id: ProjectRefId,
+        store_id: StoreId,
+        workspace_id: WorkspaceId,
+        branch_id: BranchId,
+        commit_id: CommitId,
+        changeset_id: ChangeSetId,
+        state_digest: Digest,
+        result_objects: Vec<DeliveryResultObject>,
+        reused: bool,
+    ) -> Result<Self> {
+        if !matches!(
+            operation_payload_kind,
+            CapturePayloadKind::PlanAdmitV1 | CapturePayloadKind::PlanEvolveV1
+        ) {
+            return invalid("Plan delivery receipt requires a Plan operation payload kind");
+        }
+        Self::new_for_operation(
+            delivery_id,
+            project_ref_id,
+            store_id,
+            workspace_id,
+            branch_id,
+            commit_id,
+            changeset_id,
+            state_digest,
+            result_objects,
+            reused,
+            Some(operation_payload_kind),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_for_operation(
+        delivery_id: DeliveryId,
+        project_ref_id: ProjectRefId,
+        store_id: StoreId,
+        workspace_id: WorkspaceId,
+        branch_id: BranchId,
+        commit_id: CommitId,
+        changeset_id: ChangeSetId,
+        state_digest: Digest,
+        result_objects: Vec<DeliveryResultObject>,
+        reused: bool,
+        operation_payload_kind: Option<CapturePayloadKind>,
+        canonical_record_ref: Option<CanonicalRecordRef>,
+    ) -> Result<Self> {
         let payload = Self {
             delivery_id,
             delivery_mode: DeliveryMode::Canonical,
@@ -553,6 +647,7 @@ impl DeliveryAppliedPayload {
             state_digest,
             result_objects,
             reused,
+            operation_payload_kind,
             canonical_record_ref: Nullable::present(canonical_record_ref),
         };
         payload.validate()?;
@@ -603,6 +698,10 @@ impl DeliveryAppliedPayload {
         self.reused
     }
 
+    pub fn operation_payload_kind(&self) -> Option<CapturePayloadKind> {
+        self.operation_payload_kind
+    }
+
     pub fn canonical_record_ref(&self) -> Option<&CanonicalRecordRef> {
         self.canonical_record_ref.as_ref()
     }
@@ -613,6 +712,14 @@ impl DeliveryAppliedPayload {
         }
         if !self.canonical_record_ref.is_present() {
             return invalid("delivery_applied canonical_record_ref is required even when null");
+        }
+        if self
+            .operation_payload_kind
+            .is_some_and(CapturePayloadKind::is_cognition)
+        {
+            return invalid(
+                "delivery_applied operation_payload_kind may identify only a Plan operation",
+            );
         }
         if self.result_objects.is_empty() {
             return invalid("delivery_applied requires at least one result object");
@@ -640,11 +747,20 @@ impl DeliveryAppliedPayload {
                     object.immutable_version_id.as_str()
                 ));
             }
-            has_canonical_content |= object.object_kind.as_str() == "knowledge"
-                || object.object_kind.as_str().starts_with("record:");
+            has_canonical_content |= matches!(
+                object.object_kind.as_str(),
+                "knowledge"
+                    | "goal"
+                    | "plan"
+                    | "task"
+                    | "acceptance_criterion"
+                    | "verification_requirement"
+            ) || object.object_kind.as_str().starts_with("record:");
         }
         if !has_canonical_content {
-            return invalid("delivery_applied requires at least one Record or Knowledge result");
+            return invalid(
+                "delivery_applied requires at least one canonical entity or Record result",
+            );
         }
         if let Some(reference) = self.canonical_record_ref.as_ref() {
             reference.validate()?;
@@ -675,6 +791,255 @@ impl DeliveryAppliedPayload {
             && self.workspace_id == started.workspace_id
             && self.branch_id == started.branch_id
     }
+
+    fn validate_for_payload_kind(&self, payload_kind: CapturePayloadKind) -> Result<()> {
+        match payload_kind {
+            CapturePayloadKind::CognitionV2 | CapturePayloadKind::LegacyCognitionV1 => {
+                if self.operation_payload_kind.is_some() {
+                    return invalid(format!(
+                        "{} intent cannot carry a Plan operation receipt",
+                        payload_kind.as_str()
+                    ));
+                }
+                for object in &self.result_objects {
+                    let kind = object.object_kind();
+                    if matches!(
+                        kind,
+                        "goal"
+                            | "plan"
+                            | "task"
+                            | "acceptance_criterion"
+                            | "verification_requirement"
+                    ) || matches!(kind, "relation:contains" | "relation:supersedes")
+                    {
+                        return invalid(format!(
+                            "{} intent cannot carry Plan result object kind {kind:?}",
+                            payload_kind.as_str()
+                        ));
+                    }
+                }
+            }
+            CapturePayloadKind::PlanAdmitV1 | CapturePayloadKind::PlanEvolveV1 => {
+                if self.operation_payload_kind != Some(payload_kind) {
+                    return invalid(format!(
+                        "{} delivery receipt requires operation_payload_kind {}",
+                        payload_kind.as_str(),
+                        payload_kind.as_str()
+                    ));
+                }
+                if self.canonical_record_ref().is_some() {
+                    return invalid(format!(
+                        "{} delivery receipt cannot carry a CaptureGroup canonical Record reference",
+                        payload_kind.as_str()
+                    ));
+                }
+                if !self
+                    .result_objects
+                    .iter()
+                    .any(|object| object.object_kind() == "plan")
+                {
+                    return invalid(format!(
+                        "{} delivery receipt requires a Plan result",
+                        payload_kind.as_str()
+                    ));
+                }
+                for object in &self.result_objects {
+                    let kind = object.object_kind();
+                    let allowed = matches!(
+                        kind,
+                        "goal"
+                            | "plan"
+                            | "task"
+                            | "acceptance_criterion"
+                            | "verification_requirement"
+                            | "evidence"
+                            | "relation:contains"
+                            | "relation:supersedes"
+                    ) || kind.starts_with("record:");
+                    if !allowed {
+                        return invalid(format!(
+                            "{} delivery receipt cannot carry result object kind {kind:?}",
+                            payload_kind.as_str()
+                        ));
+                    }
+                }
+                if payload_kind == CapturePayloadKind::PlanAdmitV1
+                    && self.result_objects.iter().any(|object| {
+                        matches!(
+                            object.object_kind(),
+                            "relation:contains" | "relation:supersedes"
+                        ) || object.local_id() == "new_plan"
+                    })
+                {
+                    return invalid(
+                        "plan_admit_v1 delivery receipt cannot carry Plan-evolution results",
+                    );
+                }
+                if payload_kind == CapturePayloadKind::PlanEvolveV1
+                    && self
+                        .result_objects
+                        .iter()
+                        .any(|object| object.object_kind() == "goal")
+                {
+                    return invalid("plan_evolve_v1 delivery receipt cannot create a Goal result");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_for_intent(&self, intent: &CaptureIntent) -> Result<()> {
+        self.validate_for_payload_kind(intent.payload_kind())?;
+        match intent.payload_kind() {
+            CapturePayloadKind::CognitionV2 | CapturePayloadKind::LegacyCognitionV1 => Ok(()),
+            CapturePayloadKind::PlanAdmitV1 => {
+                let manifest = parse_plan_admission_intent(intent)?;
+                self.validate_exact_plan_result_shape(expected_admission_result_shape(&manifest)?)
+            }
+            CapturePayloadKind::PlanEvolveV1 => {
+                let manifest = parse_plan_evolution_intent(intent)?;
+                self.validate_exact_plan_result_shape(expected_evolution_result_shape(&manifest)?)
+            }
+        }
+    }
+
+    fn validate_exact_plan_result_shape(&self, expected: BTreeSet<(String, String)>) -> Result<()> {
+        let operation_payload_kind = self.operation_payload_kind.ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(
+                "Plan result shape validation requires an operation payload kind".to_owned(),
+            )
+        })?;
+        let actual = self
+            .result_objects
+            .iter()
+            .map(|object| {
+                (
+                    object.local_id().to_owned(),
+                    object.object_kind().to_owned(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        if actual != expected {
+            return invalid(format!(
+                "{} delivery receipt result shape does not exactly match its admitted manifest",
+                operation_payload_kind.as_str()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn parse_plan_admission_intent(intent: &CaptureIntent) -> Result<PlanAdmissionManifest> {
+    let bytes = serde_json::to_vec(intent.semantic_payload()).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot serialize admitted plan_admit_v1 payload: {error}"
+        ))
+    })?;
+    PlanAdmissionManifest::from_json_bytes(&bytes).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "admitted plan_admit_v1 payload is not a Plan admission manifest: {error}"
+        ))
+    })
+}
+
+fn parse_plan_evolution_intent(intent: &CaptureIntent) -> Result<PlanEvolutionManifest> {
+    let bytes = serde_json::to_vec(intent.semantic_payload()).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot serialize admitted plan_evolve_v1 payload: {error}"
+        ))
+    })?;
+    PlanEvolutionManifest::from_json_bytes(&bytes).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "admitted plan_evolve_v1 payload is not a Plan evolution manifest: {error}"
+        ))
+    })
+}
+
+fn expected_admission_result_shape(
+    manifest: &PlanAdmissionManifest,
+) -> Result<BTreeSet<(String, String)>> {
+    let mut expected = BTreeSet::new();
+    if matches!(manifest.goal, PlanAdmissionGoalManifest::Create { .. }) {
+        expected.insert(("goal".to_owned(), "goal".to_owned()));
+    }
+    expected.insert(("plan".to_owned(), "plan".to_owned()));
+    append_expected_manifest_results(
+        &mut expected,
+        &manifest.tasks,
+        &manifest.records,
+        manifest.evidence.len(),
+    )?;
+    Ok(expected)
+}
+
+fn expected_evolution_result_shape(
+    manifest: &PlanEvolutionManifest,
+) -> Result<BTreeSet<(String, String)>> {
+    let mut expected = BTreeSet::from([("plan".to_owned(), "plan".to_owned())]);
+    let (tasks, records, evidence_len, supersede) = match manifest {
+        PlanEvolutionManifest::InPlace(manifest) => (
+            &manifest.tasks,
+            &manifest.records,
+            manifest.evidence.len(),
+            false,
+        ),
+        PlanEvolutionManifest::Supersede(manifest) => (
+            &manifest.tasks,
+            &manifest.records,
+            manifest.evidence.len(),
+            true,
+        ),
+    };
+    if supersede {
+        expected.insert(("new_plan".to_owned(), "plan".to_owned()));
+    }
+    append_expected_manifest_results(&mut expected, tasks, records, evidence_len)?;
+    if supersede {
+        expected.insert((
+            "goal_contains_relation".to_owned(),
+            "relation:contains".to_owned(),
+        ));
+        expected.insert((
+            "supersedes_relation".to_owned(),
+            "relation:supersedes".to_owned(),
+        ));
+    }
+    Ok(expected)
+}
+
+fn append_expected_manifest_results(
+    expected: &mut BTreeSet<(String, String)>,
+    tasks: &[PlanAdmissionTaskManifest],
+    records: &[PlanAdmissionRecordManifest],
+    evidence_len: usize,
+) -> Result<()> {
+    for (task_index, task) in tasks.iter().enumerate() {
+        expected.insert((format!("task.{task_index}"), "task".to_owned()));
+        for (criterion_index, criterion) in task.acceptance_criteria.iter().enumerate() {
+            expected.insert((
+                format!("task.{task_index}.acceptance_criterion.{criterion_index}"),
+                "acceptance_criterion".to_owned(),
+            ));
+            for requirement_index in 0..criterion.verification_requirements.len() {
+                expected.insert((
+                    format!(
+                        "task.{task_index}.acceptance_criterion.{criterion_index}.verification_requirement.{requirement_index}"
+                    ),
+                    "verification_requirement".to_owned(),
+                ));
+            }
+        }
+    }
+    for (index, record) in records.iter().enumerate() {
+        expected.insert((
+            format!("record.{index}"),
+            format!("record:{}", record.canonical_kind()?),
+        ));
+    }
+    for index in 0..evidence_len {
+        expected.insert((format!("evidence.{index}"), "evidence".to_owned()));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -682,6 +1047,9 @@ impl DeliveryAppliedPayload {
 pub enum DeliveryFailureCode {
     LegacyManifestUpgradeRequired,
     SemanticManifestInvalid,
+    PlanTargetConflict,
+    PlanManifestRejected,
+    PlanReceiptTooLarge,
 }
 
 impl DeliveryFailureCode {
@@ -689,8 +1057,37 @@ impl DeliveryFailureCode {
         match self {
             Self::LegacyManifestUpgradeRequired => "legacy_manifest_upgrade_required",
             Self::SemanticManifestInvalid => "semantic_manifest_invalid",
+            Self::PlanTargetConflict => "plan_target_conflict",
+            Self::PlanManifestRejected => "plan_manifest_rejected",
+            Self::PlanReceiptTooLarge => "plan_receipt_too_large",
         }
     }
+
+    pub const fn recovery_action(self) -> &'static str {
+        match self {
+            Self::LegacyManifestUpgradeRequired => "upgrade_legacy_manifest",
+            Self::SemanticManifestInvalid => "start_new_capture_with_corrected_payload",
+            Self::PlanTargetConflict => "start_new_plan_operation_with_current_guards",
+            Self::PlanManifestRejected => "start_new_plan_operation_with_corrected_manifest",
+            Self::PlanReceiptTooLarge => "start_new_plan_operation_with_smaller_manifest",
+        }
+    }
+}
+
+fn recovery_state_for_delivery_failure(
+    failure: Option<&DeliveryFailedPayload>,
+) -> Option<CaptureRecoveryState> {
+    failure.map(|failure| match failure.failure_code() {
+        DeliveryFailureCode::LegacyManifestUpgradeRequired => {
+            CaptureRecoveryState::LegacyManifestUpgradeRequired
+        }
+        DeliveryFailureCode::SemanticManifestInvalid => {
+            CaptureRecoveryState::SemanticManifestInvalid
+        }
+        DeliveryFailureCode::PlanTargetConflict => CaptureRecoveryState::PlanTargetConflict,
+        DeliveryFailureCode::PlanManifestRejected => CaptureRecoveryState::PlanManifestRejected,
+        DeliveryFailureCode::PlanReceiptTooLarge => CaptureRecoveryState::PlanReceiptTooLarge,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -746,6 +1143,14 @@ impl DeliveryFailedPayload {
     fn validate(&self) -> Result<()> {
         if self.delivery_mode != DeliveryMode::Canonical {
             return invalid("primary delivery_failed must use canonical delivery mode");
+        }
+        if self.recovery_action.as_str() != self.failure_code.recovery_action() {
+            return invalid(format!(
+                "delivery failure {} requires recovery action {:?}, found {:?}",
+                self.failure_code.as_str(),
+                self.failure_code.recovery_action(),
+                self.recovery_action.as_str()
+            ));
         }
         Ok(())
     }
@@ -961,6 +1366,50 @@ impl CaptureEventPayload {
             Self::CaptureCompleted(_) => "capture_completed",
         }
     }
+
+    fn validate_for_intent(&self, intent: &CaptureIntent) -> Result<()> {
+        match self {
+            Self::DeliveryApplied(payload) => {
+                payload.validate_for_intent(intent)?;
+            }
+            Self::DeliveryFailed(payload) => {
+                let valid_family = match payload.failure_code() {
+                    DeliveryFailureCode::LegacyManifestUpgradeRequired => {
+                        intent.payload_kind() == CapturePayloadKind::LegacyCognitionV1
+                    }
+                    DeliveryFailureCode::SemanticManifestInvalid => {
+                        intent.payload_kind().is_cognition()
+                    }
+                    DeliveryFailureCode::PlanTargetConflict
+                    | DeliveryFailureCode::PlanManifestRejected
+                    | DeliveryFailureCode::PlanReceiptTooLarge => matches!(
+                        intent.payload_kind(),
+                        CapturePayloadKind::PlanAdmitV1 | CapturePayloadKind::PlanEvolveV1
+                    ),
+                };
+                if !valid_family {
+                    return invalid(format!(
+                        "{} intent cannot carry delivery failure {}",
+                        intent.payload_kind().as_str(),
+                        payload.failure_code().as_str()
+                    ));
+                }
+            }
+            Self::CaptureGroupResolved(_)
+            | Self::ReferenceApplied(_)
+            | Self::CaptureCompleted(_)
+                if !intent.payload_kind().is_cognition() =>
+            {
+                return invalid(format!(
+                    "{} intent cannot carry CaptureGroup event {}",
+                    intent.payload_kind().as_str(),
+                    self.kind_name()
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -987,6 +1436,26 @@ impl CaptureEvent {
         previous_event_digest: Option<ControlPlaneDigest>,
         payload: CaptureEventPayload,
     ) -> Result<Self> {
+        let event = Self::candidate(
+            capture_id,
+            sequence,
+            event_id,
+            occurred_at,
+            previous_event_digest,
+            payload,
+        )?;
+        event.validate_size()?;
+        Ok(event)
+    }
+
+    fn candidate(
+        capture_id: CaptureId,
+        sequence: u64,
+        event_id: EventId,
+        occurred_at: UtcTimestamp,
+        previous_event_digest: Option<ControlPlaneDigest>,
+        payload: CaptureEventPayload,
+    ) -> Result<Self> {
         let payload_digest = ControlPlaneDigest::raw(&canonicalize_serializable(
             &payload,
             "capture event payload",
@@ -1001,8 +1470,25 @@ impl CaptureEvent {
             payload_digest,
             payload,
         };
-        event.validate()?;
+        event.validate_structure()?;
         Ok(event)
+    }
+
+    fn worst_case_candidate(
+        capture_id: CaptureId,
+        sequence: u64,
+        event_id: EventId,
+        previous_event_digest: Option<ControlPlaneDigest>,
+        payload: CaptureEventPayload,
+    ) -> Result<Self> {
+        Self::candidate(
+            capture_id,
+            sequence,
+            event_id,
+            UtcTimestamp::parse(MAX_CAPTURE_EVENT_TIMESTAMP)?,
+            previous_event_digest,
+            payload,
+        )
     }
 
     pub fn from_json_bytes(input: &[u8]) -> Result<Self> {
@@ -1027,6 +1513,11 @@ impl CaptureEvent {
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.validate_structure()?;
+        self.validate_size()
+    }
+
+    fn validate_structure(&self) -> Result<()> {
         if self.journal_version != JOURNAL_VERSION {
             return invalid(format!(
                 "capture event journal_version {} is not supported",
@@ -1056,6 +1547,10 @@ impl CaptureEvent {
                 self.payload_digest
             ));
         }
+        Ok(())
+    }
+
+    fn validate_size(&self) -> Result<()> {
         let canonical_size = canonicalize_serializable(self, "capture event")?.len();
         if canonical_size > MAX_CAPTURE_EVENT_BYTES {
             return invalid(format!(
@@ -1063,6 +1558,10 @@ impl CaptureEvent {
             ));
         }
         Ok(())
+    }
+
+    fn canonical_size(&self) -> Result<usize> {
+        Ok(canonicalize_serializable(self, "capture event")?.len())
     }
 
     pub fn capture_id(&self) -> CaptureId {
@@ -1114,6 +1613,9 @@ pub enum CaptureRecoveryState {
     PendingReferences,
     LegacyManifestUpgradeRequired,
     SemanticManifestInvalid,
+    PlanTargetConflict,
+    PlanManifestRejected,
+    PlanReceiptTooLarge,
     Completed,
 }
 
@@ -1126,6 +1628,9 @@ impl CaptureRecoveryState {
             Self::PendingReferences => "pending_references",
             Self::LegacyManifestUpgradeRequired => "legacy_manifest_upgrade_required",
             Self::SemanticManifestInvalid => "semantic_manifest_invalid",
+            Self::PlanTargetConflict => "plan_target_conflict",
+            Self::PlanManifestRejected => "plan_manifest_rejected",
+            Self::PlanReceiptTooLarge => "plan_receipt_too_large",
             Self::Completed => "completed",
         }
     }
@@ -1583,6 +2088,7 @@ impl CaptureProjection {
         let mut primary_delivery: Option<DeliveryAppliedPayload> = None;
         let mut delivery_failure: Option<DeliveryFailedPayload> = None;
         for event in events {
+            event.payload().validate_for_intent(intent)?;
             match event.payload() {
                 CaptureEventPayload::ResolutionRecorded(payload) => {
                     latest_resolution = payload.resolution().clone();
@@ -1767,6 +2273,12 @@ impl CaptureProjection {
                             event.event_id()
                         ));
                     }
+                    if delivery_failure.is_some() {
+                        return invalid(format!(
+                            "delivery_applied event {} cannot replace a terminal delivery_failed event",
+                            event.event_id()
+                        ));
+                    }
                     if payload.commit_id() == started.expected_head_commit_id() {
                         return invalid(format!(
                             "delivery_applied event {} did not advance the target commit",
@@ -1821,6 +2333,12 @@ impl CaptureProjection {
                     if primary_delivery.is_some() || !payload.matches_started(started) {
                         return invalid(format!(
                             "delivery_failed event {} does not match an unapplied primary delivery",
+                            event.event_id()
+                        ));
+                    }
+                    if delivery_failure.is_some() {
+                        return invalid(format!(
+                            "delivery_failed event {} cannot replace a terminal delivery_failed event",
                             event.event_id()
                         ));
                     }
@@ -1952,14 +2470,10 @@ impl CaptureProjection {
                         } else {
                             CaptureRecoveryState::Completed
                         }
-                    } else if delivery_failure.as_ref().is_some_and(|failure| {
-                        failure.failure_code() == DeliveryFailureCode::LegacyManifestUpgradeRequired
-                    }) {
-                        CaptureRecoveryState::LegacyManifestUpgradeRequired
-                    } else if delivery_failure.as_ref().is_some_and(|failure| {
-                        failure.failure_code() == DeliveryFailureCode::SemanticManifestInvalid
-                    }) {
-                        CaptureRecoveryState::SemanticManifestInvalid
+                    } else if let Some(recovery_state) =
+                        recovery_state_for_delivery_failure(delivery_failure.as_ref())
+                    {
+                        recovery_state
                     } else {
                         CaptureRecoveryState::PendingPrimary
                     }
@@ -2167,14 +2681,10 @@ impl CaptureProjection {
                     } else {
                         CaptureRecoveryState::Completed
                     }
-                } else if self.delivery_failure.as_ref().is_some_and(|failure| {
-                    failure.failure_code() == DeliveryFailureCode::LegacyManifestUpgradeRequired
-                }) {
-                    CaptureRecoveryState::LegacyManifestUpgradeRequired
-                } else if self.delivery_failure.as_ref().is_some_and(|failure| {
-                    failure.failure_code() == DeliveryFailureCode::SemanticManifestInvalid
-                }) {
-                    CaptureRecoveryState::SemanticManifestInvalid
+                } else if let Some(recovery_state) =
+                    recovery_state_for_delivery_failure(self.delivery_failure.as_ref())
+                {
+                    recovery_state
                 } else {
                     CaptureRecoveryState::PendingPrimary
                 }
@@ -2479,6 +2989,9 @@ impl CaptureIntent {
         }
         self.initial_resolution.validate()?;
         if let Some(group) = self.capture_group.as_ref() {
+            if !self.payload_kind.is_cognition() {
+                return invalid("CaptureGroup is supported only for cognition payloads");
+            }
             group.validate()?;
             match (
                 self.initial_resolution.status(),
@@ -3101,6 +3614,7 @@ impl CaptureJournal {
         self.ensure_layout()?;
         let _lock = JournalQuiescenceLock::acquire(&self.capture_lock_path(capture_id))?;
         let intent = self.load(capture_id)?;
+        payload.validate_for_intent(&intent)?;
         let mut events = self.load_events(capture_id)?;
         if let Some(existing) = events
             .iter()
@@ -3213,6 +3727,34 @@ impl CaptureJournal {
             projection,
             event_path: target,
         })
+    }
+
+    pub fn preflight_event_payload_size(
+        &self,
+        capture_id: CaptureId,
+        payload: CaptureEventPayload,
+    ) -> Result<usize> {
+        payload.validate()?;
+        self.ensure_layout()?;
+        let _lock = JournalQuiescenceLock::acquire(&self.capture_lock_path(capture_id))?;
+        let intent = self.load(capture_id)?;
+        payload.validate_for_intent(&intent)?;
+        let events = self.load_events(capture_id)?;
+        let sequence = u64::try_from(events.len())
+            .map_err(|_| WorkVcsError::ControlPlaneInvalid("too many capture events".to_owned()))?
+            .checked_add(1)
+            .ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid("capture event sequence overflow".to_owned())
+            })?;
+        let previous_event_digest = events.last().map(CaptureEvent::digest).transpose()?;
+        CaptureEvent::worst_case_candidate(
+            capture_id,
+            sequence,
+            EventId::new_v7(),
+            previous_event_digest,
+            payload,
+        )?
+        .canonical_size()
     }
 
     pub fn append_event(
@@ -3941,4 +4483,438 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control_plane::{LocatorAuthority, ResolutionMode, resolve_unbound_project};
+
+    fn typed_intent(payload_kind: CapturePayloadKind) -> CaptureIntent {
+        typed_intent_with_payload(payload_kind, serde_json::json!({"schema_version": 1}))
+    }
+
+    fn typed_intent_with_payload(
+        payload_kind: CapturePayloadKind,
+        semantic_payload: serde_json::Value,
+    ) -> CaptureIntent {
+        let evidence = LocatorEvidence::new(
+            LocatorAuthority::SemanticProject,
+            "fixture-provider",
+            "account-test",
+            "project_id",
+            "g-p-typed-journal-test",
+            LocatorAssurance::Authoritative,
+            "typed-journal-test/v1",
+            ControlPlaneDigest::raw(b"typed-journal-owner"),
+        )
+        .expect("semantic locator evidence");
+        let context =
+            ResolutionContext::new(ResolutionMode::DurableWrite).with_locator_evidence(evidence);
+        let resolution =
+            resolve_unbound_project(&context, "registry:fixture").expect("fixture resolution");
+        CaptureIntent::new(
+            CaptureId::new_v7(),
+            format!("{}:typed-journal-test", payload_kind.as_str()),
+            UtcTimestamp::parse("2026-10-06T00:00:00Z").unwrap(),
+            "prove typed journal event validation",
+            payload_kind,
+            semantic_payload,
+            context,
+            resolution,
+            None,
+        )
+        .expect("typed intent")
+    }
+
+    fn entity_result_object(local_id: &str, object_kind: &str) -> DeliveryResultObject {
+        DeliveryResultObject::new(
+            local_id,
+            object_kind,
+            EntityId::new_v7().to_string(),
+            EntityVersionId::new_v7().to_string(),
+            Digest::domain_separated("workvcs.test.typed-journal.v1", local_id.as_bytes()),
+        )
+        .expect("typed result object")
+    }
+
+    fn delivery_receipt(result_objects: Vec<DeliveryResultObject>) -> DeliveryAppliedPayload {
+        DeliveryAppliedPayload::new(
+            DeliveryId::new_v7(),
+            ProjectRefId::new_v7(),
+            StoreId::new_v7(),
+            WorkspaceId::new_v7(),
+            BranchId::new_v7(),
+            CommitId::new_v7(),
+            ChangeSetId::new_v7(),
+            Digest::domain_separated("workvcs.test.typed-journal.v1", b"state"),
+            result_objects,
+            false,
+            None,
+        )
+        .expect("delivery receipt")
+    }
+
+    fn plan_delivery_receipt(
+        payload_kind: CapturePayloadKind,
+        result_objects: Vec<DeliveryResultObject>,
+    ) -> DeliveryAppliedPayload {
+        DeliveryAppliedPayload::new_plan(
+            payload_kind,
+            DeliveryId::new_v7(),
+            ProjectRefId::new_v7(),
+            StoreId::new_v7(),
+            WorkspaceId::new_v7(),
+            BranchId::new_v7(),
+            CommitId::new_v7(),
+            ChangeSetId::new_v7(),
+            Digest::domain_separated("workvcs.test.typed-journal.v1", b"state"),
+            result_objects,
+            false,
+        )
+        .expect("Plan delivery receipt")
+    }
+
+    fn relation_result_object(local_id: &str, object_kind: &str) -> DeliveryResultObject {
+        DeliveryResultObject::new(
+            local_id,
+            object_kind,
+            RelationId::new_v7().to_string(),
+            RelationVersionId::new_v7().to_string(),
+            Digest::domain_separated("workvcs.test.typed-journal.v1", local_id.as_bytes()),
+        )
+        .expect("typed relation result object")
+    }
+
+    fn delivery_event_with_canonical_size(target_size: usize) -> CaptureEvent {
+        let build = |local_id: String| {
+            let object = DeliveryResultObject::new(
+                local_id,
+                "plan",
+                EntityId::new_v7().to_string(),
+                EntityVersionId::new_v7().to_string(),
+                Digest::domain_separated("workvcs.test.event-boundary.v1", b"object"),
+            )
+            .expect("valid boundary result object");
+            let payload = DeliveryAppliedPayload::new(
+                DeliveryId::new_v7(),
+                ProjectRefId::new_v7(),
+                StoreId::new_v7(),
+                WorkspaceId::new_v7(),
+                BranchId::new_v7(),
+                CommitId::new_v7(),
+                ChangeSetId::new_v7(),
+                Digest::domain_separated("workvcs.test.event-boundary.v1", b"state"),
+                vec![object],
+                false,
+                None,
+            )
+            .expect("valid boundary delivery payload");
+            CaptureEvent::worst_case_candidate(
+                CaptureId::new_v7(),
+                2,
+                EventId::new_v7(),
+                Some(ControlPlaneDigest::raw(b"previous event")),
+                CaptureEventPayload::DeliveryApplied(payload),
+            )
+            .expect("valid boundary event candidate")
+        };
+
+        let base = build("x".to_owned());
+        let base_size = base.canonical_size().expect("base event size");
+        assert!(base_size <= target_size);
+        let event = build("x".repeat(1 + target_size - base_size));
+        assert_eq!(
+            event.canonical_size().expect("target event size"),
+            target_size
+        );
+        event
+    }
+
+    #[test]
+    fn capture_event_limit_accepts_limit_minus_one_and_limit_but_rejects_limit_plus_one() {
+        for size in [MAX_CAPTURE_EVENT_BYTES - 1, MAX_CAPTURE_EVENT_BYTES] {
+            let event = delivery_event_with_canonical_size(size);
+            event.validate_size().expect("event at or below limit");
+            assert_eq!(event.occurred_at().as_str(), MAX_CAPTURE_EVENT_TIMESTAMP);
+        }
+        let event = delivery_event_with_canonical_size(MAX_CAPTURE_EVENT_BYTES + 1);
+        let error = event.validate_size().expect_err("event above limit");
+        assert!(error.to_string().contains("maximum is 131072"));
+    }
+
+    #[test]
+    fn event_size_preflight_envelope_matches_actual_max_precision_append() {
+        assert!(UtcTimestamp::parse("2026-10-06T00:00:00.123456789Z").is_ok());
+        let precision_error = UtcTimestamp::parse("2026-10-06T00:00:00.1234567890Z")
+            .expect_err("timestamps above nanosecond precision must be rejected");
+        assert!(
+            precision_error
+                .to_string()
+                .contains("must not exceed nanosecond precision")
+        );
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let journal = CaptureJournal::for_standalone_root(tempdir.path().join("journal")).unwrap();
+        let intent = typed_intent(CapturePayloadKind::CognitionV2);
+        journal.admit(&intent).expect("admit intent");
+        let payload = CaptureEventPayload::ResolutionRecorded(
+            ResolutionRecordedPayload::new(
+                RegistryId::new_v7(),
+                1,
+                ControlPlaneDigest::raw(b"registry"),
+                intent.initial_resolution().clone(),
+            )
+            .unwrap(),
+        );
+        let preflight_size = journal
+            .preflight_event_payload_size(intent.capture_id(), payload.clone())
+            .expect("preflight event size");
+        let appended = journal
+            .append_event_authority_only(
+                intent.capture_id(),
+                UtcTimestamp::parse(MAX_CAPTURE_EVENT_TIMESTAMP).unwrap(),
+                payload,
+            )
+            .expect("append at the maximum supported timestamp precision");
+        assert_eq!(
+            appended.event().canonical_size().unwrap(),
+            preflight_size,
+            "preflight must use the type-level maximum timestamp envelope"
+        );
+    }
+
+    #[test]
+    fn typed_intents_reject_cross_family_receipts_and_failures() {
+        let cognition = typed_intent(CapturePayloadKind::CognitionV2);
+        let plan_admit = typed_intent(CapturePayloadKind::PlanAdmitV1);
+        let plan_evolve = typed_intent(CapturePayloadKind::PlanEvolveV1);
+
+        let plan_receipt = CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanAdmitV1,
+            vec![entity_result_object("plan", "plan")],
+        ));
+        let cognition_error = plan_receipt
+            .validate_for_intent(&cognition)
+            .expect_err("cognition intent must reject Plan results");
+        assert!(
+            cognition_error
+                .to_string()
+                .contains("cannot carry a Plan operation receipt")
+        );
+
+        let cognition_receipt =
+            CaptureEventPayload::DeliveryApplied(delivery_receipt(vec![entity_result_object(
+                "finding",
+                "knowledge",
+            )]));
+        let plan_error = cognition_receipt
+            .validate_for_intent(&plan_admit)
+            .expect_err("Plan intent must reject cognition results");
+        assert!(
+            plan_error
+                .to_string()
+                .contains("requires operation_payload_kind")
+        );
+
+        let admit_relation_receipt = CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanAdmitV1,
+            vec![
+                entity_result_object("plan", "plan"),
+                relation_result_object("goal_plan", "relation:contains"),
+            ],
+        ));
+        assert!(
+            admit_relation_receipt
+                .validate_for_intent(&plan_admit)
+                .expect_err("Plan admission must reject evolution-only relations")
+                .to_string()
+                .contains("Plan-evolution results")
+        );
+
+        let evolve_goal_receipt = CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanEvolveV1,
+            vec![
+                entity_result_object("plan", "plan"),
+                entity_result_object("goal", "goal"),
+            ],
+        ));
+        assert!(
+            evolve_goal_receipt
+                .validate_for_intent(&plan_evolve)
+                .expect_err("Plan evolution must reject Goal creation")
+                .to_string()
+                .contains("cannot create a Goal result")
+        );
+
+        let admit_as_evolve = CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanAdmitV1,
+            vec![entity_result_object("plan", "plan")],
+        ));
+        assert!(
+            admit_as_evolve
+                .validate_for_intent(&plan_evolve)
+                .expect_err("Plan admission receipt must not complete Plan evolution")
+                .to_string()
+                .contains("requires operation_payload_kind")
+        );
+        let evolve_as_admit = CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanEvolveV1,
+            vec![entity_result_object("plan", "plan")],
+        ));
+        assert!(
+            evolve_as_admit
+                .validate_for_intent(&plan_admit)
+                .expect_err("Plan evolution receipt must not complete Plan admission")
+                .to_string()
+                .contains("requires operation_payload_kind")
+        );
+
+        let wrong_action = DeliveryFailedPayload::new(
+            DeliveryId::new_v7(),
+            ProjectRefId::new_v7(),
+            StoreId::new_v7(),
+            WorkspaceId::new_v7(),
+            BranchId::new_v7(),
+            DeliveryFailureCode::PlanTargetConflict,
+            DeliveryFailureCode::PlanManifestRejected.recovery_action(),
+        )
+        .expect_err("failure code and recovery action must be an exact pair");
+        assert!(
+            wrong_action
+                .to_string()
+                .contains("requires recovery action")
+        );
+
+        let plan_failure = CaptureEventPayload::DeliveryFailed(
+            DeliveryFailedPayload::new(
+                DeliveryId::new_v7(),
+                ProjectRefId::new_v7(),
+                StoreId::new_v7(),
+                WorkspaceId::new_v7(),
+                BranchId::new_v7(),
+                DeliveryFailureCode::PlanTargetConflict,
+                DeliveryFailureCode::PlanTargetConflict.recovery_action(),
+            )
+            .unwrap(),
+        );
+        assert!(
+            plan_failure
+                .validate_for_intent(&cognition)
+                .expect_err("cognition intent must reject Plan failure codes")
+                .to_string()
+                .contains("cannot carry delivery failure")
+        );
+    }
+
+    #[test]
+    fn plan_receipt_shape_exactly_matches_admitted_operation_variant() {
+        let head = CommitId::new_v7();
+        let state_digest = Digest::domain_separated("workvcs.test.plan-shape.v1", b"state");
+        let create_intent = typed_intent_with_payload(
+            CapturePayloadKind::PlanAdmitV1,
+            serde_json::json!({
+                "schema_version": 1,
+                "idempotency_key": "shape-admit-create",
+                "expected_head_commit_id": head,
+                "expected_state_digest": state_digest,
+                "goal": {"mode": "create", "description": "Goal"},
+                "plan": {"description": "Plan", "strategy": "Strategy", "constraints": []},
+                "tasks": [],
+                "records": [{
+                    "local_id": "question",
+                    "kind": "unknown",
+                    "statement": "Normalize the historical alias",
+                    "scope": {}
+                }],
+                "evidence": [],
+                "rationale": {}
+            }),
+        );
+        let missing_goal = CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanAdmitV1,
+            vec![entity_result_object("plan", "plan")],
+        ));
+        assert!(
+            missing_goal
+                .validate_for_intent(&create_intent)
+                .expect_err("create-goal admission requires the Goal result")
+                .to_string()
+                .contains("does not exactly match")
+        );
+        CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanAdmitV1,
+            vec![
+                entity_result_object("goal", "goal"),
+                entity_result_object("plan", "plan"),
+                entity_result_object("record.0", "record:question"),
+            ],
+        ))
+        .validate_for_intent(&create_intent)
+        .expect("exact create-goal admission result shape");
+        let raw_alias_receipt = CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanAdmitV1,
+            vec![
+                entity_result_object("goal", "goal"),
+                entity_result_object("plan", "plan"),
+                entity_result_object("record.0", "record:unknown"),
+            ],
+        ));
+        assert!(
+            raw_alias_receipt
+                .validate_for_intent(&create_intent)
+                .expect_err("receipt shape must use the canonical question kind")
+                .to_string()
+                .contains("does not exactly match")
+        );
+
+        let supersede_intent = typed_intent_with_payload(
+            CapturePayloadKind::PlanEvolveV1,
+            serde_json::json!({
+                "mode": "supersede",
+                "schema_version": 1,
+                "idempotency_key": "shape-evolve-supersede",
+                "expected_head_commit_id": head,
+                "expected_state_digest": state_digest,
+                "target_plan_entity_id": EntityId::new_v7(),
+                "expected_plan_entity_version_id": EntityVersionId::new_v7(),
+                "expected_plan_state_digest": Digest::domain_separated("workvcs.test.plan-shape.v1", b"plan"),
+                "expected_goal_entity_id": EntityId::new_v7(),
+                "expected_goal_entity_version_id": EntityVersionId::new_v7(),
+                "expected_goal_plan_relation_id": RelationId::new_v7(),
+                "expected_goal_plan_relation_version_id": RelationVersionId::new_v7(),
+                "plan": {
+                    "description": "Replacement",
+                    "strategy": "Replacement strategy",
+                    "constraints": {"mode": "carry_all"}
+                },
+                "tasks": [],
+                "records": [],
+                "evidence": [],
+                "rationale": {}
+            }),
+        );
+        let incomplete_supersede = CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanEvolveV1,
+            vec![entity_result_object("plan", "plan")],
+        ));
+        assert!(
+            incomplete_supersede
+                .validate_for_intent(&supersede_intent)
+                .expect_err("supersede requires replacement Plan and both relations")
+                .to_string()
+                .contains("does not exactly match")
+        );
+        CaptureEventPayload::DeliveryApplied(plan_delivery_receipt(
+            CapturePayloadKind::PlanEvolveV1,
+            vec![
+                entity_result_object("plan", "plan"),
+                entity_result_object("new_plan", "plan"),
+                relation_result_object("goal_contains_relation", "relation:contains"),
+                relation_result_object("supersedes_relation", "relation:supersedes"),
+            ],
+        ))
+        .validate_for_intent(&supersede_intent)
+        .expect("exact supersede result shape");
+    }
 }

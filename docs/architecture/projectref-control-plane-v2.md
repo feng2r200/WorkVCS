@@ -2,8 +2,8 @@
 
 Status: Accepted implemented contract — roadmap rounds 1–11 complete with isolated fault evidence and bounded live local canary evidence
 Date: 2026-09-23
-Last updated: 2026-09-27
-Parent: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md)
+Last updated: 2026-10-07
+Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md), [ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md)
 
 ## Contract language and scope
 
@@ -23,6 +23,9 @@ contains versioned ordinary read consumers, a strict tool-neutral
 semantic-locator envelope, and a digest-bound v2 read-routing activation
 candidate. The actual `capture` caller now assembles durable-write locator
 input and admits a target-neutral v1 intent or a v2 registry-coupled intent.
+Registry-v2 `plan admit --cwd` and `plan evolve --cwd` use the same physical
+journal and delivery state machine with distinct Plan payload kinds; Plan
+never enters a cognition manifest.
 V2 admission is guarded by its own exact-snapshot marker and requires the
 read-routing marker first. Its apply and disable operations share the registry
 then quiescence lock order with rollback. V2 list/status can inspect an
@@ -75,7 +78,8 @@ authorize live rollback.
 The v2 control plane has three distinct authorities:
 
 1. the registry maps stable ProjectRefs and locators to Store targets;
-2. the capture journal preserves routing intent and delivery provenance; and
+2. the durable-operation journal preserves typed routing intent and delivery
+   provenance; and
 3. each target Store remains the only semantic authority for the Work-State
    objects committed to that Store.
 
@@ -97,7 +101,7 @@ the current default `project-bindings.json`. The control-plane root is:
 | A WorkVCS home is known | The canonical WorkVCS home |
 | Only a registry path is known | `<canonical-registry-path>.d` |
 
-The capture journal is
+The durable-operation journal retains its compatible physical location,
 `<control-plane-root>/capture-journal/v1`. The registry, journal, and default
 Store roots MUST remain outside every resolved project boundary. A registry
 sidecar does not infer a Store root; the existing explicit Store-root rule for
@@ -131,25 +135,54 @@ read-routing first; admission rechecks both markers while holding the shared
 quiescence lock. Disable requires the exact installed marker digest and holds
 the registry lock followed by the shared quiescence lock through durable
 removal verification. A stale, malformed, wrong-scope, mismatched, or
-symlinked marker admits nothing. This marker authorizes intent persistence
-only; it does not authorize ProjectRef bootstrap, journal-event processing, or
-any target Store write.
+symlinked marker admits nothing.
 
-The `project capture-recovery` surface is separate from both
-markers. `--status` reconstructs authority from one immutable intent and its
-events and performs no write. `--apply` requires the exact current registry
-digest and reconstructed projection digest, then acquires the registry lock,
-the registry-derived quiescence lock, and per-capture event locks in that
-order. It is an explicit operator route, not an automatically activated route
-and not authority to operate on another live control plane. A registry-only
-configuration must also supply `--store-root` for unbound bootstrap.
+Marker version 2 also carries the strictly sorted capabilities
+`cognition_capture`, `plan_admit`, and `plan_evolve`. A historical version-1
+marker remains valid only for `cognition_capture`; it never silently gains
+Plan authority. The existing path name is retained so there cannot be two
+marker authorities. An exact version-1 marker can be replaced for the same
+registry ID, revision, and digest only through apply with its exact installed
+digest and a strict capability-superset candidate. This marker authorizes
+typed intent persistence only; the caller's explicit mutation command or a
+separate recovery apply supplies target-delivery authority. Marker presence
+alone never authorizes ProjectRef bootstrap, journal-event processing, or a
+target Store write.
+
+The compatibility-named `project capture-recovery` surface recovers all typed
+durable-operation intents and is separate from both markers. `--status`
+reports `payload_kind`, reconstructs authority from one immutable intent and
+its events, and performs no write. `--apply` requires the exact current
+registry digest and reconstructed projection digest, then acquires the
+registry lock, the registry-derived quiescence lock, and per-capture event
+locks in that order. It is an explicit operator route, not an automatically
+activated route and not authority to operate on another live control plane. A
+registry-only configuration must also supply `--store-root` for unbound
+cognition bootstrap. Public Plan commands synchronously drive this same state
+machine after their typed intent is durable; a failure still resumes through
+the compatibility recovery surface. Before any first Plan Store mutation, the
+recovery route performs pure typed-manifest validation, compares explicit
+target guards against one replayed snapshot, and materializes the typed
+receipt in a fixed maximum-timestamp event envelope. Only those proven
+manifest/guard failures and an envelope above the exact byte limit become
+durable terminal results. A terminal manifest or target disposition is
+persisted before receipt materialization is attempted; an entity that exists
+under the wrong Goal/Plan kind is an explicit target conflict rather than a
+retryable lookup error. An existing idempotent target result is recognized
+before a now-advanced head is treated as conflict. Storage, integrity, engine
+execution, transaction commit, and uncertain post-commit failures remain
+recoverable or indeterminate instead of being classified by generic error
+code. Journal reconstruction also validates receipt/failure families against
+the intent payload kind and exact manifest-derived result shape. The timestamp
+scalar permits at most nine fractional digits, so the fixed nanosecond
+preflight envelope is a type-level maximum for the later append.
 
 ## Common scalar types
 
 | Type | Contract |
 | --- | --- |
 | `Id` | Canonical UUID string. New ProjectRef, locator, link, capture, group, event, and delivery IDs use UUIDv7. |
-| `Timestamp` | RFC 3339 UTC with an explicit `Z`. |
+| `Timestamp` | RFC 3339 UTC with an explicit `Z` and at most nine fractional digits. |
 | `Digest` | Lowercase `blake3-256:<64 hex>` over the field-defined bytes; semantic objects use canonical bytes, while `backup_digest` deliberately uses exact raw file bytes. |
 | `CanonicalPath` | Absolute, filesystem-canonical path at the time it was verified. It is a locator or target attribute, never a ProjectRef identity. |
 | `NonEmptyString` | UTF-8 string containing at least one non-whitespace character. |
@@ -520,7 +553,7 @@ The protocol is exclusive and fail-closed:
    lock under a separately controlled operator procedure. No live recovery
    command is authorized or implemented in this slice.
 
-### CaptureIntent
+### CaptureIntent compatibility envelope
 
 | Field | Type | Required | Rules |
 | --- | --- | --- | --- |
@@ -528,8 +561,8 @@ The protocol is exclusive and fail-closed:
 | `capture_id` | `Id` | yes | Stable routing identity. |
 | `idempotency_key` | `NonEmptyString` | yes | Unique in this journal for the payload digest. |
 | `created_at` | `Timestamp` | yes | Admission time. |
-| `value_reason` | bounded `NonEmptyString` | yes | Why durable capture passed the external value gate. |
-| `payload_kind` | `cognition_v2` or `legacy_cognition_v1` | yes | Target-neutral payload contract or retained legacy input. |
+| `value_reason` | bounded `NonEmptyString` | yes | Why the typed operation is durable. |
+| `payload_kind` | `cognition_v2`, `legacy_cognition_v1`, `plan_admit_v1`, or `plan_evolve_v1` | yes | Typed semantic contract carried by the shared durable-operation protocol. |
 | `semantic_payload` | JSON object | yes | Bounded semantic manifest; never a full transcript. |
 | `payload_digest` | `Digest` | yes | Digest of canonical `semantic_payload`. |
 | `resolution_context` | `ResolutionContext` snapshot | yes | Bounded locator evidence used at admission. |
@@ -555,6 +588,25 @@ If it remains pending and its guards become stale or were derived from a
 different target, the intent stays durable with
 `legacy_manifest_upgrade_required`; WorkVCS never silently drops, rebases, or
 rewrites the original guarded manifest.
+
+`plan_admit_v1` and `plan_evolve_v1` preserve the complete canonical Plan
+manifest, including its target head/state and Plan/Goal/relation compare-and-
+swap guards. Their journal idempotency keys are namespaced by payload kind;
+their target Store idempotency keys remain the caller's manifest keys. Plan
+payloads MUST NOT carry a CaptureGroup and MUST NOT be converted to cognition.
+The existing Plan engines remain the only authority for Goal, Plan, Task,
+Acceptance Criterion, Verification Requirement, Record, Evidence, and typed
+relation semantics.
+
+For registry v2, a public cwd-based Plan command admits this intent before
+opening the target Store for mutation, then synchronously drives the common
+delivery state machine. It reports command success only after a matching
+`delivery_applied` receipt is durable. Repeating the command reuses the same
+intent and target operation. A crash after the Store commit but before the
+receipt converges by Store idempotency and appends only the missing receipt.
+After a durable receipt exists, the command reconstructs its user-facing
+result through the read-only idempotency lookup; it does not call the mutating
+Plan engine a second time.
 
 The semantic payload MUST be size-bounded by implementation policy, validated
 before admission, and rejected if it contains known secret-bearing fields.
@@ -626,6 +678,8 @@ A successful primary `delivery_applied` event records:
 - `delivery_id` and `delivery_mode=canonical`;
 - ProjectRef, Store ID, Workspace ID, and Branch ID;
 - WorkStateCommit ID, ChangeSet ID, and resulting state digest;
+- `operation_payload_kind=plan_admit_v1|plan_evolve_v1` for a Plan receipt,
+  omitted for cognition;
 - canonical object kind, logical object ID, immutable version ID, and version
   digest for each primary result; and
 - `reused=true|false` from the target idempotency result.
@@ -643,6 +697,18 @@ its Evidence ID is both logical and immutable-version identity, while the
 receipt digest is domain-separated over its canonical kind/metadata
 descriptor. The receipt therefore names every capture result without turning
 the journal into a second semantic database.
+
+A Plan receipt's operation discriminator MUST equal the intent payload kind,
+and its complete `local_id`/object-kind set MUST equal the result shape derived
+from that exact manifest. Admission create-Goal versus existing-Goal and
+evolution in-place versus supersede therefore have distinct receipt shapes;
+partial or cross-family receipts cannot project `completed`. The discriminator
+is absent for cognition receipts so their existing serialized contract remains
+unchanged; version-1 activation never authorized Plan intents.
+Domain aliases are canonicalized through the Plan engine's parser before both
+preflight materialization and expected-shape derivation. In particular,
+`record.kind=unknown` is receipted as `record:question`, matching the committed
+Store result and its exact event-size cost.
 
 `canonical_record_ref` is the tuple of ProjectRef, Store ID, Workspace ID,
 logical Record ID, immutable Record version ID, and version digest. It is set
@@ -706,6 +772,9 @@ The current projection is reconstructed from intent plus events:
 | `pending_references` | Primary is applied and at least one required secondary reference lacks a receipt. |
 | `legacy_manifest_upgrade_required` | A retained v1 manifest cannot safely target the current Branch guards. |
 | `semantic_manifest_invalid` | A historical immutable intent fails deterministic cognition semantics and must be replaced by a corrected new Capture. |
+| `plan_target_conflict` | The retained Plan manifest no longer matches current target guards; start a new operation with fresh guards. |
+| `plan_manifest_rejected` | The retained Plan manifest deterministically failed validation before target mutation; correct it in a new operation. |
+| `plan_receipt_too_large` | The exact next Plan receipt would exceed the journal event limit; split the manifest into a smaller operation. |
 | `completed` | Primary and every required secondary delivery have verified receipts. |
 
 Errors such as an unavailable Store, registry conflict, or failed reference
@@ -718,6 +787,7 @@ The implementation materializes `resolution_recorded`,
 the bounded legacy-staleness and semantic-invalid forms of `delivery_failed`.
 It derives `pending_resolution`, `pending_project`, `pending_primary`,
 `legacy_manifest_upgrade_required`, `semantic_manifest_invalid`,
+`plan_target_conflict`, `plan_manifest_rejected`, `plan_receipt_too_large`,
 `pending_references`, and `completed`.
 `completed` is derived as soon as the primary and every required reference
 receipt are authoritative; `capture_completed` is the idempotent summary
@@ -766,9 +836,9 @@ to a corrected new Capture.
 
 ## Cross-surface invariants
 
-1. A durable target write MUST have a prior durable CaptureIntent, except for
-   legacy direct commands explicitly outside the future routed path during a
-   bounded transition period.
+1. A registry-v2 project-routed durable target write MUST have a prior typed
+   durable intent. Explicit `STORE --branch` and registry-v1 compatibility
+   commands remain outside this routing boundary.
 2. Journal failure before intent installation MUST prevent target writes.
 3. ProjectRef resolution and semantic value admission are independent.
 4. Read-only mode MUST NOT persist locator observations, ProjectRefs, journal
@@ -792,6 +862,25 @@ to a corrected new Capture.
     corruption is authoritative failure and MUST NOT be hidden by rebuilding.
 15. Recovery/bootstrap MUST NOT broaden the journal-admission marker or make
     ordinary `capture` continue past intent admission.
+16. A version-1 journal marker authorizes cognition admission only. Plan
+    capabilities require an explicit exact-digest strict-superset refresh;
+    recovery MUST NOT perform that refresh implicitly.
+17. A typed Plan operation MUST prove that its typed receipt in the fixed
+    maximum-length timestamp envelope fits before the first Store write. Only
+    pure manifest-validation failures and explicit current-snapshot guard
+    mismatches become durable terminal events, and that terminal disposition
+    MUST be recorded before any fallible receipt construction;
+    engine/storage/integrity, transaction, or post-commit failures MUST remain
+    eligible for status-first recovery.
+18. A journal event MUST match its intent family. Cognition and Plan receipts,
+    Plan admission/evolution result families, CaptureGroup events, and
+    failure-code/recovery-action pairs cannot be interchanged. Plan receipts
+    MUST also match the exact admitted manifest variant and appended-object
+    shape.
+19. A `delivery_failed` event is terminal for its current
+    `delivery_started` identity. A later failure or receipt MUST NOT replace it;
+    only an authorized re-resolution/rebinding that clears the complete
+    delivery attempt may establish a new target attempt.
 
 ## Stable failure codes
 
@@ -818,6 +907,9 @@ The future implementation MUST expose at least these machine-routable codes:
 | `capture_recovery_install_indeterminate` | Registry, event, or projection installation may already be durable; run `project capture-recovery --status` with the same capture and continue forward using the newly reported digests. Never infer rollback. |
 | `legacy_manifest_upgrade_required` | Convert the durable legacy intent to a separately confirmed target-neutral delivery; do not rewrite it implicitly. |
 | `semantic_manifest_invalid` | Preserve the immutable intent, inspect the invalid semantic input, and start a corrected new Capture; do not replay or rewrite the old payload. |
+| `plan_target_conflict` | Preserve the immutable operation and start a new Plan operation with current target guards. |
+| `plan_manifest_rejected` | Preserve the rejected operation, correct the manifest, and admit a new Plan operation. |
+| `plan_receipt_too_large` | Split the Plan manifest so its detailed receipt fits the journal event limit, then admit a new operation. |
 | `capture_pending_references` | Primary is safe; retry missing secondary deliveries. |
 
 ## Illustrative resolution example

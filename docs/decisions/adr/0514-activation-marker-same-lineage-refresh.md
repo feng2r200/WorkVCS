@@ -44,6 +44,13 @@ wrong registry lineage, an equal or newer revision, any digest mismatch, or a
 concurrent change fails closed before replacement. Ordinary apply without the
 old-marker digest continues to refuse stale state.
 
+[ADR-0516](0516-projectref-plan-durable-operation-routing.md) adds one narrower
+journal-marker case without changing read-routing refresh: a legacy version-1
+journal marker may be replaced at the same registry revision and digest only
+when its exact installed digest is supplied and the version-2 candidate is a
+strict capability superset. Equal-revision lateral replacement, capability
+removal, and automatic broadening remain forbidden.
+
 If replacement completed or may have completed before a later cleanup,
 directory-sync, or verification failure, the existing
 `routing_activation_install_indeterminate` contract applies. The operator must

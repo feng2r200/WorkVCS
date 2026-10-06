@@ -59,6 +59,15 @@ registry ID, revision, and digest. It does not activate the capture journal or
 Store writes. Determine live state only from the selected registry and its
 exact marker; activation remains a separately authorized operation.
 
+The separate journal marker uses
+`<home>/journal-admission-activation-v1.json` or the corresponding registry
+sidecar. Its filename remains stable, while marker version 2 carries the
+strictly sorted `cognition_capture`, `plan_admit`, and `plan_evolve`
+capabilities. A readable version-1 marker authorizes cognition only. Enabling
+Plan on the same registry snapshot requires an explicit strict-superset
+refresh with the exact installed marker digest; it is never inferred from a
+new binary or source checkout.
+
 Concrete locator adapters do not add a configuration key. A trusted tool
 integration passes one bounded invocation explicitly with
 `--locator-adapter-context FILE`; `codex_home` inside the current

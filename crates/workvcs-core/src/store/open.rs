@@ -407,6 +407,15 @@ impl Store {
         history::admit_plan(&mut self.connection, options)
     }
 
+    pub(crate) fn find_plan_admission_result(
+        &self,
+        options: &PlanAdmissionOptions,
+    ) -> Result<Option<PlanAdmissionResult>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::find_plan_admission_result(&self.connection, options)
+    }
+
     pub(crate) fn capture_cognition(
         &mut self,
         options: &CognitionCaptureOptions,
@@ -423,6 +432,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::evolve_plan(&mut self.connection, options)
+    }
+
+    pub(crate) fn find_plan_evolution_result(
+        &self,
+        options: &PlanEvolutionOptions,
+    ) -> Result<Option<PlanEvolutionResult>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::find_plan_evolution_result(&self.connection, options)
     }
 
     pub(crate) fn issue_authorization_receipt(

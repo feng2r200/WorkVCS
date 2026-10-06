@@ -9,7 +9,7 @@ mod safety;
 
 pub use activation::{
     JournalAdmissionActivationCandidate, JournalAdmissionActivationScope,
-    RoutingActivationCandidate, RoutingActivationScope,
+    JournalAdmissionCapability, RoutingActivationCandidate, RoutingActivationScope,
 };
 pub use adapter::{
     BoundedAdapterContext, ContextLocatorInvocation, ContextLocatorProvider,
@@ -17,8 +17,10 @@ pub use adapter::{
     MAX_ADAPTER_EXPLANATION_BYTES, UnifiedLocatorInput,
 };
 pub use delivery::{
-    PreparedPrimaryDelivery, build_primary_delivery_receipt, prepare_primary_delivery,
-    prepare_primary_delivery_from_projection,
+    PlanDeliveryPreflight, PreparedPrimaryDelivery, PreparedPrimaryOperation,
+    build_plan_admission_delivery_receipt, build_plan_delivery_receipt_preflight,
+    build_plan_evolution_delivery_receipt, build_primary_delivery_receipt, preflight_plan_delivery,
+    prepare_primary_delivery, prepare_primary_delivery_from_projection,
 };
 pub use journal::{
     CanonicalRecordRef, CaptureAdmissionOutcome, CaptureAdmissionResult, CaptureCompletedPayload,

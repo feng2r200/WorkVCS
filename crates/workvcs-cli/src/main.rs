@@ -17,17 +17,21 @@ use workvcs_core::control_plane::{
     CaptureGroupResolvedPayload, CaptureIntent, CaptureJournal, CapturePayloadKind,
     CaptureProjectionWriteOutcome, CaptureRecoveryState, ControlPlaneDigest,
     DeliveryAppliedPayload, DeliveryFailedPayload, DeliveryFailureCode, DeliveryStartedPayload,
-    FirstWriteProjectBinding, JournalAdmissionActivationCandidate, JournalQuiescenceLock,
-    LocatorAssurance, LocatorAuthority, LocatorEvidence, LocatorRole, LocatorState,
-    MigrationBindingValidation, MigrationHistoricalIdentityDisposition, MigrationNamespaceStrategy,
+    FirstWriteProjectBinding, JournalAdmissionActivationCandidate, JournalAdmissionCapability,
+    JournalQuiescenceLock, LocatorAssurance, LocatorAuthority, LocatorEvidence, LocatorRole,
+    LocatorState, MAX_CAPTURE_EVENT_BYTES, MigrationBindingValidation,
+    MigrationHistoricalIdentityDisposition, MigrationNamespaceStrategy,
     MigrationOwnershipRepairManifest, MigrationPreviewMapping, MigrationTargetCoincidence,
-    PathLocatorEvidence, ProjectBinding as ProjectBindingV2, ProjectBindingReadyPayload,
-    ProjectBindingV1, ProjectBootstrapOutcome, ProjectMaturity, ProjectRegistryJournalAlias,
-    ProjectRegistryV1, ProjectRegistryV2, ReferenceAppliedPayload, RegistryMigrationPreview,
-    ResolutionBasis, ResolutionDiagnostic, ResolutionMode, ResolutionRank,
-    ResolutionRecordedPayload, ResolutionStatus, RoutingActivationCandidate, UnifiedLocatorInput,
-    UtcTimestamp, build_primary_delivery_receipt, build_registry_v1_migration_preview_with_repairs,
-    materialize_registry_v1_migration_candidate, prepare_primary_delivery_from_projection,
+    PathLocatorEvidence, PlanDeliveryPreflight, PreparedPrimaryOperation,
+    ProjectBinding as ProjectBindingV2, ProjectBindingReadyPayload, ProjectBindingV1,
+    ProjectBootstrapOutcome, ProjectMaturity, ProjectRegistryJournalAlias, ProjectRegistryV1,
+    ProjectRegistryV2, ReferenceAppliedPayload, RegistryMigrationPreview, ResolutionBasis,
+    ResolutionDiagnostic, ResolutionMode, ResolutionRank, ResolutionRecordedPayload,
+    ResolutionStatus, RoutingActivationCandidate, UnifiedLocatorInput, UtcTimestamp,
+    build_plan_admission_delivery_receipt, build_plan_delivery_receipt_preflight,
+    build_plan_evolution_delivery_receipt, build_primary_delivery_receipt,
+    build_registry_v1_migration_preview_with_repairs, materialize_registry_v1_migration_candidate,
+    preflight_plan_delivery, prepare_primary_delivery_from_projection,
     project_registry_journal_quiescence_lock_path, resolve_project, resolve_unbound_project,
 };
 use workvcs_core::{
@@ -1937,7 +1941,8 @@ enum ProjectCommand {
         expected_activation_digest: Option<String>,
     },
     #[command(
-        about = "Inspect or explicitly converge one admitted capture through ProjectRef bootstrap"
+        about = "Inspect or explicitly converge one admitted durable operation",
+        long_about = "Compatibility-named recovery surface for cognition_v2, plan_admit_v1, and plan_evolve_v1 intents. Status is read-only and reports payload_kind plus fresh registry/projection guards. Apply converges only the named operation through the shared ProjectRef binding, target-delivery, and durable-receipt state machine."
     )]
     #[command(group(
         ArgGroup::new("capture-recovery-action")
@@ -1959,7 +1964,11 @@ enum ProjectCommand {
         )]
         apply: bool,
 
-        #[arg(long, value_name = "CAPTURE_ID", help = "Admitted capture identity")]
+        #[arg(
+            long,
+            value_name = "CAPTURE_ID",
+            help = "Compatibility CaptureId naming the admitted durable operation"
+        )]
         capture_id: String,
 
         #[arg(long, value_name = "PATH", help = "One-command registry override")]
@@ -3457,6 +3466,10 @@ enum GoalCommand {
 
 #[derive(Debug, Subcommand)]
 enum PlanCommand {
+    #[command(
+        about = "Atomically admit one Plan manifest through an explicit Store or verified project route",
+        long_about = "Explicit STORE plus --branch uses the direct Plan engine. The --cwd form resolves the verified project binding; on registry v2 it requires the plan_admit journal capability, durably admits plan_admit_v1 into the shared operation journal, and returns only after the target result has a durable receipt. Repeating the exact manifest idempotently reuses both the target commit and journal receipt."
+    )]
     #[command(group(
         ArgGroup::new("plan-admit-target")
             .required(true)
@@ -3464,21 +3477,37 @@ enum PlanCommand {
             .args(["store", "cwd"])
     ))]
     Admit {
-        #[arg(value_name = "STORE")]
+        #[arg(value_name = "STORE", help = "Explicit WorkVCS Store path")]
         store: Option<PathBuf>,
 
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Project checkout or worktree used to resolve its verified binding"
+        )]
         cwd: Option<PathBuf>,
 
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "One-command registry override for the --cwd route"
+        )]
         registry: Option<PathBuf>,
 
-        #[arg(long)]
+        #[arg(long, help = "Required Work Branch for an explicit Store target")]
         branch: Option<String>,
 
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Strict Plan-admission manifest containing idempotency and compare-and-swap guards"
+        )]
         manifest: PathBuf,
     },
+    #[command(
+        about = "Atomically evolve one Plan through an explicit Store or verified project route",
+        long_about = "Explicit STORE plus --branch uses the direct Plan engine. The --cwd form resolves the verified project binding; on registry v2 it requires the plan_evolve journal capability, durably admits plan_evolve_v1 into the shared operation journal, and returns only after the target result has a durable receipt. In-place and supersede semantics remain those of the strict manifest, and exact replay repairs a missing receipt without another Plan commit."
+    )]
     #[command(group(
         ArgGroup::new("plan-evolve-target")
             .required(true)
@@ -3486,19 +3515,31 @@ enum PlanCommand {
             .args(["store", "cwd"])
     ))]
     Evolve {
-        #[arg(value_name = "STORE")]
+        #[arg(value_name = "STORE", help = "Explicit WorkVCS Store path")]
         store: Option<PathBuf>,
 
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Project checkout or worktree used to resolve its verified binding"
+        )]
         cwd: Option<PathBuf>,
 
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "One-command registry override for the --cwd route"
+        )]
         registry: Option<PathBuf>,
 
-        #[arg(long)]
+        #[arg(long, help = "Required Work Branch for an explicit Store target")]
         branch: Option<String>,
 
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Strict in-place or supersede manifest containing idempotency and compare-and-swap guards"
+        )]
         manifest: PathBuf,
     },
     Create {
@@ -19695,6 +19736,20 @@ fn require_active_journal_admission(
     registry_path: &Path,
     registry: &ProjectRegistryV2,
 ) -> Result<RoutingActivationInspection> {
+    require_active_journal_capability(
+        effective,
+        registry_path,
+        registry,
+        JournalAdmissionCapability::CognitionCapture,
+    )
+}
+
+fn require_active_journal_capability(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    capability: JournalAdmissionCapability,
+) -> Result<RoutingActivationInspection> {
     let read_activation =
         inspect_read_routing_activation_for_registry(effective, registry_path, registry);
     if read_activation.state != RoutingActivationState::Active {
@@ -19721,6 +19776,21 @@ fn require_active_journal_admission(
                 .as_ref()
                 .map(|issue| format!(" ({issue})"))
                 .unwrap_or_default()
+        )));
+    }
+    let marker_bytes = fs::read(&inspection.path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot read active journal-admission marker {}: {error}",
+            inspection.path.display()
+        ))
+    })?;
+    let marker = JournalAdmissionActivationCandidate::from_json_bytes(&marker_bytes)?;
+    marker.validate_registry(registry)?;
+    if !marker.supports(capability) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "ProjectRef v2 journal admission marker version {} does not authorize capability {}; preview and explicitly refresh the exact marker before retrying",
+            marker.activation_version(),
+            capability.as_str()
         )));
     }
     Ok(inspection)
@@ -20289,7 +20359,7 @@ fn inspect_project_journal_admission_activation(registry: Option<PathBuf>) -> Re
     )?;
     match load_project_registry_readonly(&registry_path, false)? {
         LoadedProjectRegistry::V1 { digest, .. } => Ok(format!(
-            "action=status\nread_only=true\nregistry_path={}\nregistry_version=1\nregistry_revision=none\nregistry_digest={}\nmigration_required=true\nactivation_scope=project_ref_v2_journal_admission\nactivation_state=not_applicable\nread_routing_active=false\njournal_admission_active=false\nactivation_path={}\nactivation_digest=none\ncandidate_digest=none\nbindings_verified=0\nregistry_written=false\nactivation_written=false\nactivation_removed=false\nactivation_reused=false\njournal_written=false\nstore_written=false\ndelivery_activated=false\n",
+            "action=status\nread_only=true\nregistry_path={}\nregistry_version=1\nregistry_revision=none\nregistry_digest={}\nmigration_required=true\nactivation_scope=project_ref_v2_journal_admission\nactivation_state=not_applicable\nactivation_version=none\nactivation_capabilities=none\ncandidate_activation_version=none\ncandidate_capabilities=none\nread_routing_active=false\njournal_admission_active=false\ncognition_capture_active=false\nplan_admit_active=false\nplan_evolve_active=false\nactivation_path={}\nactivation_digest=none\ncandidate_digest=none\nbindings_verified=0\nregistry_written=false\nactivation_written=false\nactivation_removed=false\nactivation_reused=false\njournal_written=false\nstore_written=false\ndelivery_activated=false\n",
             escape_key_value(&registry_path.display().to_string()),
             digest,
             escape_key_value(
@@ -20434,7 +20504,9 @@ fn apply_project_journal_admission_activation_with_refresh_and_fault(
 
     let initial =
         inspect_journal_admission_activation_for_registry(&effective, &registry_path, &registry_v2);
-    if initial.state == RoutingActivationState::Active {
+    if initial.state == RoutingActivationState::Active
+        && initial.marker_digest.as_ref() == Some(&candidate_digest)
+    {
         return render_journal_admission_activation(
             "apply",
             false,
@@ -20450,7 +20522,7 @@ fn apply_project_journal_admission_activation_with_refresh_and_fault(
             true,
         );
     }
-    let refresh_stale = match initial.state {
+    let refresh_existing = match initial.state {
         RoutingActivationState::Absent => {
             if expected_activation_digest.is_some() {
                 return Err(WorkVcsError::ControlPlaneInvalid(format!(
@@ -20474,6 +20546,20 @@ fn apply_project_journal_admission_activation_with_refresh_and_fault(
             )?;
             true
         }
+        RoutingActivationState::Active => {
+            let expected_activation_digest = expected_activation_digest.as_ref().ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "refusing to broaden active journal-admission marker {} without --expected-activation-digest",
+                    initial.path.display()
+                ))
+            })?;
+            validate_journal_admission_activation_refresh_source(
+                &initial.path,
+                &registry_v2,
+                expected_activation_digest,
+            )?;
+            true
+        }
         RoutingActivationState::Invalid => {
             return Err(WorkVcsError::ControlPlaneInvalid(format!(
                 "refusing to replace journal-admission activation marker {} in state {}{}",
@@ -20486,12 +20572,9 @@ fn apply_project_journal_admission_activation_with_refresh_and_fault(
                     .unwrap_or_default()
             )));
         }
-        RoutingActivationState::Active => unreachable!("active marker returned above"),
     };
-    if refresh_stale {
-        require_atomic_registry_replace_support(
-            "journal-admission activation stale-marker refresh",
-        )?;
+    if refresh_existing {
+        require_atomic_registry_replace_support("journal-admission activation marker refresh")?;
     }
 
     let current_bytes = fs::read(&registry_path).map_err(|error| {
@@ -20550,7 +20633,7 @@ fn apply_project_journal_admission_activation_with_refresh_and_fault(
                 "journal-admission activation temp changed before installation".to_owned(),
             ));
         }
-        if refresh_stale {
+        if refresh_existing {
             validate_journal_admission_activation_refresh_source(
                 &activation_path,
                 &registry_v2,
@@ -20577,7 +20660,7 @@ fn apply_project_journal_admission_activation_with_refresh_and_fault(
             fault,
             JournalAdmissionActivationApplyFault::AfterMarkerInstalled,
         )?;
-        if !refresh_stale {
+        if !refresh_existing {
             fs::remove_file(&temp_path).map_err(|error| {
                 WorkVcsError::QueryInvalid(format!(
                     "cannot remove installed journal-admission activation temp {}: {error}",
@@ -20684,18 +20767,31 @@ fn validate_journal_admission_activation_refresh_source(
             "installed stale journal-admission activation digest {actual_digest} does not match expected {expected_digest}"
         )));
     }
-    if previous.registry_id() != registry.registry_id()
-        || previous.registry_revision() >= registry.revision()
-    {
+    if previous.registry_id() != registry.registry_id() {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "stale journal-admission activation marker does not belong to an earlier revision of the same registry: marker registry_id={} revision={}, current registry_id={} revision={}",
+            "journal-admission activation marker does not belong to the same registry lineage: marker registry_id={} revision={}, current registry_id={} revision={}",
             previous.registry_id(),
             previous.registry_revision(),
             registry.registry_id(),
             registry.revision()
         )));
     }
-    Ok(())
+    if previous.registry_revision() < registry.revision() {
+        return Ok(());
+    }
+    let candidate = JournalAdmissionActivationCandidate::for_registry(registry)?;
+    if previous.registry_revision() == registry.revision()
+        && previous.is_strict_capability_predecessor_of(&candidate)
+    {
+        return Ok(());
+    }
+    Err(WorkVcsError::ControlPlaneInvalid(format!(
+        "journal-admission activation marker is neither an earlier registry revision nor a strict same-snapshot capability predecessor: marker version={} revision={}, candidate version={} revision={}",
+        previous.activation_version(),
+        previous.registry_revision(),
+        candidate.activation_version(),
+        candidate.registry_revision()
+    )))
 }
 
 fn disable_project_journal_admission_activation(
@@ -20748,12 +20844,6 @@ fn disable_project_journal_admission_activation_with_fault(
     }
     let bindings_verified = verify_v2_registry_bindings_readonly(&registry_v2)?;
     let candidate = JournalAdmissionActivationCandidate::for_registry(&registry_v2)?;
-    let candidate_digest = candidate.digest()?;
-    if candidate_digest != expected_activation_digest {
-        return Err(WorkVcsError::DigestInvalid(format!(
-            "current journal-admission activation candidate digest {candidate_digest} does not match expected installed activation digest {expected_activation_digest}"
-        )));
-    }
     let initial =
         inspect_journal_admission_activation_for_registry(&effective, &registry_path, &registry_v2);
     if initial.state == RoutingActivationState::Absent {
@@ -20912,8 +21002,30 @@ fn render_journal_admission_activation(
     activation_removed: bool,
     activation_reused: bool,
 ) -> Result<String> {
+    let installed_marker = fs::read(&inspection.path)
+        .ok()
+        .and_then(|bytes| JournalAdmissionActivationCandidate::from_json_bytes(&bytes).ok());
+    let installed_capabilities = installed_marker
+        .as_ref()
+        .map(|marker| {
+            marker
+                .capabilities()
+                .iter()
+                .map(|capability| capability.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "none".to_owned());
+    let candidate_capabilities = candidate
+        .capabilities()
+        .iter()
+        .map(|capability| capability.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let marker_active = inspection.state == RoutingActivationState::Active && read_routing_active;
     Ok(format!(
-        "action={}\nread_only={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nactivation_scope={}\nactivation_state={}\nread_routing_active={}\njournal_admission_active={}\nactivation_path={}\nactivation_digest={}\ncandidate_digest={}\nbindings={}\nbindings_verified={}\nregistry_written=false\nactivation_written={}\nactivation_removed={}\nactivation_reused={}\njournal_written=false\nstore_written=false\ndelivery_activated=false\nactivation_issue={}\n",
+        "action={}\nread_only={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nactivation_scope={}\nactivation_state={}\nactivation_version={}\nactivation_capabilities={}\ncandidate_activation_version={}\ncandidate_capabilities={}\nread_routing_active={}\njournal_admission_active={}\ncognition_capture_active={}\nplan_admit_active={}\nplan_evolve_active={}\nactivation_path={}\nactivation_digest={}\ncandidate_digest={}\nbindings={}\nbindings_verified={}\nregistry_written=false\nactivation_written={}\nactivation_removed={}\nactivation_reused={}\njournal_written=false\nstore_written=false\ndelivery_activated=false\nactivation_issue={}\n",
         action,
         read_only,
         escape_key_value(&registry_path.display().to_string()),
@@ -20922,8 +21034,27 @@ fn render_journal_admission_activation(
         registry_digest,
         candidate.scope().as_str(),
         inspection.state.as_str(),
+        installed_marker
+            .as_ref()
+            .map(|marker| marker.activation_version().to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        installed_capabilities,
+        candidate.activation_version(),
+        candidate_capabilities,
         read_routing_active,
-        inspection.state == RoutingActivationState::Active && read_routing_active,
+        marker_active,
+        marker_active
+            && installed_marker.as_ref().is_some_and(|marker| {
+                marker.supports(JournalAdmissionCapability::CognitionCapture)
+            }),
+        marker_active
+            && installed_marker
+                .as_ref()
+                .is_some_and(|marker| marker.supports(JournalAdmissionCapability::PlanAdmit)),
+        marker_active
+            && installed_marker
+                .as_ref()
+                .is_some_and(|marker| marker.supports(JournalAdmissionCapability::PlanEvolve)),
         escape_key_value(&inspection.path.display().to_string()),
         inspection
             .marker_digest
@@ -21335,6 +21466,13 @@ fn capture_recovery_action(
         CaptureRecoveryState::PendingReferences => "apply_secondary_references",
         CaptureRecoveryState::LegacyManifestUpgradeRequired => "upgrade_legacy_manifest",
         CaptureRecoveryState::SemanticManifestInvalid => "start_new_capture_with_corrected_payload",
+        CaptureRecoveryState::PlanTargetConflict => "start_new_plan_operation_with_current_guards",
+        CaptureRecoveryState::PlanManifestRejected => {
+            "start_new_plan_operation_with_corrected_manifest"
+        }
+        CaptureRecoveryState::PlanReceiptTooLarge => {
+            "start_new_plan_operation_with_smaller_manifest"
+        }
         CaptureRecoveryState::Completed
             if projection
                 .capture_group()
@@ -21354,7 +21492,8 @@ fn inspect_project_capture_recovery(
     let journal = capture_recovery_journal(&registry_path, capture_id)?;
     let inspection = journal.inspect_projection(capture_id)?;
     let projection = inspection.projection();
-    let resolution = resolve_project(&registry, journal.load(capture_id)?.resolution_context())?;
+    let intent = journal.load(capture_id)?;
+    let resolution = resolve_project(&registry, intent.resolution_context())?;
     let binding = inspect_recovery_binding(&registry, &resolution);
     let effective_state = effective_capture_recovery_state(&resolution, &binding, projection);
     let resolution_rank = resolution
@@ -21368,8 +21507,9 @@ fn inspect_project_capture_recovery(
     let delivery_failure = projection.delivery_failure();
     let capture_group = projection.capture_group();
     Ok(format!(
-        "action=status\nread_only=true\ncapture_id={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_root={}\nintent_path={}\nevents={}\nprojection_path={}\nprojection_digest={}\nprojection_stored_state={}\nprojection_issue={}\nprojected_recovery_state={}\neffective_recovery_state={}\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nbinding_state={}\nbinding_verified_objects={}\nbinding_issue={}\nrecovery_action={}\ndelivery_id={}\ndelivery_started={}\ndelivery_receipt={}\ntarget_commit_id={}\ntarget_delivery_reused={}\ncanonical_record_ref={}\ndelivery_failure_code={}\ncapture_group_id={}\ncapture_group_primary_resolved={}\nsecondary_references_required={}\nsecondary_references_applied={}\nsecondary_references_pending={}\ncapture_completed_receipt={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_initialized=false\ntarget_delivery_written=false\nrouting_activated=false\n",
+        "action=status\nread_only=true\ncapture_id={}\npayload_kind={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_root={}\nintent_path={}\nevents={}\nprojection_path={}\nprojection_digest={}\nprojection_stored_state={}\nprojection_issue={}\nprojected_recovery_state={}\neffective_recovery_state={}\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nbinding_state={}\nbinding_verified_objects={}\nbinding_issue={}\nrecovery_action={}\ndelivery_id={}\ndelivery_started={}\ndelivery_receipt={}\ntarget_commit_id={}\ntarget_delivery_reused={}\ncanonical_record_ref={}\ndelivery_failure_code={}\ncapture_group_id={}\ncapture_group_primary_resolved={}\nsecondary_references_required={}\nsecondary_references_applied={}\nsecondary_references_pending={}\ncapture_completed_receipt={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_initialized=false\ntarget_delivery_written=false\nrouting_activated=false\n",
         capture_id,
+        intent.payload_kind().as_str(),
         escape_key_value(&registry_path.display().to_string()),
         registry.registry_id(),
         registry.revision(),
@@ -21721,12 +21861,14 @@ fn apply_project_capture_recovery_with_fault(
             )?;
             let semantic_manifest_invalid = if prepared.legacy_manifest_upgrade_required() {
                 false
-            } else {
-                match prepared.manifest().validate_semantics() {
+            } else if let PreparedPrimaryOperation::Cognition(manifest) = prepared.operation() {
+                match manifest.validate_semantics() {
                     Ok(()) => false,
                     Err(WorkVcsError::RecordInvalid(_)) => true,
                     Err(error) => return Err(error),
                 }
+            } else {
+                false
             };
             let started = prepared.started().clone();
             let start_event = journal.append_event_authority_only(
@@ -21743,6 +21885,42 @@ fn apply_project_capture_recovery_with_fault(
                     ))
                 },
             )?;
+
+            let is_plan_operation =
+                !matches!(prepared.operation(), PreparedPrimaryOperation::Cognition(_));
+            let plan_delivery_preflight = if is_plan_operation {
+                Some(preflight_plan_delivery(
+                    &readonly_engine,
+                    prepared.operation(),
+                    &started,
+                )?)
+            } else {
+                None
+            };
+            let plan_delivery_failure =
+                plan_delivery_preflight
+                    .as_ref()
+                    .and_then(|preflight| match preflight {
+                        PlanDeliveryPreflight::Ready => None,
+                        PlanDeliveryPreflight::TargetConflict(_) => Some((
+                            DeliveryFailureCode::PlanTargetConflict,
+                            DeliveryFailureCode::PlanTargetConflict.recovery_action(),
+                        )),
+                        PlanDeliveryPreflight::ManifestRejected(_) => Some((
+                            DeliveryFailureCode::PlanManifestRejected,
+                            DeliveryFailureCode::PlanManifestRejected.recovery_action(),
+                        )),
+                    });
+            let plan_receipt_size =
+                if matches!(plan_delivery_preflight, Some(PlanDeliveryPreflight::Ready)) {
+                    let receipt = build_plan_delivery_receipt_preflight(&intent, &started)?;
+                    Some(journal.preflight_event_payload_size(
+                        capture_id,
+                        CaptureEventPayload::DeliveryApplied(receipt),
+                    )?)
+                } else {
+                    None
+                };
 
             if prepared.legacy_manifest_upgrade_required() {
                 let failure = DeliveryFailedPayload::new(
@@ -21780,40 +21958,124 @@ fn apply_project_capture_recovery_with_fault(
                 delivery_failure_written =
                     failure_event.outcome() == CaptureEventAppendOutcome::Created;
                 delivery_failure_snapshot = Some(failure);
+            } else if let Some((failure_code, recovery_action)) = plan_delivery_failure {
+                let failure = DeliveryFailedPayload::new(
+                    started.delivery_id(),
+                    project_ref_id,
+                    binding.store_id(),
+                    binding.workspace_id(),
+                    binding.branch_id(),
+                    failure_code,
+                    recovery_action,
+                )?;
+                let failure_event = journal.append_event_authority_only(
+                    capture_id,
+                    UtcTimestamp::now()?,
+                    CaptureEventPayload::DeliveryFailed(failure.clone()),
+                )?;
+                delivery_failure_written =
+                    failure_event.outcome() == CaptureEventAppendOutcome::Created;
+                delivery_failure_snapshot = Some(failure);
+            } else if plan_receipt_size.is_some_and(|size| size > MAX_CAPTURE_EVENT_BYTES) {
+                let failure = DeliveryFailedPayload::new(
+                    started.delivery_id(),
+                    project_ref_id,
+                    binding.store_id(),
+                    binding.workspace_id(),
+                    binding.branch_id(),
+                    DeliveryFailureCode::PlanReceiptTooLarge,
+                    "start_new_plan_operation_with_smaller_manifest",
+                )?;
+                let failure_event = journal.append_event_authority_only(
+                    capture_id,
+                    UtcTimestamp::now()?,
+                    CaptureEventPayload::DeliveryFailed(failure.clone()),
+                )?;
+                delivery_failure_written =
+                    failure_event.outcome() == CaptureEventAppendOutcome::Created;
+                delivery_failure_snapshot = Some(failure);
             } else {
                 drop(readonly_engine);
                 let mut engine = open_verified_store(binding.store_path().as_path())?;
                 verify_opened_recovery_target(&engine, binding)?;
-                let result = engine.capture_cognition(CognitionCaptureOptions::new(
-                    binding.branch_id(),
-                    started.expected_head_commit_id(),
-                    started.expected_state_digest(),
-                    prepared.into_manifest(),
-                ))?;
-                target_delivery_written = result.outcome == CognitionCaptureOutcome::Created;
-                target_delivery_reused = result.outcome == CognitionCaptureOutcome::Reused;
-                inject_capture_recovery_fault(fault, CaptureRecoveryFault::TargetCommit).map_err(
-                    |error| {
-                        WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
-                            "target Store commit completed or may already be durable but its delivery receipt is absent; run project capture-recovery --status and retry with the same capture; cause: {error}"
-                        ))
-                    },
-                )?;
-                let receipt = build_primary_delivery_receipt(&intent, &started, &result)?;
-                let receipt_event = journal.append_event_authority_only(
-                    capture_id,
-                    UtcTimestamp::now()?,
-                    CaptureEventPayload::DeliveryApplied(receipt.clone()),
-                )?;
-                delivery_receipt_written =
-                    receipt_event.outcome() == CaptureEventAppendOutcome::Created;
-                primary_delivery_snapshot = Some(receipt);
-                inject_capture_recovery_fault(fault, CaptureRecoveryFault::DeliveryReceipt)
-                    .map_err(|error| {
-                        WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
-                            "delivery_applied may already be durable; run project capture-recovery --status before retry; cause: {error}"
-                        ))
-                    })?;
+                let delivery_result = (|| -> Result<_> {
+                    Ok(match prepared.into_operation() {
+                        PreparedPrimaryOperation::Cognition(manifest) => {
+                            let result = engine.capture_cognition(CognitionCaptureOptions::new(
+                                binding.branch_id(),
+                                started.expected_head_commit_id(),
+                                started.expected_state_digest(),
+                                manifest,
+                            ))?;
+                            let receipt =
+                                build_primary_delivery_receipt(&intent, &started, &result)?;
+                            (
+                                receipt,
+                                result.outcome == CognitionCaptureOutcome::Created,
+                                result.outcome == CognitionCaptureOutcome::Reused,
+                            )
+                        }
+                        PreparedPrimaryOperation::PlanAdmission(manifest) => {
+                            let result = engine.admit_plan(PlanAdmissionOptions::new(
+                                binding.branch_id(),
+                                manifest,
+                            ))?;
+                            let receipt =
+                                build_plan_admission_delivery_receipt(&intent, &started, &result)?;
+                            (
+                                receipt,
+                                result.outcome == PlanAdmissionOutcome::Created,
+                                result.outcome == PlanAdmissionOutcome::Reused,
+                            )
+                        }
+                        PreparedPrimaryOperation::PlanEvolution(manifest) => {
+                            let result = engine.evolve_plan(PlanEvolutionOptions::new(
+                                binding.branch_id(),
+                                manifest,
+                            ))?;
+                            let receipt =
+                                build_plan_evolution_delivery_receipt(&intent, &started, &result)?;
+                            (
+                                receipt,
+                                result.outcome == PlanEvolutionOutcome::Created,
+                                result.outcome == PlanEvolutionOutcome::Reused,
+                            )
+                        }
+                    })
+                })();
+                match delivery_result {
+                    Ok((receipt, written, reused)) => {
+                        target_delivery_written = written;
+                        target_delivery_reused = reused;
+                        inject_capture_recovery_fault(
+                            fault,
+                            CaptureRecoveryFault::TargetCommit,
+                        )
+                        .map_err(|error| {
+                            WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                                "target Store commit completed or may already be durable but its delivery receipt is absent; run project capture-recovery --status and retry with the same capture; cause: {error}"
+                            ))
+                        })?;
+                        let receipt_event = journal.append_event_authority_only(
+                            capture_id,
+                            UtcTimestamp::now()?,
+                            CaptureEventPayload::DeliveryApplied(receipt.clone()),
+                        )?;
+                        delivery_receipt_written =
+                            receipt_event.outcome() == CaptureEventAppendOutcome::Created;
+                        primary_delivery_snapshot = Some(receipt);
+                        inject_capture_recovery_fault(
+                            fault,
+                            CaptureRecoveryFault::DeliveryReceipt,
+                        )
+                        .map_err(|error| {
+                            WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+                                "delivery_applied may already be durable; run project capture-recovery --status before retry; cause: {error}"
+                            ))
+                        })?;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
     }
@@ -24910,10 +25172,7 @@ fn render_routed_cognition_admission(
         outcome,
         admission.capture_id(),
         escape_key_value(intent.idempotency_key()),
-        match intent.payload_kind() {
-            CapturePayloadKind::CognitionV2 => "cognition_v2",
-            CapturePayloadKind::LegacyCognitionV1 => "legacy_cognition_v1",
-        },
+        intent.payload_kind().as_str(),
         admission.payload_digest(),
         escape_key_value(&registry_path.display().to_string()),
         registry.registry_id(),
@@ -24996,6 +25255,164 @@ fn resolve_resume_session(
     }
 }
 
+#[derive(Debug)]
+struct RoutedPlanDelivery {
+    capture_id: CaptureId,
+    binding: ProjectBindingV2,
+    journal_admission_reused: bool,
+    target_delivery_reused: bool,
+}
+
+fn try_routed_plan_delivery(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    payload_kind: CapturePayloadKind,
+    capability: JournalAdmissionCapability,
+    manifest_idempotency_key: &str,
+    manifest_bytes: &[u8],
+) -> Result<Option<RoutedPlanDelivery>> {
+    try_routed_plan_delivery_with_fault(
+        cwd,
+        registry,
+        payload_kind,
+        capability,
+        manifest_idempotency_key,
+        manifest_bytes,
+        None,
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn try_routed_plan_delivery_with_fault(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    payload_kind: CapturePayloadKind,
+    capability: JournalAdmissionCapability,
+    manifest_idempotency_key: &str,
+    manifest_bytes: &[u8],
+    fault: Option<CaptureRecoveryFault>,
+) -> Result<Option<RoutedPlanDelivery>> {
+    let current_identity = resolve_project_identity(&cwd)?;
+    let effective = effective_registry_config(registry)?;
+    let registry_path = project_registry_path_from_effective(&effective, false, &current_identity)?;
+    let (registry_v2, registry_digest) = match load_project_registry_readonly(&registry_path, true)?
+    {
+        LoadedProjectRegistry::V1 { .. } => return Ok(None),
+        LoadedProjectRegistry::V2 { registry, digest } => (*registry, digest),
+    };
+    let locator_input = unified_locator_input_for_identity_with_mode(
+        ResolutionMode::DurableWrite,
+        None,
+        load_semantic_locator_evidence(None)?,
+        None,
+        &current_identity,
+    )?;
+    let resolution = resolve_project(&registry_v2, locator_input.resolution_context())?;
+    if resolution.status() != ResolutionStatus::Resolved {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "{} --cwd requires one resolved ProjectRef binding; resolution status is {}",
+            payload_kind.as_str(),
+            resolution_status_text(resolution.status())
+        )));
+    }
+    require_active_journal_capability(&effective, &registry_path, &registry_v2, capability)?;
+    let semantic_payload = canonical_durable_operation_payload(manifest_bytes, payload_kind)?;
+    let intent = CaptureIntent::new(
+        CaptureId::new_v7(),
+        format!("{}:{manifest_idempotency_key}", payload_kind.as_str()),
+        UtcTimestamp::now()?,
+        match payload_kind {
+            CapturePayloadKind::PlanAdmitV1 => "durable Plan admission",
+            CapturePayloadKind::PlanEvolveV1 => "durable Plan evolution",
+            _ => "durable WorkVCS operation",
+        },
+        payload_kind,
+        semantic_payload,
+        locator_input.resolution_context().clone(),
+        resolution,
+        None,
+    )?;
+    let journal = CaptureJournal::for_project_registry(
+        &registry_path,
+        project_registry_journal_alias(&effective),
+    )?;
+    let admission = journal.admit_for_project_registry_with_check(
+        &intent,
+        registry_v2.revision(),
+        &registry_digest,
+        |locked_registry| {
+            require_active_journal_capability(
+                &effective,
+                &registry_path,
+                locked_registry,
+                capability,
+            )?;
+            Ok(())
+        },
+    )?;
+    let capture_id = admission.capture_id();
+    let projection_digest = journal
+        .inspect_projection(capture_id)?
+        .projection()
+        .digest()?;
+    let report = apply_project_capture_recovery_with_fault(
+        Some(registry_path),
+        None,
+        capture_id,
+        &registry_digest,
+        &projection_digest,
+        fault,
+    )?;
+    if let Some(failure) = report.delivery_failure.as_ref() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "durable Plan delivery ended in {}: {}",
+            failure.failure_code().as_str(),
+            failure.recovery_action()
+        )));
+    }
+    let target_delivery_reused = report.target_delivery_reused;
+    let binding = report.binding.ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "durable Plan delivery completed without a verified binding".to_owned(),
+        )
+    })?;
+    report.primary_delivery.ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "durable Plan delivery completed without a delivery_applied receipt".to_owned(),
+        )
+    })?;
+    Ok(Some(RoutedPlanDelivery {
+        capture_id,
+        binding,
+        journal_admission_reused: admission.outcome() == CaptureAdmissionOutcome::Reused,
+        target_delivery_reused,
+    }))
+}
+
+fn canonical_durable_operation_payload(
+    input: &[u8],
+    payload_kind: CapturePayloadKind,
+) -> Result<serde_json::Value> {
+    let canonical = parse_canonical_json(input).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "{} manifest is not strict canonical-domain JSON: {error}",
+            payload_kind.as_str()
+        ))
+    })?;
+    let canonical = canonical_bytes(&canonical).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot encode {} manifest for journal admission: {error}",
+            payload_kind.as_str()
+        ))
+    })?;
+    serde_json::from_slice(&canonical).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot decode canonical {} manifest: {error}",
+            payload_kind.as_str()
+        ))
+    })
+}
+
 fn run_plan_admit(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
@@ -25010,7 +25427,7 @@ fn run_plan_admit(
         ))
     })?;
     let manifest = PlanAdmissionManifest::from_json_bytes(&manifest_bytes)?;
-    let (store_path, branch_id) = match (store, cwd) {
+    match (store, cwd) {
         (Some(store_path), None) => {
             if registry.is_some() {
                 return Err(WorkVcsError::QueryInvalid(
@@ -25028,7 +25445,10 @@ fn run_plan_admit(
             let current_identity = resolve_project_identity(&current_dir)?;
             let store_path = canonical_existing_path("plan admit store", &store_path)?;
             reject_project_local_path("plan admit store", &store_path, &current_identity)?;
-            (store_path, BranchId::parse_canonical(&branch)?)
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let mut engine = open_verified_store(&store_path)?;
+            let result = engine.admit_plan(PlanAdmissionOptions::new(branch_id, manifest))?;
+            Ok(render_plan_admission(&result))
         }
         (None, Some(cwd)) => {
             if branch.is_some() {
@@ -25036,21 +25456,56 @@ fn run_plan_admit(
                     "plan admit --cwd uses bound branch and must not pass --branch".to_owned(),
                 ));
             }
-            let discovery = discover_project(cwd, registry)?;
-            (
-                PathBuf::from(discovery.binding.store_path),
-                discovery.binding.branch_id,
-            )
+            if let Some(routed) = try_routed_plan_delivery(
+                cwd.clone(),
+                registry.clone(),
+                CapturePayloadKind::PlanAdmitV1,
+                JournalAdmissionCapability::PlanAdmit,
+                manifest.idempotency_key(),
+                &manifest_bytes,
+            )? {
+                let engine = open_verified_store_readonly(routed.binding.store_path().as_path())?;
+                let mut result = engine
+                    .find_plan_admission_result(PlanAdmissionOptions::new(
+                        routed.binding.branch_id(),
+                        manifest,
+                    ))?
+                    .ok_or_else(|| {
+                        WorkVcsError::IntegrityInvalid(
+                            "durable Plan admission receipt has no matching read-only target result"
+                                .to_owned(),
+                        )
+                    })?;
+                result.outcome = if routed.target_delivery_reused {
+                    PlanAdmissionOutcome::Reused
+                } else {
+                    PlanAdmissionOutcome::Created
+                };
+                let mut output = render_plan_admission(&result);
+                writeln!(output, "durable_route=projectref_journal").expect("write to String");
+                writeln!(output, "capture_id={}", routed.capture_id).expect("write to String");
+                writeln!(
+                    output,
+                    "journal_admission_reused={}",
+                    routed.journal_admission_reused
+                )
+                .expect("write to String");
+                writeln!(output, "delivery_receipt=true").expect("write to String");
+                Ok(output)
+            } else {
+                let discovery = discover_project(cwd, registry)?;
+                let mut engine = open_verified_store(Path::new(&discovery.binding.store_path))?;
+                let result = engine.admit_plan(PlanAdmissionOptions::new(
+                    discovery.binding.branch_id,
+                    manifest,
+                ))?;
+                Ok(render_plan_admission(&result))
+            }
         }
-        _ => {
-            return Err(WorkVcsError::QueryInvalid(
-                "plan admit requires exactly one of STORE or --cwd".to_owned(),
-            ));
-        }
-    };
-    let mut engine = open_verified_store(&store_path)?;
-    let result = engine.admit_plan(PlanAdmissionOptions::new(branch_id, manifest))?;
-    Ok(render_plan_admission(&result))
+        _ => Err(WorkVcsError::QueryInvalid(
+            "plan admit requires exactly one of STORE or --cwd".to_owned(),
+        )),
+    }
 }
 
 fn run_plan_evolve(
@@ -25067,7 +25522,7 @@ fn run_plan_evolve(
         ))
     })?;
     let manifest = PlanEvolutionManifest::from_json_bytes(&manifest_bytes)?;
-    let (store_path, branch_id) = match (store, cwd) {
+    match (store, cwd) {
         (Some(store_path), None) => {
             if registry.is_some() {
                 return Err(WorkVcsError::QueryInvalid(
@@ -25087,7 +25542,10 @@ fn run_plan_evolve(
             let current_identity = resolve_project_identity(&current_dir)?;
             let store_path = canonical_existing_path("plan evolve store", &store_path)?;
             reject_project_local_path("plan evolve store", &store_path, &current_identity)?;
-            (store_path, BranchId::parse_canonical(&branch)?)
+            let branch_id = BranchId::parse_canonical(&branch)?;
+            let mut engine = open_verified_store(&store_path)?;
+            let result = engine.evolve_plan(PlanEvolutionOptions::new(branch_id, manifest))?;
+            Ok(render_plan_evolution(&result))
         }
         (None, Some(cwd)) => {
             if branch.is_some() {
@@ -25095,21 +25553,56 @@ fn run_plan_evolve(
                     "plan evolve --cwd uses bound branch and must not pass --branch".to_owned(),
                 ));
             }
-            let discovery = discover_project(cwd, registry)?;
-            (
-                PathBuf::from(discovery.binding.store_path),
-                discovery.binding.branch_id,
-            )
+            if let Some(routed) = try_routed_plan_delivery(
+                cwd.clone(),
+                registry.clone(),
+                CapturePayloadKind::PlanEvolveV1,
+                JournalAdmissionCapability::PlanEvolve,
+                manifest.idempotency_key(),
+                &manifest_bytes,
+            )? {
+                let engine = open_verified_store_readonly(routed.binding.store_path().as_path())?;
+                let mut result = engine
+                    .find_plan_evolution_result(PlanEvolutionOptions::new(
+                        routed.binding.branch_id(),
+                        manifest,
+                    ))?
+                    .ok_or_else(|| {
+                        WorkVcsError::IntegrityInvalid(
+                            "durable Plan evolution receipt has no matching read-only target result"
+                                .to_owned(),
+                        )
+                    })?;
+                result.outcome = if routed.target_delivery_reused {
+                    PlanEvolutionOutcome::Reused
+                } else {
+                    PlanEvolutionOutcome::Created
+                };
+                let mut output = render_plan_evolution(&result);
+                writeln!(output, "durable_route=projectref_journal").expect("write to String");
+                writeln!(output, "capture_id={}", routed.capture_id).expect("write to String");
+                writeln!(
+                    output,
+                    "journal_admission_reused={}",
+                    routed.journal_admission_reused
+                )
+                .expect("write to String");
+                writeln!(output, "delivery_receipt=true").expect("write to String");
+                Ok(output)
+            } else {
+                let discovery = discover_project(cwd, registry)?;
+                let mut engine = open_verified_store(Path::new(&discovery.binding.store_path))?;
+                let result = engine.evolve_plan(PlanEvolutionOptions::new(
+                    discovery.binding.branch_id,
+                    manifest,
+                ))?;
+                Ok(render_plan_evolution(&result))
+            }
         }
-        _ => {
-            return Err(WorkVcsError::QueryInvalid(
-                "plan evolve requires exactly one of STORE or --cwd".to_owned(),
-            ));
-        }
-    };
-    let mut engine = open_verified_store(&store_path)?;
-    let result = engine.evolve_plan(PlanEvolutionOptions::new(branch_id, manifest))?;
-    Ok(render_plan_evolution(&result))
+        _ => Err(WorkVcsError::QueryInvalid(
+            "plan evolve requires exactly one of STORE or --cwd".to_owned(),
+        )),
+    }
 }
 
 fn run_receipt_issue(
@@ -61643,6 +62136,26 @@ mod tests {
         .expect("apply fixture migration")
     }
 
+    fn activate_fixture_v2_durable_operations(fixture: &ProjectBindingFixture) {
+        let read_preview =
+            preview_project_routing_activation(Some(fixture.registry_path.clone())).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&read_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&read_preview, "candidate_digest")).unwrap(),
+        )
+        .expect("activate fixture read routing");
+        let journal_preview =
+            preview_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .unwrap();
+        apply_project_journal_admission_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "candidate_digest")).unwrap(),
+        )
+        .expect("activate fixture durable operation journal");
+    }
+
     fn fixture_capture_intent(
         _fixture: &ProjectBindingFixture,
         registry: &ProjectRegistryV2,
@@ -66609,6 +67122,1096 @@ mod tests {
     }
 
     #[test]
+    fn cli_v2_plan_admit_and_evolve_use_one_durable_journal() {
+        run_cli_test_with_large_stack(
+            "cli-v2-plan-durable-journal-test",
+            assert_cli_v2_plan_admit_and_evolve_use_one_durable_journal,
+        );
+    }
+
+    fn assert_cli_v2_plan_admit_and_evolve_use_one_durable_journal() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+
+        let admit_path = fixture._tempdir.path().join("v2-plan-admit.json");
+        fs::write(
+            &admit_path,
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "idempotency_key": "v2-plan-durable-admit",
+  "expected_head_commit_id": "{}",
+  "expected_state_digest": "{}",
+  "goal": {{"mode":"create","description":"Durable v2 Goal"}},
+  "plan": {{"description":"Durable v2 Plan","strategy":"One journal protocol","constraints":[]}},
+  "tasks": [{{"local_id":"task","description":"Prove routed Plan state","acceptance_criteria":[{{"local_id":"ac","statement":"The receipt is durable","verification_requirements":[{{"local_id":"vr","statement":"Recovery converges"}}]}}]}}],
+  "records": [],
+  "evidence": [],
+  "rationale": {{"source":"v2-plan-routing-test"}}
+}}"#,
+                value(&head, "head_commit_id"),
+                value(&head, "state_digest")
+            ),
+        )
+        .unwrap();
+        let admit_command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "plan",
+                "admit",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--manifest",
+                &path_text(&admit_path),
+            ])
+            .unwrap()
+        };
+        let admit = run(admit_command()).expect("routed v2 plan admission");
+        assert_eq!(value(&admit, "admission_status"), "created");
+        assert_eq!(value(&admit, "durable_route"), "projectref_journal");
+        assert_eq!(value(&admit, "delivery_receipt"), "true");
+        let admit_capture_id = CaptureId::parse_canonical(&value(&admit, "capture_id")).unwrap();
+        let admit_status =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), admit_capture_id)
+                .unwrap();
+        assert_eq!(
+            value(&admit_status, "effective_recovery_state"),
+            "completed"
+        );
+        assert_eq!(value(&admit_status, "payload_kind"), "plan_admit_v1");
+        assert_eq!(value(&admit_status, "delivery_receipt"), "true");
+
+        let recall = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "retrospective",
+            "--budget-items",
+            "20",
+        ])
+        .unwrap())
+        .expect("recall routed Plan state");
+        assert!(recall.contains("category=goal"));
+        assert!(recall.contains("category=plan"));
+        assert!(recall.contains("category=task"));
+
+        let store_after_admit = cli_sqlite_file_snapshots(&fixture.store_path);
+        let replay = run(admit_command()).expect("idempotent routed Plan replay");
+        assert_eq!(value(&replay, "admission_status"), "reused");
+        assert_eq!(value(&replay, "commit_id"), value(&admit, "commit_id"));
+        assert_eq!(value(&replay, "capture_id"), value(&admit, "capture_id"));
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_after_admit,
+            "rendering an existing durable receipt must use the read-only result path"
+        );
+
+        let evolve_path = fixture._tempdir.path().join("v2-plan-evolve.json");
+        fs::write(
+            &evolve_path,
+            format!(
+                r#"{{
+  "mode":"in_place",
+  "schema_version":1,
+  "idempotency_key":"v2-plan-durable-evolve",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "target_plan_entity_id":"{}",
+  "expected_plan_entity_version_id":"{}",
+  "expected_plan_state_digest":"{}",
+  "plan":{{"strategy":"One journal protocol, evolved"}},
+  "tasks":[],"records":[],"evidence":[],
+  "rationale":{{"source":"v2-plan-routing-test"}}
+}}"#,
+                value(&admit, "commit_id"),
+                value(&admit, "work_state_digest"),
+                value(&admit, "plan_entity_id"),
+                value(&admit, "plan_entity_version_id"),
+                value(&admit, "plan_state_digest")
+            ),
+        )
+        .unwrap();
+        let evolve = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&evolve_path),
+        ])
+        .unwrap())
+        .expect("routed v2 in-place evolution");
+        assert_eq!(value(&evolve, "evolution_status"), "created");
+        assert_eq!(value(&evolve, "durable_route"), "projectref_journal");
+        assert_eq!(value(&evolve, "delivery_receipt"), "true");
+        let evolve_status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&value(&evolve, "capture_id")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value(&evolve_status, "payload_kind"), "plan_evolve_v1");
+        assert_eq!(
+            value(&evolve_status, "effective_recovery_state"),
+            "completed"
+        );
+
+        let goal_id = value(&admit, "goal_entity_id");
+        let plan_id = value(&admit, "plan_entity_id");
+        let relation = {
+            let engine = Engine::open(&fixture.store_path).unwrap();
+            let commit_id = CommitId::parse_canonical(&value(&evolve, "commit_id")).unwrap();
+            let goal_id = EntityId::parse_canonical(&goal_id).unwrap();
+            let plan_id = EntityId::parse_canonical(&plan_id).unwrap();
+            engine
+                .primary_containment_relations_at(commit_id)
+                .unwrap()
+                .into_iter()
+                .find(|relation| {
+                    relation.parent_entity_id == goal_id && relation.child_entity_id == plan_id
+                })
+                .unwrap()
+        };
+        let supersede_path = fixture._tempdir.path().join("v2-plan-supersede.json");
+        fs::write(
+            &supersede_path,
+            format!(
+                r#"{{
+  "mode":"supersede",
+  "schema_version":1,
+  "idempotency_key":"v2-plan-durable-supersede",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "target_plan_entity_id":"{}",
+  "expected_plan_entity_version_id":"{}",
+  "expected_plan_state_digest":"{}",
+  "expected_goal_entity_id":"{}",
+  "expected_goal_entity_version_id":"{}",
+  "expected_goal_plan_relation_id":"{}",
+  "expected_goal_plan_relation_version_id":"{}",
+  "plan":{{"description":"Replacement v2 Plan","strategy":"Supersede through the same journal","constraints":{{"mode":"carry_all"}}}},
+  "tasks":[],"records":[],"evidence":[],
+  "rationale":{{"source":"v2-plan-routing-test"}}
+}}"#,
+                value(&evolve, "commit_id"),
+                value(&evolve, "work_state_digest"),
+                plan_id,
+                value(&evolve, "new_plan_entity_version_id"),
+                value(&evolve, "new_plan_state_digest"),
+                goal_id,
+                value(&admit, "goal_entity_version_id"),
+                relation.relation_id,
+                relation.relation_version_id
+            ),
+        )
+        .unwrap();
+        let supersede = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&supersede_path),
+        ])
+        .unwrap())
+        .expect("routed v2 supersede evolution");
+        assert_eq!(value(&supersede, "mode"), "supersede");
+        assert_eq!(value(&supersede, "evolution_status"), "created");
+        assert_ne!(value(&supersede, "new_plan_entity_id"), plan_id);
+        assert_eq!(value(&supersede, "delivery_receipt"), "true");
+    }
+
+    #[test]
+    fn cli_v2_plan_record_kind_alias_uses_canonical_receipt_shape() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest_path = fixture._tempdir.path().join("record-kind-alias.json");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"{{
+  "schema_version":1,
+  "idempotency_key":"v2-plan-record-kind-alias",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "goal":{{"mode":"create","description":"Alias Goal"}},
+  "plan":{{"description":"Alias Plan","strategy":"Normalize receipt kinds","constraints":[]}},
+  "tasks":[],
+  "records":[{{"local_id":"question","kind":"unknown","statement":"Canonicalize this alias","scope":{{}}}}],
+  "evidence":[],"rationale":{{"source":"test"}}
+}}"#,
+                value(&head, "head_commit_id"),
+                value(&head, "state_digest")
+            ),
+        )
+        .unwrap();
+
+        let command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "plan",
+                "admit",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--manifest",
+                &path_text(&manifest_path),
+            ])
+            .unwrap()
+        };
+        let admitted = run(command()).expect("record kind alias delivery");
+        assert_eq!(value(&admitted, "admission_status"), "created");
+        assert_eq!(value(&admitted, "record.0.kind"), "question");
+        assert_eq!(value(&admitted, "delivery_receipt"), "true");
+        let status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&value(&admitted, "capture_id")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value(&status, "effective_recovery_state"), "completed");
+
+        let store_after = cli_sqlite_file_snapshots(&fixture.store_path);
+        let replay = run(command()).expect("record kind alias replay");
+        assert_eq!(value(&replay, "admission_status"), "reused");
+        assert_eq!(value(&replay, "commit_id"), value(&admitted, "commit_id"));
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_after);
+
+        let evolve_path = fixture
+            ._tempdir
+            .path()
+            .join("record-kind-alias-evolve.json");
+        fs::write(
+            &evolve_path,
+            format!(
+                r#"{{
+  "mode":"in_place",
+  "schema_version":1,
+  "idempotency_key":"v2-plan-record-kind-alias-evolve",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "target_plan_entity_id":"{}",
+  "expected_plan_entity_version_id":"{}",
+  "expected_plan_state_digest":"{}",
+  "plan":{{"strategy":"Normalize evolution receipt kinds"}},
+  "tasks":[],
+  "records":[{{"local_id":"evolved-question","kind":"unknown","statement":"Canonicalize this evolution alias","scope":{{}}}}],
+  "evidence":[],"rationale":{{"source":"test"}}
+}}"#,
+                value(&admitted, "commit_id"),
+                value(&admitted, "work_state_digest"),
+                value(&admitted, "plan_entity_id"),
+                value(&admitted, "plan_entity_version_id"),
+                value(&admitted, "plan_state_digest")
+            ),
+        )
+        .unwrap();
+        let evolve_command = || {
+            Cli::try_parse_from([
+                "workvcs",
+                "plan",
+                "evolve",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--manifest",
+                &path_text(&evolve_path),
+            ])
+            .unwrap()
+        };
+        let evolved = run(evolve_command()).expect("evolution record kind alias delivery");
+        assert_eq!(value(&evolved, "evolution_status"), "created");
+        assert_eq!(value(&evolved, "record.0.kind"), "question");
+        assert_eq!(value(&evolved, "delivery_receipt"), "true");
+        let evolve_status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&value(&evolved, "capture_id")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            value(&evolve_status, "effective_recovery_state"),
+            "completed"
+        );
+        let store_after_evolve = cli_sqlite_file_snapshots(&fixture.store_path);
+        let evolve_replay = run(evolve_command()).expect("evolution record alias replay");
+        assert_eq!(value(&evolve_replay, "evolution_status"), "reused");
+        assert_eq!(
+            value(&evolve_replay, "commit_id"),
+            value(&evolved, "commit_id")
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_after_evolve
+        );
+    }
+
+    #[test]
+    fn cli_v2_plan_commit_before_receipt_recovers_by_idempotent_replay() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest = minimal_admit_manifest(
+            &value(&head, "head_commit_id"),
+            &value(&head, "state_digest"),
+            "v2-plan-commit-before-receipt",
+        );
+        let manifest_path = fixture._tempdir.path().join("commit-before-receipt.json");
+        fs::write(&manifest_path, &manifest).unwrap();
+
+        let interrupted = try_routed_plan_delivery_with_fault(
+            PathBuf::from(&fixture.project_text),
+            Some(fixture.registry_path.clone()),
+            CapturePayloadKind::PlanAdmitV1,
+            JournalAdmissionCapability::PlanAdmit,
+            "v2-plan-commit-before-receipt",
+            manifest.as_bytes(),
+            Some(CaptureRecoveryFault::TargetCommit),
+        )
+        .expect_err("target commit fault must be indeterminate");
+        assert_eq!(
+            interrupted.code().as_str(),
+            "capture_recovery_install_indeterminate"
+        );
+
+        let recovered = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .unwrap())
+        .expect("same Plan command recovers missing receipt");
+        assert_eq!(value(&recovered, "admission_status"), "reused");
+        assert_eq!(value(&recovered, "delivery_receipt"), "true");
+        let status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&value(&recovered, "capture_id")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value(&status, "effective_recovery_state"), "completed");
+        assert_eq!(value(&status, "delivery_receipt"), "true");
+    }
+
+    #[test]
+    fn cli_v2_plan_retry_after_delivery_started_reports_created_target() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest = minimal_admit_manifest(
+            &value(&head, "head_commit_id"),
+            &value(&head, "state_digest"),
+            "v2-plan-started-before-target",
+        );
+        let manifest_path = fixture._tempdir.path().join("started-before-target.json");
+        fs::write(&manifest_path, &manifest).unwrap();
+
+        let interrupted = try_routed_plan_delivery_with_fault(
+            PathBuf::from(&fixture.project_text),
+            Some(fixture.registry_path.clone()),
+            CapturePayloadKind::PlanAdmitV1,
+            JournalAdmissionCapability::PlanAdmit,
+            "v2-plan-started-before-target",
+            manifest.as_bytes(),
+            Some(CaptureRecoveryFault::DeliveryStarted),
+        )
+        .expect_err("delivery_started fault must be indeterminate");
+        assert_eq!(
+            interrupted.code().as_str(),
+            "capture_recovery_install_indeterminate"
+        );
+
+        let recovered = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .unwrap())
+        .expect("same Plan command completes the previously admitted target");
+        assert_eq!(value(&recovered, "journal_admission_reused"), "true");
+        assert_eq!(value(&recovered, "admission_status"), "created");
+        assert_eq!(value(&recovered, "delivery_receipt"), "true");
+
+        let engine = open_verified_store(&fixture.store_path).unwrap();
+        let history = engine
+            .history(HistoryQueryOptions::from_branch(
+                BranchId::parse_canonical(&fixture.branch).unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            history.entries.len(),
+            2,
+            "retry must create exactly one target Plan commit"
+        );
+    }
+
+    #[test]
+    fn cli_v2_plan_conflict_is_journaled_without_store_write() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        let initial_head = value(&head, "head_commit_id");
+        let initial_state = value(&head, "state_digest");
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+
+        let stale_path = fixture._tempdir.path().join("v2-stale-plan-admit.json");
+        fs::write(
+            &stale_path,
+            minimal_admit_manifest(
+                &initial_head,
+                &initial_state,
+                "v2-plan-stale-routed-conflict",
+            ),
+        )
+        .unwrap();
+        let advance_path = fixture._tempdir.path().join("v2-plan-advance.json");
+        fs::write(
+            &advance_path,
+            minimal_admit_manifest(&initial_head, &initial_state, "v2-plan-direct-advance"),
+        )
+        .unwrap();
+        let advanced = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&advance_path),
+        ])
+        .unwrap())
+        .expect("advance the Store after the routed manifest basis was captured");
+        let store_before_conflict = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let conflict = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&stale_path),
+        ])
+        .unwrap())
+        .expect_err("stale routed Plan admission must preserve the target Store");
+        assert_eq!(conflict.code().as_str(), "control_plane_invalid");
+        assert!(conflict.to_string().contains("plan_target_conflict"));
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_before_conflict
+        );
+        let current = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        assert_eq!(
+            value(&current, "head_commit_id"),
+            value(&advanced, "commit_id")
+        );
+
+        let intents = PathBuf::from(format!("{}.d", fixture.registry_path.display()))
+            .join("capture-journal/v1/intents");
+        let intent_names = directory_entry_names(&intents);
+        assert_eq!(intent_names.len(), 1);
+        let intent = fs::read_to_string(intents.join(&intent_names[0])).unwrap();
+        assert!(intent.contains("\"payload_kind\":\"plan_admit_v1\""));
+        let capture_id = CaptureId::parse_canonical(
+            Path::new(&intent_names[0])
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let status =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .unwrap();
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "plan_target_conflict"
+        );
+        assert_eq!(
+            value(&status, "delivery_failure_code"),
+            "plan_target_conflict"
+        );
+        assert_eq!(
+            value(&status, "recovery_action"),
+            "start_new_plan_operation_with_current_guards"
+        );
+
+        let journal = CaptureJournal::for_project_registry(
+            &fs::canonicalize(&fixture.registry_path).unwrap(),
+            ProjectRegistryJournalAlias::RegistrySidecar,
+        )
+        .unwrap();
+        let intent = journal.load(capture_id).unwrap();
+        let terminal_projection = journal.inspect_projection(capture_id).unwrap();
+        let started = terminal_projection
+            .projection()
+            .delivery_started()
+            .expect("terminal Plan attempt retains delivery_started")
+            .clone();
+        let replacement_failure = DeliveryFailedPayload::new(
+            started.delivery_id(),
+            started.project_ref_id(),
+            started.store_id(),
+            started.workspace_id(),
+            started.branch_id(),
+            DeliveryFailureCode::PlanManifestRejected,
+            DeliveryFailureCode::PlanManifestRejected.recovery_action(),
+        )
+        .unwrap();
+        let replacement_failure_error = journal
+            .append_event_authority_only(
+                capture_id,
+                UtcTimestamp::now().unwrap(),
+                CaptureEventPayload::DeliveryFailed(replacement_failure),
+            )
+            .expect_err("a different failure cannot replace the terminal target conflict");
+        assert!(
+            replacement_failure_error
+                .to_string()
+                .contains("cannot replace a terminal delivery_failed")
+        );
+        let replacement_receipt = build_plan_delivery_receipt_preflight(&intent, &started).unwrap();
+        let replacement_receipt_error = journal
+            .append_event_authority_only(
+                capture_id,
+                UtcTimestamp::now().unwrap(),
+                CaptureEventPayload::DeliveryApplied(replacement_receipt),
+            )
+            .expect_err("a receipt cannot replace the terminal target conflict");
+        assert!(
+            replacement_receipt_error
+                .to_string()
+                .contains("cannot replace a terminal delivery_failed")
+        );
+        let unchanged_status =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .unwrap();
+        assert_eq!(value(&unchanged_status, "events"), value(&status, "events"));
+        assert_eq!(
+            value(&unchanged_status, "delivery_failure_code"),
+            "plan_target_conflict"
+        );
+    }
+
+    #[test]
+    fn cli_v2_plan_wrong_entity_kinds_are_terminal_target_conflicts() {
+        let fixture = create_project_binding_fixture(false);
+        let initial_head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        let seed_path = fixture._tempdir.path().join("wrong-kind-seed.json");
+        fs::write(
+            &seed_path,
+            minimal_admit_manifest(
+                &value(&initial_head, "head_commit_id"),
+                &value(&initial_head, "state_digest"),
+                "v2-plan-wrong-kind-seed",
+            ),
+        )
+        .unwrap();
+        let seed = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--manifest",
+            &path_text(&seed_path),
+        ])
+        .unwrap())
+        .expect("seed Goal and Plan");
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let wrong_goal_path = fixture._tempdir.path().join("wrong-goal-kind.json");
+        fs::write(
+            &wrong_goal_path,
+            format!(
+                r#"{{
+  "schema_version":1,
+  "idempotency_key":"v2-plan-existing-goal-wrong-kind",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "goal":{{"mode":"existing","entity_id":"{}","expected_entity_version_id":"{}"}},
+  "plan":{{"description":"Must not be created","strategy":"Wrong-kind Goal guard","constraints":[]}},
+  "tasks":[],"records":[],"evidence":[],"rationale":{{"source":"test"}}
+}}"#,
+                value(&seed, "commit_id"),
+                value(&seed, "work_state_digest"),
+                value(&seed, "plan_entity_id"),
+                value(&seed, "plan_entity_version_id")
+            ),
+        )
+        .unwrap();
+        let wrong_goal = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&wrong_goal_path),
+        ])
+        .unwrap())
+        .expect_err("a Plan entity cannot satisfy an existing Goal guard");
+        assert!(wrong_goal.to_string().contains("plan_target_conflict"));
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let wrong_plan_path = fixture._tempdir.path().join("wrong-plan-kind.json");
+        fs::write(
+            &wrong_plan_path,
+            format!(
+                r#"{{
+  "mode":"in_place",
+  "schema_version":1,
+  "idempotency_key":"v2-plan-target-wrong-kind",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "target_plan_entity_id":"{}",
+  "expected_plan_entity_version_id":"{}",
+  "expected_plan_state_digest":"{}",
+  "plan":{{"strategy":"Must not evolve a Goal"}},
+  "tasks":[],"records":[],"evidence":[],"rationale":{{"source":"test"}}
+}}"#,
+                value(&seed, "commit_id"),
+                value(&seed, "work_state_digest"),
+                value(&seed, "goal_entity_id"),
+                value(&seed, "goal_entity_version_id"),
+                value(&seed, "plan_state_digest")
+            ),
+        )
+        .unwrap();
+        let wrong_plan = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&wrong_plan_path),
+        ])
+        .unwrap())
+        .expect_err("a Goal entity cannot satisfy a target Plan guard");
+        assert!(wrong_plan.to_string().contains("plan_target_conflict"));
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let intents = PathBuf::from(format!("{}.d", fixture.registry_path.display()))
+            .join("capture-journal/v1/intents");
+        let capture_for = |idempotency_key: &str| {
+            directory_entry_names(&intents)
+                .into_iter()
+                .find_map(|name| {
+                    let path = intents.join(&name);
+                    fs::read_to_string(path)
+                        .unwrap()
+                        .contains(idempotency_key)
+                        .then(|| {
+                            CaptureId::parse_canonical(
+                                Path::new(&name).file_stem().unwrap().to_str().unwrap(),
+                            )
+                            .unwrap()
+                        })
+                })
+                .expect("capture intent for wrong-kind operation")
+        };
+        for key in [
+            "v2-plan-existing-goal-wrong-kind",
+            "v2-plan-target-wrong-kind",
+        ] {
+            let status = inspect_project_capture_recovery(
+                Some(fixture.registry_path.clone()),
+                capture_for(key),
+            )
+            .unwrap();
+            assert_eq!(
+                value(&status, "effective_recovery_state"),
+                "plan_target_conflict"
+            );
+            assert_eq!(
+                value(&status, "delivery_failure_code"),
+                "plan_target_conflict"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_v2_plan_validation_failure_is_terminal_without_store_write() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest_path = fixture._tempdir.path().join("v2-invalid-plan-admit.json");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"{{
+  "schema_version":1,
+  "idempotency_key":"v2-plan-validation-failure",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "goal":{{"mode":"create","description":"Validation Goal"}},
+  "plan":{{"description":"Validation Plan","strategy":"Reject invalid record kind before receipt construction","constraints":[]}},
+  "tasks":[],
+  "records":[{{"local_id":"invalid-record","kind":"","statement":"must terminate cleanly","scope":{{}}}}],
+  "evidence":[],"rationale":{{"source":"test"}}
+}}"#,
+                value(&head, "head_commit_id"),
+                value(&head, "state_digest")
+            ),
+        )
+        .unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let rejected = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .unwrap())
+        .expect_err("deterministic Plan validation failure must be terminalized");
+        assert_eq!(rejected.code().as_str(), "control_plane_invalid");
+        assert!(rejected.to_string().contains("plan_manifest_rejected"));
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let intents = PathBuf::from(format!("{}.d", fixture.registry_path.display()))
+            .join("capture-journal/v1/intents");
+        let intent_names = directory_entry_names(&intents);
+        assert_eq!(intent_names.len(), 1);
+        let capture_id = CaptureId::parse_canonical(
+            Path::new(&intent_names[0])
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let status =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .unwrap();
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "plan_manifest_rejected"
+        );
+        assert_eq!(
+            value(&status, "delivery_failure_code"),
+            "plan_manifest_rejected"
+        );
+    }
+
+    #[test]
+    fn cli_v2_plan_receipt_size_is_preflighted_before_store_write() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let requirements = (0..700)
+            .map(|index| format!(r#"{{"local_id":"vr-{index}","statement":"x"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let manifest_path = fixture._tempdir.path().join("v2-large-plan-receipt.json");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"{{
+  "schema_version":1,
+  "idempotency_key":"v2-plan-receipt-preflight",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "goal":{{"mode":"create","description":"Receipt Budget Goal"}},
+  "plan":{{"description":"Receipt Budget Plan","strategy":"Preflight before commit","constraints":[]}},
+  "tasks":[{{
+    "local_id":"task",
+    "description":"Produce many receipt objects",
+    "acceptance_criteria":[{{
+      "local_id":"criterion",
+      "statement":"Every requirement has a receipt object",
+      "verification_requirements":[{requirements}]
+    }}]
+  }}],
+  "records":[],"evidence":[],"rationale":{{"source":"test"}}
+}}"#,
+                value(&head, "head_commit_id"),
+                value(&head, "state_digest")
+            ),
+        )
+        .unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let rejected = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .unwrap())
+        .expect_err("oversized future receipt must fail before the Plan Store commit");
+        assert_eq!(rejected.code().as_str(), "control_plane_invalid");
+        assert!(rejected.to_string().contains("plan_receipt_too_large"));
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let intents = PathBuf::from(format!("{}.d", fixture.registry_path.display()))
+            .join("capture-journal/v1/intents");
+        let intent_names = directory_entry_names(&intents);
+        assert_eq!(intent_names.len(), 1);
+        let capture_id = CaptureId::parse_canonical(
+            Path::new(&intent_names[0])
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let status =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .unwrap();
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "plan_receipt_too_large"
+        );
+        assert_eq!(
+            value(&status, "delivery_failure_code"),
+            "plan_receipt_too_large"
+        );
+        assert_eq!(
+            value(&status, "recovery_action"),
+            "start_new_plan_operation_with_smaller_manifest"
+        );
+    }
+
+    #[test]
+    fn legacy_journal_marker_requires_explicit_same_snapshot_plan_capability_refresh() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let read_preview =
+            preview_project_routing_activation(Some(fixture.registry_path.clone())).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&read_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&read_preview, "candidate_digest")).unwrap(),
+        )
+        .unwrap();
+
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&fixture.registry_path).unwrap()).unwrap();
+        let candidate = JournalAdmissionActivationCandidate::for_registry(&registry).unwrap();
+        let mut legacy_value: serde_json::Value =
+            serde_json::from_slice(&candidate.canonical_json_bytes().unwrap()).unwrap();
+        legacy_value["activation_version"] = serde_json::json!(1);
+        legacy_value.as_object_mut().unwrap().remove("capabilities");
+        let legacy = JournalAdmissionActivationCandidate::from_json_bytes(
+            &serde_json::to_vec(&legacy_value).unwrap(),
+        )
+        .unwrap();
+        let preview =
+            preview_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .unwrap();
+        let marker_path = PathBuf::from(value(&preview, "activation_path"));
+        fs::create_dir_all(marker_path.parent().unwrap()).unwrap();
+        fs::write(&marker_path, legacy.stored_json_bytes().unwrap()).unwrap();
+
+        let status =
+            inspect_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .unwrap();
+        assert_eq!(value(&status, "activation_state"), "active");
+        assert_eq!(value(&status, "activation_version"), "1");
+        assert_eq!(value(&status, "cognition_capture_active"), "true");
+        assert_eq!(value(&status, "plan_admit_active"), "false");
+        let manifest_path = fixture._tempdir.path().join("legacy-marker-plan.json");
+        fs::write(
+            &manifest_path,
+            minimal_admit_manifest(
+                &value(&head, "head_commit_id"),
+                &value(&head, "state_digest"),
+                "legacy-marker-plan",
+            ),
+        )
+        .unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let blocked = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .unwrap())
+        .expect_err("legacy marker must not silently authorize Plan");
+        assert!(
+            blocked
+                .to_string()
+                .contains("does not authorize capability plan_admit")
+        );
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let refreshed = apply_project_journal_admission_activation_refresh(
+            Some(fixture.registry_path.clone()),
+            registry.digest().unwrap(),
+            candidate.digest().unwrap(),
+            legacy.digest().unwrap(),
+        )
+        .expect("explicit same-snapshot capability refresh");
+        assert_eq!(value(&refreshed, "activation_version"), "2");
+        assert_eq!(value(&refreshed, "plan_admit_active"), "true");
+        assert_eq!(value(&refreshed, "plan_evolve_active"), "true");
+        assert_eq!(value(&refreshed, "activation_written"), "true");
+
+        let admitted = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .unwrap())
+        .expect("Plan works only after explicit capability refresh");
+        assert_eq!(value(&admitted, "admission_status"), "created");
+        assert_eq!(value(&admitted, "delivery_receipt"), "true");
+    }
+
+    #[test]
     fn cli_v2_cwd_durable_write_matrix_fails_closed_without_registry_or_store_changes() {
         run_cli_test_with_large_stack(
             "cli-v2-cwd-durable-write-rejection-matrix-test",
@@ -66772,36 +68375,34 @@ mod tests {
         .expect("parse rejected capture"))
         .expect_err("capture must remain fail-closed while activation is absent");
         assert!(capture_error.to_string().contains("read routing"));
-        assert_rejected(
-            "plan admit must reject registry v2",
-            Cli::try_parse_from([
-                "workvcs",
-                "plan",
-                "admit",
-                "--cwd",
-                &fixture.project_text,
-                "--registry",
-                &fixture.registry,
-                "--manifest",
-                &path_text(&admit_path),
-            ])
-            .expect("parse rejected admit"),
-        );
-        assert_rejected(
-            "plan evolve must reject registry v2",
-            Cli::try_parse_from([
-                "workvcs",
-                "plan",
-                "evolve",
-                "--cwd",
-                &fixture.project_text,
-                "--registry",
-                &fixture.registry,
-                "--manifest",
-                &path_text(&evolve_path),
-            ])
-            .expect("parse rejected evolve"),
-        );
+        let plan_admit_error = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&admit_path),
+        ])
+        .expect("parse rejected admit"))
+        .expect_err("plan admit must fail closed before activation");
+        assert!(plan_admit_error.to_string().contains("read routing"));
+        let plan_evolve_error = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&evolve_path),
+        ])
+        .expect("parse rejected evolve"))
+        .expect_err("plan evolve must fail closed before activation");
+        assert!(plan_evolve_error.to_string().contains("read routing"));
         assert_rejected(
             "receipt issue must reject registry v2",
             Cli::try_parse_from([

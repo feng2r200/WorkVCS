@@ -172,6 +172,11 @@ fn validate_utc_timestamp(value: &str) -> Result<()> {
             "timestamp fractional seconds must contain only digits".to_owned(),
         ));
     }
+    if bytes.len() > 20 && bytes[20..bytes.len() - 1].len() > 9 {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "timestamp fractional seconds must not exceed nanosecond precision".to_owned(),
+        ));
+    }
     let year = parse_decimal(&bytes[..4]);
     let month = parse_decimal(&bytes[5..7]);
     let day = parse_decimal(&bytes[8..10]);

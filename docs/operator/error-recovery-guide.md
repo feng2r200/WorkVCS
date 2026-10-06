@@ -1,6 +1,6 @@
 # WorkVCS Error Recovery Guide
 
-Status: Current V1-local guidance with ADR-0513 migration and capture-recovery candidates
+Status: Current V1-local and ProjectRef-v2 durable-operation recovery guidance
 Last updated: 2026-09-27
 
 This guide covers the stable error fields emitted by the current CLI. It is
@@ -107,19 +107,25 @@ journal-quiescence lock; disable therefore excludes new admissions before
 removing the marker. Never delete or hand-edit this marker. A malformed,
 wrong-scope, or symlinked marker is fail-closed. A stale marker can be refreshed
 only with the exact installed marker digest when it is an earlier revision of
-the same registry lineage; all other stale states remain fail-closed. A failed post-install
+the same registry lineage. One narrower same-snapshot refresh is allowed: a
+version-1 cognition-only marker can become the version-2 strict capability
+superset when the registry identity, revision, and digest are unchanged and
+the exact installed marker digest is supplied. Capability removal, lateral
+replacement, or implicit broadening remains fail-closed. A failed post-install
 step uses `routing_activation_install_indeterminate`; inspect journal-admission
 status before retrying. A failed post-removal step uses
 `routing_activation_disable_indeterminate`; status must prove whether the
 marker is absent before any retry or recovery. Neither successful state change
 authorizes ProjectRef bootstrap or target Store delivery.
 
-`project capture-recovery --status --capture-id ID` is the read-only authority
-for one admitted capture's recovery state. It validates immutable events,
-rebuilds the projection in memory, compares any stored projection, and reports
-the current registry digest and exact next action. A malformed stored
-projection may be rebuilt from valid events; an invalid event sequence,
-payload digest, or digest chain is authority corruption and fails closed.
+`project capture-recovery --status --capture-id ID` is the compatibility-named
+read-only authority for one admitted durable operation. It reports the exact
+`payload_kind` (`cognition_v2`, `plan_admit_v1`, or `plan_evolve_v1`), validates
+immutable events, rebuilds the projection in memory, compares any stored
+projection, and reports the current registry digest and exact next action. A
+malformed stored projection may be rebuilt from valid events; an invalid event
+sequence, payload digest, or digest chain is authority corruption and fails
+closed.
 
 Recovery apply is a distinct, explicit operation requiring both the exact
 status-observed registry and projection digests. A stale guard fails before
@@ -128,18 +134,46 @@ projection install may already be durable. Do not delete an initialized Store,
 restore an older registry, or blindly replay. Run `--status` first and continue
 forward using fresh digests only if that observed action remains intended.
 For `pending_primary`, the explicit apply path records exact target guards,
-performs one idempotent semantic capture, and records its receipt. A failure
-after the Store commit but before the receipt is indeterminate: status still
-shows `pending_primary`, and retry must use the same capture so the Store
-returns the existing commit with `reused=true`. Do not delete or roll back that
-Store. `legacy_manifest_upgrade_required` means the retained v1 manifest did
+performs one idempotent typed target operation, and records its receipt. A
+failure after the Store commit but before the receipt is indeterminate: status
+still shows `pending_primary`, and retry must use the same CaptureId and
+original manifest idempotency key so the Store returns the existing commit
+with `reused=true`. Plan recovery must remain Plan recovery; it is never
+converted into cognition. Do not delete or roll back that Store.
+`legacy_manifest_upgrade_required` means the retained v1 manifest did
 not carry guards matching the selected Branch; preserve it and make a separate
 upgrade decision. `semantic_manifest_invalid` means a historical immutable
 intent failed deterministic cognition semantics before target mutation;
 preserve it and follow
 `recovery_action=start_new_capture_with_corrected_payload`. For example, a
 Handoff summarized from a Finding uses `Handoff --derived_from--> Finding`,
-not `Finding --supports--> Handoff`. `pending_references` preserves a
+not `Finding --supports--> Handoff`.
+
+Typed Plan recovery performs pure manifest validation, an explicit target-
+snapshot guard comparison, and receipt-size preflight using a fixed maximum-
+length timestamp envelope before its first Store write.
+Timestamps are capped at nanosecond precision. A proven manifest or target
+failure is written before receipt construction; an existing entity of the
+wrong Goal/Plan kind is `plan_target_conflict`, not a pending lookup error.
+`plan_receipt_too_large` therefore proves zero Store mutation; split the
+manifest and admit a new operation. The terminal states
+`plan_target_conflict` and `plan_manifest_rejected` likewise preserve the old
+intent for audit, but exist only for mismatches proved by that pre-write
+analysis. Do not replay those terminal captures. Engine execution, storage,
+integrity, transaction, control-plane, and uncertain post-commit failures are
+deliberately not terminalized from a generic error code; recover the same
+Capture ID from read-only status.
+
+A Plan `delivery_applied` receipt is valid only when its operation kind and
+complete result-object shape match the admitted manifest variant. After that
+receipt is durable, the public command renders the result through a read-only
+Store lookup and does not call the mutating Plan operation again.
+Plan record aliases are receipted under their canonical kind
+(`unknown` becomes `question`). Once a terminal `delivery_failed` exists for
+the attempt, neither another failure nor a receipt can replace it; preserve the
+Capture ID for audit and follow its recorded recovery action.
+
+`pending_references` preserves a
 successful primary while one or more immutable secondary references are
 missing. Retry from fresh
 status digests: the recovery path installs only missing reference events and

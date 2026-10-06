@@ -11,7 +11,9 @@ quickstart="$repo_root/docs/operator/quickstart-and-recovery.md"
 config_reference="$repo_root/skills/workvcs/references/configuration.md"
 capability_routing="$repo_root/skills/workvcs/references/capability-routing.md"
 semantics="$repo_root/skills/workvcs/references/semantics.md"
+checkpoint_delivery="$repo_root/skills/workvcs/references/checkpoint-delivery.md"
 cli_source="$repo_root/crates/workvcs-cli/src/main.rs"
+core_journal_source="$repo_root/crates/workvcs-core/src/control_plane/journal.rs"
 config_example="$repo_root/config.toml.example"
 readme="$repo_root/README.md"
 readme_zh="$repo_root/README.zh-CN.md"
@@ -31,12 +33,12 @@ extract_ids() {
 extract_ids "$contract" >"$tmp_dir/contract-ids"
 extract_ids "$ledger" >"$tmp_dir/ledger-ids"
 
-[[ "$(wc -l <"$tmp_dir/contract-ids" | tr -d ' ')" == "95" ]] || {
-    echo "acceptance contract does not contain exactly 95 matrix rows" >&2
+[[ "$(wc -l <"$tmp_dir/contract-ids" | tr -d ' ')" == "98" ]] || {
+    echo "acceptance contract does not contain exactly 98 matrix rows" >&2
     exit 1
 }
-[[ "$(wc -l <"$tmp_dir/ledger-ids" | tr -d ' ')" == "95" ]] || {
-    echo "acceptance ledger does not contain exactly 95 matrix rows" >&2
+[[ "$(wc -l <"$tmp_dir/ledger-ids" | tr -d ' ')" == "98" ]] || {
+    echo "acceptance ledger does not contain exactly 98 matrix rows" >&2
     exit 1
 }
 [[ -z "$(sort "$tmp_dir/contract-ids" | uniq -d)" ]] || {
@@ -82,8 +84,24 @@ grep -q '^## Agent 参与策略$' "$readme_zh"
 grep -q 'semantic_manifest_invalid' "$contract"
 grep -q 'C-26.*cli_v2_journal_admission_is_default_off_exactly_activated_and_store_free' "$ledger"
 grep -q 'C-27.*capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write' "$ledger"
+grep -q 'M-40.*cli_v2_plan_admit_and_evolve_use_one_durable_journal' "$ledger"
+grep -q 'M-41.*legacy_journal_marker_requires_explicit_same_snapshot_plan_capability_refresh' "$ledger"
+grep -q 'M-42.*cli_v2_plan_commit_before_receipt_recovers_by_idempotent_replay' "$ledger"
 grep -q 'fn capture_recovery_terminalizes_semantically_invalid_manifest_without_target_write' "$cli_source"
 grep -q 'fn capture_recovery_delivers_handoff_derived_from_finding' "$cli_source"
+grep -q 'fn cli_v2_plan_admit_and_evolve_use_one_durable_journal' "$cli_source"
+grep -q 'fn cli_v2_plan_commit_before_receipt_recovers_by_idempotent_replay' "$cli_source"
+grep -q 'fn cli_v2_plan_retry_after_delivery_started_reports_created_target' "$cli_source"
+grep -q 'fn cli_v2_plan_conflict_is_journaled_without_store_write' "$cli_source"
+grep -q 'fn cli_v2_plan_validation_failure_is_terminal_without_store_write' "$cli_source"
+grep -q 'fn cli_v2_plan_receipt_size_is_preflighted_before_store_write' "$cli_source"
+grep -q 'fn legacy_journal_marker_requires_explicit_same_snapshot_plan_capability_refresh' "$cli_source"
+grep -q 'fn capture_event_limit_accepts_limit_minus_one_and_limit_but_rejects_limit_plus_one' "$core_journal_source"
+grep -q 'fn typed_intents_reject_cross_family_receipts_and_failures' "$core_journal_source"
+grep -q 'plan_admit_v1' "$workflows"
+grep -q 'plan_evolve_v1' "$workflows"
+grep -q 'plan_receipt_too_large' "$workflows"
+grep -q '`payload_kind`' "$checkpoint_delivery"
 grep -q 'Finding --supports--> Handoff' "$semantics"
 
 if grep -R -i -n -E 'codex|chatgpt' "$repo_root/crates/workvcs-core/src/control_plane"; then
@@ -91,7 +109,7 @@ if grep -R -i -n -E 'codex|chatgpt' "$repo_root/crates/workvcs-core/src/control_
     exit 1
 fi
 
-echo "matrix_rows=95"
+echo "matrix_rows=98"
 echo "matrix_ids_exact=true"
 echo "matrix_statuses_valid=true"
 echo "round5_value_gate_and_no_record_policy_probe=passed"
@@ -101,4 +119,5 @@ echo "activation_refresh_contract_probe=passed"
 echo "control_plane_selection_fallback_probe=passed"
 echo "adapter_docs_aligned=true"
 echo "semantic_preflight_and_terminal_invalid_probe=passed"
+echo "typed_plan_durable_operation_probe=passed"
 echo "generic_core_tool_neutral=true"

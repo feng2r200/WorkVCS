@@ -230,8 +230,9 @@ The accepted target includes:
   namespaces; the first concrete CLI integration handles verified desktop
   Project metadata/mirror evidence without making ChatGPT or Codex a core
   dependency;
-- an external write-ahead capture journal under the effective WorkVCS control
-  plane, admitted only after the value gate and before target Store writes;
+- an external write-ahead durable-operation journal under the effective
+  WorkVCS control plane, admitted before registry-v2 routed target Store
+  writes while retaining the compatible `capture-journal/v1` layout;
 - one canonical mutable Record per cross-project CaptureGroup, immutable
   secondary control-plane references, and separately derived local Records
   only when a project needs its own conclusion;
@@ -254,6 +255,25 @@ rejects caller target guards, optionally accepts a strict CaptureGroup, and
 performs no ProjectRef bootstrap or target Store write. The complete
 CaptureGroup value is part of admission idempotency identity. A value-qualified
 registry-v1 capture retains `legacy_cognition_v1` for migration visibility.
+
+Registry-v2 `plan admit --cwd` and `plan evolve --cwd` use that same durable
+operation protocol with `plan_admit_v1` and `plan_evolve_v1` payloads. They do
+not encode Plan as cognition and do not create a second queue. The explicit
+Plan command durably admits the typed intent, performs the existing atomic
+Store mutation, and returns only after a matching receipt is durable. A target
+commit whose receipt is interrupted converges through the same idempotency and
+recovery state machine. Explicit `STORE --branch` and registry-v1 compatibility
+paths retain their direct behavior.
+The typed event chain prevents cognition and Plan result/failure families from
+being interchanged. Pre-write Plan terminal states are limited to pure
+manifest rejection, explicit current-snapshot guard conflict, and a receipt
+that exceeds the fixed maximum-envelope byte limit; engine, storage,
+integrity, transaction, and uncertain post-commit errors remain recoverable.
+
+Journal-admission marker version 2 declares separate `cognition_capture`,
+`plan_admit`, and `plan_evolve` capabilities. A version-1 marker remains valid
+for cognition only; enabling Plan requires an explicit digest-locked strict
+capability-superset refresh for the same registry snapshot.
 
 Separately explicit recovery uses immutable events, rebuildable projections,
 fresh status digests, and exact target guards. It can converge one unbound

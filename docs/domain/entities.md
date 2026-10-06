@@ -34,8 +34,9 @@ control-plane objects:
   with semantic Project, Git common-directory, and CWD authority classes;
 - **ProjectBinding:** the one current Store/Workspace/Branch target used by a
   routable ProjectRef;
-- **CaptureIntent and CaptureEvent:** immutable journal objects that preserve a
-  bounded semantic capture before target delivery and record recovery;
+- **CaptureIntent and CaptureEvent:** compatibility-named immutable journal
+  objects that preserve a bounded typed durable operation before registry-v2
+  target delivery and record recovery;
 - **CaptureGroup:** control-plane association with one primary ProjectRef, one
   canonical Record reference, and related project members; and
 - **immutable secondary reference:** a ProjectRef-keyed control-plane index
@@ -53,7 +54,10 @@ plane. A known WorkVCS home is the root; registry-only configuration uses the
 deterministic `<canonical-registry-path>.d` sidecar. Per-project Stores remain
 separate semantic authorities. Registry, journal, and Store state do not form
 one transaction; delivery converges through immutable intent, idempotency, and
-receipts.
+receipts. `cognition_v2`, `plan_admit_v1`, and `plan_evolve_v1` are distinct
+payload kinds in one physical protocol. Goal, Plan, Task, Acceptance Criterion,
+and Verification Requirement remain Store-local Work-State entities; the
+journal never becomes their second semantic authority.
 
 The core contains the registry v2, locator, binding, link, observation,
 CaptureIntent, CaptureGroup, and resolution model from ADR-0513. The installed
@@ -89,12 +93,16 @@ Store/Workspace/Branch binding and no semantic Work-State objects; discovery
 remains read-only.
 P0-2a `plan admit` is implemented as one atomic, idempotent transition from a
 manifest. Its target is `STORE` plus `--branch`, or `--cwd` plus the bound
-branch; expected head/state and idempotency are manifest fields. The manifest
-may carry prior findings, decisions, questions, constraints, and evidence.
+branch; expected head/state and idempotency are manifest fields. Under registry
+v2 the cwd form first persists `plan_admit_v1` in the shared durable-operation
+journal and returns only after the Store result has a matching receipt. The
+manifest may carry prior findings, decisions, questions, constraints, and
+evidence.
 P0-2b `plan evolve mode=in_place` is implemented as one atomic, idempotent
-transition. It updates only explicit Plan fields, preserves omitted fields,
-and appends Tasks with AC/VR, Records, and Evidence without implicit deletion
-or replacement. P0-2b2 `mode=supersede` is current: the old active Plan becomes
+transition. Under registry v2 the cwd form uses `plan_evolve_v1` in the same
+journal and receipt path. It updates only explicit Plan fields, preserves
+omitted fields, and appends Tasks with AC/VR, Records, and Evidence without
+implicit deletion or replacement. P0-2b2 `mode=supersede` is current: the old active Plan becomes
 superseded, a new Plan becomes active under the same Goal, both `contains`
 relations remain, and `new_plan→old_plan` is a machine `supersedes` relation.
 Constraints require explicit `carry_all` or `replace`; old Tasks, Records, and

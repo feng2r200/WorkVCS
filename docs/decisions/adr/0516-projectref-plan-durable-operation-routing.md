@@ -1,6 +1,6 @@
 # ADR-0516: ProjectRef Plan Durable-Operation Routing
 
-Status: Accepted and implemented; isolated acceptance complete, local adoption pending
+Status: Accepted, implemented, independently reviewed, and locally adopted
 Date: 2026-10-06
 
 ## Context
@@ -173,4 +173,6 @@ result projection, and durable terminalization of explicitly proven stale
 guards plus pure manifest validation errors.
 Existing cognition, CaptureGroup, registry migration, activation fault, direct
 Plan, and Plan conflict suites remain regression gates. Full repository
-validation and local adoption evidence are recorded separately.
+validation and local adoption evidence, including the exact package, marker
+refresh, and live routed admission/evolution receipts, are recorded in
+[`projectref-plan-durable-operation-routing.md`](../../provenance/projectref-plan-durable-operation-routing.md).

@@ -1,7 +1,7 @@
 # Phase 5I Integrity Replay Performance Evidence
 
 Date: 2026-10-06
-Status: source implementation and local validation complete; installation not performed
+Status: source implementation, exact CI, and local installation complete
 
 ## Problem
 
@@ -104,12 +104,30 @@ On the shared Store, the new `handoff` profile was 0.44 s median across three
 runs; `retrospective` was 0.45 s median. On the HXAP Store, both profiles were
 0.76 s median. No old-profile comparison was recorded for those four cases.
 
-## Delivery and remaining boundary
+## Delivery and adopted artifact
 
-This phase updates source, tests, and project documentation. It does not install
-the new binary or Skill, change the active registry or Store format, migrate
-live data, create a release or tag, or deploy anything. Adoption must separately
-verify the exact installed artifact if and when installation is authorized.
+The performance source commit is
+`04100dfe110011179ae88a8b42b2a398ffe85142`. It was pushed to `main`, and exact
+[CI run 37472069961](https://github.com/feng2r200/WorkVCS/actions/runs/37472069961)
+completed successfully. The official packaging workflow later installed the
+clean descendant commit `501bb343651b1a3dd3ea649b8b446bc8f237513e`, which
+contains this performance fix together with ProjectRef durable Plan routing.
+
+The installed binary at `/Users/ld/.local/bin/workvcs` has SHA-256
+`b35f54a4abd587aa388ae4aa18c3314413ab030f7694388bed8e4a7c6ed8b386`.
+The installed WorkVCS Skill tree has SHA-256
+`11f658a0fe940e7dd2b1de5c04812832d665e7b67f4d99fe83240772ee60b414`.
+The package manifest identifies the exact clean source HEAD and both installed
+digests.
+
+As a bounded post-install observation on the same maintained WorkVCS Store, a
+completed `capture-recovery --status` call took about 0.2 seconds after
+installation; the immediately preceding pre-install calls in the same adoption
+session took about 12.5 to 13.0 seconds. This is a one-session operational
+confirmation, not a portable benchmark or a new asymptotic claim.
+
+No Store format or registry migration, release, tag, or deployment was part of
+this adoption.
 
 The main residual performance risk is histories whose Work-State grows at most
 commits: the request cache retains replayed states for the duration of one

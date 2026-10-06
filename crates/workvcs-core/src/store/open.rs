@@ -1739,6 +1739,15 @@ impl Store {
         history::goals_at(&self.connection, commit_id)
     }
 
+    pub(crate) fn semantic_snapshot(
+        &self,
+        options: &history::SemanticSnapshotOptions,
+    ) -> Result<history::SemanticSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::semantic_snapshot(&self.connection, options)
+    }
+
     pub(crate) fn acceptance_criterion_at(
         &self,
         commit_id: CommitId,

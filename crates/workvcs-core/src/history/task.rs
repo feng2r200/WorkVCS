@@ -8,7 +8,10 @@ use super::knowledge::KNOWLEDGE_ENTITY_KIND;
 use super::plan::PLAN_ENTITY_KIND;
 use super::record::RECORD_ENTITY_KIND;
 use super::resource::{resource, resource_observation};
-use super::{EntityTransitionOptions, branch_head, commit_entity_transition, state_at};
+use super::{
+    EntityTransitionOptions, ReplayCache, branch_head, commit_entity_transition, state_at,
+    state_at_with_cache,
+};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, entity_version_digest, parse_canonical_json,
     relation_version_digest, validate_import_fixed_point, work_state_mapping_digest,
@@ -2151,7 +2154,15 @@ pub(crate) fn tasks_at(
     connection: &StoreConnection,
     commit_id: CommitId,
 ) -> Result<Vec<TaskSnapshot>> {
-    let replayed = state_at(connection, commit_id)?;
+    tasks_at_with_cache(connection, commit_id, &mut ReplayCache::default())
+}
+
+pub(crate) fn tasks_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    replay_cache: &mut ReplayCache,
+) -> Result<Vec<TaskSnapshot>> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut tasks = Vec::new();
 
     for (entity_id, entity_version_id) in replayed.state.entities() {

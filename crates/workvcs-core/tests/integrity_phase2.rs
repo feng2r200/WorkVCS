@@ -278,6 +278,32 @@ fn validate_integrity_rejects_commit_parent_shape_drift() {
 }
 
 #[test]
+fn validate_integrity_rejects_commit_parent_cycle_without_recursion() {
+    let (_tempdir, path) = store_path();
+    let (engine, _workspace, first, second) = create_two_transitions(&path);
+
+    let connection = raw_connection(&path);
+    connection
+        .execute(
+            "UPDATE commit_parent
+             SET parent_commit_id = ?1
+             WHERE commit_id = ?2 AND parent_ordinal = 0",
+            params![
+                &second.commit_id.raw_bytes()[..],
+                &first.commit_id.raw_bytes()[..]
+            ],
+        )
+        .expect("create commit parent cycle");
+    drop(connection);
+
+    assert_integrity_error(
+        engine
+            .validate_integrity()
+            .expect_err("commit parent cycle"),
+    );
+}
+
+#[test]
 fn validate_integrity_rejects_branch_head_workspace_shape_drift() {
     let (_tempdir, path) = store_path();
     let (engine, first_workspace, _first, second) = create_two_transitions(&path);

@@ -1,6 +1,11 @@
 use super::entity::{canonical_json_string, entity_transition_payload_json};
-use super::knowledge::{KNOWLEDGE_ENTITY_KIND, KnowledgeSnapshot, KnowledgeStatus, knowledge_at};
-use super::{EntityTransitionOptions, commit_entity_transition, state_at};
+use super::knowledge::{
+    KNOWLEDGE_ENTITY_KIND, KnowledgeSnapshot, KnowledgeStatus, knowledge_at,
+    knowledge_at_with_cache,
+};
+use super::{
+    EntityTransitionOptions, ReplayCache, commit_entity_transition, state_at, state_at_with_cache,
+};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, canonical_bytes, entity_version_digest,
     parse_canonical_json, relation_version_digest, validate_import_fixed_point,
@@ -3641,8 +3646,16 @@ pub(crate) fn records_at(
     connection: &StoreConnection,
     options: &RecordListOptions,
 ) -> Result<RecordListResult> {
+    records_at_with_cache(connection, options, &mut ReplayCache::default())
+}
+
+pub(crate) fn records_at_with_cache(
+    connection: &StoreConnection,
+    options: &RecordListOptions,
+    replay_cache: &mut ReplayCache,
+) -> Result<RecordListResult> {
     let commit_id = options.commit_id();
-    let replayed = state_at(connection, commit_id)?;
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut records = Vec::new();
 
     for (entity_id, entity_version_id) in replayed.state.entities() {
@@ -3818,8 +3831,16 @@ pub(crate) fn record_relations_at(
     connection: &StoreConnection,
     options: &RecordRelationListOptions,
 ) -> Result<RecordRelationListResult> {
+    record_relations_at_with_cache(connection, options, &mut ReplayCache::default())
+}
+
+pub(crate) fn record_relations_at_with_cache(
+    connection: &StoreConnection,
+    options: &RecordRelationListOptions,
+    replay_cache: &mut ReplayCache,
+) -> Result<RecordRelationListResult> {
     let commit_id = options.commit_id();
-    let replayed = state_at(connection, commit_id)?;
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut relations = Vec::new();
 
     for (relation_id, relation_version_id) in replayed.state.relations() {
@@ -3919,8 +3940,16 @@ pub(crate) fn record_knowledge_relations_at(
     connection: &StoreConnection,
     options: &RecordKnowledgeRelationListOptions,
 ) -> Result<RecordKnowledgeRelationListResult> {
+    record_knowledge_relations_at_with_cache(connection, options, &mut ReplayCache::default())
+}
+
+pub(crate) fn record_knowledge_relations_at_with_cache(
+    connection: &StoreConnection,
+    options: &RecordKnowledgeRelationListOptions,
+    replay_cache: &mut ReplayCache,
+) -> Result<RecordKnowledgeRelationListResult> {
     let commit_id = options.commit_id();
-    let replayed = state_at(connection, commit_id)?;
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut relations = Vec::new();
 
     for (relation_id, relation_version_id) in replayed.state.relations() {
@@ -3962,7 +3991,12 @@ pub(crate) fn record_knowledge_relations_at(
             &replayed.state,
             relation.source_record_entity_id,
         )?;
-        let target = knowledge_at(connection, commit_id, relation.target_knowledge_entity_id)?;
+        let target = knowledge_at_with_cache(
+            connection,
+            commit_id,
+            relation.target_knowledge_entity_id,
+            replay_cache,
+        )?;
         if target.workspace_id != replayed.workspace_id {
             return Err(WorkVcsError::RecordInvalid(format!(
                 "record knowledge relation target {} belongs to workspace {}, not {}",
@@ -4010,8 +4044,16 @@ pub(crate) fn knowledge_relations_at(
     connection: &StoreConnection,
     options: &KnowledgeRelationListOptions,
 ) -> Result<KnowledgeRelationListResult> {
+    knowledge_relations_at_with_cache(connection, options, &mut ReplayCache::default())
+}
+
+pub(crate) fn knowledge_relations_at_with_cache(
+    connection: &StoreConnection,
+    options: &KnowledgeRelationListOptions,
+    replay_cache: &mut ReplayCache,
+) -> Result<KnowledgeRelationListResult> {
     let commit_id = options.commit_id();
-    let replayed = state_at(connection, commit_id)?;
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut relations = Vec::new();
 
     for (relation_id, relation_version_id) in replayed.state.relations() {
@@ -4039,12 +4081,18 @@ pub(crate) fn knowledge_relations_at(
         {
             continue;
         }
-        let replacement = knowledge_at(
+        let replacement = knowledge_at_with_cache(
             connection,
             commit_id,
             relation.replacement_knowledge_entity_id,
+            replay_cache,
         )?;
-        let prior = knowledge_at(connection, commit_id, relation.prior_knowledge_entity_id)?;
+        let prior = knowledge_at_with_cache(
+            connection,
+            commit_id,
+            relation.prior_knowledge_entity_id,
+            replay_cache,
+        )?;
         if replacement.workspace_id != replayed.workspace_id
             || prior.workspace_id != replayed.workspace_id
         {

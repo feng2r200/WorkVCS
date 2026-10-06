@@ -81,9 +81,9 @@ use crate::history::{
     ResourceCreateResult, ResourceListOptions, ResourceListResult,
     ResourceObservationCreateOptions, ResourceObservationCreateResult,
     ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
-    ResourceSnapshot, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    ResourceSnapshot, SemanticSnapshot, SemanticSnapshotOptions, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskTransitionCommit, TaskTransitionOptions,
     VerificationApplicabilityCacheListOptions, VerificationApplicabilityCacheListResult,
     VerificationApplicabilityCacheSnapshot, VerificationApplicabilityRecordOptions,
@@ -891,6 +891,10 @@ impl Engine {
 
     pub fn goals_at(&self, commit_id: CommitId) -> Result<Vec<GoalSnapshot>> {
         self.store.goals_at(commit_id)
+    }
+
+    pub fn semantic_snapshot(&self, options: SemanticSnapshotOptions) -> Result<SemanticSnapshot> {
+        self.store.semantic_snapshot(&options)
     }
 
     pub fn record_at(

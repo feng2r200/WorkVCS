@@ -38,7 +38,7 @@ use crate::identity::{
 };
 use crate::store::StoreConnection;
 use rusqlite::{OptionalExtension, Params, params};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const GENESIS_OPERATION_SCHEMA_VERSION: i64 = 1;
 const GENESIS_OPERATION_TYPE: &str = "workspace.genesis";
@@ -67,30 +67,167 @@ pub struct ReplayedState {
 }
 
 pub(crate) fn state_at(connection: &StoreConnection, commit_id: CommitId) -> Result<ReplayedState> {
-    state_at_inner(connection, commit_id, &mut HashSet::new())
+    state_at_with_cache(connection, commit_id, &mut ReplayCache::default())
 }
 
-fn state_at_inner(
+#[derive(Default)]
+pub(crate) struct ReplayCache {
+    states: HashMap<[u8; 16], ReplayedState>,
+}
+
+impl ReplayCache {
+    pub(crate) fn contains(&self, commit_id: CommitId) -> bool {
+        self.states.contains_key(&commit_id.raw_bytes())
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.states.len()
+    }
+}
+
+pub(crate) fn state_at_with_cache(
     connection: &StoreConnection,
     commit_id: CommitId,
-    visiting: &mut HashSet<[u8; 16]>,
+    cache: &mut ReplayCache,
 ) -> Result<ReplayedState> {
-    if !visiting.insert(commit_id.raw_bytes()) {
-        return Err(WorkVcsError::ReplayInvalid(format!(
-            "cycle detected while replaying commit {commit_id}"
-        )));
+    if let Some(replayed) = cache.states.get(&commit_id.raw_bytes()) {
+        return Ok(replayed.clone());
     }
-    let commit = load_commit(connection, commit_id)?;
-    let replayed = match commit.commit_kind.as_str() {
-        GENESIS_COMMIT_KIND => replay_genesis(connection, commit_id, commit),
-        NORMAL_COMMIT_KIND => replay_normal(connection, commit_id, commit, visiting),
-        MERGE_COMMIT_KIND => replay_merge(connection, commit_id, commit, visiting),
-        other => Err(WorkVcsError::ReplayInvalid(format!(
-            "unsupported WorkStateCommit kind {other:?}"
-        ))),
-    };
-    visiting.remove(&commit_id.raw_bytes());
-    replayed
+
+    #[derive(Clone, Copy)]
+    enum ReplayParents {
+        Genesis,
+        Normal(CommitId),
+        Merge(CommitId, CommitId),
+    }
+
+    enum ReplayFrame {
+        Enter(CommitId),
+        Exit {
+            commit_id: CommitId,
+            commit: CommitRow,
+            parents: ReplayParents,
+        },
+    }
+
+    let mut visiting = HashSet::new();
+    let mut frames = vec![ReplayFrame::Enter(commit_id)];
+    while let Some(frame) = frames.pop() {
+        match frame {
+            ReplayFrame::Enter(current_commit_id) => {
+                if cache.contains(current_commit_id) {
+                    continue;
+                }
+                if !visiting.insert(current_commit_id.raw_bytes()) {
+                    return Err(WorkVcsError::ReplayInvalid(format!(
+                        "cycle detected while replaying commit {current_commit_id}"
+                    )));
+                }
+                let commit = load_commit(connection, current_commit_id)?;
+                let parents = match commit.commit_kind.as_str() {
+                    GENESIS_COMMIT_KIND => ReplayParents::Genesis,
+                    NORMAL_COMMIT_KIND => ReplayParents::Normal(load_normal_primary_parent(
+                        connection,
+                        current_commit_id,
+                    )?),
+                    MERGE_COMMIT_KIND => {
+                        let (primary, secondary) =
+                            load_merge_parents(connection, current_commit_id)?;
+                        ReplayParents::Merge(primary, secondary)
+                    }
+                    other => {
+                        return Err(WorkVcsError::ReplayInvalid(format!(
+                            "unsupported WorkStateCommit kind {other:?}"
+                        )));
+                    }
+                };
+                match parents {
+                    ReplayParents::Genesis => {
+                        frames.push(ReplayFrame::Exit {
+                            commit_id: current_commit_id,
+                            commit,
+                            parents,
+                        });
+                    }
+                    ReplayParents::Normal(parent_commit_id) => {
+                        frames.push(ReplayFrame::Exit {
+                            commit_id: current_commit_id,
+                            commit,
+                            parents,
+                        });
+                        frames.push(ReplayFrame::Enter(parent_commit_id));
+                    }
+                    ReplayParents::Merge(primary_parent_commit_id, secondary_parent_commit_id) => {
+                        frames.push(ReplayFrame::Exit {
+                            commit_id: current_commit_id,
+                            commit,
+                            parents,
+                        });
+                        frames.push(ReplayFrame::Enter(secondary_parent_commit_id));
+                        frames.push(ReplayFrame::Enter(primary_parent_commit_id));
+                    }
+                }
+            }
+            ReplayFrame::Exit {
+                commit_id: current_commit_id,
+                commit,
+                parents,
+            } => {
+                let replayed = match parents {
+                    ReplayParents::Genesis => {
+                        replay_genesis(connection, current_commit_id, commit)?
+                    }
+                    ReplayParents::Normal(parent_commit_id) => {
+                        let parent = cache
+                            .states
+                            .get(&parent_commit_id.raw_bytes())
+                            .expect("normal parent replayed before child")
+                            .clone();
+                        replay_normal(
+                            connection,
+                            current_commit_id,
+                            commit,
+                            parent_commit_id,
+                            parent,
+                        )?
+                    }
+                    ReplayParents::Merge(primary_parent_commit_id, secondary_parent_commit_id) => {
+                        let primary_parent = cache
+                            .states
+                            .get(&primary_parent_commit_id.raw_bytes())
+                            .expect("primary merge parent replayed before child")
+                            .clone();
+                        let secondary_parent = cache
+                            .states
+                            .get(&secondary_parent_commit_id.raw_bytes())
+                            .expect("secondary merge parent replayed before child")
+                            .clone();
+                        replay_merge(
+                            connection,
+                            current_commit_id,
+                            commit,
+                            primary_parent_commit_id,
+                            primary_parent,
+                            secondary_parent_commit_id,
+                            secondary_parent,
+                        )?
+                    }
+                };
+                visiting.remove(&current_commit_id.raw_bytes());
+                cache.states.insert(current_commit_id.raw_bytes(), replayed);
+            }
+        }
+    }
+
+    cache
+        .states
+        .get(&commit_id.raw_bytes())
+        .cloned()
+        .ok_or_else(|| {
+            WorkVcsError::ReplayInvalid(format!(
+                "commit {commit_id} did not produce a replayed WorkState"
+            ))
+        })
 }
 
 struct CommitRow {
@@ -255,10 +392,9 @@ fn replay_normal(
     connection: &StoreConnection,
     commit_id: CommitId,
     commit: CommitRow,
-    visiting: &mut HashSet<[u8; 16]>,
+    parent_commit_id: CommitId,
+    parent: ReplayedState,
 ) -> Result<ReplayedState> {
-    let parent_commit_id = load_normal_primary_parent(connection, commit_id)?;
-    let parent = state_at_inner(connection, parent_commit_id, visiting)?;
     if parent.workspace_id != commit.workspace_id {
         return Err(WorkVcsError::ReplayInvalid(format!(
             "normal commit {commit_id} belongs to workspace {}, but parent {} belongs to workspace {}",
@@ -291,12 +427,11 @@ fn replay_merge(
     connection: &StoreConnection,
     commit_id: CommitId,
     commit: CommitRow,
-    visiting: &mut HashSet<[u8; 16]>,
+    primary_parent_commit_id: CommitId,
+    primary_parent: ReplayedState,
+    secondary_parent_commit_id: CommitId,
+    secondary_parent: ReplayedState,
 ) -> Result<ReplayedState> {
-    let (primary_parent_commit_id, secondary_parent_commit_id) =
-        load_merge_parents(connection, commit_id)?;
-    let primary_parent = state_at_inner(connection, primary_parent_commit_id, visiting)?;
-    let secondary_parent = state_at_inner(connection, secondary_parent_commit_id, visiting)?;
     if primary_parent.workspace_id != commit.workspace_id {
         return Err(WorkVcsError::ReplayInvalid(format!(
             "merge commit {commit_id} belongs to workspace {}, but primary parent {} belongs to workspace {}",

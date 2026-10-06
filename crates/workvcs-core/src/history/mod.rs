@@ -25,6 +25,7 @@ mod reference;
 mod replay;
 mod resource;
 mod restore;
+mod semantic_snapshot;
 mod task;
 mod why;
 
@@ -190,6 +191,7 @@ pub use resource::{
     WorkspaceResourceAssociationResult, WorkspaceResourceAssociationSnapshot,
 };
 pub use restore::{WorkStateRestoreCommit, WorkStateRestoreOptions};
+pub use semantic_snapshot::{SemanticSnapshot, SemanticSnapshotOptions};
 pub use task::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
     AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
@@ -274,13 +276,14 @@ pub(crate) use record::{
     transition_record,
 };
 pub(crate) use reference::{create_structural_reference, structural_references_at};
-pub(crate) use replay::state_at;
+pub(crate) use replay::{ReplayCache, state_at, state_at_with_cache};
 pub(crate) use resource::{
     associate_workspace_resource, bind_resource, create_resource, record_resource_observation,
     resource, resource_observation, resource_observations, resources,
     workspace_resource_associations,
 };
 pub(crate) use restore::restore_work_state;
+pub(crate) use semantic_snapshot::semantic_snapshot;
 pub(crate) use task::{
     acceptance_criteria_at, acceptance_criterion_at, acceptance_criterion_effective_status,
     acceptance_criterion_effective_status_for_branch, create_acceptance_criterion, create_task,

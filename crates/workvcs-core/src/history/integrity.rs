@@ -22,39 +22,9 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
     validate_foreign_key_integrity(connection)?;
 
     let branch_ids = load_branch_ids(connection)?;
-    for branch_id in &branch_ids {
-        let head = super::branch_head(connection, *branch_id).map_err(|error| {
-            integrity_error(format!("Branch {branch_id} head is invalid"), error)
-        })?;
-        let replayed = super::state_at(connection, head.head_commit_id).map_err(|error| {
-            integrity_error(
-                format!(
-                    "Branch {branch_id} head {} cannot be replayed",
-                    head.head_commit_id
-                ),
-                error,
-            )
-        })?;
-        if replayed.workspace_id != head.workspace_id {
-            return Err(WorkVcsError::IntegrityInvalid(format!(
-                "Branch {branch_id} head {} replays workspace {}, not {}",
-                head.head_commit_id, replayed.workspace_id, head.workspace_id
-            )));
-        }
-        if replayed.state_digest != head.state_digest {
-            return Err(WorkVcsError::IntegrityInvalid(format!(
-                "Branch {branch_id} head {} digest does not match replay",
-                head.head_commit_id
-            )));
-        }
-    }
-
     let commit_ids = load_commit_ids(connection)?;
-    for commit_id in &commit_ids {
-        super::state_at(connection, *commit_id).map_err(|error| {
-            integrity_error(format!("Commit {commit_id} cannot be replayed"), error)
-        })?;
-    }
+    let replayed_commits = validate_replay_integrity(connection, &branch_ids, &commit_ids)?;
+    debug_assert_eq!(replayed_commits, commit_ids.len());
 
     let changeset_ids = load_changeset_ids(connection)?;
     let mut checked_change_operations = 0usize;
@@ -115,6 +85,51 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
         checked_checkpoints: checkpoint_statuses.len(),
         invalid_checkpoints,
     })
+}
+
+fn validate_replay_integrity(
+    connection: &StoreConnection,
+    branch_ids: &[BranchId],
+    commit_ids: &[CommitId],
+) -> Result<usize> {
+    let mut replay_cache = super::ReplayCache::default();
+    for branch_id in branch_ids {
+        let head = super::branch_head(connection, *branch_id).map_err(|error| {
+            integrity_error(format!("Branch {branch_id} head is invalid"), error)
+        })?;
+        let replayed =
+            super::state_at_with_cache(connection, head.head_commit_id, &mut replay_cache)
+                .map_err(|error| {
+                    integrity_error(
+                        format!(
+                            "Branch {branch_id} head {} cannot be replayed",
+                            head.head_commit_id
+                        ),
+                        error,
+                    )
+                })?;
+        if replayed.workspace_id != head.workspace_id {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "Branch {branch_id} head {} replays workspace {}, not {}",
+                head.head_commit_id, replayed.workspace_id, head.workspace_id
+            )));
+        }
+        if replayed.state_digest != head.state_digest {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "Branch {branch_id} head {} digest does not match replay",
+                head.head_commit_id
+            )));
+        }
+    }
+
+    for commit_id in commit_ids {
+        if !replay_cache.contains(*commit_id) {
+            super::state_at_with_cache(connection, *commit_id, &mut replay_cache).map_err(
+                |error| integrity_error(format!("Commit {commit_id} cannot be replayed"), error),
+            )?;
+        }
+    }
+    Ok(replay_cache.len())
 }
 
 fn validate_sqlite_integrity(connection: &StoreConnection) -> Result<()> {
@@ -314,4 +329,80 @@ fn decode_16(column: &str, bytes: Vec<u8>) -> Result<[u8; 16]> {
 
 fn integrity_error(context: impl AsRef<str>, error: WorkVcsError) -> WorkVcsError {
     WorkVcsError::IntegrityInvalid(format!("{}: {error}", context.as_ref()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_branch_ids, load_commit_ids, validate_replay_integrity};
+    use crate::Engine;
+    use crate::canonical::CanonicalValue;
+    use crate::history::{EntityTransitionOptions, WorkspaceInitOptions};
+    use crate::store::{StoreConnection, StoreInitOptions};
+
+    fn record_state(revision: usize) -> CanonicalValue {
+        CanonicalValue::object(vec![
+            (
+                "revision".to_owned(),
+                CanonicalValue::safe_integer(revision as i64).expect("revision"),
+            ),
+            (
+                "title".to_owned(),
+                CanonicalValue::String("replay-cache-regression".to_owned()),
+            ),
+        ])
+        .expect("record state")
+    }
+
+    #[test]
+    fn integrity_reuses_each_linear_commit_replay() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("workvcs.sqlite");
+        let mut engine = Engine::init(
+            &path,
+            StoreInitOptions::new("integrity-replay-cache").expect("store options"),
+        )
+        .expect("init engine");
+        let workspace = engine
+            .create_workspace(WorkspaceInitOptions::new("workspace").expect("workspace options"))
+            .expect("create workspace");
+        let first = engine
+            .commit_entity_transition(
+                EntityTransitionOptions::create(
+                    workspace.initial_branch_id,
+                    workspace.genesis_commit_id,
+                    "generic_record",
+                    record_state(0),
+                )
+                .expect("first transition options"),
+            )
+            .expect("first transition");
+        let mut head_commit_id = first.commit_id;
+        let mut entity_version_id = first.entity_version_id;
+        for revision in 1..64 {
+            let transition = engine
+                .commit_entity_transition(
+                    EntityTransitionOptions::update(
+                        workspace.initial_branch_id,
+                        head_commit_id,
+                        first.entity_id,
+                        entity_version_id,
+                        record_state(revision),
+                    )
+                    .expect("transition options"),
+                )
+                .expect("transition");
+            head_commit_id = transition.commit_id;
+            entity_version_id = transition.entity_version_id;
+        }
+        drop(engine);
+
+        let connection = StoreConnection::open_readonly(&path).expect("readonly Store");
+        let branch_ids = load_branch_ids(&connection).expect("branch ids");
+        let commit_ids = load_commit_ids(&connection).expect("commit ids");
+        let replayed_commits =
+            validate_replay_integrity(&connection, &branch_ids, &commit_ids).expect("replay");
+
+        assert_eq!(commit_ids.len(), 65);
+        assert_eq!(replayed_commits, commit_ids.len());
+    }
 }

@@ -149,6 +149,7 @@ index is:
 - [Phase 5D Bounded Multi-Agent Context Bridge Evidence](provenance/phase-5d-bounded-multi-agent-context-bridge.md)
 - [Phase 5G Record Currentness Audit Evidence](provenance/phase-5g-record-currentness-audit.md)
 - [Phase 5H Local Object v2 Cutover Evidence](provenance/phase-5h-local-object-v2-cutover.md)
+- [Phase 5I Integrity Replay Performance Evidence](provenance/phase-5i-integrity-replay-performance.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.

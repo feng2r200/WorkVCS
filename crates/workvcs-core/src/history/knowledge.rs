@@ -1,4 +1,4 @@
-use super::{EntityTransitionOptions, commit_entity_transition, state_at};
+use super::{EntityTransitionOptions, ReplayCache, commit_entity_transition, state_at_with_cache};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, canonical_bytes, entity_version_digest,
     parse_canonical_json, validate_import_fixed_point,
@@ -419,7 +419,21 @@ pub(crate) fn knowledge_at(
     commit_id: CommitId,
     knowledge_entity_id: EntityId,
 ) -> Result<KnowledgeSnapshot> {
-    let replayed = state_at(connection, commit_id)?;
+    knowledge_at_with_cache(
+        connection,
+        commit_id,
+        knowledge_entity_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+pub(crate) fn knowledge_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    knowledge_entity_id: EntityId,
+    replay_cache: &mut ReplayCache,
+) -> Result<KnowledgeSnapshot> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let Some(knowledge_entity_version_id) =
         replayed
             .state
@@ -454,8 +468,16 @@ pub(crate) fn knowledges_at(
     connection: &StoreConnection,
     options: &KnowledgeListOptions,
 ) -> Result<KnowledgeListResult> {
+    knowledges_at_with_cache(connection, options, &mut ReplayCache::default())
+}
+
+pub(crate) fn knowledges_at_with_cache(
+    connection: &StoreConnection,
+    options: &KnowledgeListOptions,
+    replay_cache: &mut ReplayCache,
+) -> Result<KnowledgeListResult> {
     let commit_id = options.commit_id();
-    let replayed = state_at(connection, commit_id)?;
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut knowledge = Vec::new();
 
     for (entity_id, entity_version_id) in replayed.state.entities() {

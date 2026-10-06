@@ -125,17 +125,18 @@ use workvcs_core::{
     ResourceObservationCreateResult, ResourceObservationDetailInput, ResourceObservationId,
     ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
     ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
-    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection, SessionDiffId,
-    SessionDiffSnapshot, SessionEndOptions, SessionEndResult, SessionFocusOptions,
-    SessionFocusUpdateResult, SessionId, SessionLifecycleState, SessionListOptions,
-    SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult, StoreId,
-    StoreInfo, StoreInitOptions, StoreLineageListOptions, StoreLineageListResult,
-    StoreLineageRecordOptions, StoreLineageRecordResult, StoreLineageSnapshot, StoreManifest,
-    StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
-    StoreMigrationRecordOptions, StoreMigrationRecordResult, StructuralReferenceCreateCommit,
-    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
-    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
+    SemanticSnapshotOptions, SessionDiffId, SessionDiffSnapshot, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
+    SessionLifecycleState, SessionListOptions, SessionListResult, SessionMarkStaleOptions,
+    SessionMarkStaleResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
+    SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInfo, StoreInitOptions,
+    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
+    StoreLineageRecordResult, StoreLineageSnapshot, StoreManifest, StoreMigrationAttemptSnapshot,
+    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
+    StoreMigrationRecordResult, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
+    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
+    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, VerificationApplicability, VerificationApplicabilityCacheListOptions,
     VerificationApplicabilityCacheListResult, VerificationApplicabilityCacheSnapshot,
@@ -17039,6 +17040,11 @@ fn project_maturity_text(maturity: ProjectMaturity) -> &'static str {
 }
 
 fn verify_registry_binding_readonly(binding: &ProjectBinding) -> Result<usize> {
+    open_verified_registry_binding_readonly(binding)
+        .map(|(_, local_content_objects_verified)| local_content_objects_verified)
+}
+
+fn open_verified_registry_binding_readonly(binding: &ProjectBinding) -> Result<(Engine, usize)> {
     let store_path =
         canonical_existing_path("project binding store", Path::new(&binding.store_path))?;
     let canonical_store_path = store_path.display().to_string();
@@ -17064,7 +17070,8 @@ fn verify_registry_binding_readonly(binding: &ProjectBinding) -> Result<usize> {
             binding.branch_id, branch_head.workspace_id, binding.workspace_id
         )));
     }
-    engine.validate_local_content_storage()
+    let local_content_objects_verified = engine.validate_local_content_storage()?;
+    Ok((engine, local_content_objects_verified))
 }
 
 fn preview_project_registry_migration(
@@ -17778,8 +17785,15 @@ fn verify_v2_registry_bindings_readonly(registry: &ProjectRegistryV2) -> Result<
 }
 
 fn verify_v2_registry_binding_readonly(binding: &ProjectBindingV2) -> Result<usize> {
+    open_verified_v2_registry_binding_readonly(binding)
+        .map(|(_, local_content_objects_verified)| local_content_objects_verified)
+}
+
+fn open_verified_v2_registry_binding_readonly(
+    binding: &ProjectBindingV2,
+) -> Result<(Engine, usize)> {
     let project_ref = binding.project_ref_id().to_string();
-    verify_registry_binding_readonly(&ProjectBinding {
+    open_verified_registry_binding_readonly(&ProjectBinding {
         identity_kind: "project-ref".to_owned(),
         identity: project_ref.clone(),
         root: project_ref,
@@ -21598,11 +21612,12 @@ fn apply_project_capture_recovery_with_fault(
                 "resolved ProjectRef {project_ref_id} has no binding; refusing fallback"
             ))
         })?;
-        verify_v2_registry_binding_readonly(binding).map_err(|error| {
-            WorkVcsError::ControlPlaneInvalid(format!(
-                "resolved ProjectRef {project_ref_id} binding is not recovery-ready: {error}"
-            ))
-        })?;
+        let (readonly_engine, _) =
+            open_verified_v2_registry_binding_readonly(binding).map_err(|error| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "resolved ProjectRef {project_ref_id} binding is not recovery-ready: {error}"
+                ))
+            })?;
         let (primary_locator_id, primary_evidence) =
             primary_identity_locator(&registry, &resolution)?;
         let primary_evidence_digest = primary_evidence.evidence_digest().clone();
@@ -21691,7 +21706,6 @@ fn apply_project_capture_recovery_with_fault(
                 delivery_projection.projection().delivery_started().cloned();
             delivery_failure_snapshot = Some(failure.clone());
         } else {
-            let readonly_engine = open_verified_store_readonly(binding.store_path().as_path())?;
             verify_opened_recovery_target(&readonly_engine, binding)?;
             let head = readonly_engine.branch_head(binding.branch_id())?;
             let prepared = prepare_primary_delivery_from_projection(
@@ -21767,6 +21781,7 @@ fn apply_project_capture_recovery_with_fault(
                     failure_event.outcome() == CaptureEventAppendOutcome::Created;
                 delivery_failure_snapshot = Some(failure);
             } else {
+                drop(readonly_engine);
                 let mut engine = open_verified_store(binding.store_path().as_path())?;
                 verify_opened_recovery_target(&engine, binding)?;
                 let result = engine.capture_cognition(CognitionCaptureOptions::new(
@@ -23741,16 +23756,22 @@ fn run_recall(
     let engine = open_verified_store_readonly(Path::new(&discovery.binding.store_path))?;
     let head = engine.branch_head(discovery.binding.branch_id)?;
     let commit_id = head.head_commit_id;
+    let mut semantic_options = SemanticSnapshotOptions::new(commit_id);
+    if profile != RecallProfileArg::Brief {
+        semantic_options = semantic_options
+            .with_record_relations()
+            .with_record_knowledge_relations();
+    }
+    if profile == RecallProfileArg::Retrospective {
+        semantic_options = semantic_options.with_knowledge_relations();
+    }
+    let semantic = engine.semantic_snapshot(semantic_options)?;
 
-    let mut goals = engine.goals_at(commit_id)?;
-    let mut plans = engine.plans_at(commit_id)?;
-    let mut tasks = engine.tasks_at(commit_id)?;
-    let mut records = engine
-        .records_at(RecordListOptions::new(commit_id))?
-        .records;
-    let mut knowledge = engine
-        .knowledges_at(KnowledgeListOptions::new(commit_id))?
-        .knowledge;
+    let mut goals = semantic.goals;
+    let mut plans = semantic.plans;
+    let mut tasks = semantic.tasks;
+    let mut records = semantic.records;
+    let mut knowledge = semantic.knowledge;
 
     goals.sort_by_key(|goal| goal.goal_entity_version_id);
     goals.reverse();
@@ -23782,27 +23803,9 @@ fn run_recall(
         RecallProfileArg::Retrospective => {}
     }
 
-    let mut record_relations = if profile == RecallProfileArg::Brief {
-        Vec::new()
-    } else {
-        engine
-            .record_relations_at(RecordRelationListOptions::new(commit_id))?
-            .relations
-    };
-    let mut record_knowledge_relations = if profile == RecallProfileArg::Brief {
-        Vec::new()
-    } else {
-        engine
-            .record_knowledge_relations_at(RecordKnowledgeRelationListOptions::new(commit_id))?
-            .relations
-    };
-    let mut knowledge_relations = if profile == RecallProfileArg::Retrospective {
-        engine
-            .knowledge_relations_at(KnowledgeRelationListOptions::new(commit_id))?
-            .relations
-    } else {
-        Vec::new()
-    };
+    let mut record_relations = semantic.record_relations;
+    let mut record_knowledge_relations = semantic.record_knowledge_relations;
+    let mut knowledge_relations = semantic.knowledge_relations;
     let mut evidence = if profile == RecallProfileArg::Retrospective {
         engine.evidences(EvidenceListOptions::all())?.evidences
     } else {

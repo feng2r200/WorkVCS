@@ -1,4 +1,6 @@
-use super::{EntityTransitionOptions, commit_entity_transition, state_at};
+use super::{
+    EntityTransitionOptions, ReplayCache, commit_entity_transition, state_at, state_at_with_cache,
+};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, entity_version_digest, parse_canonical_json,
     validate_import_fixed_point,
@@ -465,7 +467,15 @@ pub(crate) fn plans_at(
     connection: &StoreConnection,
     commit_id: CommitId,
 ) -> Result<Vec<PlanSnapshot>> {
-    let replayed = state_at(connection, commit_id)?;
+    plans_at_with_cache(connection, commit_id, &mut ReplayCache::default())
+}
+
+pub(crate) fn plans_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    replay_cache: &mut ReplayCache,
+) -> Result<Vec<PlanSnapshot>> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut plans = Vec::new();
 
     for (entity_id, entity_version_id) in replayed.state.entities() {

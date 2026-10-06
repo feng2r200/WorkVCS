@@ -1,7 +1,7 @@
 # Local Operator Quickstart and Recovery
 
 Status: Local operator guide for CLI package `0.1.0`; verify registry version and activation state before selecting a route
-Last updated: 2026-09-30
+Last updated: 2026-10-06
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
 this repository. It describes the locally packaged v1 and ProjectRef-v2
@@ -506,6 +506,29 @@ Run integrity checks against any Store before and after risky local operations:
 workvcs doctor "$STORE" --require-valid
 workvcs store integrity "$STORE" --require-valid
 ```
+
+Current integrity validation remains complete: every branch head and every
+commit is replayed and checked. The implementation shares already replayed
+states only within one validation request and uses an explicit replay stack;
+there is no persisted trust cache and no head-only fast path. Discovery still
+performs full identity and integrity validation. Capture recovery may reuse the
+Engine from its initial verified read-only preparation, but it must still open
+the target writable and repeat complete identity and integrity validation
+before mutation.
+
+For a source change that touches replay, integrity, discovery, Recall, or
+capture recovery, run the fixed-state opt-in scale regression in addition to
+the ordinary workspace suite:
+
+```bash
+cargo test -p workvcs-core --release --test integrity_replay_scale -- --ignored --nocapture
+```
+
+The Phase 5I evidence checkpoints 500, 1,000, and 5,000 commits and includes a
+corrupted parent-cycle regression. Its timing is a local regression signal,
+not a replacement for `--require-valid` and not proof of memory behavior for a
+history whose Work-State grows materially at every commit. See
+[`phase-5i-integrity-replay-performance.md`](../provenance/phase-5i-integrity-replay-performance.md).
 
 If a local Store was created before Phase 4LS and ordinary open reports that
 the frozen schema object set is missing only context packet snapshot objects,

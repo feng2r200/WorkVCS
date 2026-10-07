@@ -12,10 +12,10 @@ use std::process::Command as ProcessCommand;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use workvcs_core::control_plane::{
-    BoundedAdapterContext, CanonicalPath, CaptureAdmissionOutcome, CaptureCompletedPayload,
-    CaptureEventAppendOutcome, CaptureEventPayload, CaptureGroupIntent, CaptureGroupMemberDelivery,
-    CaptureGroupResolvedPayload, CaptureIntent, CaptureJournal, CapturePayloadKind,
-    CaptureProjectionWriteOutcome, CaptureRecoveryState, ControlPlaneDigest,
+    BindingSource, BoundedAdapterContext, CanonicalPath, CaptureAdmissionOutcome,
+    CaptureCompletedPayload, CaptureEventAppendOutcome, CaptureEventPayload, CaptureGroupIntent,
+    CaptureGroupMemberDelivery, CaptureGroupResolvedPayload, CaptureIntent, CaptureJournal,
+    CapturePayloadKind, CaptureProjectionWriteOutcome, CaptureRecoveryState, ControlPlaneDigest,
     DeliveryAppliedPayload, DeliveryFailedPayload, DeliveryFailureCode, DeliveryStartedPayload,
     FirstWriteProjectBinding, JournalAdmissionActivationCandidate, JournalAdmissionCapability,
     JournalQuiescenceLock, LocatorAssurance, LocatorAuthority, LocatorEvidence, LocatorRole,
@@ -27,8 +27,8 @@ use workvcs_core::control_plane::{
     ProjectBootstrapOutcome, ProjectMaturity, ProjectRegistryJournalAlias, ProjectRegistryV1,
     ProjectRegistryV2, ReferenceAppliedPayload, RegistryMigrationPreview, ResolutionBasis,
     ResolutionDiagnostic, ResolutionMode, ResolutionRank, ResolutionRecordedPayload,
-    ResolutionStatus, RoutingActivationCandidate, UnifiedLocatorInput, UtcTimestamp,
-    build_plan_admission_delivery_receipt, build_plan_delivery_receipt_preflight,
+    ResolutionStatus, RoutingActivationCandidate, SharedTargetIsolation, UnifiedLocatorInput,
+    UtcTimestamp, build_plan_admission_delivery_receipt, build_plan_delivery_receipt_preflight,
     build_plan_evolution_delivery_receipt, build_primary_delivery_receipt,
     build_registry_v1_migration_preview_with_repairs, materialize_registry_v1_migration_candidate,
     preflight_plan_delivery, prepare_primary_delivery_from_projection,
@@ -1750,6 +1750,64 @@ enum ProjectCommand {
             help = "Fail if any binding, Store identity, project identity, or local Evidence object is invalid"
         )]
         require_valid: bool,
+    },
+    #[command(about = "Move one exactly shared ProjectRef binding to a dedicated pristine Store")]
+    #[command(group(
+        ArgGroup::new("shared-binding-isolation-action")
+            .required(true)
+            .multiple(false)
+            .args(["preview", "apply"])
+    ))]
+    IsolateSharedBinding {
+        #[arg(long, help = "Preview the exact isolation candidate without writing")]
+        preview: bool,
+
+        #[arg(
+            long,
+            requires_all = ["expected_registry_digest", "expected_candidate_digest"],
+            help = "Apply the exactly digest-locked isolation candidate"
+        )]
+        apply: bool,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Logical project checkout or directory whose binding should be isolated"
+        )]
+        cwd: PathBuf,
+
+        #[arg(
+            long,
+            value_name = "PROJECT_REF",
+            help = "Optional explicit ProjectRef owner; missing or unknown values fail closed"
+        )]
+        project_ref: Option<String>,
+
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Dedicated Store directory required when the registry locator has no WorkVCS home"
+        )]
+        store_root: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected digest of the exact registry v2 snapshot"
+        )]
+        expected_registry_digest: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires = "apply",
+            help = "Expected digest of the exact shared-binding isolation candidate"
+        )]
+        expected_candidate_digest: Option<String>,
     },
     #[command(about = "Preview, apply, roll back, or inspect registry v1/v2 recovery")]
     #[command(group(
@@ -7308,6 +7366,35 @@ fn run(cli: Cli) -> Result<String> {
                 registry,
                 require_valid,
             } => list_project_bindings(registry, require_valid),
+            ProjectCommand::IsolateSharedBinding {
+                preview,
+                apply,
+                cwd,
+                project_ref,
+                registry,
+                store_root,
+                expected_registry_digest,
+                expected_candidate_digest,
+            } => match (preview, apply) {
+                (true, false) => {
+                    preview_project_shared_binding_isolation(cwd, project_ref, registry, store_root)
+                }
+                (false, true) => apply_project_shared_binding_isolation(
+                    cwd,
+                    project_ref,
+                    registry,
+                    store_root,
+                    required_control_plane_digest(
+                        "shared binding isolation apply --expected-registry-digest",
+                        expected_registry_digest,
+                    )?,
+                    required_control_plane_digest(
+                        "shared binding isolation apply --expected-candidate-digest",
+                        expected_candidate_digest,
+                    )?,
+                ),
+                _ => unreachable!("clap requires exactly one shared-binding isolation action"),
+            },
             ProjectCommand::RegistryMigrate {
                 preview,
                 apply,
@@ -16305,6 +16392,762 @@ fn validate_project_bootstrap_workspace(
         return Err(WorkVcsError::StoreBootstrapInvalid(format!(
             "project bootstrap Workspace {} is not pristine at its Genesis",
             workspace.workspace_id
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SharedBindingIsolationState {
+    Eligible,
+    NotShared,
+    AlreadyIsolated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum SharedBindingIsolationInstallFault {
+    AfterRegistryRename,
+    AfterRegistryDirectorySync,
+    BeforeInstalledVerification,
+}
+
+impl SharedBindingIsolationState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Eligible => "eligible",
+            Self::NotShared => "not_shared",
+            Self::AlreadyIsolated => "already_isolated",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SharedBindingIsolationPreview {
+    effective: EffectiveRegistryConfig,
+    registry_path: PathBuf,
+    registry: ProjectRegistryV2,
+    registry_digest: ControlPlaneDigest,
+    identity: ProjectIdentity,
+    project_ref_id: ProjectRefId,
+    binding: ProjectBindingV2,
+    shared_peer_project_refs: Vec<ProjectRefId>,
+    bootstrap: ProjectBootstrapSpec,
+    candidate_store_state: &'static str,
+    state: SharedBindingIsolationState,
+    candidate_digest: Option<ControlPlaneDigest>,
+}
+
+fn preview_project_shared_binding_isolation(
+    cwd: PathBuf,
+    project_ref: Option<String>,
+    registry: Option<PathBuf>,
+    store_root: Option<PathBuf>,
+) -> Result<String> {
+    let preview = inspect_project_shared_binding_isolation(cwd, project_ref, registry, store_root)?;
+    Ok(render_shared_binding_isolation_preview(&preview))
+}
+
+fn inspect_project_shared_binding_isolation(
+    cwd: PathBuf,
+    project_ref: Option<String>,
+    registry: Option<PathBuf>,
+    store_root: Option<PathBuf>,
+) -> Result<SharedBindingIsolationPreview> {
+    let identity = resolve_project_identity(&cwd)?;
+    let effective = effective_registry_config(registry)?;
+    let registry_path = project_registry_path_from_effective(&effective, false, &identity)?;
+    let (registry, registry_digest) = match load_project_registry_readonly(&registry_path, false)? {
+        LoadedProjectRegistry::V1 { .. } => {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "shared-binding isolation requires registry v2".to_owned(),
+            ));
+        }
+        LoadedProjectRegistry::V2 { registry, digest } => (*registry, digest),
+    };
+    let explicit_project_ref = project_ref
+        .map(|value| ProjectRefId::parse_canonical(&value))
+        .transpose()?;
+    let locator_input = unified_locator_input_for_identity_with_mode(
+        ResolutionMode::ReadOnly,
+        explicit_project_ref,
+        Vec::new(),
+        None,
+        &identity,
+    )?;
+    let resolution = resolve_project(&registry, locator_input.resolution_context())?;
+    if resolution.status() != ResolutionStatus::Resolved {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "shared-binding isolation owner resolution failed closed with status {:?} and diagnostics {:?}",
+            resolution.status(),
+            resolution.diagnostics()
+        )));
+    }
+    let project_ref_id = resolution.primary_project_ref().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "shared-binding isolation resolved without a primary ProjectRef".to_owned(),
+        )
+    })?;
+    let binding = registry.binding(project_ref_id).cloned().ok_or_else(|| {
+        WorkVcsError::ProjectBindingNotFound {
+            identity_kind: "project-ref".to_owned(),
+            identity: project_ref_id.to_string(),
+            project_root: identity.root.clone(),
+            registry_path: registry_path.display().to_string(),
+        }
+    })?;
+    verify_v2_project_binding_readonly(&binding, &identity)?;
+    let mut shared_peer_project_refs = registry
+        .bindings()
+        .iter()
+        .filter(|candidate| {
+            candidate.project_ref_id() != project_ref_id
+                && exact_project_binding_target(candidate, &binding)
+        })
+        .map(ProjectBindingV2::project_ref_id)
+        .collect::<Vec<_>>();
+    shared_peer_project_refs.sort();
+
+    let store_root = project_store_root_readonly(&effective, store_root, &identity)?;
+    let bootstrap = project_bootstrap_spec(&identity, &store_root);
+    let deterministic_isolated_path = bootstrap.store_path.display().to_string();
+    let already_isolated = binding.binding_source() == BindingSource::Isolation
+        && binding.store_path().as_str() == deterministic_isolated_path
+        && shared_peer_project_refs.is_empty();
+    let (state, candidate_store_state, candidate_digest) = if already_isolated {
+        (SharedBindingIsolationState::AlreadyIsolated, "bound", None)
+    } else if shared_peer_project_refs.is_empty() {
+        (
+            SharedBindingIsolationState::NotShared,
+            "not_inspected",
+            None,
+        )
+    } else {
+        if binding.store_path().as_str() == deterministic_isolated_path {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "shared binding already occupies its deterministic isolation Store path".to_owned(),
+            ));
+        }
+        if let Some(conflict) = registry
+            .bindings()
+            .iter()
+            .find(|candidate| candidate.store_path().as_str() == deterministic_isolated_path)
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "deterministic isolation Store path is already bound to ProjectRef {}",
+                conflict.project_ref_id()
+            )));
+        }
+        let candidate_store_state =
+            inspect_project_bootstrap_store_readonly(&bootstrap, &identity)?;
+        let candidate_digest = shared_binding_isolation_candidate_digest(
+            &registry_digest,
+            project_ref_id,
+            &binding,
+            &bootstrap.store_path,
+        );
+        (
+            SharedBindingIsolationState::Eligible,
+            candidate_store_state,
+            Some(candidate_digest),
+        )
+    };
+
+    Ok(SharedBindingIsolationPreview {
+        effective,
+        registry_path,
+        registry,
+        registry_digest,
+        identity,
+        project_ref_id,
+        binding,
+        shared_peer_project_refs,
+        bootstrap,
+        candidate_store_state,
+        state,
+        candidate_digest,
+    })
+}
+
+fn project_store_root_readonly(
+    effective: &EffectiveRegistryConfig,
+    explicit_store_root: Option<PathBuf>,
+    identity: &ProjectIdentity,
+) -> Result<PathBuf> {
+    let raw_path = match explicit_store_root {
+        Some(path) => absolute_cli_path("project Store root", path)?,
+        None => effective
+            .configured_home
+            .as_ref()
+            .map(|home| home.join("stores").join("projects"))
+            .ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "shared-binding isolation requires --store-root PATH when the selected registry locator does not define a WorkVCS home"
+                        .to_owned(),
+                )
+            })?,
+    };
+    reject_project_local_unresolved_path("project Store root", &raw_path, identity)?;
+    let resolved = canonical_nonexistent_path("project Store root", &raw_path)?;
+    reject_project_local_path("project Store root", &resolved, identity)?;
+    if resolved.exists() && !resolved.is_dir() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project Store root {} is not a directory",
+            resolved.display()
+        )));
+    }
+    Ok(resolved)
+}
+
+fn inspect_project_bootstrap_store_readonly(
+    spec: &ProjectBootstrapSpec,
+    identity: &ProjectIdentity,
+) -> Result<&'static str> {
+    if !spec.store_path.exists() {
+        return Ok("absent");
+    }
+    let canonical = canonical_existing_path("project bootstrap store", &spec.store_path)?;
+    reject_project_local_path("project bootstrap store", &canonical, identity)?;
+    if canonical != spec.store_path {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Store path {} resolves to {}; refusing a path alias",
+            spec.store_path.display(),
+            canonical.display()
+        )));
+    }
+    let engine = open_verified_store_readonly(&canonical)?;
+    let store_info = engine.store_info()?;
+    if store_info.display_name != spec.store_display_name {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Store {} has display name {:?}, expected {:?}; refusing to adopt it",
+            spec.store_path.display(),
+            store_info.display_name,
+            spec.store_display_name
+        )));
+    }
+    let workspaces = engine.workspaces(WorkspaceListOptions::all())?.workspaces;
+    match workspaces.as_slice() {
+        [] => Ok("recoverable_empty"),
+        [workspace] => {
+            validate_project_bootstrap_workspace(&engine, workspace, spec)?;
+            Ok("pristine")
+        }
+        _ => Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "project bootstrap Store {} has {} Workspaces; refusing to adopt a non-pristine Store",
+            spec.store_path.display(),
+            workspaces.len()
+        ))),
+    }
+}
+
+fn exact_project_binding_target(left: &ProjectBindingV2, right: &ProjectBindingV2) -> bool {
+    left.store_path() == right.store_path()
+        && left.store_id() == right.store_id()
+        && left.workspace_id() == right.workspace_id()
+        && left.branch_id() == right.branch_id()
+}
+
+fn shared_binding_isolation_candidate_digest(
+    registry_digest: &ControlPlaneDigest,
+    project_ref_id: ProjectRefId,
+    binding: &ProjectBindingV2,
+    isolated_store_path: &Path,
+) -> ControlPlaneDigest {
+    ControlPlaneDigest::raw(
+        format!(
+            "workvcs-shared-binding-isolation/v1\0{registry_digest}\0{project_ref_id}\0{}\0{}\0{}\0{}\0{}",
+            binding.store_path().as_str(),
+            binding.store_id(),
+            binding.workspace_id(),
+            binding.branch_id(),
+            isolated_store_path.display(),
+        )
+        .as_bytes(),
+    )
+}
+
+fn binding_source_text(source: BindingSource) -> &'static str {
+    match source {
+        BindingSource::Explicit => "explicit",
+        BindingSource::Migration => "migration",
+        BindingSource::FirstWrite => "first_write",
+        BindingSource::Isolation => "isolation",
+    }
+}
+
+fn render_shared_binding_isolation_preview(preview: &SharedBindingIsolationPreview) -> String {
+    format!(
+        "action=preview\nread_only=true\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\nproject_ref_id={}\nbinding_source={}\nisolation_state={}\napply_eligible={}\nshared_peer_project_refs={}\nshared_peer_count={}\nsource_store_path={}\nsource_store_id={}\nsource_workspace_id={}\nsource_branch_id={}\ndedicated_store_path={}\ncandidate_store_state={}\ncandidate_digest={}\nsource_store_preserved=true\nhistory_migrated=false\nregistry_written=false\nbackup_written=false\nstore_written=false\nrouting_activated=false\njournal_admission_activated=false\n",
+        escape_key_value(&preview.registry_path.display().to_string()),
+        preview.registry.registry_id(),
+        preview.registry.revision(),
+        preview.registry_digest,
+        preview.project_ref_id,
+        binding_source_text(preview.binding.binding_source()),
+        preview.state.as_str(),
+        preview.state == SharedBindingIsolationState::Eligible,
+        preview
+            .shared_peer_project_refs
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        preview.shared_peer_project_refs.len(),
+        escape_key_value(preview.binding.store_path().as_str()),
+        preview.binding.store_id(),
+        preview.binding.workspace_id(),
+        preview.binding.branch_id(),
+        escape_key_value(&preview.bootstrap.store_path.display().to_string()),
+        preview.candidate_store_state,
+        preview
+            .candidate_digest
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "none".to_owned()),
+    )
+}
+
+fn apply_project_shared_binding_isolation(
+    cwd: PathBuf,
+    project_ref: Option<String>,
+    registry: Option<PathBuf>,
+    store_root: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+) -> Result<String> {
+    apply_project_shared_binding_isolation_with_fault(
+        cwd,
+        project_ref,
+        registry,
+        store_root,
+        expected_registry_digest,
+        expected_candidate_digest,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_project_shared_binding_isolation_with_fault(
+    cwd: PathBuf,
+    project_ref: Option<String>,
+    registry: Option<PathBuf>,
+    store_root: Option<PathBuf>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_candidate_digest: ControlPlaneDigest,
+    fault: Option<SharedBindingIsolationInstallFault>,
+) -> Result<String> {
+    require_atomic_registry_replace_support("shared-binding isolation apply")?;
+    let initial = inspect_project_shared_binding_isolation(
+        cwd.clone(),
+        project_ref.clone(),
+        registry.clone(),
+        store_root.clone(),
+    )?;
+    require_shared_binding_isolation_digests(
+        &initial,
+        &expected_registry_digest,
+        &expected_candidate_digest,
+        "before lock",
+    )?;
+    let _registry_lock = ProjectRegistryLock::acquire(&initial.registry_path)?;
+    let journal_lock_path = project_registry_journal_quiescence_lock_path(&initial.registry_path)?;
+    let _journal_lock = JournalQuiescenceLock::acquire(&journal_lock_path)?;
+    let locked =
+        inspect_project_shared_binding_isolation(cwd, project_ref, registry, store_root.clone())?;
+    require_shared_binding_isolation_digests(
+        &locked,
+        &expected_registry_digest,
+        &expected_candidate_digest,
+        "under lock",
+    )?;
+
+    let source_bytes = fs::read(&locked.registry_path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot read shared-binding isolation source registry {}: {error}",
+            locked.registry_path.display()
+        ))
+    })?;
+    if locked.registry.stored_json_bytes()? != source_bytes {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "shared-binding isolation source registry is not in canonical stored byte form"
+                .to_owned(),
+        ));
+    }
+    let backup_path =
+        shared_binding_isolation_backup_path(&locked.registry_path, &locked.registry_digest)?;
+    let backup_reused = install_shared_binding_isolation_backup(
+        &locked.registry_path,
+        &backup_path,
+        &source_bytes,
+        &locked.registry_digest,
+    )?;
+
+    let writable_store_root = project_store_root(&locked.effective, store_root, &locked.identity)?;
+    let bootstrap = project_bootstrap_spec(&locked.identity, &writable_store_root);
+    if bootstrap.store_path != locked.bootstrap.store_path {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "dedicated Store path changed between isolation preview and apply".to_owned(),
+        ));
+    }
+    let store_existed = bootstrap.store_path.exists();
+    let (store_info, workspace, workspace_created) =
+        ensure_project_bootstrap_store(&bootstrap, &locked.identity)?;
+    let isolated_store_path =
+        canonical_existing_path("shared-binding isolation Store", &bootstrap.store_path)?;
+    let isolation = SharedTargetIsolation::new(
+        locked.project_ref_id,
+        locked.binding.store_path().clone(),
+        locked.binding.store_id(),
+        locked.binding.workspace_id(),
+        locked.binding.branch_id(),
+        CanonicalPath::parse(isolated_store_path.display().to_string())?,
+        store_info.store_id,
+        workspace.workspace_id,
+        workspace.initial_branch_id,
+        UtcTimestamp::now()?,
+    )?;
+    let result = locked.registry.isolate_shared_target(isolation)?;
+    if result.shared_peer_project_refs() != locked.shared_peer_project_refs {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "shared peer set changed while materializing the isolation candidate".to_owned(),
+        ));
+    }
+    let candidate = result.into_registry();
+    let installed_digest = install_shared_binding_isolation_registry(
+        &locked.registry_path,
+        &locked.registry_digest,
+        &candidate,
+        fault,
+    )?;
+    let post_install = (|| -> Result<()> {
+        verify_v2_registry_bindings_readonly(&candidate)?;
+        verify_shared_binding_isolation_backup(
+            &backup_path,
+            &source_bytes,
+            &locked.registry_digest,
+        )?;
+        let installed_binding = candidate.binding(locked.project_ref_id).ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(
+                "installed isolation registry lost the selected ProjectRef binding".to_owned(),
+            )
+        })?;
+        if installed_binding.binding_source() != BindingSource::Isolation
+            || installed_binding.store_path().as_str() != isolated_store_path.display().to_string()
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "installed registry does not expose the exact isolated binding".to_owned(),
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(error) = post_install {
+        return Err(WorkVcsError::SharedBindingIsolationInstallIndeterminate(
+            format!(
+                "the registry is installed but post-install verification failed; rerun project isolate-shared-binding --preview before any retry; cause: {error}"
+            ),
+        ));
+    }
+
+    Ok(format!(
+        "action=apply\nread_only=false\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nprevious_registry_digest={}\nregistry_digest={}\nproject_ref_id={}\nbinding_source=isolation\nisolation_state=isolated\nshared_peer_project_refs={}\nsource_store_path={}\nsource_store_preserved=true\nhistory_migrated=false\ndedicated_store_path={}\ndedicated_store_id={}\ndedicated_workspace_id={}\ndedicated_branch_id={}\nstore_created={}\nworkspace_created={}\nbackup_path={}\nbackup_reused={}\nregistry_written=true\nbackup_written={}\nstore_written=true\npost_install_verified=true\nrouting_activated=false\njournal_admission_activated=false\nactivation_refresh_required=true\n",
+        escape_key_value(&locked.registry_path.display().to_string()),
+        candidate.registry_id(),
+        candidate.revision(),
+        locked.registry_digest,
+        installed_digest,
+        locked.project_ref_id,
+        locked
+            .shared_peer_project_refs
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        escape_key_value(locked.binding.store_path().as_str()),
+        escape_key_value(&isolated_store_path.display().to_string()),
+        store_info.store_id,
+        workspace.workspace_id,
+        workspace.initial_branch_id,
+        !store_existed,
+        workspace_created,
+        escape_key_value(&backup_path.display().to_string()),
+        backup_reused,
+        !backup_reused,
+    ))
+}
+
+fn require_shared_binding_isolation_digests(
+    preview: &SharedBindingIsolationPreview,
+    expected_registry_digest: &ControlPlaneDigest,
+    expected_candidate_digest: &ControlPlaneDigest,
+    phase: &str,
+) -> Result<()> {
+    if preview.state != SharedBindingIsolationState::Eligible {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "shared-binding isolation is not apply-eligible {phase}: state {}",
+            preview.state.as_str()
+        )));
+    }
+    if &preview.registry_digest != expected_registry_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "shared-binding isolation registry digest changed {phase}: expected {expected_registry_digest}, found {}",
+            preview.registry_digest
+        )));
+    }
+    let candidate_digest = preview.candidate_digest.as_ref().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "apply-eligible shared-binding isolation has no candidate digest".to_owned(),
+        )
+    })?;
+    if candidate_digest != expected_candidate_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "shared-binding isolation candidate digest changed {phase}: expected {expected_candidate_digest}, found {candidate_digest}"
+        )));
+    }
+    Ok(())
+}
+
+fn shared_binding_isolation_backup_path(
+    registry_path: &Path,
+    registry_digest: &ControlPlaneDigest,
+) -> Result<PathBuf> {
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let file_name = registry_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "project registry path {} has no UTF-8 file name",
+                registry_path.display()
+            ))
+        })?;
+    Ok(parent.join(format!(
+        "{file_name}.v2.{}.pre-isolation.bak",
+        registry_digest.digest()
+    )))
+}
+
+fn install_shared_binding_isolation_backup(
+    registry_path: &Path,
+    backup_path: &Path,
+    expected_bytes: &[u8],
+    expected_digest: &ControlPlaneDigest,
+) -> Result<bool> {
+    if backup_path.exists() {
+        verify_shared_binding_isolation_backup(backup_path, expected_bytes, expected_digest)?;
+        return Ok(true);
+    }
+    fs::hard_link(registry_path, backup_path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot atomically preserve shared-binding isolation backup {}: {error}",
+            backup_path.display()
+        ))
+    })?;
+    sync_directory(
+        registry_path
+            .parent()
+            .expect("canonical project registry has a parent"),
+    )?;
+    verify_shared_binding_isolation_backup(backup_path, expected_bytes, expected_digest)?;
+    Ok(false)
+}
+
+fn verify_shared_binding_isolation_backup(
+    backup_path: &Path,
+    expected_bytes: &[u8],
+    expected_digest: &ControlPlaneDigest,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(backup_path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot inspect shared-binding isolation backup {}: {error}",
+            backup_path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "shared-binding isolation backup {} must be a regular non-symlink file",
+            backup_path.display()
+        )));
+    }
+    let bytes = fs::read(backup_path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot read shared-binding isolation backup {}: {error}",
+            backup_path.display()
+        ))
+    })?;
+    if bytes != expected_bytes {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "shared-binding isolation backup {} does not contain the exact source bytes",
+            backup_path.display()
+        )));
+    }
+    let registry = ProjectRegistryV2::from_json_bytes(&bytes)?;
+    if registry.digest()? != *expected_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "shared-binding isolation backup {} has the wrong registry digest",
+            backup_path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn install_shared_binding_isolation_registry(
+    registry_path: &Path,
+    expected_digest: &ControlPlaneDigest,
+    candidate: &ProjectRegistryV2,
+    fault: Option<SharedBindingIsolationInstallFault>,
+) -> Result<ControlPlaneDigest> {
+    let current_bytes = fs::read(registry_path).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "cannot read registry {} before shared-binding isolation replacement: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let current = ProjectRegistryV2::from_json_bytes(&current_bytes)?;
+    if current.digest()? != *expected_digest {
+        return Err(WorkVcsError::DigestInvalid(format!(
+            "shared-binding isolation registry changed before replacement: expected {expected_digest}, found {}",
+            current.digest()?
+        )));
+    }
+    if candidate.registry_id() != current.registry_id()
+        || candidate.revision() != current.revision().saturating_add(1)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "shared-binding isolation candidate must advance the exact registry by one revision"
+                .to_owned(),
+        ));
+    }
+    let candidate_bytes = candidate.stored_json_bytes()?;
+    let candidate_digest = candidate.digest()?;
+    let parent = registry_path.parent().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "project registry path {} has no parent directory",
+            registry_path.display()
+        ))
+    })?;
+    let temp = unique_project_registry_temp_path(registry_path)?;
+    let mut registry_replaced = false;
+    let write_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "cannot create shared-binding isolation registry temp {}: {error}",
+                    temp.display()
+                ))
+            })?;
+        file.write_all(&candidate_bytes).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot write shared-binding isolation registry temp {}: {error}",
+                temp.display()
+            ))
+        })?;
+        fs::set_permissions(
+            &temp,
+            fs::metadata(registry_path)
+                .map_err(|error| {
+                    WorkVcsError::ControlPlaneInvalid(format!(
+                        "cannot inspect project registry permissions {}: {error}",
+                        registry_path.display()
+                    ))
+                })?
+                .permissions(),
+        )
+        .map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot preserve registry permissions on isolation candidate {}: {error}",
+                temp.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot sync shared-binding isolation registry temp {}: {error}",
+                temp.display()
+            ))
+        })?;
+        drop(file);
+        let source_before_replace = fs::read(registry_path).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot recheck project registry {} before isolation replacement: {error}",
+                registry_path.display()
+            ))
+        })?;
+        if source_before_replace != current_bytes {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "registry bytes changed after isolation digest lock and before replacement"
+                    .to_owned(),
+            ));
+        }
+        fs::rename(&temp, registry_path).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot atomically replace project registry {} from {}: {error}",
+                registry_path.display(),
+                temp.display()
+            ))
+        })?;
+        registry_replaced = true;
+        inject_shared_binding_isolation_fault(
+            fault,
+            SharedBindingIsolationInstallFault::AfterRegistryRename,
+        )?;
+        sync_directory(parent)?;
+        inject_shared_binding_isolation_fault(
+            fault,
+            SharedBindingIsolationInstallFault::AfterRegistryDirectorySync,
+        )?;
+        inject_shared_binding_isolation_fault(
+            fault,
+            SharedBindingIsolationInstallFault::BeforeInstalledVerification,
+        )?;
+        let installed_bytes = fs::read(registry_path).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "cannot verify isolated registry {}: {error}",
+                registry_path.display()
+            ))
+        })?;
+        if installed_bytes != candidate_bytes {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "isolated registry bytes differ after atomic replacement".to_owned(),
+            ));
+        }
+        let installed = ProjectRegistryV2::from_json_bytes(&installed_bytes)?;
+        if installed.digest()? != candidate_digest {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "isolated registry digest differs after atomic replacement".to_owned(),
+            ));
+        }
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    if let Err(error) = write_result {
+        if registry_replaced {
+            return Err(WorkVcsError::SharedBindingIsolationInstallIndeterminate(
+                format!(
+                    "the registry replacement completed or may have completed; rerun project isolate-shared-binding --preview before retrying; cause: {error}"
+                ),
+            ));
+        }
+        return Err(error);
+    }
+    Ok(candidate_digest)
+}
+
+fn inject_shared_binding_isolation_fault(
+    configured: Option<SharedBindingIsolationInstallFault>,
+    current: SharedBindingIsolationInstallFault,
+) -> Result<()> {
+    if configured == Some(current) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "injected shared-binding isolation fault at {current:?}"
         )));
     }
     Ok(())
@@ -62134,6 +62977,345 @@ mod tests {
             None,
         )
         .expect("apply fixture migration")
+    }
+
+    struct SharedBindingIsolationFixture {
+        binding: ProjectBindingFixture,
+        second_project_text: String,
+        store_root: PathBuf,
+    }
+
+    fn create_shared_binding_isolation_fixture() -> SharedBindingIsolationFixture {
+        let binding = create_project_binding_fixture(false);
+        let second_project = binding._tempdir.path().join("second-project");
+        fs::create_dir_all(&second_project).expect("create second project");
+        let second_project_text =
+            path_text(&fs::canonicalize(&second_project).expect("canonical second project"));
+        migrate_fixture_registry_to_v2(&binding, None);
+        let registry = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&binding.registry_path).expect("migrated registry"),
+        )
+        .expect("registry v2");
+        let mut registry_value: serde_json::Value =
+            serde_json::from_slice(&registry.canonical_json_bytes().unwrap()).unwrap();
+        let second_project_ref = ProjectRefId::new_v7();
+        registry_value["revision"] = serde_json::json!(registry.revision() + 1);
+        registry_value["projects"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "project_ref_id": second_project_ref,
+                "maturity": "provisional",
+                "display_name": null,
+                "created_at": "2026-10-07T08:00:00Z",
+                "created_by": "cwd_first_write"
+            }));
+        registry_value["projects"]
+            .as_array_mut()
+            .unwrap()
+            .sort_by(|left, right| {
+                left["project_ref_id"]
+                    .as_str()
+                    .unwrap()
+                    .cmp(right["project_ref_id"].as_str().unwrap())
+            });
+        registry_value["locators"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "locator_id": workvcs_core::ProjectLocatorId::new_v7(),
+                "project_ref_id": second_project_ref,
+                "role": "identity",
+                "authority": "cwd",
+                "provider": "filesystem",
+                "namespace": format!("registry:{}", registry.registry_id()),
+                "kind": "canonical_directory",
+                "normalized_value": second_project_text,
+                "assurance": "verified_derived",
+                "source_adapter": "workvcs-filesystem-v1",
+                "evidence_digest": ControlPlaneDigest::raw(b"second fixture cwd"),
+                "observed_at": "2026-10-07T08:00:00Z",
+                "state": "active"
+            }));
+        registry_value["locators"]
+            .as_array_mut()
+            .unwrap()
+            .sort_by(|left, right| {
+                left["locator_id"]
+                    .as_str()
+                    .unwrap()
+                    .cmp(right["locator_id"].as_str().unwrap())
+            });
+        let mut second_binding = registry_value["bindings"][0].clone();
+        second_binding["project_ref_id"] = serde_json::json!(second_project_ref);
+        second_binding["binding_source"] = serde_json::json!("explicit");
+        second_binding["bound_at"] = serde_json::json!("2026-10-07T08:00:00Z");
+        registry_value["bindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(second_binding);
+        registry_value["bindings"]
+            .as_array_mut()
+            .unwrap()
+            .sort_by(|left, right| {
+                left["project_ref_id"]
+                    .as_str()
+                    .unwrap()
+                    .cmp(right["project_ref_id"].as_str().unwrap())
+            });
+        let shared_registry =
+            ProjectRegistryV2::from_json_bytes(&serde_json::to_vec(&registry_value).unwrap())
+                .expect("shared-target registry v2");
+        fs::write(
+            &binding.registry_path,
+            shared_registry.stored_json_bytes().unwrap(),
+        )
+        .expect("install shared-target fixture registry");
+        activate_fixture_v2_durable_operations(&binding);
+        let store_root = binding._tempdir.path().join("isolated-stores");
+        SharedBindingIsolationFixture {
+            binding,
+            second_project_text,
+            store_root,
+        }
+    }
+
+    #[test]
+    fn cli_v2_shared_binding_isolation_is_digest_locked_preserves_history_and_stales_markers() {
+        let fixture = create_shared_binding_isolation_fixture();
+        let registry_before = fs::read(&fixture.binding.registry_path).expect("registry before");
+        let source_store_before = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        let preview = preview_project_shared_binding_isolation(
+            PathBuf::from(&fixture.binding.project_text),
+            None,
+            Some(fixture.binding.registry_path.clone()),
+            Some(fixture.store_root.clone()),
+        )
+        .expect("preview shared binding isolation");
+        assert_eq!(value(&preview, "read_only"), "true");
+        assert_eq!(value(&preview, "isolation_state"), "eligible");
+        assert_eq!(value(&preview, "apply_eligible"), "true");
+        assert_eq!(value(&preview, "shared_peer_count"), "1");
+        assert_eq!(value(&preview, "candidate_store_state"), "absent");
+        assert!(!fixture.store_root.exists());
+        assert_eq!(
+            fs::read(&fixture.binding.registry_path).unwrap(),
+            registry_before
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            source_store_before
+        );
+
+        let wrong_digest = apply_project_shared_binding_isolation(
+            PathBuf::from(&fixture.binding.project_text),
+            None,
+            Some(fixture.binding.registry_path.clone()),
+            Some(fixture.store_root.clone()),
+            ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::raw(b"wrong isolation candidate"),
+        )
+        .expect_err("wrong candidate digest must fail before writes");
+        assert_eq!(wrong_digest.code().as_str(), "digest_invalid");
+        assert!(!fixture.store_root.exists());
+        assert_eq!(
+            fs::read(&fixture.binding.registry_path).unwrap(),
+            registry_before
+        );
+
+        let applied = apply_project_shared_binding_isolation(
+            PathBuf::from(&fixture.binding.project_text),
+            None,
+            Some(fixture.binding.registry_path.clone()),
+            Some(fixture.store_root.clone()),
+            ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap(),
+        )
+        .expect("apply shared binding isolation");
+        assert_eq!(value(&applied, "isolation_state"), "isolated");
+        assert_eq!(value(&applied, "binding_source"), "isolation");
+        assert_eq!(value(&applied, "source_store_preserved"), "true");
+        assert_eq!(value(&applied, "history_migrated"), "false");
+        assert_eq!(value(&applied, "registry_written"), "true");
+        assert_eq!(value(&applied, "post_install_verified"), "true");
+        assert_eq!(value(&applied, "activation_refresh_required"), "true");
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            source_store_before,
+            "isolation must not mutate or copy the ambiguous source Store"
+        );
+        let backup_path = PathBuf::from(value(&applied, "backup_path"));
+        assert_eq!(fs::read(&backup_path).unwrap(), registry_before);
+        let isolated_store = PathBuf::from(value(&applied, "dedicated_store_path"));
+        assert!(isolated_store.is_file());
+        assert_ne!(isolated_store, fixture.binding.store_path);
+
+        let installed = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.binding.registry_path).expect("installed registry"),
+        )
+        .expect("installed registry v2");
+        assert_eq!(installed.revision(), 3);
+        let selected = ProjectRefId::parse_canonical(&value(&applied, "project_ref_id")).unwrap();
+        assert_eq!(
+            installed.binding(selected).unwrap().binding_source(),
+            BindingSource::Isolation
+        );
+        let second_preview = preview_project_shared_binding_isolation(
+            PathBuf::from(&fixture.binding.project_text),
+            None,
+            Some(fixture.binding.registry_path.clone()),
+            Some(fixture.store_root.clone()),
+        )
+        .expect("preview installed isolation without active markers");
+        assert_eq!(
+            value(&second_preview, "isolation_state"),
+            "already_isolated"
+        );
+        assert_eq!(value(&second_preview, "apply_eligible"), "false");
+
+        let routing_status =
+            inspect_project_routing_activation(Some(fixture.binding.registry_path.clone()))
+                .expect("inspect stale read-routing marker");
+        assert_eq!(value(&routing_status, "activation_state"), "stale");
+        let journal_status = inspect_project_journal_admission_activation(Some(
+            fixture.binding.registry_path.clone(),
+        ))
+        .expect("inspect stale journal marker");
+        assert_eq!(value(&journal_status, "activation_state"), "stale");
+
+        let routing_preview =
+            preview_project_routing_activation(Some(fixture.binding.registry_path.clone()))
+                .unwrap();
+        apply_project_routing_activation_refresh(
+            Some(fixture.binding.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&routing_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&routing_preview, "candidate_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&routing_status, "activation_digest")).unwrap(),
+        )
+        .expect("refresh read-routing marker");
+        let journal_preview = preview_project_journal_admission_activation(Some(
+            fixture.binding.registry_path.clone(),
+        ))
+        .unwrap();
+        apply_project_journal_admission_activation_refresh(
+            Some(fixture.binding.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "candidate_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&journal_status, "activation_digest")).unwrap(),
+        )
+        .expect("refresh journal marker");
+
+        let selected_discovery = discover_project_readonly(
+            PathBuf::from(&fixture.binding.project_text),
+            Some(fixture.binding.registry_path.clone()),
+        )
+        .expect("discover isolated project");
+        assert_eq!(
+            selected_discovery.binding.store_path,
+            isolated_store.display().to_string()
+        );
+        let peer_discovery = discover_project_readonly(
+            PathBuf::from(&fixture.second_project_text),
+            Some(fixture.binding.registry_path.clone()),
+        )
+        .expect("discover preserved shared-target peer");
+        assert_eq!(
+            peer_discovery.binding.store_path,
+            fixture.binding.store_path.display().to_string()
+        );
+    }
+
+    #[test]
+    fn shared_binding_isolation_post_replace_faults_are_indeterminate_and_recover_by_preview() {
+        for fault in [
+            SharedBindingIsolationInstallFault::AfterRegistryRename,
+            SharedBindingIsolationInstallFault::AfterRegistryDirectorySync,
+            SharedBindingIsolationInstallFault::BeforeInstalledVerification,
+        ] {
+            let fixture = create_shared_binding_isolation_fixture();
+            let registry_before =
+                fs::read(&fixture.binding.registry_path).expect("shared registry before");
+            let source_store_before = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+            let preview = preview_project_shared_binding_isolation(
+                PathBuf::from(&fixture.binding.project_text),
+                None,
+                Some(fixture.binding.registry_path.clone()),
+                Some(fixture.store_root.clone()),
+            )
+            .expect("preview shared binding isolation");
+            let registry_digest =
+                ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap();
+            let candidate_digest =
+                ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap();
+            let backup_path = shared_binding_isolation_backup_path(
+                &fixture.binding.registry_path,
+                &registry_digest,
+            )
+            .expect("isolation backup path");
+
+            let error = apply_project_shared_binding_isolation_with_fault(
+                PathBuf::from(&fixture.binding.project_text),
+                None,
+                Some(fixture.binding.registry_path.clone()),
+                Some(fixture.store_root.clone()),
+                registry_digest,
+                candidate_digest,
+                Some(fault),
+            )
+            .expect_err("post-replacement fault must be indeterminate");
+            assert_eq!(
+                error.code().as_str(),
+                "shared_binding_isolation_install_indeterminate"
+            );
+            assert!(error.to_string().contains("--preview"));
+
+            let recovery = preview_project_shared_binding_isolation(
+                PathBuf::from(&fixture.binding.project_text),
+                None,
+                Some(fixture.binding.registry_path.clone()),
+                Some(fixture.store_root.clone()),
+            )
+            .expect("preview resolves post-replacement outcome");
+            assert_eq!(value(&recovery, "isolation_state"), "already_isolated");
+            assert_eq!(value(&recovery, "apply_eligible"), "false");
+            assert_eq!(fs::read(&backup_path).unwrap(), registry_before);
+            assert_eq!(
+                cli_sqlite_file_snapshots(&fixture.binding.store_path),
+                source_store_before
+            );
+            assert_eq!(
+                value(
+                    &inspect_project_routing_activation(Some(
+                        fixture.binding.registry_path.clone()
+                    ))
+                    .expect("routing status after indeterminate isolation"),
+                    "activation_state"
+                ),
+                "stale"
+            );
+            assert_eq!(
+                value(
+                    &inspect_project_journal_admission_activation(Some(
+                        fixture.binding.registry_path.clone()
+                    ))
+                    .expect("journal status after indeterminate isolation"),
+                    "activation_state"
+                ),
+                "stale"
+            );
+            assert!(
+                directory_entry_names(
+                    fixture
+                        .binding
+                        .registry_path
+                        .parent()
+                        .expect("registry parent")
+                )
+                .iter()
+                .all(|name| !name.ends_with(".tmp")),
+                "fault {fault:?} left a registry temp artifact"
+            );
+        }
     }
 
     fn activate_fixture_v2_durable_operations(fixture: &ProjectBindingFixture) {

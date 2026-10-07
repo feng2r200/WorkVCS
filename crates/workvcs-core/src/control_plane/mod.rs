@@ -54,9 +54,9 @@ pub use model::{
     ProjectBootstrapOutcome, ProjectBootstrapResult, ProjectCreatedBy, ProjectLink,
     ProjectLinkBasis, ProjectLinkRelation, ProjectLinkStatus, ProjectLocator, ProjectMaturity,
     ProjectRef, ProjectRegistryV2, RegistryObservation, RegistryObservationKind,
-    RegistryObservationSource, ResolutionContext, ResolutionMode, StrongerLocatorAttachment,
-    StrongerLocatorAttachmentBasis, StrongerLocatorAttachmentOutcome,
-    StrongerLocatorAttachmentResult, UtcTimestamp,
+    RegistryObservationSource, ResolutionContext, ResolutionMode, SharedTargetIsolation,
+    SharedTargetIsolationResult, StrongerLocatorAttachment, StrongerLocatorAttachmentBasis,
+    StrongerLocatorAttachmentOutcome, StrongerLocatorAttachmentResult, UtcTimestamp,
 };
 pub use resolver::{
     ResolutionBasis, ResolutionDiagnostic, ResolutionRank, ResolutionResult, ResolutionStatus,

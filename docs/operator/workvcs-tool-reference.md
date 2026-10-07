@@ -1,7 +1,7 @@
 # WorkVCS Tool Reference For Governance Plan Carriers
 
 Status: current-main operator reference for Codex sessions
-Last updated: 2026-09-27
+Last updated: 2026-10-07
 
 This reference explains what the current `workvcs` tool can carry for an
 Agent-facing governance workflow. It is meant for other Codex sessions that
@@ -108,6 +108,27 @@ registry revision only through an exact-old-digest strict capability-superset
 refresh. This marker permits only immutable typed-intent admission. It does
 not by itself authorize ProjectRef bootstrap, journal-event processing, target
 Store delivery, or any live operation.
+
+Shared-binding isolation is a separate registry repair surface:
+
+When registry v2 preserves an unintentional exact shared target, use the
+separate repair surface before writing new logical-project state:
+
+```text
+workvcs project isolate-shared-binding --preview --cwd PATH [--project-ref ID] [--registry PATH] [--store-root PATH]
+workvcs project isolate-shared-binding --apply --cwd PATH [--project-ref ID] [--registry PATH] [--store-root PATH] --expected-registry-digest DIGEST --expected-candidate-digest DIGEST
+```
+
+Preview resolves and verifies one ProjectRef without requiring active ordinary
+read routing and performs zero writes. Apply is Unix-only, digest-locked, and
+serialized against journal admission. It preserves exact old registry bytes,
+creates or reuses only the deterministic pristine Store, changes exactly one
+binding to `binding_source=isolation`, and copies no source Store history.
+Other bindings and historical `possible_shared_target` observations remain
+unchanged. Both activation markers become stale and require their own exact
+old-digest refresh. After
+`shared_binding_isolation_install_indeterminate`, run preview before any retry;
+never hand-edit the registry or infer rollback.
 
 The source tree now also contains a separately explicit recovery surface:
 

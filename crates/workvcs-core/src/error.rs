@@ -100,6 +100,7 @@ pub enum ErrorCode {
     RegistryRollbackInstallIndeterminate,
     RoutingActivationInstallIndeterminate,
     RoutingActivationDisableIndeterminate,
+    SharedBindingIsolationInstallIndeterminate,
     RecordInvalid,
     RecordNotFound,
     RelationInvalid,
@@ -164,6 +165,9 @@ impl ErrorCode {
             }
             Self::RoutingActivationDisableIndeterminate => {
                 "routing_activation_disable_indeterminate"
+            }
+            Self::SharedBindingIsolationInstallIndeterminate => {
+                "shared_binding_isolation_install_indeterminate"
             }
             Self::RecordInvalid => "record_invalid",
             Self::RecordNotFound => "record_not_found",
@@ -312,6 +316,9 @@ pub enum WorkVcsError {
     #[error("routing activation disable is indeterminate after marker removal: {0}")]
     RoutingActivationDisableIndeterminate(String),
 
+    #[error("shared binding isolation is indeterminate after registry replacement: {0}")]
+    SharedBindingIsolationInstallIndeterminate(String),
+
     #[error("record invalid: {0}")]
     RecordInvalid(String),
 
@@ -418,6 +425,9 @@ impl WorkVcsError {
             Self::RoutingActivationDisableIndeterminate(_) => {
                 ErrorCode::RoutingActivationDisableIndeterminate
             }
+            Self::SharedBindingIsolationInstallIndeterminate(_) => {
+                ErrorCode::SharedBindingIsolationInstallIndeterminate
+            }
             Self::RecordInvalid(_) => ErrorCode::RecordInvalid,
             Self::RecordNotFound(_) => ErrorCode::RecordNotFound,
             Self::RelationInvalid(_) => ErrorCode::RelationInvalid,
@@ -453,7 +463,8 @@ impl WorkVcsError {
             | Self::RegistryRollbackFailed(_)
             | Self::RegistryRollbackInstallIndeterminate(_)
             | Self::RoutingActivationInstallIndeterminate(_)
-            | Self::RoutingActivationDisableIndeterminate(_) => ErrorCategory::ControlPlane,
+            | Self::RoutingActivationDisableIndeterminate(_)
+            | Self::SharedBindingIsolationInstallIndeterminate(_) => ErrorCategory::ControlPlane,
             Self::EvidenceInvalid(_) | Self::EvidenceNotFound(_) => ErrorCategory::Evidence,
             Self::IdentityInvalid(_) => ErrorCategory::Identity,
             Self::ImmutableImportInvalid(_) => ErrorCategory::Import,
@@ -570,6 +581,10 @@ mod tests {
         assert_eq!(
             ErrorCode::RoutingActivationDisableIndeterminate.as_str(),
             "routing_activation_disable_indeterminate"
+        );
+        assert_eq!(
+            ErrorCode::SharedBindingIsolationInstallIndeterminate.as_str(),
+            "shared_binding_isolation_install_indeterminate"
         );
     }
 

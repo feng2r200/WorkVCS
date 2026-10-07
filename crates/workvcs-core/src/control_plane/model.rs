@@ -421,6 +421,7 @@ pub enum BindingSource {
     Explicit,
     Migration,
     FirstWrite,
+    Isolation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -633,6 +634,95 @@ pub struct FirstWriteProjectBinding {
     workspace_id: WorkspaceId,
     branch_id: BranchId,
     created_at: UtcTimestamp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedTargetIsolation {
+    project_ref_id: ProjectRefId,
+    expected_store_path: CanonicalPath,
+    expected_store_id: StoreId,
+    expected_workspace_id: WorkspaceId,
+    expected_branch_id: BranchId,
+    isolated_store_path: CanonicalPath,
+    isolated_store_id: StoreId,
+    isolated_workspace_id: WorkspaceId,
+    isolated_branch_id: BranchId,
+    isolated_at: UtcTimestamp,
+}
+
+impl SharedTargetIsolation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        project_ref_id: ProjectRefId,
+        expected_store_path: CanonicalPath,
+        expected_store_id: StoreId,
+        expected_workspace_id: WorkspaceId,
+        expected_branch_id: BranchId,
+        isolated_store_path: CanonicalPath,
+        isolated_store_id: StoreId,
+        isolated_workspace_id: WorkspaceId,
+        isolated_branch_id: BranchId,
+        isolated_at: UtcTimestamp,
+    ) -> Result<Self> {
+        let candidate = Self {
+            project_ref_id,
+            expected_store_path,
+            expected_store_id,
+            expected_workspace_id,
+            expected_branch_id,
+            isolated_store_path,
+            isolated_store_id,
+            isolated_workspace_id,
+            isolated_branch_id,
+            isolated_at,
+        };
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
+    pub fn project_ref_id(&self) -> ProjectRefId {
+        self.project_ref_id
+    }
+
+    pub fn isolated_store_path(&self) -> &CanonicalPath {
+        &self.isolated_store_path
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.expected_store_path == self.isolated_store_path
+            || self.expected_store_id == self.isolated_store_id
+        {
+            return invalid(
+                "shared-target isolation requires a different dedicated Store path and Store identity",
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedTargetIsolationResult {
+    registry: ProjectRegistryV2,
+    project_ref_id: ProjectRefId,
+    shared_peer_project_refs: Vec<ProjectRefId>,
+}
+
+impl SharedTargetIsolationResult {
+    pub fn registry(&self) -> &ProjectRegistryV2 {
+        &self.registry
+    }
+
+    pub fn into_registry(self) -> ProjectRegistryV2 {
+        self.registry
+    }
+
+    pub fn project_ref_id(&self) -> ProjectRefId {
+        self.project_ref_id
+    }
+
+    pub fn shared_peer_project_refs(&self) -> &[ProjectRefId] {
+        &self.shared_peer_project_refs
+    }
 }
 
 impl FirstWriteProjectBinding {
@@ -1233,6 +1323,82 @@ impl ProjectRegistryV2 {
             .binary_search_by_key(&project_ref_id, |binding| binding.project_ref_id)
             .ok()
             .map(|index| &self.bindings[index])
+    }
+
+    pub fn isolate_shared_target(
+        &self,
+        isolation: SharedTargetIsolation,
+    ) -> Result<SharedTargetIsolationResult> {
+        self.validate()?;
+        isolation.validate()?;
+        let binding_index = self
+            .bindings
+            .binary_search_by_key(&isolation.project_ref_id, |binding| binding.project_ref_id)
+            .map_err(|_| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "shared-target isolation names missing ProjectRef binding {}",
+                    isolation.project_ref_id
+                ))
+            })?;
+        let current = &self.bindings[binding_index];
+        if current.store_path != isolation.expected_store_path
+            || current.store_id != isolation.expected_store_id
+            || current.workspace_id != isolation.expected_workspace_id
+            || current.branch_id != isolation.expected_branch_id
+        {
+            return invalid(format!(
+                "ProjectRef {} target changed before shared-target isolation",
+                isolation.project_ref_id
+            ));
+        }
+        let mut shared_peer_project_refs = self
+            .bindings
+            .iter()
+            .filter(|binding| {
+                binding.project_ref_id != isolation.project_ref_id
+                    && binding.store_path == current.store_path
+                    && binding.store_id == current.store_id
+                    && binding.workspace_id == current.workspace_id
+                    && binding.branch_id == current.branch_id
+            })
+            .map(|binding| binding.project_ref_id)
+            .collect::<Vec<_>>();
+        shared_peer_project_refs.sort();
+        if shared_peer_project_refs.is_empty() {
+            return invalid(format!(
+                "ProjectRef {} target is not shared by another binding",
+                isolation.project_ref_id
+            ));
+        }
+        if let Some(conflict) = self.bindings.iter().find(|binding| {
+            binding.store_path == isolation.isolated_store_path
+                || binding.store_id == isolation.isolated_store_id
+        }) {
+            return invalid(format!(
+                "dedicated isolation Store conflicts with ProjectRef {}",
+                conflict.project_ref_id
+            ));
+        }
+
+        let mut registry = self.clone();
+        registry.revision = registry.revision.checked_add(1).ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid("registry revision overflow".to_owned())
+        })?;
+        registry.bindings[binding_index] = ProjectBinding {
+            project_ref_id: isolation.project_ref_id,
+            store_path: isolation.isolated_store_path,
+            store_id: isolation.isolated_store_id,
+            workspace_id: isolation.isolated_workspace_id,
+            branch_id: isolation.isolated_branch_id,
+            bound_at: isolation.isolated_at,
+            binding_source: BindingSource::Isolation,
+        };
+        registry.validate()?;
+        Ok(SharedTargetIsolationResult {
+            registry,
+            project_ref_id: isolation.project_ref_id,
+            shared_peer_project_refs,
+        })
     }
 
     pub fn converge_first_write_binding(

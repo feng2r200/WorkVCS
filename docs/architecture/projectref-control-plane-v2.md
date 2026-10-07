@@ -3,7 +3,7 @@
 Status: Accepted implemented contract — roadmap rounds 1–11 complete with isolated fault evidence and bounded live local canary evidence
 Date: 2026-09-23
 Last updated: 2026-10-07
-Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md), [ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md)
+Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md), [ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md), [ADR-0517](../decisions/adr/0517-shared-project-binding-isolation.md)
 
 ## Contract language and scope
 
@@ -286,7 +286,7 @@ Additional rules:
 | `workspace_id` | canonical Workspace ID | yes | Must exist in the Store. |
 | `branch_id` | canonical Branch ID | yes | Must belong to the Workspace. |
 | `bound_at` | `Timestamp` | yes | Initial or migrated binding time. |
-| `binding_source` | `explicit`, `migration`, or `first_write` | yes | How the target was selected. |
+| `binding_source` | `explicit`, `migration`, `first_write`, or `isolation` | yes | How the target was selected. |
 
 Every routable ProjectRef MUST have one binding. A binding is accepted for use
 only after the current complete Store identity, format, schema, Workspace,
@@ -300,6 +300,14 @@ A newly created ProjectRef receives a dedicated Store, Workspace, and initial
 Branch under the configured external Store root by default. Sharing an
 existing target requires an explicit bind operation; migration may preserve a
 pre-existing shared target without endorsing it as the new-project default.
+
+An exact shared target may be separated only through the ADR-0517
+preview/digest-locked isolation operation. It preserves the ProjectRef and old
+Store, creates or reuses a deterministic pristine dedicated Store, changes one
+binding, advances the registry revision, and records `binding_source=isolation`.
+It never copies the old Store or removes the historical shared-target
+observation. Ordinary activation markers become stale and require separate
+exact-digest refresh after the registry change.
 
 ### ProjectLink
 
@@ -905,6 +913,7 @@ The future implementation MUST expose at least these machine-routable codes:
 | `routing_activation_disable_indeterminate` | A journal-admission marker was removed or may have been removed before durable verification completed; inspect `project journal-admission-activation --status` before retry or recovery. |
 | `capture_idempotency_conflict` | Use the original payload or a new idempotency key. |
 | `capture_recovery_install_indeterminate` | Registry, event, or projection installation may already be durable; run `project capture-recovery --status` with the same capture and continue forward using the newly reported digests. Never infer rollback. |
+| `shared_binding_isolation_install_indeterminate` | The registry replacement may already be durable; rerun `project isolate-shared-binding --preview` and continue only from `eligible`, `not_shared`, or verified `already_isolated`. Never copy the source Store or replay apply blindly. |
 | `legacy_manifest_upgrade_required` | Convert the durable legacy intent to a separately confirmed target-neutral delivery; do not rewrite it implicitly. |
 | `semantic_manifest_invalid` | Preserve the immutable intent, inspect the invalid semantic input, and start a corrected new Capture; do not replay or rewrite the old payload. |
 | `plan_target_conflict` | Preserve the immutable operation and start a new Plan operation with current target guards. |

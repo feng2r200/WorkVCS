@@ -40,7 +40,9 @@ ProjectRef v2 按确定顺序判断内容归属：显式指定的 ProjectRef、�
 
 当集成层确认某项内容值得保留后，v2 `capture` 会先把不携带目标地址的意图写入中央日志。交付仍是一个显式且受摘要锁定的恢复操作：主项目拥有唯一的规范 Record，相关项目可以通过 CaptureGroup 获得不可变、固定到具体版本的引用。只读操作和明确的“不记录”决定保持零写入；只有针对注册表精确快照显式启用后，路由和准入才会生效。
 
-进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
+如果迁移暴露出两个不同 ProjectRef 意外共享同一个未分区目标，WorkVCS 通过先预览、再以摘要锁定的隔离操作，只把被选中的绑定切换到确定性的全新 Store。旧 Store 与 ProjectRef 会被保留，不复制归属不明的历史状态；注册表版本改变后，两个激活标记必须分别显式刷新。
+
+进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ADR-0517（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
 
 ## Agent 参与策略
 
@@ -99,6 +101,7 @@ scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
 - [语义操作与状态机（英文）](docs/architecture/semantic-operations-and-state-machines.md)——面向 Agent 的行为契约。
 - [持久化模型（英文）](docs/architecture/persistence-model.md)和 [Schema 契约（英文）](docs/architecture/physical-schema-v0.1.md)——本地持久存储与可重建投影。
 - [ProjectRef 归属与持久化捕获路由（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)——逻辑项目解析、日志准入、有界恢复和跨项目关联。
+- [共享 ProjectRef 绑定隔离（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)——零写入预览、精确替换、旧 Store 保留和激活刷新边界。
 - [V1 就绪台账（英文）](docs/provenance/v1-readiness-ledger.md)和[发布门矩阵（英文）](docs/provenance/v1-release-gate-matrix.md)——支撑限定成熟度声明的证据。
 - [文档地图（英文）](docs/README.md)——完整的权威资料与证据索引。
 

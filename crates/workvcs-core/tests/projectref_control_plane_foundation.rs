@@ -7,13 +7,13 @@ use std::time::Duration;
 use tempfile::tempdir;
 use workvcs_core::canonical::{canonical_bytes, parse_canonical_json};
 use workvcs_core::control_plane::{
-    CanonicalPath, CaptureAdmissionOutcome, CaptureIntent, CaptureJournal, ControlPlaneDigest,
-    JournalQuiescenceLock, LocatorAssurance, LocatorAuthority, LocatorEvidence,
+    BindingSource, CanonicalPath, CaptureAdmissionOutcome, CaptureIntent, CaptureJournal,
+    ControlPlaneDigest, JournalQuiescenceLock, LocatorAssurance, LocatorAuthority, LocatorEvidence,
     MAX_SEMANTIC_PAYLOAD_BYTES, PathLocatorEvidence, ProjectMaturity, ProjectRegistryJournalAlias,
     ProjectRegistryV2, ResolutionContext, ResolutionDiagnostic, ResolutionMode, ResolutionRank,
-    ResolutionStatus, StrongerLocatorAttachment, StrongerLocatorAttachmentBasis,
-    StrongerLocatorAttachmentOutcome, UtcTimestamp, project_registry_journal_quiescence_lock_path,
-    resolve_project,
+    ResolutionStatus, SharedTargetIsolation, StrongerLocatorAttachment,
+    StrongerLocatorAttachmentBasis, StrongerLocatorAttachmentOutcome, UtcTimestamp,
+    project_registry_journal_quiescence_lock_path, resolve_project,
 };
 use workvcs_core::{
     BranchId, CaptureGroupId, CaptureId, ErrorCode, ProjectLinkId, ProjectLocatorId, ProjectRefId,
@@ -168,6 +168,109 @@ fn registry_with_cwd_binding(fixture: &RegistryFixture) -> ProjectRegistryV2 {
         "binding_source": "first_write"
     }]);
     ProjectRegistryV2::from_json_bytes(&serde_json::to_vec(&value).unwrap()).unwrap()
+}
+
+#[test]
+fn shared_target_isolation_moves_only_the_selected_binding() {
+    let fixture = registry_fixture();
+    let shared_store_id = StoreId::new_v7();
+    let shared_workspace_id = WorkspaceId::new_v7();
+    let shared_branch_id = BranchId::new_v7();
+    let mut value: Value =
+        serde_json::from_slice(&fixture.registry.canonical_json_bytes().unwrap()).unwrap();
+    value["bindings"] = json!([
+        {
+            "project_ref_id": fixture.repository_project,
+            "store_path": "/tmp/workvcs-projectref-foundation/stores/shared.sqlite",
+            "store_id": shared_store_id,
+            "workspace_id": shared_workspace_id,
+            "branch_id": shared_branch_id,
+            "bound_at": NOW,
+            "binding_source": "migration"
+        },
+        {
+            "project_ref_id": fixture.semantic_project,
+            "store_path": "/tmp/workvcs-projectref-foundation/stores/shared.sqlite",
+            "store_id": shared_store_id,
+            "workspace_id": shared_workspace_id,
+            "branch_id": shared_branch_id,
+            "bound_at": NOW,
+            "binding_source": "migration"
+        }
+    ]);
+    value["bindings"]
+        .as_array_mut()
+        .unwrap()
+        .sort_by(|left, right| {
+            left["project_ref_id"]
+                .as_str()
+                .unwrap()
+                .cmp(right["project_ref_id"].as_str().unwrap())
+        });
+    let registry =
+        ProjectRegistryV2::from_json_bytes(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let isolated_store_id = StoreId::new_v7();
+    let isolated_workspace_id = WorkspaceId::new_v7();
+    let isolated_branch_id = BranchId::new_v7();
+    let candidate = SharedTargetIsolation::new(
+        fixture.repository_project,
+        CanonicalPath::parse("/tmp/workvcs-projectref-foundation/stores/shared.sqlite".to_owned())
+            .unwrap(),
+        shared_store_id,
+        shared_workspace_id,
+        shared_branch_id,
+        CanonicalPath::parse(
+            "/tmp/workvcs-projectref-foundation/stores/repository.sqlite".to_owned(),
+        )
+        .unwrap(),
+        isolated_store_id,
+        isolated_workspace_id,
+        isolated_branch_id,
+        UtcTimestamp::parse("2026-09-23T08:01:00Z").unwrap(),
+    )
+    .unwrap();
+
+    let result = registry
+        .isolate_shared_target(candidate)
+        .expect("isolate exact shared target");
+    assert_eq!(result.project_ref_id(), fixture.repository_project);
+    assert_eq!(
+        result.shared_peer_project_refs(),
+        &[fixture.semantic_project]
+    );
+    let isolated = result.registry();
+    assert_eq!(isolated.revision(), registry.revision() + 1);
+    let moved = isolated.binding(fixture.repository_project).unwrap();
+    assert_eq!(moved.binding_source(), BindingSource::Isolation);
+    assert_eq!(moved.store_id(), isolated_store_id);
+    assert_eq!(moved.workspace_id(), isolated_workspace_id);
+    assert_eq!(moved.branch_id(), isolated_branch_id);
+    let preserved = isolated.binding(fixture.semantic_project).unwrap();
+    assert_eq!(preserved.store_id(), shared_store_id);
+    assert_eq!(preserved.workspace_id(), shared_workspace_id);
+    assert_eq!(preserved.branch_id(), shared_branch_id);
+
+    let no_longer_shared = SharedTargetIsolation::new(
+        fixture.repository_project,
+        moved.store_path().clone(),
+        moved.store_id(),
+        moved.workspace_id(),
+        moved.branch_id(),
+        CanonicalPath::parse(
+            "/tmp/workvcs-projectref-foundation/stores/repository-second.sqlite".to_owned(),
+        )
+        .unwrap(),
+        StoreId::new_v7(),
+        WorkspaceId::new_v7(),
+        BranchId::new_v7(),
+        UtcTimestamp::parse("2026-09-23T08:02:00Z").unwrap(),
+    )
+    .unwrap();
+    let error = isolated
+        .isolate_shared_target(no_longer_shared)
+        .expect_err("an already dedicated binding is not eligible");
+    assert_eq!(error.code(), ErrorCode::ControlPlaneInvalid);
+    assert!(error.to_string().contains("is not shared"));
 }
 
 fn semantic_evidence(value: &str, assurance: LocatorAssurance) -> LocatorEvidence {

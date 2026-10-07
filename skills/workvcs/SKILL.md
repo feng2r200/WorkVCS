@@ -125,12 +125,17 @@ or activate a different route. Read
 [Configuration](references/configuration.md) only after an observed
 configuration, locator, registry, binding, or marker problem.
 
-Registry migration, rollback, read-routing activation, journal-admission
-activation, marker refresh, and capture-recovery apply are separate mutation
-boundaries. Their preview or status forms do not authorize apply. Use current
-digests, status-first recovery, and the exact installed binary; never delete or
-hand-edit a stale marker, substitute a source-tree binary for live
-installation, or infer authority from fixture success.
+Registry migration, rollback, shared-binding isolation, read-routing
+activation, journal-admission activation, marker refresh, and capture-recovery
+apply are separate mutation boundaries. Their preview or status forms do not
+authorize apply. Use current digests, status-first recovery, and the exact
+installed binary; never delete or hand-edit a stale marker, substitute a
+source-tree binary for live installation, or infer authority from fixture
+success. When two ProjectRefs share one exact target without proven logical
+partitioning, treat reads as candidate context and fail closed on new writes
+until the explicit preview/digest-locked isolation route restores a dedicated
+Store. Isolation preserves the source Store and copies no historical state;
+refresh both stale activation markers separately before reconstruction.
 
 On registry v2 the journal marker grants named capabilities. Marker version 1
 remains cognition-only; `plan admit --cwd` and `plan evolve --cwd` require an

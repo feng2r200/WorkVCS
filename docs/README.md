@@ -153,6 +153,8 @@ index is:
 - [Phase 5G Record Currentness Audit Evidence](provenance/phase-5g-record-currentness-audit.md)
 - [Phase 5H Local Object v2 Cutover Evidence](provenance/phase-5h-local-object-v2-cutover.md)
 - [Phase 5I Integrity Replay Performance Evidence](provenance/phase-5i-integrity-replay-performance.md)
+- [ProjectRef Plan Durable-Operation Routing Evidence](provenance/projectref-plan-durable-operation-routing.md)
+- [Shared Project Binding Isolation Evidence](provenance/shared-project-binding-isolation.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.
@@ -343,6 +345,8 @@ Recent repository-level CLI smoke gates:
 - [ADR-0513: ProjectRef Ownership and Durable Capture Routing](decisions/adr/0513-projectref-durable-capture-routing.md)
 - [ADR-0514: Digest-Locked Same-Lineage Activation Marker Refresh](decisions/adr/0514-activation-marker-same-lineage-refresh.md)
 - [ADR-0515: Capture Semantic Preflight and Terminal Invalid Intent](decisions/adr/0515-capture-semantic-preflight-and-terminal-invalid-intent.md)
+- [ADR-0516: ProjectRef Plan Durable-Operation Routing](decisions/adr/0516-projectref-plan-durable-operation-routing.md)
+- [ADR-0517: Shared Project Binding Isolation](decisions/adr/0517-shared-project-binding-isolation.md)
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is

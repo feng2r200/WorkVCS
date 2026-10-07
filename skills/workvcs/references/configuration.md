@@ -82,3 +82,19 @@ verified binding update rather than silent path fallback.
 The default is one Store per logical project. Use explicit `project bind` only
 when separate projects intentionally share a chosen Store, Workspace, and Work
 Branch. Ensure never infers that coordination topology.
+
+Registry v2 does not accept `project bind`. If audit proves that two distinct
+ProjectRefs unintentionally share the exact same Store, Workspace, and Branch,
+use the separately authorized repair surface:
+
+```text
+workvcs project isolate-shared-binding --preview --cwd PATH [--project-ref ID] [--registry PATH] [--store-root PATH]
+workvcs project isolate-shared-binding --apply --cwd PATH [--project-ref ID] [--registry PATH] [--store-root PATH] --expected-registry-digest DIGEST --expected-candidate-digest DIGEST
+```
+
+Preview writes nothing. Apply preserves an exact registry backup, moves only
+the selected binding to its deterministic pristine Store, leaves the old Store
+untouched, and does not copy history. The registry revision changes, so inspect
+and explicitly refresh both activation markers before ordinary reads or
+writes. After an indeterminate result, rerun preview; never hand-edit the
+registry or replay apply without the new observed state.

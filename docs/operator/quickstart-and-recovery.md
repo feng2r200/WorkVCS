@@ -110,6 +110,38 @@ Store.
 If disable returns `routing_activation_disable_indeterminate`, inspect
 `journal-admission-activation --status` before any retry.
 
+When two distinct ProjectRefs unexpectedly name the same exact Store,
+Workspace, and Branch, do not use registry-v1 `project bind`, hand-edit the v2
+registry, or clone the Store. Inspect the bounded repair candidate instead:
+
+```sh
+workvcs project isolate-shared-binding --preview \
+  --cwd "$PROJECT" [--project-ref "$PROJECT_REF"] \
+  [--registry "$REGISTRY"] [--store-root "$STORE_ROOT"]
+```
+
+Preview writes nothing. It is apply-eligible only for an exact shared target
+and reports the current registry and candidate digests. A separately
+authorized apply uses those exact values:
+
+```sh
+workvcs project isolate-shared-binding --apply \
+  --cwd "$PROJECT" [--project-ref "$PROJECT_REF"] \
+  [--registry "$REGISTRY"] [--store-root "$STORE_ROOT"] \
+  --expected-registry-digest "$REGISTRY_DIGEST" \
+  --expected-candidate-digest "$CANDIDATE_DIGEST"
+```
+
+Apply preserves a digest-named exact registry backup, leaves the shared source
+Store byte-stable, and points only the selected ProjectRef at a deterministic
+pristine Store. It copies no historical Work State. Registry revision changes,
+so both activation markers become stale: inspect each marker and explicitly
+refresh it with its exact old digest before ordinary reads, durable admission,
+or reconstruction. If apply returns
+`shared_binding_isolation_install_indeterminate`, rerun the same read-only
+preview first; `already_isolated` is a verified stop state, not permission to
+replay apply.
+
 The recovery surface is intentionally separate from both activation markers:
 
 ```sh

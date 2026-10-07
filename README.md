@@ -74,7 +74,14 @@ references through a CaptureGroup. Read-only operations and explicit
 no-record decisions remain zero-write, and routing/admission activation is
 off unless its exact registry snapshot has been enabled.
 
+If migration reveals that distinct ProjectRefs unintentionally share one
+unpartitioned target, the preview/digest-locked isolation operation moves only
+the selected binding to a deterministic pristine Store. It preserves the old
+Store and ProjectRef, copies no ambiguous history, and requires explicit
+activation-marker refresh afterward.
+
 See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),
+[ADR-0517](docs/decisions/adr/0517-shared-project-binding-isolation.md),
 the [ProjectRef control-plane contract](docs/architecture/projectref-control-plane-v2.md),
 and the [migration and acceptance contract](docs/architecture/projectref-registry-v2-migration-and-acceptance.md).
 
@@ -156,6 +163,9 @@ before using WorkVCS as durable project infrastructure.
 - [ProjectRef ownership and durable capture routing](docs/decisions/adr/0513-projectref-durable-capture-routing.md)
   — logical-project resolution, journal admission, bounded recovery, and
   cross-project association.
+- [Shared ProjectRef binding isolation](docs/decisions/adr/0517-shared-project-binding-isolation.md)
+  — zero-write preview, exact registry replacement, source-Store preservation,
+  and activation refresh boundaries.
 - [V1 readiness ledger](docs/provenance/v1-readiness-ledger.md) and
   [release gate matrix](docs/provenance/v1-release-gate-matrix.md) — evidence
   behind the bounded maturity claim.

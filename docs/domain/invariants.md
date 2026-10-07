@@ -282,6 +282,19 @@ state is terminal for the intent, is idempotent under replay, and requires a
 corrected new Capture rather than rewriting or repeatedly delivering the old
 payload.
 
+### INV-109 — Shared binding isolation is exact, history-preserving, and empty-target only
+
+Separating one ProjectRef from an exact shared Store/Workspace/Branch tuple
+requires a zero-write preview and unchanged registry/candidate digests under
+the registry-then-journal-quiescence lock order. The replacement target must be
+the deterministic dedicated Store and be missing, empty-recoverable, or
+pristine at Genesis before installation. Exactly one binding changes, its
+source becomes `isolation`, and registry revision advances once. The old Store,
+other bindings, migration observations, and retained registry backup are never
+mutated, deleted, copied, or replayed. Isolation never refreshes activation
+markers or authorizes reconstruction writes; post-replacement uncertainty is
+resolved by read-only preview and forward inspection.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

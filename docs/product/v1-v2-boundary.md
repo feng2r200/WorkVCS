@@ -240,7 +240,10 @@ The accepted target includes:
   boundaries without a cross-Store transaction claim; and
 - explicit preview-gated, one-to-one registry migration that preserves every
   existing Store/Workspace/Branch target and never infers identity from a
-  shared target.
+  shared target; and
+- an explicit preview/digest-locked isolation operation that moves one exact
+  shared binding to a deterministic pristine Store without copying ambiguous
+  historical Work State or changing the ProjectRef.
 
 The target is accepted and implemented. The core remains tool-neutral; the CLI
 integration layer includes the first concrete adapter behind the generic
@@ -274,6 +277,12 @@ Journal-admission marker version 2 declares separate `cognition_capture`,
 `plan_admit`, and `plan_evolve` capabilities. A version-1 marker remains valid
 for cognition only; enabling Plan requires an explicit digest-locked strict
 capability-superset refresh for the same registry snapshot.
+
+When migration preserves an unintentional exact shared target,
+`project isolate-shared-binding` is the only registry-v2 repair path. Preview
+is zero-write; apply retains an exact registry backup, leaves the source Store
+untouched, changes one binding, and makes both activation markers stale. Marker
+refresh and reconstruction of current state remain separate explicit actions.
 
 Separately explicit recovery uses immutable events, rebuildable projections,
 fresh status digests, and exact target guards. It can converge one unbound

@@ -40,15 +40,18 @@ about 12.5–13.0 seconds immediately before installation to about 0.2 seconds
 after installation; the wider same-machine measurements are recorded in the
 Phase 5I evidence.
 
-### Deliberately unimplemented contract alternatives
+### Contract alternatives and later operator-control decision
 
 The first investigation also discussed three possible contract changes:
 removing the second full validation, adding a weaker routine-status validation
 path, and adding broader integrated health/trace reporting. They were not
 confirmed defects and were explicitly left behind a separate decision gate.
-The delivered optimization made them unnecessary for the observed latency and
-did not trade away the current integrity boundary. They remain possible future
-product decisions, not incomplete fixes.
+The first two remain rejected for this scope: complete integrity validation and
+the fresh writable-open validation are unchanged. The third was later accepted
+as ADR-0518 and implemented as a strictly read-only `project health` command
+that loads one registry snapshot and performs one complete binding-validation
+pass. It adds observability without weakening the integrity boundary or
+activating any control-plane state.
 
 ## Registry-v2 Plan control-plane investigation
 
@@ -68,7 +71,7 @@ product decisions, not incomplete fixes.
 | Plan variants could reach panic-only `manifest()` and `into_manifest()` paths. | Typed Plan variants are handled explicitly and no longer enter the cognition-only accessors. |
 | `record.kind=unknown` sized as one kind but committed as canonical `question`. | Placeholder sizing, expected receipt shape, and the Plan engine share canonical record-kind normalization. |
 | A terminal delivery failure could be overwritten by another failure or receipt. | Terminal failure is monotonic for one delivery identity; both replacement paths are rejected before event installation. |
-| A generic control-plane error obscured missing Plan authorization. | Capability-aware marker checks and status output identify the missing `plan_admit` or `plan_evolve` authorization while retaining the stable control-plane error family. |
+| A generic control-plane error obscured missing Plan authorization. | Capability-aware marker checks and status output identify the missing `plan_admit` or `plan_evolve` authorization. ADR-0518 later adds `journal_admission_capability_inactive` for the cleanly missing-capability state while malformed or stale authority remains `control_plane_invalid`. |
 
 The complete behavioral and regression evidence is in
 [`projectref-plan-durable-operation-routing.md`](projectref-plan-durable-operation-routing.md).

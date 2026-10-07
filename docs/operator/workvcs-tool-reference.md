@@ -130,14 +130,26 @@ old-digest refresh. After
 `shared_binding_isolation_install_indeterminate`, run preview before any retry;
 never hand-edit the registry or infer rollback.
 
-The source tree now also contains a separately explicit recovery surface:
+Start composite diagnosis with the strictly read-only health surface:
 
 ```text
-workvcs project capture-recovery --status --capture-id ID [--registry PATH]
-workvcs project capture-recovery --apply --capture-id ID --expected-registry-digest DIGEST --expected-projection-digest DIGEST [--registry PATH] [--store-root PATH]
+workvcs project health [--cwd PATH [--project-ref ID]] [--registry PATH] [--require-healthy] [--timings]
 ```
 
-`--status` is read-only. It reports the intent `payload_kind`, validates the immutable event chain, derives the
+It loads one registry snapshot, performs one complete validation of every
+binding, and reports registry, routing, journal, capability, and optional CWD
+resolution health. It never activates, admits, recovers, or writes. Use
+`--require-healthy` for a gate and `--timings` only for diagnostics.
+
+The source tree also contains a separately explicit recovery surface:
+
+```text
+workvcs project operation-recovery --status --capture-id ID [--registry PATH]
+workvcs project operation-recovery --apply --capture-id ID --expected-registry-digest DIGEST --expected-projection-digest DIGEST [--registry PATH] [--store-root PATH]
+```
+
+`capture-recovery` remains a visible compatibility alias. `--status` is
+read-only. It reports the intent `payload_kind`, validates the immutable event chain, derives the
 authoritative projection, compares any stored projection, re-resolves current
 ownership, and reports the exact next action. `--apply` is not implied by
 either activation marker: it is a distinct Unix-only, digest-locked operator
@@ -302,7 +314,7 @@ Reusing the manifest idempotency key reuses an intent only when both the
 semantic payload and complete CaptureGroup (including `null`) are identical;
 any drift fails as `capture_idempotency_conflict`. Admission does not deliver
 the payload into a target Store. Delivery is a separate, explicit
-`project capture-recovery --apply` action using fresh status digests.
+`project operation-recovery --apply` action using fresh status digests.
 
 The live admit syntax is:
 
@@ -340,8 +352,9 @@ and idempotency are manifest fields.
 With registry v2, the cwd form requires `plan_evolve`, persists
 `plan_evolve_v1`, and uses the same receipt recovery. Repeating an identical
 manifest is idempotent. A process failure after the Store commit but before
-the receipt is repaired by repeating the exact command or by the compatibility
-`project capture-recovery` surface; neither route creates another Plan commit.
+the receipt is repaired by repeating the exact command or by
+`project operation-recovery` (`capture-recovery` compatibility alias); neither
+route creates another Plan commit.
 
 The routed Plan path performs pure typed-manifest validation, explicit
 current-snapshot guard comparison, and a fixed maximum-timestamp receipt-

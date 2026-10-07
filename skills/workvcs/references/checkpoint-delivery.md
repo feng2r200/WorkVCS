@@ -12,7 +12,7 @@ not need another full read of this reference or the project history.
 
 After admission, keep the compatibility CaptureId, `payload_kind`, semantic
 scope, and exact registry route.
-Run `workvcs project capture-recovery --status --capture-id <id>` using that
+Run `workvcs project operation-recovery --status --capture-id <id>` using that
 same route. Add `--registry <path>` only when it was the verified selected route.
 Status is read-only. `payload_kind` identifies `cognition_v2`,
 `plan_admit_v1`, or `plan_evolve_v1`; it is not permission to reinterpret one
@@ -47,7 +47,7 @@ When the current operation is authorized, use the same installed binary and
 fresh status digests:
 
 ```sh
-workvcs project capture-recovery --apply --capture-id <id> \
+workvcs project operation-recovery --apply --capture-id <id> \
   --expected-registry-digest <registry_digest_from_status> \
   --expected-projection-digest <projection_digest_from_status>
 ```

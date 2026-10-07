@@ -42,7 +42,9 @@ ProjectRef v2 按确定顺序判断内容归属：显式指定的 ProjectRef、�
 
 如果迁移暴露出两个不同 ProjectRef 意外共享同一个未分区目标，WorkVCS 通过先预览、再以摘要锁定的隔离操作，只把被选中的绑定切换到确定性的全新 Store。旧 Store 与 ProjectRef 会被保留，不复制归属不明的历史状态；注册表版本改变后，两个激活标记必须分别显式刷新。
 
-进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ADR-0517（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
+`workvcs project health` 可通过一次严格只读检查汇总注册表、完整绑定校验、激活标记、日志能力和可选 CWD 解析状态。持久操作恢复的规范命令是 `project operation-recovery`；`project capture-recovery` 继续作为同一 CaptureId 与日志状态机的可见兼容别名。
+
+进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ADR-0517（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)、[ADR-0518（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
 
 ## Agent 参与策略
 
@@ -102,6 +104,7 @@ scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
 - [持久化模型（英文）](docs/architecture/persistence-model.md)和 [Schema 契约（英文）](docs/architecture/physical-schema-v0.1.md)——本地持久存储与可重建投影。
 - [ProjectRef 归属与持久化捕获路由（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)——逻辑项目解析、日志准入、有界恢复和跨项目关联。
 - [共享 ProjectRef 绑定隔离（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)——零写入预览、精确替换、旧 Store 保留和激活刷新边界。
+- [操作者控制平面健康与恢复契约（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)——单次完整只读健康检查、稳定错误分类和恢复命令兼容边界。
 - [V1 就绪台账（英文）](docs/provenance/v1-readiness-ledger.md)和[发布门矩阵（英文）](docs/provenance/v1-release-gate-matrix.md)——支撑限定成熟度声明的证据。
 - [文档地图（英文）](docs/README.md)——完整的权威资料与证据索引。
 

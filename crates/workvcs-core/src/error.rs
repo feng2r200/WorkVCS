@@ -67,6 +67,9 @@ impl fmt::Display for ErrorCategory {
 pub enum ErrorCode {
     CanonicalEncodingInvalid,
     ControlPlaneInvalid,
+    RoutingActivationInactive,
+    JournalAdmissionActivationInactive,
+    JournalAdmissionCapabilityInactive,
     CaptureNotPersisted,
     CaptureIdempotencyConflict,
     CaptureRecoveryInstallIndeterminate,
@@ -127,6 +130,9 @@ impl ErrorCode {
         match self {
             Self::CanonicalEncodingInvalid => "canonical_encoding_invalid",
             Self::ControlPlaneInvalid => "control_plane_invalid",
+            Self::RoutingActivationInactive => "routing_activation_inactive",
+            Self::JournalAdmissionActivationInactive => "journal_admission_activation_inactive",
+            Self::JournalAdmissionCapabilityInactive => "journal_admission_capability_inactive",
             Self::CaptureNotPersisted => "capture_not_persisted",
             Self::CaptureIdempotencyConflict => "capture_idempotency_conflict",
             Self::CaptureRecoveryInstallIndeterminate => "capture_recovery_install_indeterminate",
@@ -205,6 +211,31 @@ pub enum WorkVcsError {
 
     #[error("control plane invalid: {0}")]
     ControlPlaneInvalid(String),
+
+    #[error(
+        "ProjectRef v2 read routing is inactive with activation state {activation_state} at {activation_path}; inspect and explicitly activate the digest-bound marker before retrying"
+    )]
+    RoutingActivationInactive {
+        activation_path: String,
+        activation_state: String,
+    },
+
+    #[error(
+        "ProjectRef v2 journal admission is inactive with activation state {activation_state} at {activation_path}; inspect and explicitly activate the digest-bound marker before retrying"
+    )]
+    JournalAdmissionActivationInactive {
+        activation_path: String,
+        activation_state: String,
+    },
+
+    #[error(
+        "ProjectRef v2 journal admission marker version {activation_version} at {activation_path} does not authorize capability {required_capability}; inspect and explicitly refresh the digest-bound marker before retrying"
+    )]
+    JournalAdmissionCapabilityInactive {
+        activation_path: String,
+        activation_version: u64,
+        required_capability: String,
+    },
 
     #[error("capture not persisted: {0}")]
     CaptureNotPersisted(String),
@@ -382,6 +413,13 @@ impl WorkVcsError {
         match self {
             Self::CanonicalEncodingInvalid(_) => ErrorCode::CanonicalEncodingInvalid,
             Self::ControlPlaneInvalid(_) => ErrorCode::ControlPlaneInvalid,
+            Self::RoutingActivationInactive { .. } => ErrorCode::RoutingActivationInactive,
+            Self::JournalAdmissionActivationInactive { .. } => {
+                ErrorCode::JournalAdmissionActivationInactive
+            }
+            Self::JournalAdmissionCapabilityInactive { .. } => {
+                ErrorCode::JournalAdmissionCapabilityInactive
+            }
             Self::CaptureNotPersisted(_) => ErrorCode::CaptureNotPersisted,
             Self::CaptureIdempotencyConflict(_) => ErrorCode::CaptureIdempotencyConflict,
             Self::CaptureRecoveryInstallIndeterminate(_) => {
@@ -454,6 +492,9 @@ impl WorkVcsError {
         match self {
             Self::CanonicalEncodingInvalid(_) | Self::DigestInvalid(_) => ErrorCategory::Canonical,
             Self::ControlPlaneInvalid(_)
+            | Self::RoutingActivationInactive { .. }
+            | Self::JournalAdmissionActivationInactive { .. }
+            | Self::JournalAdmissionCapabilityInactive { .. }
             | Self::CaptureNotPersisted(_)
             | Self::CaptureIdempotencyConflict(_)
             | Self::CaptureRecoveryInstallIndeterminate(_)
@@ -520,6 +561,18 @@ mod tests {
         assert_eq!(
             ErrorCode::ControlPlaneInvalid.as_str(),
             "control_plane_invalid"
+        );
+        assert_eq!(
+            ErrorCode::RoutingActivationInactive.as_str(),
+            "routing_activation_inactive"
+        );
+        assert_eq!(
+            ErrorCode::JournalAdmissionActivationInactive.as_str(),
+            "journal_admission_activation_inactive"
+        );
+        assert_eq!(
+            ErrorCode::JournalAdmissionCapabilityInactive.as_str(),
+            "journal_admission_capability_inactive"
         );
         assert_eq!(
             ErrorCode::CaptureNotPersisted.as_str(),

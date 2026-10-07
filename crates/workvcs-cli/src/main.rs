@@ -174,7 +174,7 @@ Commands:
   id            Generate and validate typed WorkVCS identifiers
   store         Inspect Store metadata, lineage, and migrations
   config        Inspect effective WorkVCS configuration
-  project       Manage project bindings and controlled registry migration
+  project       Inspect and manage the project control plane
   history       List commit history from a branch or commit
   changeset     Inspect changesets and change operations
   commit        Inspect commit metadata and causal anchors
@@ -232,6 +232,7 @@ const WORKVCS_CONFIG_FILE: &str = "config.toml";
 const PROJECT_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const PROJECT_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
+const PROJECT_ENSURE_REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const PROJECT_REGISTRY_LOCK_RETRY: Duration = Duration::from_millis(25);
 const RESUME_CATEGORY_ORDER: [ContextItemCategory; 19] = [
     ContextItemCategory::SessionAnchor,
@@ -375,7 +376,7 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    #[command(about = "Manage project bindings and preview registry migration")]
+    #[command(about = "Inspect and manage the project control plane")]
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
@@ -1740,6 +1741,38 @@ enum ProjectCommand {
         #[command(flatten)]
         locator: ProjectLocatorArgs,
     },
+    #[command(about = "Inspect composite project control-plane health without writing")]
+    Health {
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Optional project checkout or directory whose ProjectRef resolution should be included"
+        )]
+        cwd: Option<PathBuf>,
+
+        #[arg(
+            long,
+            requires = "cwd",
+            value_name = "PROJECT_REF",
+            help = "Optional explicit ProjectRef owner for the CWD resolution probe"
+        )]
+        project_ref: Option<String>,
+
+        #[arg(long, value_name = "PATH", help = "One-command registry override")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long,
+            help = "Fail closed unless registry, bindings, activations, capabilities, and optional resolution are healthy"
+        )]
+        require_healthy: bool,
+
+        #[arg(
+            long,
+            help = "Include diagnostic phase timings in microseconds; timings are observational, not acceptance thresholds"
+        )]
+        timings: bool,
+    },
     #[command(about = "List and verify every project binding in the selected registry")]
     List {
         #[arg(long, value_name = "PATH", help = "One-command registry override")]
@@ -1999,11 +2032,13 @@ enum ProjectCommand {
         expected_activation_digest: Option<String>,
     },
     #[command(
+        name = "operation-recovery",
+        visible_alias = "capture-recovery",
         about = "Inspect or explicitly converge one admitted durable operation",
-        long_about = "Compatibility-named recovery surface for cognition_v2, plan_admit_v1, and plan_evolve_v1 intents. Status is read-only and reports payload_kind plus fresh registry/projection guards. Apply converges only the named operation through the shared ProjectRef binding, target-delivery, and durable-receipt state machine."
+        long_about = "Canonical recovery surface for cognition_v2, plan_admit_v1, and plan_evolve_v1 intents. The capture-recovery spelling remains a compatibility alias. Status is read-only and reports payload_kind plus fresh registry/projection guards. Apply converges only the named operation through the shared ProjectRef binding, target-delivery, and durable-receipt state machine."
     )]
     #[command(group(
-        ArgGroup::new("capture-recovery-action")
+        ArgGroup::new("operation-recovery-action")
             .required(true)
             .multiple(false)
             .args(["status", "apply"])
@@ -6149,6 +6184,66 @@ fn render_workvcs_error_key_value(error: &WorkVcsError) -> String {
             escape_key_value(registry_path)
         );
     }
+    match error {
+        WorkVcsError::RoutingActivationInactive {
+            activation_path,
+            activation_state,
+        } => {
+            output.push_str("recoverable=true\n");
+            output.push_str("activation_scope=project_ref_v2_read_routing\n");
+            let _ = writeln!(
+                output,
+                "activation_state={}",
+                escape_key_value(activation_state)
+            );
+            let _ = writeln!(
+                output,
+                "activation_path={}",
+                escape_key_value(activation_path)
+            );
+            output.push_str("recovery_action=inspect_and_explicitly_activate_read_routing\n");
+        }
+        WorkVcsError::JournalAdmissionActivationInactive {
+            activation_path,
+            activation_state,
+        } => {
+            output.push_str("recoverable=true\n");
+            output.push_str("activation_scope=project_ref_v2_journal_admission\n");
+            let _ = writeln!(
+                output,
+                "activation_state={}",
+                escape_key_value(activation_state)
+            );
+            let _ = writeln!(
+                output,
+                "activation_path={}",
+                escape_key_value(activation_path)
+            );
+            output.push_str("recovery_action=inspect_and_explicitly_activate_journal_admission\n");
+        }
+        WorkVcsError::JournalAdmissionCapabilityInactive {
+            activation_path,
+            activation_version,
+            required_capability,
+        } => {
+            output.push_str("recoverable=true\n");
+            output.push_str("activation_scope=project_ref_v2_journal_admission\n");
+            output.push_str("activation_state=active\n");
+            let _ = writeln!(
+                output,
+                "activation_path={}",
+                escape_key_value(activation_path)
+            );
+            let _ = writeln!(output, "activation_version={activation_version}");
+            let _ = writeln!(
+                output,
+                "required_capability={}",
+                escape_key_value(required_capability)
+            );
+            output.push_str("recovery_action=inspect_and_explicitly_refresh_journal_capability\n");
+        }
+        _ => {}
+    }
     let _ = writeln!(output, "message={}", escape_key_value(&error.to_string()));
     output
 }
@@ -6180,6 +6275,51 @@ fn render_workvcs_error_json(error: &WorkVcsError) -> String {
         value["recovery_action"] = serde_json::Value::String("project_ensure".to_owned());
         value["recovery_cwd"] = serde_json::Value::String(project_root.clone());
         value["recovery_registry"] = serde_json::Value::String(registry_path.clone());
+    }
+    match error {
+        WorkVcsError::RoutingActivationInactive {
+            activation_path,
+            activation_state,
+        } => {
+            value["recoverable"] = serde_json::Value::Bool(true);
+            value["activation_scope"] =
+                serde_json::Value::String("project_ref_v2_read_routing".to_owned());
+            value["activation_state"] = serde_json::Value::String(activation_state.clone());
+            value["activation_path"] = serde_json::Value::String(activation_path.clone());
+            value["recovery_action"] = serde_json::Value::String(
+                "inspect_and_explicitly_activate_read_routing".to_owned(),
+            );
+        }
+        WorkVcsError::JournalAdmissionActivationInactive {
+            activation_path,
+            activation_state,
+        } => {
+            value["recoverable"] = serde_json::Value::Bool(true);
+            value["activation_scope"] =
+                serde_json::Value::String("project_ref_v2_journal_admission".to_owned());
+            value["activation_state"] = serde_json::Value::String(activation_state.clone());
+            value["activation_path"] = serde_json::Value::String(activation_path.clone());
+            value["recovery_action"] = serde_json::Value::String(
+                "inspect_and_explicitly_activate_journal_admission".to_owned(),
+            );
+        }
+        WorkVcsError::JournalAdmissionCapabilityInactive {
+            activation_path,
+            activation_version,
+            required_capability,
+        } => {
+            value["recoverable"] = serde_json::Value::Bool(true);
+            value["activation_scope"] =
+                serde_json::Value::String("project_ref_v2_journal_admission".to_owned());
+            value["activation_state"] = serde_json::Value::String("active".to_owned());
+            value["activation_path"] = serde_json::Value::String(activation_path.clone());
+            value["activation_version"] = serde_json::Value::from(*activation_version);
+            value["required_capability"] = serde_json::Value::String(required_capability.clone());
+            value["recovery_action"] = serde_json::Value::String(
+                "inspect_and_explicitly_refresh_journal_capability".to_owned(),
+            );
+        }
+        _ => {}
     }
     render_json_error(value)
 }
@@ -7362,6 +7502,13 @@ fn run(cli: Cli) -> Result<String> {
                 )?;
                 Ok(render_project_discovery(&discovery))
             }
+            ProjectCommand::Health {
+                cwd,
+                project_ref,
+                registry,
+                require_healthy,
+                timings,
+            } => inspect_project_health(cwd, project_ref, registry, require_healthy, timings),
             ProjectCommand::List {
                 registry,
                 require_valid,
@@ -7560,15 +7707,15 @@ fn run(cli: Cli) -> Result<String> {
                     store_root,
                     CaptureId::parse_canonical(&capture_id)?,
                     required_control_plane_digest(
-                        "capture recovery apply --expected-registry-digest",
+                        "operation recovery apply --expected-registry-digest",
                         expected_registry_digest,
                     )?,
                     required_control_plane_digest(
-                        "capture recovery apply --expected-projection-digest",
+                        "operation recovery apply --expected-projection-digest",
                         expected_projection_digest,
                     )?,
                 ),
-                _ => unreachable!("clap requires exactly one capture recovery action"),
+                _ => unreachable!("clap requires exactly one operation recovery action"),
             },
             ProjectCommand::CaptureGroupRecall {
                 project_ref_id,
@@ -16127,6 +16274,49 @@ struct RoutingActivationInspection {
     issue: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectHealthState {
+    Healthy,
+    Degraded,
+    Blocked,
+}
+
+impl ProjectHealthState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ProjectBindingHealth {
+    local_content_objects_verified: Option<usize>,
+    issue: Option<String>,
+}
+
+impl ProjectBindingHealth {
+    fn verified(local_content_objects_verified: usize) -> Self {
+        Self {
+            local_content_objects_verified: Some(local_content_objects_verified),
+            issue: None,
+        }
+    }
+
+    fn invalid(error: &WorkVcsError) -> Self {
+        Self {
+            local_content_objects_verified: None,
+            issue: Some(error.to_string()),
+        }
+    }
+
+    fn is_verified(&self) -> bool {
+        self.issue.is_none()
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ProjectBootstrapSpec {
     store_path: PathBuf,
@@ -16142,7 +16332,7 @@ fn ensure_project(
     let identity = resolve_project_identity(&cwd)?;
     let effective = effective_registry_config(registry)?;
     let registry_path = project_registry_path_from_effective(&effective, true, &identity)?;
-    let _lock = ProjectRegistryLock::acquire(&registry_path)?;
+    let _lock = ProjectRegistryLock::acquire_for_project_ensure(&registry_path)?;
     let mut bindings = load_project_registry(&registry_path, true)?;
     let matches = bindings
         .iter()
@@ -17621,6 +17811,557 @@ fn render_project_discovery(discovery: &ProjectDiscovery) -> String {
         .expect("write to String");
     }
     output
+}
+
+fn inspect_project_binding_health_with<T>(
+    bindings: &[T],
+    mut verify: impl FnMut(usize, &T) -> Result<usize>,
+) -> Vec<ProjectBindingHealth> {
+    bindings
+        .iter()
+        .enumerate()
+        .map(|(index, binding)| match verify(index, binding) {
+            Ok(local_content_objects_verified) => {
+                ProjectBindingHealth::verified(local_content_objects_verified)
+            }
+            Err(error) => ProjectBindingHealth::invalid(&error),
+        })
+        .collect()
+}
+
+fn inspect_project_health(
+    cwd: Option<PathBuf>,
+    project_ref: Option<String>,
+    registry: Option<PathBuf>,
+    require_healthy: bool,
+    timings: bool,
+) -> Result<String> {
+    let total_started = Instant::now();
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    let registry_load_started = Instant::now();
+    let loaded = load_project_registry_readonly(&registry_path, false)?;
+    let registry_load_us = registry_load_started.elapsed().as_micros();
+    match loaded {
+        LoadedProjectRegistry::V1 { bindings, digest } => inspect_project_health_v1(
+            &effective,
+            &registry_path,
+            &bindings,
+            &digest,
+            cwd,
+            project_ref,
+            require_healthy,
+            timings,
+            registry_load_us,
+            total_started,
+        ),
+        LoadedProjectRegistry::V2 { registry, digest } => inspect_project_health_v2(
+            &effective,
+            &registry_path,
+            &registry,
+            &digest,
+            cwd,
+            project_ref,
+            require_healthy,
+            timings,
+            registry_load_us,
+            total_started,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inspect_project_health_v1(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    bindings: &[ProjectBinding],
+    digest: &ControlPlaneDigest,
+    cwd: Option<PathBuf>,
+    project_ref: Option<String>,
+    require_healthy: bool,
+    timings: bool,
+    registry_load_us: u128,
+    total_started: Instant,
+) -> Result<String> {
+    let binding_validation_started = Instant::now();
+    let binding_health = inspect_project_binding_health_with(bindings, |index, binding| {
+        let duplicate_identity = bindings.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && other.identity_kind == binding.identity_kind
+                && other.identity == binding.identity
+        });
+        if duplicate_identity {
+            Err(WorkVcsError::QueryInvalid(format!(
+                "duplicate {} identity {}",
+                binding.identity_kind, binding.identity
+            )))
+        } else {
+            verify_registry_binding_readonly(binding)
+        }
+    });
+    let binding_validation_us = binding_validation_started.elapsed().as_micros();
+    let invalid_bindings = binding_health
+        .iter()
+        .filter(|health| !health.is_verified())
+        .count();
+    let local_content_objects_verified = binding_health
+        .iter()
+        .filter_map(|health| health.local_content_objects_verified)
+        .sum::<usize>();
+
+    let resolution_started = Instant::now();
+    let resolution_requested = cwd.is_some();
+    let mut resolution_status = if resolution_requested {
+        "unresolved".to_owned()
+    } else {
+        "not_requested".to_owned()
+    };
+    let mut resolution_issue = None;
+    if project_ref.is_some() {
+        resolution_issue = Some(
+            "registry v1 cannot evaluate an explicit ProjectRef; migrate and activate the exact v2 snapshot"
+                .to_owned(),
+        );
+    } else if let Some(cwd) = cwd {
+        let identity = resolve_project_identity(&cwd)?;
+        let matches = bindings
+            .iter()
+            .enumerate()
+            .filter(|(_, binding)| {
+                binding.identity_kind == identity.kind && binding.identity == identity.identity
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [(index, binding)] if binding_health[*index].is_verified() => {
+                let store_path = canonical_existing_path(
+                    "project binding store",
+                    Path::new(&binding.store_path),
+                )?;
+                match reject_project_local_path("project binding store", &store_path, &identity) {
+                    Ok(()) => resolution_status = "legacy_v1_resolved".to_owned(),
+                    Err(error) => resolution_issue = Some(error.to_string()),
+                }
+            }
+            [(index, _)] => {
+                resolution_issue = binding_health[*index].issue.clone();
+            }
+            [] => {
+                resolution_issue = Some(format!(
+                    "no registry v1 binding matches {} identity {}",
+                    identity.kind, identity.identity
+                ));
+            }
+            _ => {
+                resolution_issue = Some(format!(
+                    "multiple registry v1 bindings match {} identity {}",
+                    identity.kind, identity.identity
+                ));
+            }
+        }
+    }
+    let resolution_us = resolution_started.elapsed().as_micros();
+    let resolution_healthy = !resolution_requested || resolution_issue.is_none();
+    let health = if invalid_bindings != 0 || !resolution_healthy {
+        ProjectHealthState::Blocked
+    } else {
+        ProjectHealthState::Degraded
+    };
+    if require_healthy {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "project health requires registry v2 with active read routing and journal admission; selected registry {} is v1 with health {}",
+            registry_path.display(),
+            health.as_str()
+        )));
+    }
+
+    let mut output = format!(
+        "health={}\nread_only=true\nregistry_path={}\nregistry_source={}\nregistry_version=1\nregistry_revision=none\nregistry_digest={}\nmigration_required=true\nbindings={}\nvalid_bindings={}\ninvalid_bindings={}\nlocal_content_objects_verified={}\nrouting_activation_state=not_applicable\nrouting_activation_path=none\nrouting_activation_issue=none\njournal_admission_activation_state=not_applicable\njournal_admission_activation_path=none\njournal_admission_activation_issue=none\njournal_admission_activation_version=none\ncapability.cognition_capture=false\ncapability.plan_admit=false\ncapability.plan_evolve=false\nresolution_requested={}\nresolution_status={}\nresolution_project_ref=none\nresolution_issue={}\nregistry_written=false\nactivation_written=false\njournal_written=false\nstore_written=false\n",
+        health.as_str(),
+        escape_key_value(&registry_path.display().to_string()),
+        effective.source,
+        digest,
+        bindings.len(),
+        bindings.len() - invalid_bindings,
+        invalid_bindings,
+        local_content_objects_verified,
+        resolution_requested,
+        resolution_status,
+        resolution_issue
+            .as_deref()
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+    );
+    render_project_binding_health(&mut output, &binding_health);
+    if timings {
+        writeln!(output, "timing.registry_load_us={registry_load_us}").expect("write to String");
+        writeln!(
+            output,
+            "timing.binding_validation_us={binding_validation_us}"
+        )
+        .expect("write to String");
+        output.push_str("timing.activation_inspection_us=0\n");
+        writeln!(output, "timing.resolution_us={resolution_us}").expect("write to String");
+        writeln!(
+            output,
+            "timing.total_us={}",
+            total_started.elapsed().as_micros()
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inspect_project_health_v2(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    digest: &ControlPlaneDigest,
+    cwd: Option<PathBuf>,
+    project_ref: Option<String>,
+    require_healthy: bool,
+    timings: bool,
+    registry_load_us: u128,
+    total_started: Instant,
+) -> Result<String> {
+    let binding_validation_started = Instant::now();
+    let binding_health = inspect_project_binding_health_with(registry.bindings(), |_, binding| {
+        verify_v2_registry_binding_readonly(binding)
+    });
+    let binding_validation_us = binding_validation_started.elapsed().as_micros();
+    let invalid_bindings = binding_health
+        .iter()
+        .filter(|health| !health.is_verified())
+        .count();
+    let local_content_objects_verified = binding_health
+        .iter()
+        .filter_map(|health| health.local_content_objects_verified)
+        .sum::<usize>();
+
+    let activation_started = Instant::now();
+    let routing = inspect_read_routing_activation_for_registry(effective, registry_path, registry);
+    let journal =
+        inspect_journal_admission_activation_for_registry(effective, registry_path, registry);
+    let mut journal_activation_version = None;
+    let mut cognition_capture = false;
+    let mut plan_admit = false;
+    let mut plan_evolve = false;
+    let mut capability_issue = None;
+    if journal.state == RoutingActivationState::Active {
+        let candidate = fs::read(&journal.path)
+            .map_err(|error| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "cannot reread active journal-admission marker {} during health inspection: {error}",
+                    journal.path.display()
+                ))
+            })
+            .and_then(|bytes| JournalAdmissionActivationCandidate::from_json_bytes(&bytes))
+            .and_then(|candidate| {
+                candidate.validate_registry(registry)?;
+                Ok(candidate)
+            });
+        match candidate {
+            Ok(candidate) => {
+                journal_activation_version = Some(candidate.activation_version());
+                cognition_capture =
+                    candidate.supports(JournalAdmissionCapability::CognitionCapture);
+                plan_admit = candidate.supports(JournalAdmissionCapability::PlanAdmit);
+                plan_evolve = candidate.supports(JournalAdmissionCapability::PlanEvolve);
+            }
+            Err(error) => capability_issue = Some(error.to_string()),
+        }
+    }
+    let activation_inspection_us = activation_started.elapsed().as_micros();
+
+    let resolution_started = Instant::now();
+    let resolution_requested = cwd.is_some();
+    let mut resolution_status = if resolution_requested {
+        "unresolved".to_owned()
+    } else {
+        "not_requested".to_owned()
+    };
+    let mut resolution_project_ref = None;
+    let mut resolution_issue = None;
+    if let Some(cwd) = cwd {
+        let identity = resolve_project_identity(&cwd)?;
+        let explicit_project_ref = project_ref
+            .map(|value| ProjectRefId::parse_canonical(&value))
+            .transpose()?;
+        let locator_input =
+            unified_locator_input_for_identity(explicit_project_ref, Vec::new(), None, &identity)?;
+        let resolution = resolve_project(registry, locator_input.resolution_context())?;
+        resolution_status = resolution_status_text(resolution.status()).to_owned();
+        if resolution.status() == ResolutionStatus::Resolved {
+            if let Some(resolved_project_ref) = resolution.primary_project_ref() {
+                resolution_project_ref = Some(resolved_project_ref);
+                match registry
+                    .bindings()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, binding)| binding.project_ref_id() == resolved_project_ref)
+                {
+                    Some((index, binding)) if binding_health[index].is_verified() => {
+                        let store_path = canonical_existing_path(
+                            "project binding store",
+                            Path::new(binding.store_path().as_str()),
+                        )?;
+                        if let Err(error) = reject_project_local_path(
+                            "project binding store",
+                            &store_path,
+                            &identity,
+                        ) {
+                            resolution_issue = Some(error.to_string());
+                        }
+                    }
+                    Some((index, _)) => resolution_issue = binding_health[index].issue.clone(),
+                    None => {
+                        resolution_issue = Some(format!(
+                            "resolved ProjectRef {resolved_project_ref} has no registry binding"
+                        ));
+                    }
+                }
+            } else {
+                resolution_issue =
+                    Some("resolved ProjectRef result did not include its primary owner".to_owned());
+            }
+        } else {
+            resolution_issue = Some(format!(
+                "ProjectRef resolution ended with status {} and {} diagnostic(s)",
+                resolution_status,
+                resolution.diagnostics().len()
+            ));
+        }
+    }
+    let resolution_us = resolution_started.elapsed().as_micros();
+
+    let activation_invalid = matches!(
+        routing.state,
+        RoutingActivationState::Stale | RoutingActivationState::Invalid
+    ) || matches!(
+        journal.state,
+        RoutingActivationState::Stale | RoutingActivationState::Invalid
+    );
+    let resolution_healthy = !resolution_requested || resolution_issue.is_none();
+    let capabilities_healthy = cognition_capture && plan_admit && plan_evolve;
+    let health = if invalid_bindings != 0
+        || activation_invalid
+        || capability_issue.is_some()
+        || !resolution_healthy
+    {
+        ProjectHealthState::Blocked
+    } else if routing.state != RoutingActivationState::Active
+        || journal.state != RoutingActivationState::Active
+        || !capabilities_healthy
+    {
+        ProjectHealthState::Degraded
+    } else {
+        ProjectHealthState::Healthy
+    };
+
+    if require_healthy && health != ProjectHealthState::Healthy {
+        require_project_health_v2(
+            registry_path,
+            invalid_bindings,
+            &routing,
+            &journal,
+            journal_activation_version,
+            cognition_capture,
+            plan_admit,
+            plan_evolve,
+            capability_issue.as_deref(),
+            resolution_issue.as_deref(),
+        )?;
+        unreachable!("non-healthy ProjectRef v2 health must fail closed");
+    }
+
+    let mut output = format!(
+        "health={}\nread_only=true\nregistry_path={}\nregistry_source={}\nregistry_version=2\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nbindings={}\nvalid_bindings={}\ninvalid_bindings={}\nlocal_content_objects_verified={}\nrouting_activation_state={}\nrouting_activation_path={}\nrouting_activation_issue={}\njournal_admission_activation_state={}\njournal_admission_activation_path={}\njournal_admission_activation_issue={}\njournal_admission_activation_version={}\ncapability.cognition_capture={}\ncapability.plan_admit={}\ncapability.plan_evolve={}\nresolution_requested={}\nresolution_status={}\nresolution_project_ref={}\nresolution_issue={}\nregistry_written=false\nactivation_written=false\njournal_written=false\nstore_written=false\n",
+        health.as_str(),
+        escape_key_value(&registry_path.display().to_string()),
+        effective.source,
+        registry.revision(),
+        digest,
+        registry.bindings().len(),
+        registry.bindings().len() - invalid_bindings,
+        invalid_bindings,
+        local_content_objects_verified,
+        routing.state.as_str(),
+        escape_key_value(&routing.path.display().to_string()),
+        routing
+            .issue
+            .as_deref()
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+        journal.state.as_str(),
+        escape_key_value(&journal.path.display().to_string()),
+        journal
+            .issue
+            .as_deref()
+            .or(capability_issue.as_deref())
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+        journal_activation_version
+            .map(|version| version.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        cognition_capture,
+        plan_admit,
+        plan_evolve,
+        resolution_requested,
+        resolution_status,
+        resolution_project_ref
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        resolution_issue
+            .as_deref()
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+    );
+    render_project_binding_health(&mut output, &binding_health);
+    if timings {
+        writeln!(output, "timing.registry_load_us={registry_load_us}").expect("write to String");
+        writeln!(
+            output,
+            "timing.binding_validation_us={binding_validation_us}"
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "timing.activation_inspection_us={activation_inspection_us}"
+        )
+        .expect("write to String");
+        writeln!(output, "timing.resolution_us={resolution_us}").expect("write to String");
+        writeln!(
+            output,
+            "timing.total_us={}",
+            total_started.elapsed().as_micros()
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn require_project_health_v2(
+    registry_path: &Path,
+    invalid_bindings: usize,
+    routing: &RoutingActivationInspection,
+    journal: &RoutingActivationInspection,
+    journal_activation_version: Option<u64>,
+    cognition_capture: bool,
+    plan_admit: bool,
+    plan_evolve: bool,
+    capability_issue: Option<&str>,
+    resolution_issue: Option<&str>,
+) -> Result<()> {
+    if invalid_bindings != 0 {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "project registry {} has {invalid_bindings} invalid binding(s)",
+            registry_path.display()
+        )));
+    }
+    if matches!(
+        routing.state,
+        RoutingActivationState::Stale | RoutingActivationState::Invalid
+    ) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "ProjectRef v2 read-routing activation is {} at {}{}",
+            routing.state.as_str(),
+            routing.path.display(),
+            routing
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+    if matches!(
+        journal.state,
+        RoutingActivationState::Stale | RoutingActivationState::Invalid
+    ) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "ProjectRef v2 journal-admission activation is {} at {}{}",
+            journal.state.as_str(),
+            journal.path.display(),
+            journal
+                .issue
+                .as_ref()
+                .map(|issue| format!(" ({issue})"))
+                .unwrap_or_default()
+        )));
+    }
+    if let Some(issue) = capability_issue {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "journal-admission capability inspection failed: {issue}"
+        )));
+    }
+    if let Some(issue) = resolution_issue {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "project health CWD resolution failed closed: {issue}"
+        )));
+    }
+    if routing.state == RoutingActivationState::Absent {
+        return Err(WorkVcsError::RoutingActivationInactive {
+            activation_path: routing.path.display().to_string(),
+            activation_state: routing.state.as_str().to_owned(),
+        });
+    }
+    if journal.state == RoutingActivationState::Absent {
+        return Err(WorkVcsError::JournalAdmissionActivationInactive {
+            activation_path: journal.path.display().to_string(),
+            activation_state: journal.state.as_str().to_owned(),
+        });
+    }
+    let activation_version = journal_activation_version.ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "active journal-admission marker has no readable activation version".to_owned(),
+        )
+    })?;
+    for (capability, active) in [
+        (
+            JournalAdmissionCapability::CognitionCapture,
+            cognition_capture,
+        ),
+        (JournalAdmissionCapability::PlanAdmit, plan_admit),
+        (JournalAdmissionCapability::PlanEvolve, plan_evolve),
+    ] {
+        if !active {
+            return Err(WorkVcsError::JournalAdmissionCapabilityInactive {
+                activation_path: journal.path.display().to_string(),
+                activation_version,
+                required_capability: capability.as_str().to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn render_project_binding_health(output: &mut String, health: &[ProjectBindingHealth]) {
+    for (index, binding) in health.iter().enumerate() {
+        writeln!(output, "binding.{index}.verified={}", binding.is_verified())
+            .expect("write to String");
+        writeln!(
+            output,
+            "binding.{index}.local_content_objects_verified={}",
+            binding
+                .local_content_objects_verified
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "none".to_owned())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "binding.{index}.verification_error={}",
+            binding
+                .issue
+                .as_deref()
+                .map(escape_key_value)
+                .unwrap_or_else(|| "none".to_owned())
+        )
+        .expect("write to String");
+    }
 }
 
 fn resolution_status_text(status: ResolutionStatus) -> &'static str {
@@ -20595,6 +21336,12 @@ fn require_active_journal_capability(
 ) -> Result<RoutingActivationInspection> {
     let read_activation =
         inspect_read_routing_activation_for_registry(effective, registry_path, registry);
+    if read_activation.state == RoutingActivationState::Absent {
+        return Err(WorkVcsError::RoutingActivationInactive {
+            activation_path: read_activation.path.display().to_string(),
+            activation_state: read_activation.state.as_str().to_owned(),
+        });
+    }
     if read_activation.state != RoutingActivationState::Active {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "ProjectRef v2 journal admission requires active read routing, but its activation state is {} at {}{}",
@@ -20609,6 +21356,12 @@ fn require_active_journal_capability(
     }
     let inspection =
         inspect_journal_admission_activation_for_registry(effective, registry_path, registry);
+    if inspection.state == RoutingActivationState::Absent {
+        return Err(WorkVcsError::JournalAdmissionActivationInactive {
+            activation_path: inspection.path.display().to_string(),
+            activation_state: inspection.state.as_str().to_owned(),
+        });
+    }
     if inspection.state != RoutingActivationState::Active {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "ProjectRef v2 journal admission is fail-closed with activation state {} at {}{}; inspect or preview the digest-bound candidate before any activation",
@@ -20630,11 +21383,11 @@ fn require_active_journal_capability(
     let marker = JournalAdmissionActivationCandidate::from_json_bytes(&marker_bytes)?;
     marker.validate_registry(registry)?;
     if !marker.supports(capability) {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "ProjectRef v2 journal admission marker version {} does not authorize capability {}; preview and explicitly refresh the exact marker before retrying",
-            marker.activation_version(),
-            capability.as_str()
-        )));
+        return Err(WorkVcsError::JournalAdmissionCapabilityInactive {
+            activation_path: inspection.path.display().to_string(),
+            activation_version: marker.activation_version(),
+            required_capability: capability.as_str().to_owned(),
+        });
     }
     Ok(inspection)
 }
@@ -20646,6 +21399,12 @@ fn require_active_read_routing(
 ) -> Result<RoutingActivationInspection> {
     let inspection =
         inspect_read_routing_activation_for_registry(effective, registry_path, registry);
+    if inspection.state == RoutingActivationState::Absent {
+        return Err(WorkVcsError::RoutingActivationInactive {
+            activation_path: inspection.path.display().to_string(),
+            activation_state: inspection.state.as_str().to_owned(),
+        });
+    }
     if inspection.state != RoutingActivationState::Active {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "ProjectRef v2 read routing is fail-closed with activation state {} at {}{}; inspect or preview the digest-bound candidate before any activation",
@@ -27316,6 +28075,14 @@ struct ProjectRegistryLock {
 
 impl ProjectRegistryLock {
     fn acquire(registry_path: &Path) -> Result<Self> {
+        Self::acquire_with_timeout(registry_path, PROJECT_REGISTRY_LOCK_TIMEOUT)
+    }
+
+    fn acquire_for_project_ensure(registry_path: &Path) -> Result<Self> {
+        Self::acquire_with_timeout(registry_path, PROJECT_ENSURE_REGISTRY_LOCK_TIMEOUT)
+    }
+
+    fn acquire_with_timeout(registry_path: &Path, timeout: Duration) -> Result<Self> {
         let lock_path = registry_path.with_extension(format!(
             "{}.lock",
             registry_path
@@ -27357,7 +28124,7 @@ impl ProjectRegistryLock {
                     return Ok(Self { path: lock_path });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if started.elapsed() >= PROJECT_REGISTRY_LOCK_TIMEOUT {
+                    if started.elapsed() >= timeout {
                         return Err(WorkVcsError::QueryInvalid(format!(
                             "project registry lock {} is already held; refusing to update registry",
                             lock_path.display()
@@ -38879,6 +39646,69 @@ mod tests {
     }
 
     #[test]
+    fn cli_renders_structured_inactive_control_plane_errors() {
+        let cases = [
+            (
+                WorkVcsError::RoutingActivationInactive {
+                    activation_path: "/tmp/routing.json".to_owned(),
+                    activation_state: "absent".to_owned(),
+                },
+                "routing_activation_inactive",
+                "project_ref_v2_read_routing",
+                "inspect_and_explicitly_activate_read_routing",
+            ),
+            (
+                WorkVcsError::JournalAdmissionActivationInactive {
+                    activation_path: "/tmp/journal.json".to_owned(),
+                    activation_state: "absent".to_owned(),
+                },
+                "journal_admission_activation_inactive",
+                "project_ref_v2_journal_admission",
+                "inspect_and_explicitly_activate_journal_admission",
+            ),
+        ];
+        for (error, code, scope, action) in cases {
+            let key_value = render_workvcs_error(&error, ErrorOutputFormat::KeyValue);
+            assert_eq!(value(&key_value, "error_code"), code);
+            assert_eq!(value(&key_value, "error_category"), "control_plane");
+            assert_eq!(value(&key_value, "retryable"), "false");
+            assert_eq!(value(&key_value, "recoverable"), "true");
+            assert_eq!(value(&key_value, "activation_scope"), scope);
+            assert_eq!(value(&key_value, "activation_state"), "absent");
+            assert_eq!(value(&key_value, "recovery_action"), action);
+
+            let json = json_value(&render_workvcs_error(&error, ErrorOutputFormat::Json));
+            assert_eq!(json["error_code"], code);
+            assert_eq!(json["error_category"], "control_plane");
+            assert_eq!(json["recoverable"], true);
+            assert_eq!(json["activation_scope"], scope);
+            assert_eq!(json["activation_state"], "absent");
+            assert_eq!(json["recovery_action"], action);
+        }
+
+        let capability = WorkVcsError::JournalAdmissionCapabilityInactive {
+            activation_path: "/tmp/journal.json".to_owned(),
+            activation_version: 1,
+            required_capability: "plan_admit".to_owned(),
+        };
+        let key_value = render_workvcs_error(&capability, ErrorOutputFormat::KeyValue);
+        assert_eq!(
+            value(&key_value, "error_code"),
+            "journal_admission_capability_inactive"
+        );
+        assert_eq!(value(&key_value, "activation_state"), "active");
+        assert_eq!(value(&key_value, "activation_version"), "1");
+        assert_eq!(value(&key_value, "required_capability"), "plan_admit");
+        assert_eq!(
+            value(&key_value, "recovery_action"),
+            "inspect_and_explicitly_refresh_journal_capability"
+        );
+        let json = json_value(&render_workvcs_error(&capability, ErrorOutputFormat::Json));
+        assert_eq!(json["activation_version"], 1);
+        assert_eq!(json["required_capability"], "plan_admit");
+    }
+
+    #[test]
     fn cli_renders_completed_mutation_postcondition_failure() {
         let error = WorkVcsError::MutationPostconditionFailed {
             operation: "session.focus-set".to_owned(),
@@ -39013,6 +39843,36 @@ mod tests {
     }
 
     #[test]
+    fn cli_exposes_canonical_operation_recovery_and_compatibility_alias() {
+        let capture_id = CaptureId::new_v7().to_string();
+        Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--status",
+            "--capture-id",
+            &capture_id,
+        ])
+        .expect("parse canonical operation-recovery command");
+        Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "capture-recovery",
+            "--status",
+            "--capture-id",
+            &capture_id,
+        ])
+        .expect("parse capture-recovery compatibility alias");
+
+        let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
+            .expect_err("project help is rendered by clap")
+            .to_string();
+        assert!(project_help.contains("health"));
+        assert!(project_help.contains("operation-recovery"));
+        assert!(project_help.contains("capture-recovery"));
+    }
+
+    #[test]
     fn cli_exposes_thin_command_shells() {
         let command = Cli::command();
         let names = command
@@ -39094,10 +39954,7 @@ mod tests {
             ("id", "Generate and validate typed WorkVCS identifiers"),
             ("store", "Inspect Store metadata, lineage, and migrations"),
             ("config", "Inspect effective WorkVCS configuration"),
-            (
-                "project",
-                "Manage project bindings and controlled registry migration",
-            ),
+            ("project", "Inspect and manage the project control plane"),
             ("history", "List commit history from a branch or commit"),
             ("changeset", "Inspect changesets and change operations"),
             ("commit", "Inspect commit metadata and causal anchors"),
@@ -39213,7 +40070,7 @@ mod tests {
         let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
             .expect_err("project help should render through clap DisplayHelp")
             .to_string();
-        assert!(project_help.contains("Manage project bindings and preview registry migration"));
+        assert!(project_help.contains("Inspect and manage the project control plane"));
         assert!(project_help.contains("ensure"));
         assert!(project_help.contains("bind"));
         assert!(project_help.contains("discover"));
@@ -63338,6 +64195,308 @@ mod tests {
         .expect("activate fixture durable operation journal");
     }
 
+    #[test]
+    fn project_health_binding_validation_calls_each_binding_once() {
+        let bindings = ["one", "two", "three"];
+        let mut calls = [0_usize; 3];
+        let health = inspect_project_binding_health_with(&bindings, |index, _| {
+            calls[index] += 1;
+            Ok(index + 1)
+        });
+
+        assert_eq!(calls, [1, 1, 1]);
+        assert!(health.iter().all(ProjectBindingHealth::is_verified));
+        assert_eq!(
+            health
+                .iter()
+                .filter_map(|item| item.local_content_objects_verified)
+                .sum::<usize>(),
+            6
+        );
+    }
+
+    #[test]
+    fn project_health_require_healthy_does_not_mask_blocked_evidence_as_inactive() {
+        let routing = RoutingActivationInspection {
+            path: PathBuf::from("routing-activation.json"),
+            state: RoutingActivationState::Absent,
+            marker_digest: None,
+            issue: None,
+        };
+        let journal = RoutingActivationInspection {
+            path: PathBuf::from("journal-admission-activation.json"),
+            state: RoutingActivationState::Stale,
+            marker_digest: None,
+            issue: Some("registry digest mismatch".to_owned()),
+        };
+        let stale = require_project_health_v2(
+            Path::new("project-bindings.json"),
+            0,
+            &routing,
+            &journal,
+            None,
+            false,
+            false,
+            false,
+            None,
+            None,
+        )
+        .expect_err("stale journal authority must outrank absent routing authority");
+        assert_eq!(stale.code(), ErrorCode::ControlPlaneInvalid);
+        assert!(
+            stale
+                .to_string()
+                .contains("journal-admission activation is stale")
+        );
+
+        let active_routing = RoutingActivationInspection {
+            state: RoutingActivationState::Active,
+            ..routing
+        };
+        let active_journal = RoutingActivationInspection {
+            state: RoutingActivationState::Active,
+            issue: None,
+            ..journal
+        };
+        let resolution = require_project_health_v2(
+            Path::new("project-bindings.json"),
+            0,
+            &active_routing,
+            &active_journal,
+            Some(1),
+            true,
+            false,
+            false,
+            None,
+            Some("ownership conflict"),
+        )
+        .expect_err("blocked resolution must outrank a cleanly missing capability");
+        assert_eq!(resolution.code(), ErrorCode::ControlPlaneInvalid);
+        assert!(resolution.to_string().contains("ownership conflict"));
+    }
+
+    #[test]
+    fn project_health_reports_activation_progress_and_is_strictly_read_only() {
+        run_cli_test_with_large_stack(
+            "project-health-activation-progress-test",
+            assert_project_health_reports_activation_progress_and_is_strictly_read_only,
+        );
+    }
+
+    fn assert_project_health_reports_activation_progress_and_is_strictly_read_only() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+
+        let degraded = inspect_project_health(
+            Some(PathBuf::from(&fixture.project_text)),
+            None,
+            Some(fixture.registry_path.clone()),
+            false,
+            true,
+        )
+        .expect("inspect default-off project health");
+        assert_eq!(value(&degraded, "health"), "degraded");
+        assert_eq!(value(&degraded, "routing_activation_state"), "absent");
+        assert_eq!(value(&degraded, "resolution_status"), "resolved");
+        assert_eq!(value(&degraded, "read_only"), "true");
+        assert!(degraded.contains("timing.registry_load_us="));
+        let routing_error =
+            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
+                .expect_err("require-healthy rejects absent read routing");
+        assert_eq!(routing_error.code(), ErrorCode::RoutingActivationInactive);
+
+        let read_preview =
+            preview_project_routing_activation(Some(fixture.registry_path.clone())).unwrap();
+        apply_project_routing_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&read_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&read_preview, "candidate_digest")).unwrap(),
+        )
+        .unwrap();
+        let journal_error =
+            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
+                .expect_err("require-healthy rejects absent journal admission");
+        assert_eq!(
+            journal_error.code(),
+            ErrorCode::JournalAdmissionActivationInactive
+        );
+
+        let journal_preview =
+            preview_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .unwrap();
+        apply_project_journal_admission_activation(
+            Some(fixture.registry_path.clone()),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&journal_preview, "candidate_digest")).unwrap(),
+        )
+        .unwrap();
+
+        let registry_before = fs::read(&fixture.registry_path).unwrap();
+        let registry_snapshot = cli_file_snapshot(&fixture.registry_path);
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let routing_path = PathBuf::from(value(&read_preview, "activation_path"));
+        let journal_path = PathBuf::from(value(&journal_preview, "activation_path"));
+        let routing_before = fs::read(&routing_path).unwrap();
+        let journal_before = fs::read(&journal_path).unwrap();
+
+        let healthy = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "health",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--require-healthy",
+            "--timings",
+        ])
+        .expect("parse project health"))
+        .expect("healthy project control plane");
+        assert_eq!(value(&healthy, "health"), "healthy");
+        assert_eq!(value(&healthy, "invalid_bindings"), "0");
+        assert_eq!(value(&healthy, "routing_activation_state"), "active");
+        assert_eq!(
+            value(&healthy, "journal_admission_activation_state"),
+            "active"
+        );
+        assert_eq!(value(&healthy, "capability.cognition_capture"), "true");
+        assert_eq!(value(&healthy, "capability.plan_admit"), "true");
+        assert_eq!(value(&healthy, "capability.plan_evolve"), "true");
+        assert_eq!(value(&healthy, "resolution_status"), "resolved");
+        assert_eq!(value(&healthy, "registry_written"), "false");
+        assert_eq!(value(&healthy, "activation_written"), "false");
+        assert_eq!(value(&healthy, "journal_written"), "false");
+        assert_eq!(value(&healthy, "store_written"), "false");
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        assert_eq!(cli_file_snapshot(&fixture.registry_path), registry_snapshot);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+        assert_eq!(fs::read(&routing_path).unwrap(), routing_before);
+        assert_eq!(fs::read(&journal_path).unwrap(), journal_before);
+    }
+
+    #[test]
+    fn project_health_distinguishes_missing_capability_from_stale_marker() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&fixture.registry_path).unwrap()).unwrap();
+        let candidate = JournalAdmissionActivationCandidate::for_registry(&registry).unwrap();
+        let mut legacy_value: serde_json::Value =
+            serde_json::from_slice(&candidate.canonical_json_bytes().unwrap()).unwrap();
+        legacy_value["activation_version"] = serde_json::json!(1);
+        legacy_value.as_object_mut().unwrap().remove("capabilities");
+        let legacy = JournalAdmissionActivationCandidate::from_json_bytes(
+            &serde_json::to_vec(&legacy_value).unwrap(),
+        )
+        .unwrap();
+        let journal_status =
+            inspect_project_journal_admission_activation(Some(fixture.registry_path.clone()))
+                .unwrap();
+        let journal_path = PathBuf::from(value(&journal_status, "activation_path"));
+        fs::write(&journal_path, legacy.stored_json_bytes().unwrap()).unwrap();
+
+        let degraded = inspect_project_health(
+            None,
+            None,
+            Some(fixture.registry_path.clone()),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(value(&degraded, "health"), "degraded");
+        assert_eq!(
+            value(&degraded, "journal_admission_activation_version"),
+            "1"
+        );
+        assert_eq!(value(&degraded, "capability.cognition_capture"), "true");
+        assert_eq!(value(&degraded, "capability.plan_admit"), "false");
+        let missing =
+            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
+                .expect_err("legacy marker does not authorize Plan capabilities");
+        assert!(matches!(
+            missing,
+            WorkVcsError::JournalAdmissionCapabilityInactive {
+                activation_version: 1,
+                ref required_capability,
+                ..
+            } if required_capability == "plan_admit"
+        ));
+
+        let other = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&other, None);
+        let other_registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&other.registry_path).unwrap()).unwrap();
+        let routing_status =
+            inspect_project_routing_activation(Some(fixture.registry_path.clone())).unwrap();
+        let routing_path = PathBuf::from(value(&routing_status, "activation_path"));
+        fs::write(
+            &routing_path,
+            RoutingActivationCandidate::for_registry(&other_registry)
+                .unwrap()
+                .stored_json_bytes()
+                .unwrap(),
+        )
+        .unwrap();
+        let blocked = inspect_project_health(
+            None,
+            None,
+            Some(fixture.registry_path.clone()),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(value(&blocked, "health"), "blocked");
+        assert_eq!(value(&blocked, "routing_activation_state"), "stale");
+        let stale =
+            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
+                .expect_err("stale marker remains a generic invalid control plane");
+        assert_eq!(stale.code(), ErrorCode::ControlPlaneInvalid);
+    }
+
+    #[test]
+    fn project_health_reports_invalid_binding_without_revalidating_or_writing_it() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&fs::read(&fixture.registry_path).unwrap()).unwrap();
+        let mut registry_value: serde_json::Value =
+            serde_json::from_slice(&registry.canonical_json_bytes().unwrap()).unwrap();
+        registry_value["bindings"][0]["store_id"] = serde_json::json!(StoreId::new_v7());
+        let invalid_registry =
+            ProjectRegistryV2::from_json_bytes(&serde_json::to_vec(&registry_value).unwrap())
+                .unwrap();
+        fs::write(
+            &fixture.registry_path,
+            invalid_registry.stored_json_bytes().unwrap(),
+        )
+        .unwrap();
+        let registry_before = fs::read(&fixture.registry_path).unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let health = inspect_project_health(
+            None,
+            None,
+            Some(fixture.registry_path.clone()),
+            false,
+            false,
+        )
+        .expect("invalid binding remains inspectable");
+        assert_eq!(value(&health, "health"), "blocked");
+        assert_eq!(value(&health, "valid_bindings"), "0");
+        assert_eq!(value(&health, "invalid_bindings"), "1");
+        assert_eq!(value(&health, "binding.0.verified"), "false");
+        assert!(value(&health, "binding.0.verification_error").contains("store id"));
+
+        let required =
+            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
+                .expect_err("require-healthy rejects invalid binding");
+        assert_eq!(required.code(), ErrorCode::ControlPlaneInvalid);
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+    }
+
     fn fixture_capture_intent(
         _fixture: &ProjectBindingFixture,
         registry: &ProjectRegistryV2,
@@ -65489,6 +66648,7 @@ mod tests {
         ])
         .expect("parse inactive v2 discover"))
         .expect_err("ordinary v2 routing must be default-off");
+        assert_eq!(inactive.code(), ErrorCode::RoutingActivationInactive);
         assert!(inactive.to_string().contains("activation state absent"));
 
         let preview = run(Cli::try_parse_from([
@@ -66361,6 +67521,7 @@ mod tests {
             .expect("parse routed capture")
         };
         let absent = run(capture_command()).expect_err("absent journal marker must fail closed");
+        assert_eq!(absent.code(), ErrorCode::JournalAdmissionActivationInactive);
         assert!(absent.to_string().contains("activation state absent"));
         assert!(!journal_marker.exists());
         assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_bytes);
@@ -66565,6 +67726,10 @@ mod tests {
 
         let disabled_capture =
             run(capture_command()).expect_err("disabled admission must fail before replay lookup");
+        assert_eq!(
+            disabled_capture.code(),
+            ErrorCode::JournalAdmissionActivationInactive
+        );
         assert!(
             disabled_capture
                 .to_string()
@@ -67014,7 +68179,7 @@ mod tests {
             Cli::try_parse_from([
                 "workvcs",
                 "project",
-                "capture-recovery",
+                "operation-recovery",
                 "--status",
                 "--capture-id",
                 &capture_id,
@@ -67397,9 +68562,22 @@ mod tests {
                 "--registry",
                 &registry_path,
             ])
-            .expect("parse capture recovery status")
+            .expect("parse operation recovery status")
         };
-        let status = run(status_command()).expect("initial capture recovery status");
+        let status = run(status_command()).expect("initial operation recovery status");
+        let compatibility_status = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "capture-recovery",
+            "--status",
+            "--capture-id",
+            &capture_id,
+            "--registry",
+            &registry_path,
+        ])
+        .expect("parse capture-recovery compatibility status"))
+        .expect("capture-recovery compatibility status");
+        assert_eq!(compatibility_status, status);
         assert_eq!(value(&status, "read_only"), "true");
         assert_eq!(value(&status, "projection_stored_state"), "absent");
         assert_eq!(
@@ -69357,6 +70535,10 @@ mod tests {
         ])
         .unwrap())
         .expect_err("legacy marker must not silently authorize Plan");
+        assert_eq!(
+            blocked.code(),
+            ErrorCode::JournalAdmissionCapabilityInactive
+        );
         assert!(
             blocked
                 .to_string()

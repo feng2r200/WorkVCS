@@ -1,7 +1,7 @@
 # WorkVCS Error Recovery Guide
 
 Status: Current V1-local and ProjectRef-v2 durable-operation recovery guidance
-Last updated: 2026-09-27
+Last updated: 2026-10-07
 
 This guide covers the stable error fields emitted by the current CLI. It is
 intentionally an operator recovery contract, not a new recovery engine or Store
@@ -59,13 +59,31 @@ Confirm that `recovery_cwd` is the intended logical project, then use
 `workvcs project ensure --cwd <PATH>`. A direct registry locator also needs
 `--store-root PATH`. Discovery itself never performs this write. Do not turn
 this error into a no-record decision or silently redirect a known semantic
-Project into its repository/mirror. The source-tree ProjectRef-v2 read route
-uses `control_plane_invalid` for absent/stale activation and unresolved,
-unbound, or conflicting ownership. The value-qualified `capture` route can
+Project into its repository/mirror. ProjectRef-v2 uses dedicated inactive
+codes when a required marker or named capability is cleanly absent. Stale,
+malformed, mismatched, symlinked, unreadable, unresolved, unbound, or
+conflicting control-plane authority remains `control_plane_invalid`. The
+value-qualified `capture` route can
 journal admitted content without target Store delivery when its exact
 installed revision and activation markers are verified. It reports routing
 state in successful output rather than dedicated `ownership_unbound` or
 `registry_migration_required` error codes.
+
+The three inactive codes add bounded recovery fields in both key-value and
+JSON output:
+
+```text
+recoverable=true
+activation_scope=<project_ref_v2_read_routing|project_ref_v2_journal_admission>
+activation_state=<absent|active>
+activation_path=<PATH>
+activation_version=<VERSION>          # capability error only
+required_capability=<CAPABILITY>       # capability error only
+recovery_action=<EXPLICIT_ACTION>
+```
+
+These fields identify the next inspect/explicit-activation route; they do not
+authorize it and `retryable` remains `false`.
 
 For `--locator-adapter-context`, distinguish absence from invalid input. An
 omitted adapter or a valid context with neither Project metadata nor mirror
@@ -78,6 +96,15 @@ force repository fallback when semantic Project context is known. When
 authoritative metadata conflicts with the canonical mirror, the authoritative
 Project wins and `context_mismatch` must be investigated before treating the
 mirror as related context.
+
+`project health` is the composite read-only starting point for registry,
+binding, activation, capability, and optional CWD-resolution diagnosis. It
+loads one registry snapshot and performs one complete validation pass over all
+bindings. `--require-healthy` is suitable for a gate; `--timings` is diagnostic
+only. Health never installs or refreshes a marker and never weakens complete
+Store integrity validation. Use the focused status command named by its output
+before deciding whether a separately authorized activation or recovery apply
+is appropriate.
 
 `project routing-activation --status` is read-only for registry v1 or v2.
 `--preview` requires v2 and reports the exact registry and candidate digests.
@@ -118,8 +145,10 @@ status before retrying. A failed post-removal step uses
 marker is absent before any retry or recovery. Neither successful state change
 authorizes ProjectRef bootstrap or target Store delivery.
 
-`project capture-recovery --status --capture-id ID` is the compatibility-named
-read-only authority for one admitted durable operation. It reports the exact
+`project operation-recovery --status --capture-id ID` is the canonical
+read-only authority for one admitted durable operation. The visible
+`project capture-recovery` spelling remains a compatibility alias over the
+same CaptureId and journal state. Status reports the exact
 `payload_kind` (`cognition_v2`, `plan_admit_v1`, or `plan_evolve_v1`), validates
 immutable events, rebuilds the projection in memory, compares any stored
 projection, and reports the current registry digest and exact next action. A
@@ -269,7 +298,10 @@ through current CLI output.
 | error_code | category | retryable | Recovery action |
 | --- | --- | --- | --- |
 | `canonical_encoding_invalid` | `canonical` | `false` | Stop using the malformed canonical payload as authority. Regenerate it through the WorkVCS CLI or schema-backed producer, then rerun the operation with the corrected payload. |
-| `control_plane_invalid` | `control_plane` | `false` | Stop using the malformed, stale, unbound, conflicting, or inactive control-plane input. For migration repair, regenerate an exact source/key/target-bound manifest. For v2 reads, inspect the registry and activation status, then correct the evidence or use a separately authorized exact activation candidate; never bypass a digest, owner rank, or marker guard. |
+| `control_plane_invalid` | `control_plane` | `false` | Stop using the malformed, stale, unbound, conflicting, or otherwise invalid control-plane input. For migration repair, regenerate an exact source/key/target-bound manifest. For v2 reads, run `project health` and focused status, then correct the evidence; never bypass a digest, owner rank, or marker guard. Clean absence uses one of the dedicated inactive codes below. |
+| `routing_activation_inactive` | `control_plane` | `false` | Read routing is cleanly off. Inspect `project health` and `project routing-activation --status`, then use a separately authorized digest-locked activation apply if intended. Never auto-activate from this error. |
+| `journal_admission_activation_inactive` | `control_plane` | `false` | Journal admission is cleanly off. Confirm read routing and inspect `project journal-admission-activation --status`, then use a separately authorized digest-locked apply if intended. Never auto-activate from this error. |
+| `journal_admission_capability_inactive` | `control_plane` | `false` | The active journal marker lacks the named capability. Inspect the reported path/version/capability and explicitly refresh only with the exact installed-marker digest and strict capability-superset candidate. |
 | `capture_not_persisted` | `control_plane` | `false` | The journal did not durably admit the capture. Preserve the bounded pending semantic packet, repair the journal path, permissions, lock, or storage fault, and retry with the same idempotency key before any target Store write. |
 | `capture_idempotency_conflict` | `control_plane` | `false` | The idempotency key already names different capture content or identity. Inspect the existing immutable intent; reuse its exact payload or choose a genuinely new key for a distinct capture. Never overwrite the admitted intent. |
 | `registry_migration_apply_failed` | `control_plane` | `false` | The atomic registry replacement did not occur. Preserve v1, correct the reported digest, manifest, Store, lock, backup, or temp conflict, recompute both expected digests, and retry only with explicit apply authority. |
@@ -278,7 +310,7 @@ through current CLI output.
 | `registry_rollback_install_indeterminate` | `control_plane` | `false` | The v1 restore rename occurred but later durability or verification failed. Run `registry-migrate --rollback-check` with the same digests; continue only from its observed `v1_restored` or `blocked` state. |
 | `routing_activation_install_indeterminate` | `control_plane` | `false` | The activation marker was installed or may have been installed before a later cleanup, durability, or verification failure. Run `project routing-activation --status` against the same registry before any retry; never delete, overwrite, or infer marker state from the failed command alone. |
 | `routing_activation_disable_indeterminate` | `control_plane` | `false` | The journal-admission marker was removed or may have been removed before a later durability or verification failure. Run `project journal-admission-activation --status` against the same registry before retry or recovery; never infer disabled state from the failed command alone. |
-| `capture_recovery_install_indeterminate` | `control_plane` | `false` | A recovery registry, event, target commit, receipt, or projection install may already be durable. Run `project capture-recovery --status --capture-id ID` against the same registry, use its fresh registry/projection digests, and converge forward only from the observed state; never guess rollback or remove a bootstrapped or delivered Store. |
+| `capture_recovery_install_indeterminate` | `control_plane` | `false` | A recovery registry, event, target commit, receipt, or projection install may already be durable. Run `project operation-recovery --status --capture-id ID` against the same registry, use its fresh registry/projection digests, and converge forward only from the observed state; never guess rollback or remove a bootstrapped or delivered Store. The historical code name is stable. |
 | `shared_binding_isolation_install_indeterminate` | `control_plane` | `false` | The registry replacement completed or may have completed. Rerun `project isolate-shared-binding --preview` for the same CWD, ProjectRef, registry, and Store root. Continue only from its verified state; never replay apply blindly, edit the registry, delete the backup, or copy the source Store. |
 | `digest_invalid` | `canonical` | `false` | Recompute the digest from the current canonical bytes. Do not copy a digest from another object or bypass digest checks. |
 | `evidence_invalid` | `evidence` | `false` | Fix the Evidence content, kind, or referenced entities before retrying. Preserve the failed payload for audit if it came from an external artifact. |

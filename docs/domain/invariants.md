@@ -295,6 +295,19 @@ mutated, deleted, copied, or replayed. Isolation never refreshes activation
 markers or authorizes reconstruction writes; post-replacement uncertainty is
 resolved by read-only preview and forward inspection.
 
+### INV-110 — Operator health is complete, single-pass, and non-activating
+
+Composite project health loads one selected registry snapshot and performs
+exactly one complete validation of every binding before reporting registry,
+read-routing, journal-admission, capability, and optional CWD-resolution state.
+It never substitutes a weaker integrity path, performs migration or activation,
+opens a Store writable, or changes registry, marker, journal, projection, or
+Store state. Cleanly absent activation or capability authority has a dedicated
+recoverable-but-non-retryable error; stale, malformed, mismatched, symlinked,
+or racing authority remains `control_plane_invalid`. `operation-recovery` is
+the canonical operator spelling, while `capture-recovery` remains an alias for
+the same CaptureId, journal, projection, and receipt state machine.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

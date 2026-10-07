@@ -3,7 +3,7 @@
 Status: Accepted implemented contract — roadmap rounds 1–11 complete with isolated fault evidence and bounded live local canary evidence
 Date: 2026-09-23
 Last updated: 2026-10-07
-Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md), [ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md), [ADR-0517](../decisions/adr/0517-shared-project-binding-isolation.md)
+Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md), [ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md), [ADR-0517](../decisions/adr/0517-shared-project-binding-isolation.md), [ADR-0518](../decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)
 
 ## Contract language and scope
 
@@ -149,8 +149,10 @@ separate recovery apply supplies target-delivery authority. Marker presence
 alone never authorizes ProjectRef bootstrap, journal-event processing, or a
 target Store write.
 
-The compatibility-named `project capture-recovery` surface recovers all typed
-durable-operation intents and is separate from both markers. `--status`
+The canonical `project operation-recovery` surface recovers all typed
+durable-operation intents and is separate from both markers. The visible
+`project capture-recovery` spelling is a compatibility alias over the same
+command and persistent state. `--status`
 reports `payload_kind`, reconstructs authority from one immutable intent and
 its events, and performs no write. `--apply` requires the exact current
 registry digest and reconstructed projection digest, then acquires the
@@ -160,7 +162,7 @@ activated route and not authority to operate on another live control plane. A
 registry-only configuration must also supply `--store-root` for unbound
 cognition bootstrap. Public Plan commands synchronously drive this same state
 machine after their typed intent is durable; a failure still resumes through
-the compatibility recovery surface. Before any first Plan Store mutation, the
+the same recovery surface. Before any first Plan Store mutation, the
 recovery route performs pure typed-manifest validation, compares explicit
 target guards against one replayed snapshot, and materializes the typed
 receipt in a fixed maximum-timestamp event envelope. Only those proven
@@ -176,6 +178,17 @@ code. Journal reconstruction also validates receipt/failure families against
 the intent payload kind and exact manifest-derived result shape. The timestamp
 scalar permits at most nine fractional digits, so the fixed nanosecond
 preflight envelope is a type-level maximum for the later append.
+
+The composite `project health` inspection loads the selected registry once,
+performs one complete validation of every binding, and then reports registry,
+read-routing, journal-admission, all marker capabilities, and optional CWD
+resolution state. Its `healthy`, `degraded`, and `blocked` classifications are
+observations only. `--require-healthy` turns a non-healthy observation into a
+stable failure, and `--timings` adds diagnostic observations without creating
+a performance acceptance threshold. Health never migrates, activates,
+refreshes, admits, recovers, opens a Store writable, or changes control-plane
+or Store state. Full integrity validation is retained; a selected CWD binding
+is not reopened after the one complete registry pass.
 
 ## Common scalar types
 
@@ -909,10 +922,13 @@ The future implementation MUST expose at least these machine-routable codes:
 | `registry_migration_install_indeterminate` | The atomic rename occurred but a later durability or verification step failed; inspect the installed registry and run the read-only rollback probe. Never infer or perform rollback automatically. |
 | `registry_rollback_failed` | The rollback replacement did not occur. Correct the reported digest, receipt, activation, journal, backup, snapshot, lock, or temp conflict; the exact v2 snapshot may remain reusable. |
 | `registry_rollback_install_indeterminate` | The v1 restore rename occurred but a later durability or verification step failed; run the read-only rollback probe with the same digests before retrying or choosing forward recovery. |
+| `routing_activation_inactive` | The exact read-routing marker is absent. Inspect health/status and activate only through a separately authorized digest-locked apply. |
+| `journal_admission_activation_inactive` | The exact journal-admission marker is absent. Inspect health/status and activate only through a separately authorized digest-locked apply. |
+| `journal_admission_capability_inactive` | The active journal marker does not authorize the required capability. Inspect its version and explicitly refresh only through the exact installed-marker digest contract. |
 | `routing_activation_install_indeterminate` | The marker installation completed or may have completed before later cleanup, directory sync, or verification failed; inspect the exact marker with `project routing-activation --status` before retrying or recovering. |
 | `routing_activation_disable_indeterminate` | A journal-admission marker was removed or may have been removed before durable verification completed; inspect `project journal-admission-activation --status` before retry or recovery. |
 | `capture_idempotency_conflict` | Use the original payload or a new idempotency key. |
-| `capture_recovery_install_indeterminate` | Registry, event, or projection installation may already be durable; run `project capture-recovery --status` with the same capture and continue forward using the newly reported digests. Never infer rollback. |
+| `capture_recovery_install_indeterminate` | Registry, event, or projection installation may already be durable; run `project operation-recovery --status` with the same capture and continue forward using the newly reported digests. The historical error name remains stable. Never infer rollback. |
 | `shared_binding_isolation_install_indeterminate` | The registry replacement may already be durable; rerun `project isolate-shared-binding --preview` and continue only from `eligible`, `not_shared`, or verified `already_isolated`. Never copy the source Store or replay apply blindly. |
 | `legacy_manifest_upgrade_required` | Convert the durable legacy intent to a separately confirmed target-neutral delivery; do not rewrite it implicitly. |
 | `semantic_manifest_invalid` | Preserve the immutable intent, inspect the invalid semantic input, and start a corrected new Capture; do not replay or rewrite the old payload. |

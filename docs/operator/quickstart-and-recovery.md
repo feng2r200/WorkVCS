@@ -142,6 +142,20 @@ or reconstruction. If apply returns
 preview first; `already_isolated` is a verified stop state, not permission to
 replay apply.
 
+Before composing several focused status calls, inspect the selected control
+plane once:
+
+```sh
+workvcs project health --registry "$REGISTRY" [--cwd "$CONTEXT"] [--require-healthy] [--timings]
+```
+
+Health loads one registry snapshot, performs one complete validation of every
+binding, and reports routing, journal admission, all declared capabilities,
+and optional CWD resolution. It is strictly read-only and never activates or
+recovers anything. Use `--require-healthy` for an automation gate; use
+`--timings` only to diagnose phase cost, not to replace complete integrity
+validation.
+
 The recovery surface is intentionally separate from both activation markers:
 
 ```sh
@@ -162,13 +176,14 @@ the manifest idempotency key is
 valid only with the same semantic payload and byte-equivalent canonical group
 meaning; changing either fails closed. Admission itself writes no Store.
 
-Continue only from the admitted Capture ID. The compatibility-named recovery
-surface also recognizes `plan_admit_v1` and `plan_evolve_v1`; status reports
-the exact `payload_kind`:
+Continue only from the admitted Capture ID. The canonical recovery surface
+also recognizes `plan_admit_v1` and `plan_evolve_v1`; status reports the exact
+`payload_kind`. The historical `capture-recovery` spelling remains a visible
+compatibility alias:
 
 ```sh
-workvcs project capture-recovery --status --capture-id "$CAPTURE_ID" [--registry "$REGISTRY"]
-workvcs project capture-recovery --apply --capture-id "$CAPTURE_ID" \
+workvcs project operation-recovery --status --capture-id "$CAPTURE_ID" [--registry "$REGISTRY"]
+workvcs project operation-recovery --apply --capture-id "$CAPTURE_ID" \
   --expected-registry-digest "$REGISTRY_DIGEST" \
   --expected-projection-digest "$PROJECTION_DIGEST" \
   [--registry "$REGISTRY"] [--store-root "$STORE_ROOT"]
@@ -204,7 +219,7 @@ retain their independent Store-local contract; they do not consume or mark a
 pending Capture intent as delivered. If that mix-up has already happened,
 keep the intent and repair it in this order:
 
-1. Run `capture-recovery --status` against the exact registry and record both
+1. Run `operation-recovery --status` against the exact registry and record both
    current digests.
 2. Apply recovery once with those digests. The journal-delivered Record is the
    canonical current item; do not delete the journal, Store rows, or create an

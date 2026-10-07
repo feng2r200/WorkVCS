@@ -85,7 +85,7 @@ supplied. Equal-revision lateral replacement, capability removal, wrong
 lineage, malformed or symlinked state, and digest mismatch remain fail-closed;
 never delete or hand-edit either marker. Refresh read routing before journal
 admission, and retain separate authority for both operations.
-The separate `project capture-recovery` route starts with
+The separate `project operation-recovery` route starts with
 `--status --capture-id <id>`. Status is read-only and produces the registry
 and projection digests needed by an explicit `--apply`. Apply can converge an
 unbound semantic, Git, or CWD owner to exactly one ProjectRef and pristine
@@ -181,7 +181,7 @@ a repository-local binary for the installation and live-activation gates.
 
 Primary delivery is a separate operator action, never an automatic continuation
 of `capture`: first run
-`workvcs project capture-recovery --status --capture-id <id>`, then use the
+`workvcs project operation-recovery --status --capture-id <id>`, then use the
 fresh registry/projection digests with `--apply` only inside the explicitly
 authorized control plane. For status interpretation and the bounded same-target
 sequence, read [Checkpoint delivery](checkpoint-delivery.md). Apply records
@@ -222,7 +222,7 @@ writes: `plan admit` requires the `plan_admit` marker capability and admits
 idempotency, and receipt protocol as routed cognition while retaining Plan
 manifest semantics. Success requires the durable receipt. If the Store commit
 lands before that receipt, repeat the exact Plan command or use
-`project capture-recovery` with the same CaptureId; never choose a new
+`project operation-recovery` with the same CaptureId; never choose a new
 idempotency key merely to escape an uncertain result. Registry v1 cwd and
 explicit `STORE --branch` remain direct compatibility boundaries.
 

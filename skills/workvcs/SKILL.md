@@ -126,7 +126,7 @@ or activate a different route. Read
 configuration, locator, registry, binding, or marker problem.
 
 Registry migration, rollback, shared-binding isolation, read-routing
-activation, journal-admission activation, marker refresh, and capture-recovery
+activation, journal-admission activation, marker refresh, and operation-recovery
 apply are separate mutation boundaries. Their preview or status forms do not
 authorize apply. Use current digests, status-first recovery, and the exact
 installed binary; never delete or hand-edit a stale marker, substitute a
@@ -140,10 +140,11 @@ refresh both stale activation markers separately before reconstruction.
 On registry v2 the journal marker grants named capabilities. Marker version 1
 remains cognition-only; `plan admit --cwd` and `plan evolve --cwd` require an
 explicit old-digest-locked refresh to the version-2 capability superset. The
-compatibility-named `project capture-recovery` surface serves cognition and
-typed Plan operations through the same intent/event/projection/receipt
-protocol. Always read `payload_kind`; never reinterpret a Plan payload as
-cognition or create a second recovery queue.
+canonical `project operation-recovery` surface serves cognition and typed Plan
+operations through the same intent/event/projection/receipt protocol;
+`project capture-recovery` remains a visible compatibility alias. Always read
+`payload_kind`; never reinterpret a Plan payload as cognition or create a
+second recovery queue.
 For routed Plan output, distinguish `journal_admission_reused` from the target
 `admission_status` or `evolution_status`: an already admitted intent can still
 create its first target commit, while commit-before-receipt recovery reuses the

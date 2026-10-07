@@ -28,6 +28,8 @@ public release, and remote deployment remain separate decisions.
 - [ADR-0514: Digest-Locked Same-Lineage Activation Marker Refresh](decisions/adr/0514-activation-marker-same-lineage-refresh.md)
 - [ADR-0515: Capture Semantic Preflight and Terminal Invalid Intent](decisions/adr/0515-capture-semantic-preflight-and-terminal-invalid-intent.md)
 - [ADR-0516: ProjectRef Plan Durable-Operation Routing](decisions/adr/0516-projectref-plan-durable-operation-routing.md)
+- [ADR-0517: Shared Project Binding Isolation](decisions/adr/0517-shared-project-binding-isolation.md)
+- [ADR-0518: Operator Control-Plane Health and Recovery Contract](decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)
@@ -44,6 +46,7 @@ public release, and remote deployment remain separate decisions.
 - [ProjectRef Live Primary Delivery and CaptureGroup Canary Evidence](provenance/projectref-live-primary-and-capture-group-canary.md)
 - [ProjectRef Plan Durable-Operation Routing Evidence](provenance/projectref-plan-durable-operation-routing.md)
 - [Referenced WorkVCS Issue Closure Matrix](provenance/referenced-workvcs-issue-closure-2026-10-07.md)
+- [Operator Control-Plane V1 Implementation Evidence](provenance/operator-control-plane-v1.md)
 
 ## Implementation readiness
 

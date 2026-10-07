@@ -80,8 +80,16 @@ the selected binding to a deterministic pristine Store. It preserves the old
 Store and ProjectRef, copies no ambiguous history, and requires explicit
 activation-marker refresh afterward.
 
+`workvcs project health` provides one strictly read-only composite check of the
+registry, complete binding validation, activation markers, journal
+capabilities, and optional CWD resolution. Durable-operation recovery uses the
+canonical `project operation-recovery` command; `project capture-recovery`
+remains a visible compatibility alias over the same CaptureId and journal
+state.
+
 See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),
 [ADR-0517](docs/decisions/adr/0517-shared-project-binding-isolation.md),
+[ADR-0518](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md),
 the [ProjectRef control-plane contract](docs/architecture/projectref-control-plane-v2.md),
 and the [migration and acceptance contract](docs/architecture/projectref-registry-v2-migration-and-acceptance.md).
 

@@ -43,6 +43,7 @@ public release, and remote deployment remain separate decisions.
 - [ProjectRef Concrete Adapter and Round-5 Acceptance Evidence](provenance/projectref-concrete-adapter-and-round5-acceptance.md)
 - [ProjectRef Live Primary Delivery and CaptureGroup Canary Evidence](provenance/projectref-live-primary-and-capture-group-canary.md)
 - [ProjectRef Plan Durable-Operation Routing Evidence](provenance/projectref-plan-durable-operation-routing.md)
+- [Referenced WorkVCS Issue Closure Matrix](provenance/referenced-workvcs-issue-closure-2026-10-07.md)
 
 ## Implementation readiness
 
@@ -155,6 +156,7 @@ index is:
 - [Phase 5I Integrity Replay Performance Evidence](provenance/phase-5i-integrity-replay-performance.md)
 - [ProjectRef Plan Durable-Operation Routing Evidence](provenance/projectref-plan-durable-operation-routing.md)
 - [Shared Project Binding Isolation Evidence](provenance/shared-project-binding-isolation.md)
+- [Referenced WorkVCS Issue Closure Matrix](provenance/referenced-workvcs-issue-closure-2026-10-07.md)
 
 The ledger maps current evidence. It does not replace the confirmed product,
 domain, architecture, schema, or ADR authorities.

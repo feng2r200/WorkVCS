@@ -1,6 +1,6 @@
 # ADR-0517: Shared Project Binding Isolation
 
-Status: Accepted and implemented; live adoption evidence pending
+Status: Accepted, implemented, and live adopted
 Date: 2026-10-07
 
 ## Context

@@ -104,7 +104,7 @@ This is now closed at both layers:
 - work-governance commit `e178ee1c219430a8af00e9fac1260d5b28f51c55`
   makes provider isolation a project-startup invariant, bounds recovery
   packets, and invalidates snapshots only on typed receipts or relevant
-  mutations. Exact [CI run 37553940420](https://github.com/feng2r200/work-governance/actions/runs/37553940420)
+  mutations. Exact [CI run 37553940420](https://github.com/feng2r200/codex-work-governance/actions/runs/37553940420)
   succeeded, and plugin version `2.0.0+codex.20261007002945` is installed and
   enabled.
 

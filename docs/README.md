@@ -21,7 +21,10 @@ delivery, or batch recovery. Exact local installed adoption and one bounded
 configured-local same-binding canary are complete under their separate Stage C
 evidence. A separately authorized Stage D reconciled exactly two selected
 same-ProjectRef historical receipts without turning the global inventory into
-batch authority.
+batch authority. ADR-0520 adds immutable pre-delivery disposition and a
+read-only all-operation lifecycle inventory without automatic history sweeps.
+ADR-0521 adds zero-write intrinsic Plan-manifest validation and Capture-aware
+routed terminal diagnostics while preserving journal-first audit.
 
 The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
 on 2026-09-27. The final exact installed canary wrote one canonical
@@ -38,6 +41,8 @@ public release, and remote deployment remain separate decisions.
 - [ADR-0517: Shared Project Binding Isolation](decisions/adr/0517-shared-project-binding-isolation.md)
 - [ADR-0518: Operator Control-Plane Health and Recovery Contract](decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)
 - [ADR-0519: Authorized Existing-Binding Delivery and Operation Inventory](decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
+- [ADR-0520: Operation Disposition and Global Inventory Classification](decisions/adr/0520-operation-disposition-and-global-inventory-classification.md)
+- [ADR-0521: Plan Manifest Validation and Routed Rejection Diagnostics](decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)
@@ -59,6 +64,7 @@ public release, and remote deployment remain separate decisions.
 - [Authorized Existing-Binding Delivery Candidate Evidence](provenance/authorized-existing-binding-delivery-candidate.md)
 - [Authorized Existing-Binding Delivery Local Adoption Evidence](provenance/authorized-existing-binding-delivery-local-adoption.md)
 - [Authorized Existing-Binding Delivery Historical Reconciliation Evidence](provenance/authorized-existing-binding-delivery-historical-reconciliation.md)
+- [Operation Disposition and Plan Validation Candidate Evidence](provenance/operation-disposition-and-plan-validation-candidate.md)
 
 ## Implementation readiness
 

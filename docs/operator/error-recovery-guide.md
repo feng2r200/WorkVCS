@@ -189,6 +189,20 @@ malformed stored projection may be rebuilt from valid events; an invalid event
 sequence, payload digest, or digest chain is authority corruption and fails
 closed.
 
+Use `--list-open` to enumerate current recovery work and `--list-all` when
+completed, deterministic-terminal, superseded, and abandoned history must also
+remain visible. Inventory scope is bound into its paging digest. Rows expose
+projected and effective state plus lifecycle so registry drift cannot reopen a
+terminal operation. Neither inventory scope grants apply/disposition authority
+or permits a historical sweep.
+
+For an owned pre-delivery operation whose obsolete semantics are proven from
+current project truth, `--dispose superseded` records a distinct later Capture
+or `--dispose abandoned` records no successor. Both require fresh registry and
+projection digests, open no Store, and are refused once target-bearing
+authority exists. Exact replay is zero-write. A stale guard or uncertain
+semantic relationship means stop and reclassify; do not guess a successor.
+
 Recovery apply is a distinct, explicit operation requiring both the exact
 status-observed registry and projection digests. A stale guard fails before
 mutation. `capture_recovery_install_indeterminate` means a registry, event, or
@@ -214,6 +228,10 @@ not `Finding --supports--> Handoff`.
 Typed Plan recovery performs pure manifest validation, an explicit target-
 snapshot guard comparison, and receipt-size preflight using a fixed maximum-
 length timestamp envelope before its first Store write.
+Before durable admission, `workvcs plan validate --operation admit|evolve
+--manifest PATH` can run the same intrinsic typed validation with zero registry,
+journal, activation, or Store access. It does not check target guards and does
+not grant admission or delivery authority.
 Timestamps are capped at nanosecond precision. A proven manifest or target
 failure is written before receipt construction; an existing entity of the
 wrong Goal/Plan kind is `plan_target_conflict`, not a pending lookup error.
@@ -225,6 +243,13 @@ analysis. Do not replay those terminal captures. Engine execution, storage,
 integrity, transaction, control-plane, and uncertain post-commit failures are
 deliberately not terminalized from a generic error code; recover the same
 Capture ID from read-only status.
+
+When the routed invocation itself reaches a deterministic terminal failure,
+`capture_delivery_incomplete` includes the durable CaptureId, failure code,
+canonical recovery action, and the bounded validation or conflict detail
+already known in that invocation. Use that evidence to correct the next
+operation. The detail is intentionally not journal or inventory authority, so
+later diagnosis starts from status when it is no longer in memory.
 
 A Plan `delivery_applied` receipt is valid only when its operation kind and
 complete result-object shape match the admitted manifest variant. After that

@@ -46,7 +46,9 @@ ProjectRef v2 按确定顺序判断内容归属：显式指定的 ProjectRef、�
 
 ADR-0519 已在源码树实现并完成精确的本地安装采用：在调用方显式授权时，单项目 `capture` 可以继续交付到准入时解析出的同一个、完整有效且非共享的既有绑定，并增加一个严格只读的开放操作清单。默认行为仍只写日志；ProjectRef 启动、目标变化、CaptureGroup 和历史积压处理仍分别需要授权。一个有界的同绑定现场 canary 及其零写入重放已经通过；随后单独授权的 Stage D 又只处理了当前 ProjectRef 下明确选中的两条历史回执，并保留其余全局清单的独立授权边界。
 
-进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ADR-0517（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)、[ADR-0518（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)、[ADR-0519（英文）](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
+ADR-0520 增加了显式、摘要锁定的交付前 `superseded`/`abandoned` 终态分类，以及只读的全量操作生命周期清单；它不会推断后继 Capture，也不会自动清扫历史。ADR-0521 增加了零写入的 Plan 清单内在校验，并让路由后的确定性拒绝直接返回 CaptureId、恢复动作和本次原因，同时保留 journal-first 的持久审计语义。
+
+进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ADR-0517（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)、[ADR-0518（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)、[ADR-0519（英文）](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)、[ADR-0520（英文）](docs/decisions/adr/0520-operation-disposition-and-global-inventory-classification.md)、[ADR-0521（英文）](docs/decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
 
 ## Agent 参与策略
 
@@ -110,6 +112,8 @@ scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
 - [共享 ProjectRef 绑定隔离（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)——零写入预览、精确替换、旧 Store 保留和激活刷新边界。
 - [操作者控制平面健康与恢复契约（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)——单次完整只读健康检查、稳定错误分类和恢复命令兼容边界。
 - [既有绑定授权交付与操作清单（英文）](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)——已完成本地安装采用的快速路径、积压可见性和保留的授权门。
+- [操作终态处置与全局清单分类（英文）](docs/decisions/adr/0520-operation-disposition-and-global-inventory-classification.md)——交付前显式终态、全量生命周期可见性和禁止自动历史清扫。
+- [Plan 清单校验与路由拒绝诊断（英文）](docs/decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md)——零写入内在校验、Capture 感知错误和保留的 journal-first 审计。
 - [V1 就绪台账（英文）](docs/provenance/v1-readiness-ledger.md)和[发布门矩阵（英文）](docs/provenance/v1-release-gate-matrix.md)——支撑限定成熟度声明的证据。
 - [文档地图（英文）](docs/README.md)——完整的权威资料与证据索引。
 

@@ -193,8 +193,14 @@ expect_contains "$capture_help_output" '--deliver-existing-binding'
 capture_success "operation-recovery-help-inventory" operation_recovery_help_output \
     project operation-recovery --help
 expect_contains "$operation_recovery_help_output" '--list-open'
+expect_contains "$operation_recovery_help_output" '--list-all'
+expect_contains "$operation_recovery_help_output" '--dispose <superseded|abandoned>'
+expect_contains "$operation_recovery_help_output" '--successor-capture-id <CAPTURE_ID>'
 expect_contains "$operation_recovery_help_output" '--expected-inventory-digest'
 expect_contains "$operation_recovery_help_output" '--format <FORMAT>'
+capture_success "plan-validate-help" plan_validate_help_output plan validate --help
+expect_contains "$plan_validate_help_output" '--operation <admit|evolve>'
+expect_contains "$plan_validate_help_output" '--manifest <PATH>'
 
 step "store and workspace setup"
 capture_success "init" init_output init "$store" --display-name "operator-recovery-maturity"
@@ -274,6 +280,17 @@ expect_value "$inventory_output" "row.0.capture_id" "$pending_capture_id"
 expect_value "$inventory_output" "row.0.recovery_action" "apply_binding_receipt"
 [[ "$inventory_output" != *"operator-existing-binding-pending"* ]] \
     || die "operation inventory leaked a raw idempotency key"
+
+capture_success "all-operation-inventory" all_inventory_output \
+    project operation-recovery --list-all --registry "$registry" \
+    --payload-kind cognition_v2 --limit 1
+expect_value "$all_inventory_output" "action" "list_all"
+expect_value "$all_inventory_output" "inventory_scope" "all"
+expect_value "$all_inventory_output" "read_only" "true"
+expect_value "$all_inventory_output" "total_matching" "1"
+expect_value "$all_inventory_output" "row.0.capture_id" "$pending_capture_id"
+expect_value "$all_inventory_output" "row.0.operation_lifecycle" "open"
+expect_value "$all_inventory_output" "store_written" "false"
 
 mkdir -p "$unbound_dir"
 printf '%s\n' \

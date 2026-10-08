@@ -1181,6 +1181,70 @@ impl DeliveryFailedPayload {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationDisposition {
+    Superseded,
+    Abandoned,
+}
+
+impl OperationDisposition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Superseded => "superseded",
+            Self::Abandoned => "abandoned",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationDispositionRecordedPayload {
+    disposition: OperationDisposition,
+    #[serde(default)]
+    successor_capture_id: Nullable<CaptureId>,
+}
+
+impl OperationDispositionRecordedPayload {
+    pub fn new(
+        disposition: OperationDisposition,
+        successor_capture_id: Option<CaptureId>,
+    ) -> Result<Self> {
+        let payload = Self {
+            disposition,
+            successor_capture_id: Nullable::present(successor_capture_id),
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
+    pub fn disposition(&self) -> OperationDisposition {
+        self.disposition
+    }
+
+    pub fn successor_capture_id(&self) -> Option<CaptureId> {
+        self.successor_capture_id.copied()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if !self.successor_capture_id.is_present() {
+            return invalid(
+                "operation disposition successor_capture_id is required even when null",
+            );
+        }
+        match (self.disposition, self.successor_capture_id()) {
+            (OperationDisposition::Superseded, None) => {
+                return invalid("superseded operation disposition requires a successor CaptureId");
+            }
+            (OperationDisposition::Abandoned, Some(_)) => {
+                return invalid("abandoned operation disposition forbids a successor CaptureId");
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureGroupResolvedPayload {
@@ -1354,6 +1418,7 @@ pub enum CaptureEventPayload {
     DeliveryFailed(DeliveryFailedPayload),
     ReferenceApplied(ReferenceAppliedPayload),
     CaptureCompleted(CaptureCompletedPayload),
+    OperationDispositionRecorded(OperationDispositionRecordedPayload),
 }
 
 impl CaptureEventPayload {
@@ -1367,6 +1432,7 @@ impl CaptureEventPayload {
             Self::DeliveryFailed(payload) => payload.validate(),
             Self::ReferenceApplied(payload) => payload.validate(),
             Self::CaptureCompleted(payload) => payload.validate(),
+            Self::OperationDispositionRecorded(payload) => payload.validate(),
         }
     }
 
@@ -1380,6 +1446,7 @@ impl CaptureEventPayload {
             Self::DeliveryFailed(_) => "delivery_failed",
             Self::ReferenceApplied(_) => "reference_applied",
             Self::CaptureCompleted(_) => "capture_completed",
+            Self::OperationDispositionRecorded(_) => "operation_disposition_recorded",
         }
     }
 
@@ -1421,6 +1488,11 @@ impl CaptureEventPayload {
                     intent.payload_kind().as_str(),
                     self.kind_name()
                 ));
+            }
+            Self::OperationDispositionRecorded(payload)
+                if payload.successor_capture_id() == Some(intent.capture_id()) =>
+            {
+                return invalid("operation disposition successor must differ from its CaptureId");
             }
             _ => {}
         }
@@ -1633,6 +1705,8 @@ pub enum CaptureRecoveryState {
     PlanManifestRejected,
     PlanReceiptTooLarge,
     Completed,
+    Superseded,
+    Abandoned,
 }
 
 impl CaptureRecoveryState {
@@ -1648,6 +1722,8 @@ impl CaptureRecoveryState {
             Self::PlanManifestRejected => "plan_manifest_rejected",
             Self::PlanReceiptTooLarge => "plan_receipt_too_large",
             Self::Completed => "completed",
+            Self::Superseded => "superseded",
+            Self::Abandoned => "abandoned",
         }
     }
 }
@@ -2064,6 +2140,8 @@ pub struct CaptureProjection {
     primary_delivery: Nullable<DeliveryAppliedPayload>,
     #[serde(default)]
     delivery_failure: Nullable<DeliveryFailedPayload>,
+    #[serde(default)]
+    operation_disposition: Nullable<OperationDispositionRecordedPayload>,
 }
 
 impl CaptureProjection {
@@ -2103,8 +2181,15 @@ impl CaptureProjection {
         let mut delivery_started: Option<DeliveryStartedPayload> = None;
         let mut primary_delivery: Option<DeliveryAppliedPayload> = None;
         let mut delivery_failure: Option<DeliveryFailedPayload> = None;
+        let mut operation_disposition: Option<OperationDispositionRecordedPayload> = None;
         for event in events {
             event.payload().validate_for_intent(intent)?;
+            if operation_disposition.is_some() {
+                return invalid(format!(
+                    "capture event {} follows terminal operation_disposition_recorded authority",
+                    event.event_id()
+                ));
+            }
             match event.payload() {
                 CaptureEventPayload::ResolutionRecorded(payload) => {
                     latest_resolution = payload.resolution().clone();
@@ -2462,39 +2547,65 @@ impl CaptureProjection {
                     }
                     group.completion_receipt = Nullable::present(Some(payload.clone()));
                 }
+                CaptureEventPayload::OperationDispositionRecorded(payload) => {
+                    let group_has_delivery_authority =
+                        capture_group.as_ref().is_some_and(|group| {
+                            group.canonical_record_ref().is_some()
+                                || group.applied_reference_count() != 0
+                                || group.completion_receipt().is_some()
+                        });
+                    if delivery_started.is_some()
+                        || primary_delivery.is_some()
+                        || delivery_failure.is_some()
+                        || group_has_delivery_authority
+                    {
+                        return invalid(format!(
+                            "operation_disposition_recorded event {} cannot terminate target-bearing authority",
+                            event.event_id()
+                        ));
+                    }
+                    operation_disposition = Some(payload.clone());
+                }
             }
         }
-        let recovery_state = match latest_resolution.status() {
-            ResolutionStatus::Unresolved | ResolutionStatus::Conflict => {
-                CaptureRecoveryState::PendingResolution
+        let recovery_state = if let Some(disposition) = operation_disposition.as_ref() {
+            match disposition.disposition() {
+                OperationDisposition::Superseded => CaptureRecoveryState::Superseded,
+                OperationDisposition::Abandoned => CaptureRecoveryState::Abandoned,
             }
-            ResolutionStatus::Unbound => CaptureRecoveryState::PendingProject,
-            ResolutionStatus::Resolved => {
-                if project_binding_ready.as_ref().is_some_and(|binding| {
-                    Some(binding.project_ref_id()) == latest_resolution.primary_project_ref()
-                }) {
-                    if capture_group
-                        .as_ref()
-                        .is_some_and(|group| group.resolved_primary_project_ref().is_none())
-                    {
-                        CaptureRecoveryState::PendingProject
-                    } else if primary_delivery.is_some() {
-                        if capture_group.as_ref().is_some_and(|group| {
-                            group.required_reference_count() != group.applied_reference_count()
-                        }) {
-                            CaptureRecoveryState::PendingReferences
+        } else {
+            match latest_resolution.status() {
+                ResolutionStatus::Unresolved | ResolutionStatus::Conflict => {
+                    CaptureRecoveryState::PendingResolution
+                }
+                ResolutionStatus::Unbound => CaptureRecoveryState::PendingProject,
+                ResolutionStatus::Resolved => {
+                    if project_binding_ready.as_ref().is_some_and(|binding| {
+                        Some(binding.project_ref_id()) == latest_resolution.primary_project_ref()
+                    }) {
+                        if capture_group
+                            .as_ref()
+                            .is_some_and(|group| group.resolved_primary_project_ref().is_none())
+                        {
+                            CaptureRecoveryState::PendingProject
+                        } else if primary_delivery.is_some() {
+                            if capture_group.as_ref().is_some_and(|group| {
+                                group.required_reference_count() != group.applied_reference_count()
+                            }) {
+                                CaptureRecoveryState::PendingReferences
+                            } else {
+                                CaptureRecoveryState::Completed
+                            }
+                        } else if let Some(recovery_state) =
+                            recovery_state_for_delivery_failure(delivery_failure.as_ref())
+                        {
+                            recovery_state
                         } else {
-                            CaptureRecoveryState::Completed
+                            CaptureRecoveryState::PendingPrimary
                         }
-                    } else if let Some(recovery_state) =
-                        recovery_state_for_delivery_failure(delivery_failure.as_ref())
-                    {
-                        recovery_state
                     } else {
-                        CaptureRecoveryState::PendingPrimary
+                        CaptureRecoveryState::PendingProject
                     }
-                } else {
-                    CaptureRecoveryState::PendingProject
                 }
             }
         };
@@ -2517,6 +2628,7 @@ impl CaptureProjection {
             delivery_started: Nullable::present(delivery_started),
             primary_delivery: Nullable::present(primary_delivery),
             delivery_failure: Nullable::present(delivery_failure),
+            operation_disposition: Nullable::present(operation_disposition),
         };
         projection.validate()?;
         Ok(projection)
@@ -2550,6 +2662,10 @@ impl CaptureProjection {
                 self.journal_version
             ));
         }
+        // `operation_disposition` was added after projection v1 shipped.  A
+        // missing value is accepted as the legacy spelling of null so the
+        // disposable cache is reported stale and can be rebuilt from
+        // immutable authority instead of being misclassified as corrupt.
         if !self.last_event_digest.is_present()
             || !self.project_binding_ready.is_present()
             || !self.capture_group.is_present()
@@ -2677,35 +2793,59 @@ impl CaptureProjection {
                 );
             }
         }
-        let expected_state = match self.latest_resolution.status() {
-            ResolutionStatus::Unresolved | ResolutionStatus::Conflict => {
-                CaptureRecoveryState::PendingResolution
+        if let Some(disposition) = self.operation_disposition.as_ref() {
+            disposition.validate()?;
+            let group_has_delivery_authority = self.capture_group.as_ref().is_some_and(|group| {
+                group.canonical_record_ref().is_some()
+                    || group.applied_reference_count() != 0
+                    || group.completion_receipt().is_some()
+            });
+            if self.delivery_started.as_ref().is_some()
+                || self.primary_delivery.as_ref().is_some()
+                || self.delivery_failure.as_ref().is_some()
+                || group_has_delivery_authority
+            {
+                return invalid(
+                    "capture projection disposition cannot coexist with target-bearing authority",
+                );
             }
-            ResolutionStatus::Unbound => CaptureRecoveryState::PendingProject,
-            ResolutionStatus::Resolved if self.project_binding_ready.as_ref().is_some() => {
-                if self
-                    .capture_group
-                    .as_ref()
-                    .is_some_and(|group| group.resolved_primary_project_ref().is_none())
-                {
-                    CaptureRecoveryState::PendingProject
-                } else if self.primary_delivery.as_ref().is_some() {
-                    if self.capture_group.as_ref().is_some_and(|group| {
-                        group.required_reference_count() != group.applied_reference_count()
-                    }) {
-                        CaptureRecoveryState::PendingReferences
-                    } else {
-                        CaptureRecoveryState::Completed
-                    }
-                } else if let Some(recovery_state) =
-                    recovery_state_for_delivery_failure(self.delivery_failure.as_ref())
-                {
-                    recovery_state
-                } else {
-                    CaptureRecoveryState::PendingPrimary
+        }
+        let expected_state = if let Some(disposition) = self.operation_disposition.as_ref() {
+            match disposition.disposition() {
+                OperationDisposition::Superseded => CaptureRecoveryState::Superseded,
+                OperationDisposition::Abandoned => CaptureRecoveryState::Abandoned,
+            }
+        } else {
+            match self.latest_resolution.status() {
+                ResolutionStatus::Unresolved | ResolutionStatus::Conflict => {
+                    CaptureRecoveryState::PendingResolution
                 }
+                ResolutionStatus::Unbound => CaptureRecoveryState::PendingProject,
+                ResolutionStatus::Resolved if self.project_binding_ready.as_ref().is_some() => {
+                    if self
+                        .capture_group
+                        .as_ref()
+                        .is_some_and(|group| group.resolved_primary_project_ref().is_none())
+                    {
+                        CaptureRecoveryState::PendingProject
+                    } else if self.primary_delivery.as_ref().is_some() {
+                        if self.capture_group.as_ref().is_some_and(|group| {
+                            group.required_reference_count() != group.applied_reference_count()
+                        }) {
+                            CaptureRecoveryState::PendingReferences
+                        } else {
+                            CaptureRecoveryState::Completed
+                        }
+                    } else if let Some(recovery_state) =
+                        recovery_state_for_delivery_failure(self.delivery_failure.as_ref())
+                    {
+                        recovery_state
+                    } else {
+                        CaptureRecoveryState::PendingPrimary
+                    }
+                }
+                ResolutionStatus::Resolved => CaptureRecoveryState::PendingProject,
             }
-            ResolutionStatus::Resolved => CaptureRecoveryState::PendingProject,
         };
         if self.recovery_state != expected_state {
             return invalid(format!(
@@ -2773,6 +2913,10 @@ impl CaptureProjection {
 
     pub fn delivery_failure(&self) -> Option<&DeliveryFailedPayload> {
         self.delivery_failure.as_ref()
+    }
+
+    pub fn operation_disposition(&self) -> Option<&OperationDispositionRecordedPayload> {
+        self.operation_disposition.as_ref()
     }
 
     pub fn canonical_json_bytes(&self) -> Result<Vec<u8>> {
@@ -4756,6 +4900,146 @@ mod tests {
         let event = delivery_event_with_canonical_size(MAX_CAPTURE_EVENT_BYTES + 1);
         let error = event.validate_size().expect_err("event above limit");
         assert!(error.to_string().contains("maximum is 131072"));
+    }
+
+    #[test]
+    fn operation_disposition_is_terminal_and_idempotent_before_delivery() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let journal = CaptureJournal::for_standalone_root(tempdir.path().join("journal")).unwrap();
+        let intent = typed_intent(CapturePayloadKind::CognitionV2);
+        journal.admit(&intent).expect("admit intent");
+        let payload = CaptureEventPayload::OperationDispositionRecorded(
+            OperationDispositionRecordedPayload::new(OperationDisposition::Abandoned, None)
+                .unwrap(),
+        );
+
+        let first = journal
+            .append_event(
+                intent.capture_id(),
+                UtcTimestamp::parse("2026-10-08T00:00:00Z").unwrap(),
+                payload.clone(),
+            )
+            .expect("record disposition");
+        assert_eq!(first.outcome(), CaptureEventAppendOutcome::Created);
+        assert_eq!(
+            first.projection().recovery_state(),
+            CaptureRecoveryState::Abandoned
+        );
+        assert_eq!(
+            first
+                .projection()
+                .operation_disposition()
+                .map(OperationDispositionRecordedPayload::disposition),
+            Some(OperationDisposition::Abandoned)
+        );
+
+        let replay = journal
+            .append_event(
+                intent.capture_id(),
+                UtcTimestamp::parse("2026-10-08T00:00:01Z").unwrap(),
+                payload,
+            )
+            .expect("replay disposition");
+        assert_eq!(replay.outcome(), CaptureEventAppendOutcome::Reused);
+        assert_eq!(replay.projection().event_count(), 1);
+
+        let later = CaptureEventPayload::ResolutionRecorded(
+            ResolutionRecordedPayload::new(
+                RegistryId::new_v7(),
+                1,
+                ControlPlaneDigest::raw(b"registry"),
+                intent.initial_resolution().clone(),
+            )
+            .unwrap(),
+        );
+        let error = journal
+            .append_event_authority_only(
+                intent.capture_id(),
+                UtcTimestamp::parse("2026-10-08T00:00:02Z").unwrap(),
+                later,
+            )
+            .expect_err("event after disposition must fail");
+        assert!(error.to_string().contains("follows terminal"));
+        assert_eq!(journal.load_events(intent.capture_id()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn operation_disposition_requires_an_exact_successor_contract() {
+        let missing_successor =
+            OperationDispositionRecordedPayload::new(OperationDisposition::Superseded, None)
+                .expect_err("supersession requires a successor");
+        assert!(
+            missing_successor
+                .to_string()
+                .contains("requires a successor CaptureId")
+        );
+
+        let unexpected_successor = OperationDispositionRecordedPayload::new(
+            OperationDisposition::Abandoned,
+            Some(CaptureId::new_v7()),
+        )
+        .expect_err("abandonment forbids a successor");
+        assert!(
+            unexpected_successor
+                .to_string()
+                .contains("forbids a successor CaptureId")
+        );
+
+        let intent = typed_intent(CapturePayloadKind::CognitionV2);
+        let self_successor = CaptureEventPayload::OperationDispositionRecorded(
+            OperationDispositionRecordedPayload::new(
+                OperationDisposition::Superseded,
+                Some(intent.capture_id()),
+            )
+            .expect("structurally valid supersession"),
+        );
+        let self_error = self_successor
+            .validate_for_intent(&intent)
+            .expect_err("a capture cannot supersede itself");
+        assert!(
+            self_error
+                .to_string()
+                .contains("successor must differ from its CaptureId")
+        );
+    }
+
+    #[test]
+    fn legacy_projection_without_operation_disposition_is_stale_not_invalid() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let journal = CaptureJournal::for_standalone_root(tempdir.path().join("journal")).unwrap();
+        let intent = typed_intent(CapturePayloadKind::CognitionV2);
+        journal.admit(&intent).expect("admit intent");
+        journal
+            .rebuild_projection(intent.capture_id())
+            .expect("write current projection");
+
+        let inspection = journal
+            .inspect_projection(intent.capture_id())
+            .expect("inspect current projection");
+        let mut legacy_value: Value = serde_json::from_slice(
+            &inspection
+                .projection()
+                .canonical_json_bytes()
+                .expect("canonical projection"),
+        )
+        .expect("projection JSON");
+        legacy_value
+            .as_object_mut()
+            .expect("projection object")
+            .remove("operation_disposition");
+        let mut legacy_bytes = serde_json::to_vec(&legacy_value).expect("legacy projection JSON");
+        legacy_bytes.push(b'\n');
+        fs::write(journal.projection_path(intent.capture_id()), legacy_bytes)
+            .expect("write legacy projection");
+
+        let legacy = journal
+            .inspect_projection(intent.capture_id())
+            .expect("inspect legacy projection");
+        assert_eq!(legacy.stored_state(), StoredProjectionState::Stale);
+        assert_eq!(
+            legacy.stored_issue(),
+            Some("stored projection does not match immutable intent and events")
+        );
     }
 
     #[test]

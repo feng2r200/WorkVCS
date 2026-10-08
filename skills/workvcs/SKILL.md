@@ -150,6 +150,11 @@ when the CaptureId is not already known. Treat its rows as recovery work to
 classify, never as authority to apply, bootstrap, repair, isolate, or sweep a
 historical backlog. Continue paging only with both the returned CaptureId
 cursor and the same `inventory_digest`.
+Use the separately explicit `--list-all` scope when completed, deterministic-
+terminal, superseded, or abandoned history must remain visible. Read projected
+and effective recovery states plus `operation_lifecycle` together; the scope is
+bound into the inventory digest. Neither scope may infer a successor or
+perform a historical sweep.
 
 Own the operations started by the current task. Retain each CaptureId and, when
 existing user or project authority already covers the exact same target,
@@ -172,6 +177,15 @@ and creating a replacement after an immutable target change are different
 decisions. Never use an open-looking status alone to replay historical
 semantics.
 
+When verified current project truth proves that an owned pre-delivery
+operation is obsolete, the responsible task records that conclusion instead
+of delegating routine monitoring to the user. Use the digest-locked
+`operation-recovery --dispose superseded` only with a distinct later Capture,
+or `--dispose abandoned` only without a successor. Disposition is refused once
+target-bearing authority exists, is terminal and idempotent, opens no Store,
+and does not authorize the Agent to guess semantic equivalence or sweep older
+inventory rows.
+
 Registry-v2 cognition capture remains journal-only by default. Add
 `--deliver-existing-binding` only when current user or project authority
 already covers delivery of this operation to its exact existing binding. The
@@ -190,6 +204,14 @@ target result. Treat a terminal typed preflight as closed before receipt
 construction, and require the durable Plan receipt's operation kind and full
 manifest-derived result shape to match before reporting success. Once that
 receipt exists, render the result through the read-only target lookup.
+Before durable Plan admission, use `plan validate --operation admit|evolve
+--manifest <path>` when the manifest was newly authored or materially changed.
+It is a zero-write intrinsic check only: it does not resolve a project, inspect
+activation, compare target guards, or grant admission/delivery authority. If a
+routed command still terminalizes, retain the `capture_delivery_incomplete`
+CaptureId and use its failure code, canonical recovery action, and bounded
+same-invocation cause; do not push diagnosis back to the user when the task can
+correct its own manifest.
 
 The journal-backed route provides no silent loss after admission. It does not
 claim that a caller recognized and submitted every valuable semantic delta

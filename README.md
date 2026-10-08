@@ -99,10 +99,18 @@ see the
 [Stage C evidence](docs/provenance/authorized-existing-binding-delivery-local-adoption.md)
 and [Stage D evidence](docs/provenance/authorized-existing-binding-delivery-historical-reconciliation.md).
 
+ADR-0520 adds explicit, digest-locked pre-delivery `superseded`/`abandoned`
+classification and a read-only `--list-all` lifecycle inventory; it never
+infers successors or sweeps history. ADR-0521 adds zero-write intrinsic Plan
+manifest validation plus Capture-aware terminal rejection diagnostics while
+retaining journal-first durable admission.
+
 See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),
 [ADR-0517](docs/decisions/adr/0517-shared-project-binding-isolation.md),
 [ADR-0518](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md),
 [ADR-0519](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md),
+[ADR-0520](docs/decisions/adr/0520-operation-disposition-and-global-inventory-classification.md),
+[ADR-0521](docs/decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md),
 the [ProjectRef control-plane contract](docs/architecture/projectref-control-plane-v2.md),
 and the [migration and acceptance contract](docs/architecture/projectref-registry-v2-migration-and-acceptance.md).
 

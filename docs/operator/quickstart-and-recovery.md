@@ -209,9 +209,17 @@ workvcs project operation-recovery --apply --capture-id "$CAPTURE_ID" \
   --expected-registry-digest "$REGISTRY_DIGEST" \
   --expected-projection-digest "$PROJECTION_DIGEST" \
   [--registry "$REGISTRY"] [--store-root "$STORE_ROOT"]
+workvcs project operation-recovery --dispose superseded --capture-id "$CAPTURE_ID" \
+  --successor-capture-id "$LATER_CAPTURE_ID" \
+  --expected-registry-digest "$REGISTRY_DIGEST" \
+  --expected-projection-digest "$PROJECTION_DIGEST" [--registry "$REGISTRY"]
+workvcs project operation-recovery --dispose abandoned --capture-id "$CAPTURE_ID" \
+  --expected-registry-digest "$REGISTRY_DIGEST" \
+  --expected-projection-digest "$PROJECTION_DIGEST" [--registry "$REGISTRY"]
 workvcs project operation-recovery --list-open [--registry "$REGISTRY"] \
   [--project-ref "$PRIMARY_PROJECT_REF"] [--payload-kind cognition_v2] \
   [--recovery-action ACTION] [--limit 100] [--format key-value|json]
+workvcs project operation-recovery --list-all [same filters]
 ```
 
 Always start with `--status`. It validates immutable events, derives the
@@ -222,14 +230,31 @@ owner can converge to exactly one ProjectRef and binding; conflict or
 unresolved ownership stays pending and creates no fallback target.
 
 Use `--list-open` when the CaptureId is unknown or to classify a bounded
-backlog. It is mutually exclusive with status/apply and writes no registry,
-marker, event, projection, or Store data. It orders rows oldest-first, reports
+backlog. It is mutually exclusive with status, apply, and dispose, and writes
+no registry, marker, event, projection, or Store data. It orders rows
+oldest-first, reports
 full matching counts before the limit, and exposes only allowlisted metadata.
 When `truncated=true`, request the next page with both
 `--after-capture-id "$NEXT_CAPTURE_ID"` and
 `--expected-inventory-digest "$INVENTORY_DIGEST"` plus the same filters. A
 changed digest or missing cursor fails closed. Inventory presence is not
 delivery authority.
+
+Use `--list-all` when classification must retain completed,
+deterministic-terminal, superseded, and abandoned history. The selected scope
+is part of the inventory digest, so a cursor/digest from `--list-open` cannot
+be reused against `--list-all`. Rows expose projected and effective state plus
+an explicit lifecycle; a registry change therefore cannot make terminal
+authority look reopenable.
+
+When verified current project truth shows that a still-undelivered operation
+must never be delivered, record that judgment explicitly rather than asking
+the user to keep watching it. `--dispose superseded` requires a distinct later
+Capture and `--dispose abandoned` forbids one. Both require fresh status
+digests, append one terminal journal event, and open no Store. They are refused
+after delivery started, delivery failed, a reference was applied, or completion
+authority exists. Identical replay is zero-write. Never infer a successor or
+run a bulk historical sweep from inventory membership alone.
 
 The responsible task keeps ownership of each operation it starts through
 ordinary same-target delivery and exact readback whenever existing authority
@@ -413,6 +438,14 @@ idempotency are manifest fields, not CLI flags. The manifest may carry prior
 findings, decisions, questions, constraints, and evidence; the admission is
 one atomic transition and same-key replay is idempotent.
 
+Before choosing durable admission, validate intrinsic manifest semantics with
+`workvcs plan validate --operation admit|evolve --manifest PATH`. The command
+does not resolve a project, inspect routing or activation, open a Store, read
+or write registry/journal state, or compare current target guards. It emits no
+raw idempotency key or manifest text. A successful result reduces avoidable
+schema/domain mistakes; it does not prove target currentness or authorize
+delivery.
+
 When `--cwd` selects registry v2, the command requires read routing plus the
 `plan_admit` journal capability. It first persists `plan_admit_v1`, then drives
 the common delivery state machine and returns only after `delivery_applied` is
@@ -451,6 +484,13 @@ a new operation. Do not apply those captures again. Engine execution, storage,
 integrity, transaction, control-plane, or uncertain post-commit errors are not
 terminalized by their generic error code; inspect status and recover the same
 Capture ID.
+
+If the routed command itself records one of those terminal failures, it returns
+`capture_delivery_incomplete` with the durable CaptureId, failure code,
+canonical recovery action, and the bounded validation or target-conflict detail
+already known in that invocation. Preserve the CaptureId. A later status call
+still provides durable classification even though the transient detail is not
+stored in the journal or global inventory.
 
 `workvcs receipt issue`, `receipt show`, `receipt list`, and `receipt consume`
 are current P0-3a/P0-3b commands. They expose only mechanical binding plus

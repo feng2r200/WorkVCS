@@ -151,22 +151,34 @@ The source tree also contains a separately explicit recovery surface:
 ```text
 workvcs project operation-recovery --status --capture-id ID [--registry PATH]
 workvcs project operation-recovery --apply --capture-id ID --expected-registry-digest DIGEST --expected-projection-digest DIGEST [--registry PATH] [--store-root PATH]
+workvcs project operation-recovery --dispose superseded --capture-id ID --successor-capture-id LATER_ID --expected-registry-digest DIGEST --expected-projection-digest DIGEST [--registry PATH]
+workvcs project operation-recovery --dispose abandoned --capture-id ID --expected-registry-digest DIGEST --expected-projection-digest DIGEST [--registry PATH]
 workvcs project operation-recovery --list-open [--registry PATH] [--project-ref PROJECT_REF] [--payload-kind KIND] [--recovery-action ACTION] [--limit N] [--format key-value|json]
+workvcs project operation-recovery --list-all [same filters]
 workvcs project operation-recovery --list-open --after-capture-id ID --expected-inventory-digest DIGEST [same filters]
 ```
 
 `capture-recovery` remains a visible compatibility alias. `--status` is
-read-only. `--list-open` is also strictly read-only and mutually exclusive with
-status/apply. It scans immutable authority through the supported journal
-aliases, loads one registry snapshot, and fully validates each distinct
+read-only. `--list-open` and `--list-all` are also strictly read-only and
+mutually exclusive with status/apply/dispose. They scan immutable authority through the supported journal
+aliases, load one registry snapshot, and fully validate each distinct
 classification-relevant binding exactly once. Open means
-`recovery_action != none`; listing never authorizes that action. Rows are
+`recovery_action != none`; all additionally retains completed, terminal,
+superseded, and abandoned history. Listing never authorizes a recovery or
+disposition action. Rows are
 oldest-first, the default limit is 100 and maximum is 1000, and summary counts
 cover the full matching set before the limit. Later pages require the exact
 returned CaptureId cursor together with the unchanged full-inventory digest.
 Key-value and JSON rows share the same bounded allowlist and never expose raw
 idempotency keys, payload/value text, provider/locator context, target paths,
 free-text causes, credentials, or environment data.
+
+`--dispose` appends one immutable terminal event and opens no Store. It
+requires current registry/projection digests and is legal only before any
+target-bearing delivery, failure, reference, or completion authority exists.
+`superseded` requires a distinct later admitted Capture; `abandoned` forbids a
+successor. Identical replay is zero-write. The command does not infer semantic
+equivalence, choose a successor, or sweep historical inventory.
 
 The task that created an operation owns routine same-target completion and
 exact readback while its existing authority remains valid; it must not turn
@@ -376,8 +388,17 @@ the payload into a target Store. Delivery is a separate, explicit
 The live admit syntax is:
 
 ```text
+workvcs plan validate --operation admit --manifest <PATH>
 workvcs plan admit [OPTIONS] --manifest <PATH> <STORE|--cwd <PATH>>
 ```
+
+`plan validate` performs only strict typed parsing and intrinsic domain
+validation. It does not resolve a project, read or write a registry or
+journal, inspect activation, open a Store, or compare current target guards.
+Success returns the operation kind, payload digest, and a digest of the
+idempotency key rather than the raw key. A specific typed validation error is
+zero-write. This optional preflight reduces avoidable rejected operations but
+does not replace journal-first admission or grant delivery authority.
 
 Options are `--cwd PATH`, `--registry PATH`, `--branch BRANCH`, and
 `--manifest PATH`. Explicit `STORE` requires `--branch`; `--cwd` uses the
@@ -397,6 +418,7 @@ their direct compatibility behavior.
 The live evolve syntax is:
 
 ```text
+workvcs plan validate --operation evolve --manifest <PATH>
 workvcs plan evolve [OPTIONS] --manifest <PATH> <STORE|--cwd <PATH>>
 ```
 
@@ -423,6 +445,11 @@ Goal/Plan references are target conflicts. Timestamp precision is capped at
 nine fractional digits, making the preflight envelope an append-safe maximum.
 These captures are preserved for audit but are not replay candidates; start a
 new operation with a smaller manifest, current guards, or corrected content.
+When the same routed invocation records a terminal failure, its
+`capture_delivery_incomplete` error includes the durable CaptureId, terminal
+failure code, canonical recovery action, and the bounded validation or target
+conflict detail already known to that invocation. Later status remains the
+durable source of truth even when that transient detail is unavailable.
 Engine, storage, integrity, transaction, control-plane, or post-commit
 uncertainty remains nonterminal and requires status-first recovery of the same
 operation. Receipt and failure event families are validated against their

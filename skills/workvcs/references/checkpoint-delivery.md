@@ -28,6 +28,15 @@ domain payload as another. Read these fields together:
 | `effective_recovery_state=completed`, `delivery_receipt=true`, `recovery_action=none` | The recorded delivery completed. Verify its exact target and semantic result once; do not apply again merely to poll. |
 | Conflict, invalid binding, terminal failure, or an unrecognized result | Preserve the capture and diagnose the stated cause. Do not convert it to success, recreate its intent, or bypass a gate. |
 
+For a newly authored or materially changed Plan manifest, run
+`workvcs plan validate --operation admit|evolve --manifest <path>` before durable admission.
+This is a zero-write intrinsic check and intentionally does not inspect the
+registry, routing/activation, journal, Store, or current target guards. If the
+routed command still records `plan_manifest_rejected` or another deterministic
+terminal result, keep the returned `capture_delivery_incomplete` CaptureId and
+use the same-invocation cause to correct the next operation; do not make the
+user rediscover a validation error the responsible task already has.
+
 The read-only status field `target_delivery_written=false` describes what that
 status call wrote, not whether an earlier delivery exists. Use the recovery
 state, receipt, and target commit together. A cached projection or a process
@@ -38,14 +47,18 @@ mutating it:
 
 ```sh
 workvcs project operation-recovery --list-open [--registry <path>]
+workvcs project operation-recovery --list-all [--registry <path>]
 ```
 
 Filter by ProjectRef, payload kind, or recovery action when useful. The command
 derives state from immutable authority, treats stored projections only as
 cache, and renders allowlisted metadata rather than raw keys or payload text.
 For a later page, supply both the returned `next_after_capture_id` and the same
-`inventory_digest`; a mismatch fails closed. A listed action is not authority
-to perform it.
+`inventory_digest`; a mismatch fails closed. Inventory scope is part of that
+digest. `--list-open` includes recovery work; `--list-all` also retains
+completed, deterministic-terminal, superseded, and abandoned history. Read
+projected/effective state and lifecycle together. A listed action is not
+authority to perform it.
 
 ## Keep ownership with the responsible task
 
@@ -75,6 +88,26 @@ The provider has no authority to infer these semantic decisions from age or
 queue position. If currentness cannot be established from the responsible
 task's context and verified project truth, preserve the CaptureId and do not
 apply it.
+
+If currentness is established and an owned operation is still pre-delivery but
+must never be delivered, record the classification explicitly under fresh
+status guards:
+
+```sh
+workvcs project operation-recovery --dispose superseded --capture-id <id> \
+  --successor-capture-id <later-id> \
+  --expected-registry-digest <digest> \
+  --expected-projection-digest <digest>
+workvcs project operation-recovery --dispose abandoned --capture-id <id> \
+  --expected-registry-digest <digest> \
+  --expected-projection-digest <digest>
+```
+
+Supersession requires a distinct later admitted Capture; abandonment forbids a
+successor. Either disposition is refused after delivery started, failed,
+applied, referenced, or completed; it is a terminal immutable event and exact
+replay is zero-write. The task, not the inventory command, owns the semantic
+judgment. Do not infer a successor or batch-dispose old rows.
 
 ## Deliver within the existing authority
 

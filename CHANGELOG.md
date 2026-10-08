@@ -26,7 +26,9 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
 - Target-neutral `cognition_v2` capture with one canonical primary Record,
   idempotent delivery receipts, CaptureGroup secondary references, and
   Store-free secondary recall.
-- A 93-row ProjectRef acceptance matrix and bounded live local canary evidence.
+- A 98-row ProjectRef acceptance matrix and bounded live local canary evidence.
+- Immutable, digest-locked pre-delivery operation disposition, a read-only
+  all-operation lifecycle inventory, and zero-write Plan manifest validation.
 - Structured `--rationale-json` input for Task transitions that require a
   terminal rationale.
 - A complete Simplified Chinese README with bidirectional language navigation.
@@ -45,6 +47,9 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
   readback with the task that created an operation, while historical open
   inventories require semantic-currentness and counterfactual-effect
   classification instead of user monitoring or batch replay.
+- Routed deterministic Plan rejection now returns the durable CaptureId,
+  terminal failure code, canonical recovery action, and bounded
+  same-invocation cause while retaining journal-first terminal audit.
 - Project discovery and durable capture no longer equate the ambient CWD with
   logical ownership; resolution follows explicit ProjectRef, verified semantic
   project, repository, then CWD precedence and fails closed on ambiguity.

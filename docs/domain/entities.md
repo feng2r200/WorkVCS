@@ -106,7 +106,16 @@ implicit deletion or replacement. P0-2b2 `mode=supersede` is current: the old ac
 superseded, a new Plan becomes active under the same Goal, both `contains`
 relations remain, and `new_plan→old_plan` is a machine `supersedes` relation.
 Constraints require explicit `carry_all` or `replace`; old Tasks, Records, and
-Evidence are not migrated. P0-3a AuthorizationReceipt issue/show/list are
+Evidence are not migrated.
+
+Typed Plan manifests also have a zero-write intrinsic validation surface. It
+does not replace registry-v2 journal-first admission or target guards. Durable
+operations have an explicit pre-delivery disposition entity in journal
+authority: `superseded` names a distinct later Capture, while `abandoned`
+names none. These terminal classifications never overwrite delivery or failure
+history, and the all-operation inventory keeps them globally enumerable.
+
+P0-3a AuthorizationReceipt issue/show/list are
 current mechanical capabilities. The structured `authority_ref.ref` input is
 automatically redacted and is not persisted or emitted from scope, payload,
 CLI/show/list, or debug output; only type/digest and a redacted marker are

@@ -351,6 +351,42 @@ and never bootstrap implicitly.
 This invariant is source-implemented under ADR-0519; exact local installed
 adoption and one bounded configured-local canary are complete.
 
+### INV-113 — Obsolete operation disposition is explicit and globally auditable
+
+An admitted durable operation may become `superseded` or `abandoned` only by
+one immutable, digest-locked disposition event recorded before any target
+delivery authority exists. Supersession names a distinct later Capture;
+abandonment names no successor. Completed, failed, delivery-started, or
+cross-project-receipted authority cannot be hidden by disposition, and no event
+may follow a disposition. Deterministic failure and disposition states remain
+terminal across later registry revisions. The compatible open inventory keeps
+its recovery-action inclusion rule, while a separately explicit all-operation
+scope keeps terminal and completed history globally enumerable. Every row
+distinguishes immutable projected state, current effective state, lifecycle,
+and disposition without exposing semantic payload or granting mutation
+authority. No inventory call infers a successor, sweeps history, or mutates a
+registry, journal, projection, marker, or Store.
+
+This invariant is source-implemented and locally validated under ADR-0520;
+installation and configured-local adoption remain separately gated.
+
+### INV-114 — Plan validation can prevent avoidable rejection without weakening journal-first audit
+
+Intrinsic `plan admit` and `plan evolve` manifest validation may be invoked
+through a strictly read-only command that performs no project resolution,
+registry/activation/journal access, Store open, target-guard comparison, or
+durable write. It returns the same specific typed validation error used by
+delivery preflight and never exposes a raw idempotency key or manifest. Routed
+Plan operations remain journal-first: when deterministic preflight still
+terminalizes an admitted operation, the immutable failure remains authority
+and the same invocation reports `capture_delivery_incomplete` with the exact
+CaptureId, failure code, canonical recovery action, and bounded in-memory
+cause. The cause does not become journal or inventory data, and a later replay
+cannot create a second intent or event for the same idempotency identity.
+
+This invariant is source-implemented and locally validated under ADR-0521;
+installation and configured-local adoption remain separately gated.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

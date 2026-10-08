@@ -165,7 +165,15 @@ activated route and not authority to operate on another live control plane. A
 registry-only configuration must also supply `--store-root` for unbound
 cognition bootstrap. Public Plan commands synchronously drive this same state
 machine after their typed intent is durable; a failure still resumes through
-the same recovery surface. Before any first Plan Store mutation, the
+the same recovery surface. `--dispose superseded|abandoned` is a separate,
+digest-locked journal mutation allowed only before any target-bearing event;
+supersession must name a distinct later Capture and abandonment must not name
+one. Before either routed Plan command is admitted, callers may use the
+strictly read-only `plan validate --operation admit|evolve --manifest PATH`
+surface to check intrinsic typed-manifest semantics without resolving a
+project or opening a registry, journal, activation marker, or Store. This
+optional validation does not check current target guards and does not replace
+journal-first admission. Before any first Plan Store mutation, the
 recovery route performs pure typed-manifest validation, compares explicit
 target guards against one replayed snapshot, and materializes the typed
 receipt in a fixed maximum-timestamp event envelope. Only those proven
@@ -677,21 +685,27 @@ open and requires a new Capture. The more general manual recovery contract is
 unchanged; its ability to re-resolve some pre-delivery non-CaptureGroup intents
 does not widen standing existing-binding authority.
 
-The same source-implemented increment adds read-only
-`project operation-recovery --list-open`. It loads one registry snapshot,
-fully validates exactly once every distinct referenced binding needed for
-classification, reconstructs operation state from immutable intent/event
-authority across distinct journal aliases, and returns only operations whose
-current recovery action is not `none`. Projections remain replaceable caches
+The same source-implemented increment adds read-only operation inventories.
+`project operation-recovery --list-open` preserves the recovery-work contract:
+it includes rows whose current recovery action is not `none`. `--list-all`
+uses the same filters and paging but retains completed,
+deterministic-terminal, superseded, and abandoned operations as well. Each
+scope loads one registry snapshot, fully validates exactly once every distinct
+referenced binding needed for classification, and reconstructs operation state
+from immutable intent/event authority across distinct journal aliases.
+Projections remain replaceable caches
 and are not written by inventory. Filters, deterministic oldest-first ordering,
 bounded rows, complete pre-limit counts, and explicit truncation keep the result
 both actionable and bounded. An inventory digest over the complete matching
-set locks later `--after-capture-id` pages; mismatch or an absent cursor fails
+set and selected scope locks later `--after-capture-id` pages; mismatch or an absent cursor fails
 closed, so every row remains reachable without hiding concurrent change.
-Rows expose only bounded machine metadata and digests. They never render raw
+Rows expose projected and effective recovery states, lifecycle, disposition,
+successor, bounded receipt/failure classification, and other machine metadata
+and digests. They never render raw
 idempotency keys, semantic payloads, value reasons, locator/provider context,
 target paths, free-text diagnostics, credentials, environment data, or raw tool
-output. Listing supplies no recovery authority.
+output. Listing supplies no recovery or disposition authority and never infers
+a successor or sweeps historical operations.
 
 ### CaptureGroupIntent
 
@@ -740,10 +754,14 @@ is:
 | `delivery_failed` | A bounded error and recovery action were recorded. Legacy upgrade remains recoverable; a deterministic invalid semantic manifest is terminal for that immutable intent. |
 | `reference_applied` | An immutable secondary reference was installed. |
 | `capture_completed` | All required deliveries have receipts. |
+| `operation_disposition_recorded` | A pre-delivery operation was explicitly and terminally classified as `superseded` by a later Capture or `abandoned` without a successor. |
 
 Events never contain credentials or raw Store files. A recoverable failed
 event may be followed by a later retry. A `semantic_manifest_invalid` failure
 is terminal for that immutable intent and requires a corrected new Capture.
+No event may follow `operation_disposition_recorded`, and disposition cannot
+coexist with delivery-started, applied, failed, reference, or completion
+authority.
 
 ### DeliveryReceipt and canonical record reference
 
@@ -849,6 +867,8 @@ The current projection is reconstructed from intent plus events:
 | `plan_target_conflict` | The retained Plan manifest no longer matches current target guards; start a new operation with fresh guards. |
 | `plan_manifest_rejected` | The retained Plan manifest deterministically failed validation before target mutation; correct it in a new operation. |
 | `plan_receipt_too_large` | The exact next Plan receipt would exceed the journal event limit; split the manifest into a smaller operation. |
+| `superseded` | An explicit pre-delivery disposition names a distinct later Capture that replaces this operation. |
+| `abandoned` | An explicit pre-delivery disposition closes this operation without a successor. |
 | `completed` | Primary and every required secondary delivery have verified receipts. |
 
 Errors such as an unavailable Store, registry conflict, or failed reference
@@ -862,7 +882,7 @@ the bounded legacy-staleness and semantic-invalid forms of `delivery_failed`.
 It derives `pending_resolution`, `pending_project`, `pending_primary`,
 `legacy_manifest_upgrade_required`, `semantic_manifest_invalid`,
 `plan_target_conflict`, `plan_manifest_rejected`, `plan_receipt_too_large`,
-`pending_references`, and `completed`.
+`pending_references`, `superseded`, `abandoned`, and `completed`.
 `completed` is derived as soon as the primary and every required reference
 receipt are authoritative; `capture_completed` is the idempotent summary
 receipt. A crash between the last reference and that summary therefore reports

@@ -32,10 +32,10 @@ pub use journal::{
     DeliveryAppliedPayload, DeliveryFailedPayload, DeliveryFailureCode, DeliveryMode,
     DeliveryResultObject, DeliveryStartedPayload, ImmutableSecondaryReference,
     JournalQuiescenceLock, MAX_CAPTURE_EVENT_BYTES, MAX_CAPTURE_INTENT_BYTES,
-    MAX_CAPTURE_PROJECTION_BYTES, MAX_SEMANTIC_PAYLOAD_BYTES, ProjectBindingReadyPayload,
-    ProjectRegistryJournalAlias, ReferenceAppliedPayload, ResolutionRecordedPayload,
-    SecondaryProjectAssociation, StoredProjectionState,
-    project_registry_journal_quiescence_lock_path,
+    MAX_CAPTURE_PROJECTION_BYTES, MAX_SEMANTIC_PAYLOAD_BYTES, OperationDisposition,
+    OperationDispositionRecordedPayload, ProjectBindingReadyPayload, ProjectRegistryJournalAlias,
+    ReferenceAppliedPayload, ResolutionRecordedPayload, SecondaryProjectAssociation,
+    StoredProjectionState, project_registry_journal_quiescence_lock_path,
 };
 pub use migration::{
     MAX_MIGRATION_OWNERSHIP_REPAIR_MANIFEST_BYTES, MAX_MIGRATION_OWNERSHIP_REPAIRS,

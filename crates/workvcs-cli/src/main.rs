@@ -23,13 +23,14 @@ use workvcs_core::control_plane::{
     LocatorState, MAX_CAPTURE_EVENT_BYTES, MigrationBindingValidation,
     MigrationHistoricalIdentityDisposition, MigrationNamespaceStrategy,
     MigrationOwnershipRepairManifest, MigrationPreviewMapping, MigrationTargetCoincidence,
-    PathLocatorEvidence, PlanDeliveryPreflight, PreparedPrimaryOperation,
-    ProjectBinding as ProjectBindingV2, ProjectBindingReadyPayload, ProjectBindingV1,
-    ProjectBootstrapOutcome, ProjectMaturity, ProjectRegistryJournalAlias, ProjectRegistryV1,
-    ProjectRegistryV2, ReferenceAppliedPayload, RegistryMigrationPreview, ResolutionBasis,
-    ResolutionDiagnostic, ResolutionMode, ResolutionRank, ResolutionRecordedPayload,
-    ResolutionStatus, RoutingActivationCandidate, SharedTargetIsolation, UnifiedLocatorInput,
-    UtcTimestamp, build_plan_admission_delivery_receipt, build_plan_delivery_receipt_preflight,
+    OperationDisposition, OperationDispositionRecordedPayload, PathLocatorEvidence,
+    PlanDeliveryPreflight, PreparedPrimaryOperation, ProjectBinding as ProjectBindingV2,
+    ProjectBindingReadyPayload, ProjectBindingV1, ProjectBootstrapOutcome, ProjectMaturity,
+    ProjectRegistryJournalAlias, ProjectRegistryV1, ProjectRegistryV2, ReferenceAppliedPayload,
+    RegistryMigrationPreview, ResolutionBasis, ResolutionDiagnostic, ResolutionMode,
+    ResolutionRank, ResolutionRecordedPayload, ResolutionStatus, RoutingActivationCandidate,
+    SharedTargetIsolation, UnifiedLocatorInput, UtcTimestamp,
+    build_plan_admission_delivery_receipt, build_plan_delivery_receipt_preflight,
     build_plan_evolution_delivery_receipt, build_primary_delivery_receipt,
     build_registry_v1_migration_preview_with_repairs, materialize_registry_v1_migration_candidate,
     preflight_plan_delivery, prepare_primary_delivery_from_projection,
@@ -293,6 +294,36 @@ enum MigrationPreviewFormatArg {
 enum OperationRecoveryOutputFormat {
     KeyValue,
     Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum OperationDispositionArg {
+    Superseded,
+    Abandoned,
+}
+
+impl From<OperationDispositionArg> for OperationDisposition {
+    fn from(value: OperationDispositionArg) -> Self {
+        match value {
+            OperationDispositionArg::Superseded => Self::Superseded,
+            OperationDispositionArg::Abandoned => Self::Abandoned,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum PlanManifestOperationArg {
+    Admit,
+    Evolve,
+}
+
+impl PlanManifestOperationArg {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admit => "admit",
+            Self::Evolve => "evolve",
+        }
+    }
 }
 
 impl RecallProfileArg {
@@ -2054,7 +2085,13 @@ enum ProjectCommand {
         ArgGroup::new("operation-recovery-action")
             .required(true)
             .multiple(false)
-            .args(["status", "apply", "list_open"])
+            .args(["status", "apply", "dispose", "list_open", "list_all"])
+    ))]
+    #[command(group(
+        ArgGroup::new("operation-inventory-action")
+            .required(false)
+            .multiple(false)
+            .args(["list_open", "list_all"])
     ))]
     CaptureRecovery {
         #[arg(
@@ -2072,17 +2109,40 @@ enum ProjectCommand {
 
         #[arg(
             long,
+            value_enum,
+            value_name = "superseded|abandoned",
+            requires_all = ["expected_registry_digest", "expected_projection_digest"],
+            help = "Record one terminal pre-delivery operation disposition under exact digest guards"
+        )]
+        dispose: Option<OperationDispositionArg>,
+
+        #[arg(
+            long,
             help = "List all currently open durable operations without writing"
         )]
         list_open: bool,
 
         #[arg(
             long,
+            help = "List every durable operation, including completed and terminal history, without writing"
+        )]
+        list_all: bool,
+
+        #[arg(
+            long,
             value_name = "CAPTURE_ID",
             help = "Compatibility CaptureId naming the admitted durable operation"
         )]
-        #[arg(required_unless_present = "list_open")]
+        #[arg(required_unless_present_any = ["list_open", "list_all"])]
         capture_id: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "CAPTURE_ID",
+            requires = "dispose",
+            help = "Distinct later durable operation required by --dispose superseded"
+        )]
+        successor_capture_id: Option<String>,
 
         #[arg(long, value_name = "PATH", help = "One-command registry override")]
         registry: Option<PathBuf>,
@@ -2098,46 +2158,48 @@ enum ProjectCommand {
         #[arg(
             long,
             value_name = "DIGEST",
-            requires = "apply",
-            help = "Expected digest of the exact registry v2 snapshot"
+            help = "Expected digest of the exact registry v2 snapshot for apply or disposition"
         )]
         expected_registry_digest: Option<String>,
 
         #[arg(
             long,
             value_name = "DIGEST",
-            requires = "apply",
-            help = "Expected digest of the projection rebuilt from immutable intent and events"
+            help = "Expected digest of the projection rebuilt from immutable intent and events for apply or disposition"
         )]
         expected_projection_digest: Option<String>,
 
-        #[arg(long, value_name = "PROJECT_REF", requires = "list_open")]
+        #[arg(
+            long,
+            value_name = "PROJECT_REF",
+            requires = "operation-inventory-action"
+        )]
         project_ref: Option<String>,
 
-        #[arg(long, value_name = "KIND", requires = "list_open")]
+        #[arg(long, value_name = "KIND", requires = "operation-inventory-action")]
         payload_kind: Option<String>,
 
-        #[arg(long, value_name = "ACTION", requires = "list_open")]
+        #[arg(long, value_name = "ACTION", requires = "operation-inventory-action")]
         recovery_action: Option<String>,
 
-        #[arg(long, default_value_t = 100, requires = "list_open")]
+        #[arg(long, default_value_t = 100, requires = "operation-inventory-action")]
         limit: usize,
 
         #[arg(
             long,
             value_name = "CAPTURE_ID",
-            requires_all = ["list_open", "expected_inventory_digest"]
+            requires_all = ["operation-inventory-action", "expected_inventory_digest"]
         )]
         after_capture_id: Option<String>,
 
         #[arg(
             long,
             value_name = "DIGEST",
-            requires_all = ["list_open", "after_capture_id"]
+            requires_all = ["operation-inventory-action", "after_capture_id"]
         )]
         expected_inventory_digest: Option<String>,
 
-        #[arg(long, value_enum, default_value_t = OperationRecoveryOutputFormat::KeyValue, requires = "list_open")]
+        #[arg(long, value_enum, default_value_t = OperationRecoveryOutputFormat::KeyValue, requires = "operation-inventory-action")]
         format: OperationRecoveryOutputFormat,
     },
     #[command(
@@ -3609,6 +3671,21 @@ enum GoalCommand {
 
 #[derive(Debug, Subcommand)]
 enum PlanCommand {
+    #[command(
+        about = "Validate one strict Plan manifest without reading or writing project state",
+        long_about = "Parses and validates intrinsic Plan admission or evolution semantics without resolving a project, opening a Store, reading a registry, or admitting a durable operation. Target compare-and-swap guards are not checked."
+    )]
+    Validate {
+        #[arg(long, value_enum, value_name = "admit|evolve")]
+        operation: PlanManifestOperationArg,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Strict Plan admission or evolution manifest"
+        )]
+        manifest: PathBuf,
+    },
     #[command(
         about = "Atomically admit one Plan manifest through an explicit Store or verified project route",
         long_about = "Explicit STORE plus --branch uses the direct Plan engine. The --cwd form resolves the verified project binding; on registry v2 it requires the plan_admit journal capability, durably admits plan_admit_v1 into the shared operation journal, and returns only after the target result has a durable receipt. Repeating the exact manifest idempotently reuses both the target commit and journal receipt."
@@ -7806,8 +7883,11 @@ fn run(cli: Cli) -> Result<String> {
             ProjectCommand::CaptureRecovery {
                 status,
                 apply,
+                dispose,
                 list_open,
+                list_all,
                 capture_id,
+                successor_capture_id,
                 registry,
                 store_root,
                 expected_registry_digest,
@@ -7819,14 +7899,14 @@ fn run(cli: Cli) -> Result<String> {
                 after_capture_id,
                 expected_inventory_digest,
                 format,
-            } => match (status, apply, list_open) {
-                (true, false, false) => inspect_project_capture_recovery(
+            } => match (status, apply, dispose, list_open, list_all) {
+                (true, false, None, false, false) => inspect_project_capture_recovery(
                     registry,
                     CaptureId::parse_canonical(
                         capture_id.as_deref().expect("clap requires capture ID"),
                     )?,
                 ),
-                (false, true, false) => apply_project_capture_recovery(
+                (false, true, None, false, false) => apply_project_capture_recovery(
                     registry,
                     store_root,
                     CaptureId::parse_canonical(
@@ -7841,16 +7921,53 @@ fn run(cli: Cli) -> Result<String> {
                         expected_projection_digest,
                     )?,
                 ),
-                (false, false, true) => list_open_project_operations(OperationInventoryRequest {
-                    registry,
-                    project_ref,
-                    payload_kind,
-                    recovery_action,
-                    limit,
-                    after_capture_id,
-                    expected_inventory_digest,
-                    format,
-                }),
+                (false, false, Some(disposition), false, false) => {
+                    record_project_capture_disposition(
+                        registry,
+                        CaptureId::parse_canonical(
+                            capture_id.as_deref().expect("clap requires capture ID"),
+                        )?,
+                        disposition.into(),
+                        successor_capture_id
+                            .as_deref()
+                            .map(CaptureId::parse_canonical)
+                            .transpose()?,
+                        required_control_plane_digest(
+                            "operation disposition --expected-registry-digest",
+                            expected_registry_digest,
+                        )?,
+                        required_control_plane_digest(
+                            "operation disposition --expected-projection-digest",
+                            expected_projection_digest,
+                        )?,
+                    )
+                }
+                (false, false, None, true, false) => {
+                    list_project_operations(OperationInventoryRequest {
+                        scope: OperationInventoryScope::Open,
+                        registry,
+                        project_ref,
+                        payload_kind,
+                        recovery_action,
+                        limit,
+                        after_capture_id,
+                        expected_inventory_digest,
+                        format,
+                    })
+                }
+                (false, false, None, false, true) => {
+                    list_project_operations(OperationInventoryRequest {
+                        scope: OperationInventoryScope::All,
+                        registry,
+                        project_ref,
+                        payload_kind,
+                        recovery_action,
+                        limit,
+                        after_capture_id,
+                        expected_inventory_digest,
+                        format,
+                    })
+                }
                 _ => unreachable!("clap requires exactly one operation recovery action"),
             },
             ProjectCommand::CaptureGroupRecall {
@@ -10092,6 +10209,10 @@ fn run(cli: Cli) -> Result<String> {
             }
         },
         Command::Plan { command } => match command {
+            PlanCommand::Validate {
+                operation,
+                manifest,
+            } => validate_plan_manifest(operation, manifest),
             PlanCommand::Admit {
                 store,
                 cwd,
@@ -22913,6 +23034,7 @@ struct CaptureRecoveryApplyReport {
     delivery_started: Option<DeliveryStartedPayload>,
     primary_delivery: Option<DeliveryAppliedPayload>,
     delivery_failure: Option<DeliveryFailedPayload>,
+    delivery_failure_detail: Option<String>,
     project_ref_id: Option<ProjectRefId>,
     locator_id: Option<workvcs_core::ProjectLocatorId>,
     binding: Option<ProjectBindingV2>,
@@ -23002,8 +23124,31 @@ struct OperationInventoryCandidate {
     resolution: workvcs_core::control_plane::ResolutionResult,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OperationInventoryScope {
+    Open,
+    All,
+}
+
+impl OperationInventoryScope {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::All => "all",
+        }
+    }
+
+    const fn action(self) -> &'static str {
+        match self {
+            Self::Open => "list_open",
+            Self::All => "list_all",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct OperationInventoryRequest {
+    scope: OperationInventoryScope,
     registry: Option<PathBuf>,
     project_ref: Option<String>,
     payload_kind: Option<String>,
@@ -23028,7 +23173,11 @@ struct OperationInventoryRow {
     payload_kind: String,
     created_at: String,
     project_ref: Option<String>,
+    projected_recovery_state: String,
     effective_recovery_state: String,
+    operation_lifecycle: String,
+    operation_disposition: Option<String>,
+    successor_capture_id: Option<String>,
     recovery_action: String,
     binding_classification: String,
     projection_cache_state: String,
@@ -23038,8 +23187,30 @@ struct OperationInventoryRow {
     event_count: u64,
     capture_group_id: Option<String>,
     delivery_id: Option<String>,
+    delivery_receipt: bool,
+    target_commit_id: Option<String>,
+    delivery_failure_code: Option<String>,
     result_object_ids: Vec<String>,
     result_object_ids_truncated: bool,
+}
+
+fn operation_lifecycle(
+    projection: &workvcs_core::control_plane::CaptureProjection,
+) -> &'static str {
+    match projection.recovery_state() {
+        CaptureRecoveryState::Completed => "completed",
+        CaptureRecoveryState::Superseded => "superseded",
+        CaptureRecoveryState::Abandoned => "abandoned",
+        CaptureRecoveryState::LegacyManifestUpgradeRequired
+        | CaptureRecoveryState::SemanticManifestInvalid
+        | CaptureRecoveryState::PlanTargetConflict
+        | CaptureRecoveryState::PlanManifestRejected
+        | CaptureRecoveryState::PlanReceiptTooLarge => "terminal_failed",
+        CaptureRecoveryState::PendingResolution
+        | CaptureRecoveryState::PendingProject
+        | CaptureRecoveryState::PendingPrimary
+        | CaptureRecoveryState::PendingReferences => "open",
+    }
 }
 
 fn parse_capture_payload_kind(value: &str) -> Result<CapturePayloadKind> {
@@ -23056,14 +23227,16 @@ fn parse_capture_payload_kind(value: &str) -> Result<CapturePayloadKind> {
 
 fn operation_inventory_digest(
     registry_digest: &ControlPlaneDigest,
+    scope: OperationInventoryScope,
     project_ref: Option<ProjectRefId>,
     payload_kind: Option<CapturePayloadKind>,
     recovery_action: Option<&str>,
     rows: &[OperationInventoryRow],
 ) -> Result<ControlPlaneDigest> {
     let value = serde_json::json!({
-        "inventory_version": 1,
+        "inventory_version": 2,
         "registry_digest": registry_digest.to_string(),
+        "scope": scope.as_str(),
         "filters": {
             "project_ref": project_ref.map(|value| value.to_string()),
             "payload_kind": payload_kind.map(|value| value.as_str()),
@@ -23080,8 +23253,9 @@ fn operation_inventory_digest(
     Ok(ControlPlaneDigest::raw(&canonical))
 }
 
-fn list_open_project_operations(request: OperationInventoryRequest) -> Result<String> {
+fn list_project_operations(request: OperationInventoryRequest) -> Result<String> {
     let OperationInventoryRequest {
+        scope,
         registry,
         project_ref,
         payload_kind,
@@ -23227,7 +23401,7 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
         } else {
             status_action
         };
-        if action == "none"
+        if (scope == OperationInventoryScope::Open && action == "none")
             || recovery_action
                 .as_deref()
                 .is_some_and(|value| value != action)
@@ -23275,7 +23449,18 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
             payload_kind: authority.intent().payload_kind().as_str().to_owned(),
             created_at: authority.intent().created_at().as_str().to_owned(),
             project_ref: project_ref_id.map(|value| value.to_string()),
+            projected_recovery_state: authority.projection().recovery_state().as_str().to_owned(),
             effective_recovery_state: effective_state.as_str().to_owned(),
+            operation_lifecycle: operation_lifecycle(authority.projection()).to_owned(),
+            operation_disposition: authority
+                .projection()
+                .operation_disposition()
+                .map(|value| value.disposition().as_str().to_owned()),
+            successor_capture_id: authority
+                .projection()
+                .operation_disposition()
+                .and_then(OperationDispositionRecordedPayload::successor_capture_id)
+                .map(|value| value.to_string()),
             recovery_action: action.to_owned(),
             binding_classification: binding_classification.to_owned(),
             projection_cache_state: authority.stored_state().as_str().to_owned(),
@@ -23297,6 +23482,15 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
                 .projection()
                 .delivery_started()
                 .map(|delivery| delivery.delivery_id().to_string()),
+            delivery_receipt: authority.projection().primary_delivery().is_some(),
+            target_commit_id: authority
+                .projection()
+                .primary_delivery()
+                .map(|delivery| delivery.commit_id().to_string()),
+            delivery_failure_code: authority
+                .projection()
+                .delivery_failure()
+                .map(|failure| failure.failure_code().as_str().to_owned()),
             result_object_ids,
             result_object_ids_truncated: result_objects.len() > 16,
         });
@@ -23304,6 +23498,7 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
 
     let inventory_digest = operation_inventory_digest(
         &registry_digest,
+        scope,
         project_ref,
         payload_kind,
         recovery_action.as_deref(),
@@ -23335,12 +23530,20 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
         .then(|| page.last().map(|row| row.capture_id.clone()))
         .flatten();
     let mut payload_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut projected_state_counts = std::collections::BTreeMap::<String, usize>::new();
     let mut state_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut lifecycle_counts = std::collections::BTreeMap::<String, usize>::new();
     let mut action_counts = std::collections::BTreeMap::<String, usize>::new();
     for row in &rows {
         *payload_counts.entry(row.payload_kind.clone()).or_default() += 1;
+        *projected_state_counts
+            .entry(row.projected_recovery_state.clone())
+            .or_default() += 1;
         *state_counts
             .entry(row.effective_recovery_state.clone())
+            .or_default() += 1;
+        *lifecycle_counts
+            .entry(row.operation_lifecycle.clone())
             .or_default() += 1;
         *action_counts
             .entry(row.recovery_action.clone())
@@ -23356,6 +23559,7 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
         .count();
     match format {
         OperationRecoveryOutputFormat::KeyValue => render_operation_inventory_key_value(
+            scope,
             &registry_path,
             &registry,
             &registry_digest,
@@ -23367,7 +23571,9 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
             recovery_action.as_deref(),
             &inventory_digest,
             &payload_counts,
+            &projected_state_counts,
             &state_counts,
+            &lifecycle_counts,
             &action_counts,
             rows.len(),
             page,
@@ -23375,6 +23581,7 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
             next_after_capture_id.as_deref(),
         ),
         OperationRecoveryOutputFormat::Json => render_operation_inventory_json(
+            scope,
             &registry_path,
             &registry,
             &registry_digest,
@@ -23386,7 +23593,9 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
             recovery_action.as_deref(),
             &inventory_digest,
             &payload_counts,
+            &projected_state_counts,
             &state_counts,
+            &lifecycle_counts,
             &action_counts,
             rows.len(),
             page,
@@ -23398,6 +23607,7 @@ fn list_open_project_operations(request: OperationInventoryRequest) -> Result<St
 
 #[allow(clippy::too_many_arguments)]
 fn render_operation_inventory_key_value(
+    scope: OperationInventoryScope,
     registry_path: &Path,
     registry: &ProjectRegistryV2,
     registry_digest: &ControlPlaneDigest,
@@ -23409,7 +23619,9 @@ fn render_operation_inventory_key_value(
     recovery_action: Option<&str>,
     inventory_digest: &ControlPlaneDigest,
     payload_counts: &std::collections::BTreeMap<String, usize>,
+    projected_state_counts: &std::collections::BTreeMap<String, usize>,
     state_counts: &std::collections::BTreeMap<String, usize>,
+    lifecycle_counts: &std::collections::BTreeMap<String, usize>,
     action_counts: &std::collections::BTreeMap<String, usize>,
     total_matching: usize,
     rows: &[OperationInventoryRow],
@@ -23417,7 +23629,9 @@ fn render_operation_inventory_key_value(
     next_after_capture_id: Option<&str>,
 ) -> Result<String> {
     let mut output = format!(
-        "action=list_open\nread_only=true\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_aliases={}\nbindings_validated={}\nbindings_verified={}\nfilter.project_ref={}\nfilter.payload_kind={}\nfilter.recovery_action={}\ninventory_digest={}\ntotal_matching={}\nreturned_rows={}\ntruncated={}\nnext_after_capture_id={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_opened_readonly={}\nstore_written=false\nrouting_activated=false\n",
+        "action={}\nread_only=true\ninventory_scope={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_aliases={}\nbindings_validated={}\nbindings_verified={}\nfilter.project_ref={}\nfilter.payload_kind={}\nfilter.recovery_action={}\ninventory_digest={}\ntotal_matching={}\nreturned_rows={}\ntruncated={}\nnext_after_capture_id={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_opened_readonly={}\nstore_written=false\nrouting_activated=false\n",
+        scope.action(),
+        scope.as_str(),
         escape_key_value(&registry_path.display().to_string()),
         registry.registry_id(),
         registry.revision(),
@@ -23458,6 +23672,28 @@ fn render_operation_inventory_key_value(
             escape_key_value(state)
         )
         .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "summary.effective_recovery_state.{}={count}",
+            escape_key_value(state)
+        )
+        .expect("String writes cannot fail");
+    }
+    for (state, count) in projected_state_counts {
+        writeln!(
+            output,
+            "summary.projected_recovery_state.{}={count}",
+            escape_key_value(state)
+        )
+        .expect("String writes cannot fail");
+    }
+    for (lifecycle, count) in lifecycle_counts {
+        writeln!(
+            output,
+            "summary.operation_lifecycle.{}={count}",
+            escape_key_value(lifecycle)
+        )
+        .expect("String writes cannot fail");
     }
     for (action, count) in action_counts {
         writeln!(
@@ -23477,9 +23713,14 @@ fn render_operation_inventory_key_value(
             ("payload_kind", row.payload_kind.as_str()),
             ("created_at", row.created_at.as_str()),
             (
+                "projected_recovery_state",
+                row.projected_recovery_state.as_str(),
+            ),
+            (
                 "effective_recovery_state",
                 row.effective_recovery_state.as_str(),
             ),
+            ("operation_lifecycle", row.operation_lifecycle.as_str()),
             ("recovery_action", row.recovery_action.as_str()),
             (
                 "binding_classification",
@@ -23504,6 +23745,27 @@ fn render_operation_inventory_key_value(
                 .unwrap_or_else(|| "none".to_owned())
         )
         .expect("String writes cannot fail");
+        for (key, value) in [
+            (
+                "operation_disposition",
+                row.operation_disposition.as_deref(),
+            ),
+            ("successor_capture_id", row.successor_capture_id.as_deref()),
+            ("target_commit_id", row.target_commit_id.as_deref()),
+            (
+                "delivery_failure_code",
+                row.delivery_failure_code.as_deref(),
+            ),
+        ] {
+            writeln!(
+                output,
+                "row.{index}.{key}={}",
+                value
+                    .map(escape_key_value)
+                    .unwrap_or_else(|| "none".to_owned())
+            )
+            .expect("String writes cannot fail");
+        }
         writeln!(
             output,
             "row.{index}.last_event_digest={}",
@@ -23535,6 +23797,12 @@ fn render_operation_inventory_key_value(
         .expect("String writes cannot fail");
         writeln!(
             output,
+            "row.{index}.delivery_receipt={}",
+            row.delivery_receipt
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
             "row.{index}.result_object_ids={}",
             escape_key_value(&row.result_object_ids.join(","))
         )
@@ -23551,6 +23819,7 @@ fn render_operation_inventory_key_value(
 
 #[allow(clippy::too_many_arguments)]
 fn render_operation_inventory_json(
+    scope: OperationInventoryScope,
     registry_path: &Path,
     registry: &ProjectRegistryV2,
     registry_digest: &ControlPlaneDigest,
@@ -23562,7 +23831,9 @@ fn render_operation_inventory_json(
     recovery_action: Option<&str>,
     inventory_digest: &ControlPlaneDigest,
     payload_counts: &std::collections::BTreeMap<String, usize>,
+    projected_state_counts: &std::collections::BTreeMap<String, usize>,
     state_counts: &std::collections::BTreeMap<String, usize>,
+    lifecycle_counts: &std::collections::BTreeMap<String, usize>,
     action_counts: &std::collections::BTreeMap<String, usize>,
     total_matching: usize,
     rows: &[OperationInventoryRow],
@@ -23570,8 +23841,9 @@ fn render_operation_inventory_json(
     next_after_capture_id: Option<&str>,
 ) -> Result<String> {
     let value = serde_json::json!({
-        "action": "list_open",
+        "action": scope.action(),
         "read_only": true,
+        "inventory_scope": scope.as_str(),
         "registry_path": registry_path.display().to_string(),
         "registry_version": 2,
         "registry_id": registry.registry_id().to_string(),
@@ -23589,6 +23861,9 @@ fn render_operation_inventory_json(
         "summary": {
             "payload_kind": payload_counts,
             "recovery_state": state_counts,
+            "projected_recovery_state": projected_state_counts,
+            "effective_recovery_state": state_counts,
+            "operation_lifecycle": lifecycle_counts,
             "recovery_action": action_counts,
         },
         "total_matching": total_matching,
@@ -24004,6 +24279,20 @@ fn effective_capture_recovery_state(
     binding: &RecoveryBindingInspection<'_>,
     projection: &workvcs_core::control_plane::CaptureProjection,
 ) -> CaptureRecoveryState {
+    match projection.recovery_state() {
+        CaptureRecoveryState::LegacyManifestUpgradeRequired
+        | CaptureRecoveryState::SemanticManifestInvalid
+        | CaptureRecoveryState::PlanTargetConflict
+        | CaptureRecoveryState::PlanManifestRejected
+        | CaptureRecoveryState::PlanReceiptTooLarge
+        | CaptureRecoveryState::Superseded
+        | CaptureRecoveryState::Abandoned => return projection.recovery_state(),
+        CaptureRecoveryState::PendingResolution
+        | CaptureRecoveryState::PendingProject
+        | CaptureRecoveryState::PendingPrimary
+        | CaptureRecoveryState::PendingReferences
+        | CaptureRecoveryState::Completed => {}
+    }
     match resolution.status() {
         ResolutionStatus::Unresolved | ResolutionStatus::Conflict => {
             CaptureRecoveryState::PendingResolution
@@ -24075,6 +24364,7 @@ fn capture_recovery_action(
             "apply_capture_completion"
         }
         CaptureRecoveryState::Completed => "none",
+        CaptureRecoveryState::Superseded | CaptureRecoveryState::Abandoned => "none",
     }
 }
 
@@ -24099,9 +24389,10 @@ fn inspect_project_capture_recovery(
     let delivery_started = projection.delivery_started();
     let primary_delivery = projection.primary_delivery();
     let delivery_failure = projection.delivery_failure();
+    let operation_disposition = projection.operation_disposition();
     let capture_group = projection.capture_group();
     Ok(format!(
-        "action=status\nread_only=true\ncapture_id={}\npayload_kind={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_root={}\nintent_path={}\nevents={}\nprojection_path={}\nprojection_digest={}\nprojection_stored_state={}\nprojection_issue={}\nprojected_recovery_state={}\neffective_recovery_state={}\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nbinding_state={}\nbinding_verified_objects={}\nbinding_issue={}\nrecovery_action={}\ndelivery_id={}\ndelivery_started={}\ndelivery_receipt={}\ntarget_commit_id={}\ntarget_delivery_reused={}\ncanonical_record_ref={}\ndelivery_failure_code={}\ncapture_group_id={}\ncapture_group_primary_resolved={}\nsecondary_references_required={}\nsecondary_references_applied={}\nsecondary_references_pending={}\ncapture_completed_receipt={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_initialized=false\ntarget_delivery_written=false\nrouting_activated=false\n",
+        "action=status\nread_only=true\ncapture_id={}\npayload_kind={}\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_root={}\nintent_path={}\nevents={}\nprojection_path={}\nprojection_digest={}\nprojection_stored_state={}\nprojection_issue={}\nprojected_recovery_state={}\neffective_recovery_state={}\noperation_lifecycle={}\noperation_disposition={}\nsuccessor_capture_id={}\nresolution_status={}\nresolution_rank={}\nproject_ref_id={}\nbinding_state={}\nbinding_verified_objects={}\nbinding_issue={}\nrecovery_action={}\ndelivery_id={}\ndelivery_started={}\ndelivery_receipt={}\ntarget_commit_id={}\ntarget_delivery_reused={}\ncanonical_record_ref={}\ndelivery_failure_code={}\ncapture_group_id={}\ncapture_group_primary_resolved={}\nsecondary_references_required={}\nsecondary_references_applied={}\nsecondary_references_pending={}\ncapture_completed_receipt={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_initialized=false\ntarget_delivery_written=false\nrouting_activated=false\n",
         capture_id,
         intent.payload_kind().as_str(),
         escape_key_value(&registry_path.display().to_string()),
@@ -24120,6 +24411,14 @@ fn inspect_project_capture_recovery(
             .unwrap_or_else(|| "none".to_owned()),
         projection.recovery_state().as_str(),
         effective_state.as_str(),
+        operation_lifecycle(projection),
+        operation_disposition
+            .map(|value| value.disposition().as_str())
+            .unwrap_or("none"),
+        operation_disposition
+            .and_then(OperationDispositionRecordedPayload::successor_capture_id)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
         resolution_status_text(resolution.status()),
         resolution_rank,
         resolution
@@ -24164,6 +24463,124 @@ fn inspect_project_capture_recovery(
             .map(|group| group.pending_reference_project_refs().len())
             .unwrap_or(0),
         capture_group.is_some_and(|group| group.completion_receipt().is_some()),
+    ))
+}
+
+fn record_project_capture_disposition(
+    registry: Option<PathBuf>,
+    capture_id: CaptureId,
+    disposition: OperationDisposition,
+    successor_capture_id: Option<CaptureId>,
+    expected_registry_digest: ControlPlaneDigest,
+    expected_projection_digest: ControlPlaneDigest,
+) -> Result<String> {
+    let payload = OperationDispositionRecordedPayload::new(disposition, successor_capture_id)?;
+    let (_, registry_path, _registry, observed_registry_digest) =
+        capture_recovery_registry(registry)?;
+    if observed_registry_digest != expected_registry_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "operation disposition registry digest changed before lock: expected {expected_registry_digest}, found {observed_registry_digest}"
+        )));
+    }
+    let journal = capture_recovery_journal(&registry_path, capture_id)?;
+    let observed_projection = journal.inspect_projection(capture_id)?;
+    if observed_projection.projection().digest()? != expected_projection_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "operation disposition projection digest changed before lock: expected {expected_projection_digest}, found {}",
+            observed_projection.projection().digest()?
+        )));
+    }
+
+    let _registry_lock = ProjectRegistryLock::acquire(&registry_path)?;
+    let quiescence_path = project_registry_journal_quiescence_lock_path(&registry_path)?;
+    let _quiescence = JournalQuiescenceLock::acquire(&quiescence_path)?;
+    let (_, _, _locked_registry, locked_registry_digest) =
+        capture_recovery_registry(Some(registry_path.clone()))?;
+    if locked_registry_digest != expected_registry_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "operation disposition registry digest changed under lock: expected {expected_registry_digest}, found {locked_registry_digest}"
+        )));
+    }
+    let locked_journal = capture_recovery_journal(&registry_path, capture_id)?;
+    if locked_journal.root() != journal.root() {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "capture journal alias changed while acquiring disposition locks".to_owned(),
+        ));
+    }
+    let locked_projection = locked_journal.inspect_projection(capture_id)?;
+    if locked_projection.projection().digest()? != expected_projection_digest {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "operation disposition projection digest changed under lock: expected {expected_projection_digest}, found {}",
+            locked_projection.projection().digest()?
+        )));
+    }
+    let target_intent = locked_journal.load(capture_id)?;
+    if let Some(successor_capture_id) = successor_capture_id {
+        let successor_journal = capture_recovery_journal(&registry_path, successor_capture_id)?;
+        let successor_intent = successor_journal.load(successor_capture_id)?;
+        if successor_intent.created_at().as_str() <= target_intent.created_at().as_str() {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "superseding Capture {successor_capture_id} must be admitted later than {capture_id}"
+            )));
+        }
+    }
+    let target_projection = locked_projection.projection();
+    let group_has_delivery_authority = target_projection.capture_group().is_some_and(|group| {
+        group.canonical_record_ref().is_some()
+            || group.applied_reference_count() != 0
+            || group.completion_receipt().is_some()
+    });
+    if target_projection.delivery_started().is_some()
+        || target_projection.primary_delivery().is_some()
+        || target_projection.delivery_failure().is_some()
+        || group_has_delivery_authority
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture {capture_id} has target-bearing authority and cannot be disposed"
+        )));
+    }
+
+    let appended = locked_journal.append_event_authority_only(
+        capture_id,
+        UtcTimestamp::now()?,
+        CaptureEventPayload::OperationDispositionRecorded(payload),
+    )?;
+    let projection_write = locked_journal.rebuild_projection(capture_id)?;
+    let projection = projection_write.projection();
+    let stored = locked_journal.inspect_projection(capture_id)?;
+    if stored.stored_state() != workvcs_core::control_plane::StoredProjectionState::Current {
+        return Err(WorkVcsError::CaptureRecoveryInstallIndeterminate(format!(
+            "operation disposition event is durable but projection {} is not current",
+            locked_journal.projection_path(capture_id).display()
+        )));
+    }
+    Ok(format!(
+        "action=dispose\nread_only=false\ncapture_id={}\ndisposition={}\nsuccessor_capture_id={}\nregistry_path={}\nregistry_digest={}\njournal_root={}\nevents={}\nprojection_path={}\nprojection_digest={}\nprojected_recovery_state={}\neffective_recovery_state={}\nrecovery_action=none\njournal_event_written={}\nprojection_write_outcome={}\nprojection_written={}\nregistry_written=false\nstore_opened=false\nstore_written=false\nrouting_activated=false\n",
+        capture_id,
+        disposition.as_str(),
+        successor_capture_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        escape_key_value(&registry_path.display().to_string()),
+        locked_registry_digest,
+        escape_key_value(&locked_journal.root().display().to_string()),
+        projection.event_count(),
+        escape_key_value(
+            &locked_journal
+                .projection_path(capture_id)
+                .display()
+                .to_string()
+        ),
+        projection.digest()?,
+        projection.recovery_state().as_str(),
+        projection.recovery_state().as_str(),
+        appended.outcome() == CaptureEventAppendOutcome::Created,
+        match projection_write.outcome() {
+            CaptureProjectionWriteOutcome::Created => "created",
+            CaptureProjectionWriteOutcome::Replaced => "replaced",
+            CaptureProjectionWriteOutcome::Reused => "reused",
+        },
+        projection_write.outcome() != CaptureProjectionWriteOutcome::Reused,
     ))
 }
 
@@ -24328,6 +24745,7 @@ fn apply_project_capture_recovery_with_fault_and_mode(
             delivery_started: locked_projection.projection().delivery_started().cloned(),
             primary_delivery: locked_projection.projection().primary_delivery().cloned(),
             delivery_failure: None,
+            delivery_failure_detail: None,
             project_ref_id: resolution.primary_project_ref(),
             locator_id: Some(locator_id),
             binding: Some(binding.clone()),
@@ -24360,6 +24778,7 @@ fn apply_project_capture_recovery_with_fault_and_mode(
     let mut delivery_started_snapshot = None;
     let mut primary_delivery_snapshot = None;
     let mut delivery_failure_snapshot = None;
+    let mut delivery_failure_detail = None;
     let mut locator_id = None;
 
     if resolution.status() == ResolutionStatus::Unbound {
@@ -24592,13 +25011,15 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                     .as_ref()
                     .and_then(|preflight| match preflight {
                         PlanDeliveryPreflight::Ready => None,
-                        PlanDeliveryPreflight::TargetConflict(_) => Some((
+                        PlanDeliveryPreflight::TargetConflict(detail) => Some((
                             DeliveryFailureCode::PlanTargetConflict,
                             DeliveryFailureCode::PlanTargetConflict.recovery_action(),
+                            detail.clone(),
                         )),
-                        PlanDeliveryPreflight::ManifestRejected(_) => Some((
+                        PlanDeliveryPreflight::ManifestRejected(detail) => Some((
                             DeliveryFailureCode::PlanManifestRejected,
                             DeliveryFailureCode::PlanManifestRejected.recovery_action(),
+                            detail.clone(),
                         )),
                     });
             let plan_receipt_size =
@@ -24648,7 +25069,9 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                 delivery_failure_written =
                     failure_event.outcome() == CaptureEventAppendOutcome::Created;
                 delivery_failure_snapshot = Some(failure);
-            } else if let Some((failure_code, recovery_action)) = plan_delivery_failure {
+            } else if let Some((failure_code, recovery_action, failure_detail)) =
+                plan_delivery_failure
+            {
                 let failure = DeliveryFailedPayload::new(
                     started.delivery_id(),
                     project_ref_id,
@@ -24666,6 +25089,7 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                 delivery_failure_written =
                     failure_event.outcome() == CaptureEventAppendOutcome::Created;
                 delivery_failure_snapshot = Some(failure);
+                delivery_failure_detail = Some(failure_detail);
             } else if plan_receipt_size.is_some_and(|size| size > MAX_CAPTURE_EVENT_BYTES) {
                 let failure = DeliveryFailedPayload::new(
                     started.delivery_id(),
@@ -24886,6 +25310,7 @@ fn apply_project_capture_recovery_with_fault_and_mode(
         delivery_started: delivery_started_snapshot,
         primary_delivery: primary_delivery_snapshot,
         delivery_failure: delivery_failure_snapshot,
+        delivery_failure_detail,
         project_ref_id: resolution.primary_project_ref(),
         locator_id,
         binding: binding_snapshot,
@@ -28174,11 +28599,20 @@ fn try_routed_plan_delivery_with_fault(
         fault,
     )?;
     if let Some(failure) = report.delivery_failure.as_ref() {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "durable Plan delivery ended in {}: {}",
-            failure.failure_code().as_str(),
-            failure.recovery_action()
-        )));
+        let detail = report
+            .delivery_failure_detail
+            .as_deref()
+            .unwrap_or("inspect operation-recovery status for the durable terminal result");
+        return Err(WorkVcsError::CaptureDeliveryIncomplete {
+            capture_id: capture_id.to_string(),
+            journal_persisted: true,
+            cause_error_code: failure.failure_code().as_str().to_owned(),
+            recovery_action: failure.recovery_action().to_owned(),
+            message: format!(
+                "durable Plan delivery ended in {}: {detail}",
+                failure.failure_code().as_str()
+            ),
+        });
     }
     let target_delivery_reused = report.target_delivery_reused;
     let binding = report.binding.ok_or_else(|| {
@@ -28221,6 +28655,49 @@ fn canonical_durable_operation_payload(
             payload_kind.as_str()
         ))
     })
+}
+
+fn validate_plan_manifest(
+    operation: PlanManifestOperationArg,
+    manifest_path: PathBuf,
+) -> Result<String> {
+    let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read plan {} manifest {}: {error}",
+            operation.as_str(),
+            manifest_path.display()
+        ))
+    })?;
+    let (payload_digest, idempotency_key, mode) = match operation {
+        PlanManifestOperationArg::Admit => {
+            let manifest = PlanAdmissionManifest::from_json_bytes(&manifest_bytes)?;
+            manifest.validate_for_delivery()?;
+            (
+                manifest.payload_digest()?.to_string(),
+                manifest.idempotency_key().to_owned(),
+                None,
+            )
+        }
+        PlanManifestOperationArg::Evolve => {
+            let manifest = PlanEvolutionManifest::from_json_bytes(&manifest_bytes)?;
+            manifest.validate_for_delivery()?;
+            (
+                manifest.payload_digest()?.to_string(),
+                manifest.idempotency_key().to_owned(),
+                Some(manifest.mode()),
+            )
+        }
+    };
+    let idempotency_key_digest = ControlPlaneDigest::raw(
+        format!("workvcs-plan-manifest-idempotency/v1\0{}", idempotency_key).as_bytes(),
+    );
+    Ok(format!(
+        "action=plan_manifest_validate\nread_only=true\noperation={}\nmode={}\nvalid=true\npayload_digest={}\nidempotency_key_digest={}\nregistry_read=false\nregistry_written=false\njournal_read=false\njournal_event_written=false\nprojection_written=false\nstore_opened=false\nstore_written=false\nrouting_activated=false\n",
+        operation.as_str(),
+        mode.unwrap_or("none"),
+        payload_digest,
+        idempotency_key_digest,
+    ))
 }
 
 fn run_plan_admit(
@@ -69951,6 +70428,300 @@ mod tests {
     }
 
     #[test]
+    fn cli_operation_disposition_is_guarded_terminal_and_globally_auditable() {
+        run_cli_test_with_large_stack(
+            "operation-disposition-inventory-test",
+            assert_cli_operation_disposition_is_guarded_terminal_and_globally_auditable,
+        );
+    }
+
+    fn assert_cli_operation_disposition_is_guarded_terminal_and_globally_auditable() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let target_manifest = write_v2_capture_manifest(
+            &fixture,
+            "disposition-target.json",
+            "disposition-target-key",
+            "Obsolete undelivered operation",
+        );
+        let successor_manifest = write_v2_capture_manifest(
+            &fixture,
+            "disposition-successor.json",
+            "disposition-successor-key",
+            "Later durable replacement",
+        );
+        let target = run_fixture_v2_capture(&fixture, &target_manifest, false)
+            .expect("admit disposition target");
+        let successor = run_fixture_v2_capture(&fixture, &successor_manifest, false)
+            .expect("admit disposition successor");
+        let target_capture_id = value(&target, "capture_id");
+        let successor_capture_id = value(&successor, "capture_id");
+        let before = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&target_capture_id).unwrap(),
+        )
+        .unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let disposed = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--dispose",
+            "superseded",
+            "--capture-id",
+            &target_capture_id,
+            "--successor-capture-id",
+            &successor_capture_id,
+            "--registry",
+            &fixture.registry,
+            "--expected-registry-digest",
+            &value(&before, "registry_digest"),
+            "--expected-projection-digest",
+            &value(&before, "projection_digest"),
+        ])
+        .unwrap())
+        .expect("record guarded supersession");
+        assert_eq!(value(&disposed, "action"), "dispose");
+        assert_eq!(value(&disposed, "disposition"), "superseded");
+        assert_eq!(value(&disposed, "journal_event_written"), "true");
+        assert_eq!(value(&disposed, "store_opened"), "false");
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&target_capture_id).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value(&status, "projected_recovery_state"), "superseded");
+        assert_eq!(value(&status, "effective_recovery_state"), "superseded");
+        assert_eq!(value(&status, "operation_lifecycle"), "superseded");
+        assert_eq!(value(&status, "operation_disposition"), "superseded");
+        assert_eq!(value(&status, "successor_capture_id"), successor_capture_id);
+        assert_eq!(value(&status, "recovery_action"), "none");
+
+        let open = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+            "--format",
+            "json",
+        ])
+        .unwrap())
+        .expect("list open after supersession");
+        let open_json: serde_json::Value = serde_json::from_str(&open).unwrap();
+        assert_eq!(open_json["inventory_scope"], serde_json::json!("open"));
+        assert_eq!(open_json["total_matching"], serde_json::json!(1));
+        assert_eq!(
+            open_json["rows"][0]["capture_id"],
+            serde_json::json!(successor_capture_id)
+        );
+
+        let all = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-all",
+            "--registry",
+            &fixture.registry,
+            "--format",
+            "json",
+        ])
+        .unwrap())
+        .expect("list all after supersession");
+        let all_json: serde_json::Value = serde_json::from_str(&all).unwrap();
+        assert_eq!(all_json["inventory_scope"], serde_json::json!("all"));
+        assert_eq!(all_json["total_matching"], serde_json::json!(2));
+        let target_row = all_json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["capture_id"] == serde_json::json!(target_capture_id))
+            .expect("superseded row remains globally visible");
+        assert_eq!(
+            target_row["projected_recovery_state"],
+            serde_json::json!("superseded")
+        );
+        assert_eq!(
+            target_row["operation_lifecycle"],
+            serde_json::json!("superseded")
+        );
+        assert_eq!(target_row["recovery_action"], serde_json::json!("none"));
+        assert_eq!(
+            target_row["successor_capture_id"],
+            serde_json::json!(successor_capture_id)
+        );
+
+        let replay = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--dispose",
+            "superseded",
+            "--capture-id",
+            &target_capture_id,
+            "--successor-capture-id",
+            &successor_capture_id,
+            "--registry",
+            &fixture.registry,
+            "--expected-registry-digest",
+            &value(&status, "registry_digest"),
+            "--expected-projection-digest",
+            &value(&status, "projection_digest"),
+        ])
+        .unwrap())
+        .expect("replay identical supersession");
+        assert_eq!(value(&replay, "journal_event_written"), "false");
+        assert_eq!(value(&replay, "projection_written"), "false");
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let successor_status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&successor_capture_id).unwrap(),
+        )
+        .unwrap();
+        let missing_successor_capture_id = CaptureId::new_v7().to_string();
+        let missing_successor = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--dispose",
+            "superseded",
+            "--capture-id",
+            &successor_capture_id,
+            "--successor-capture-id",
+            &missing_successor_capture_id,
+            "--registry",
+            &fixture.registry,
+            "--expected-registry-digest",
+            &value(&successor_status, "registry_digest"),
+            "--expected-projection-digest",
+            &value(&successor_status, "projection_digest"),
+        ])
+        .unwrap())
+        .expect_err("missing successor must fail");
+        assert!(missing_successor.to_string().contains("was not found"));
+
+        let earlier_successor = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--dispose",
+            "superseded",
+            "--capture-id",
+            &successor_capture_id,
+            "--successor-capture-id",
+            &target_capture_id,
+            "--registry",
+            &fixture.registry,
+            "--expected-registry-digest",
+            &value(&successor_status, "registry_digest"),
+            "--expected-projection-digest",
+            &value(&successor_status, "projection_digest"),
+        ])
+        .unwrap())
+        .expect_err("successor must have a later admission time");
+        assert!(
+            earlier_successor
+                .to_string()
+                .contains("must be admitted later")
+        );
+
+        let stale = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--dispose",
+            "abandoned",
+            "--capture-id",
+            &successor_capture_id,
+            "--registry",
+            &fixture.registry,
+            "--expected-registry-digest",
+            &value(&successor_status, "registry_digest"),
+            "--expected-projection-digest",
+            &ControlPlaneDigest::raw(b"stale disposition projection").to_string(),
+        ])
+        .unwrap())
+        .expect_err("stale disposition guard must fail");
+        assert!(stale.to_string().contains("projection digest changed"));
+
+        apply_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            None,
+            CaptureId::parse_canonical(&successor_capture_id).unwrap(),
+            ControlPlaneDigest::from_text(&value(&successor_status, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&successor_status, "projection_digest")).unwrap(),
+        )
+        .expect("deliver successor before terminal guard check");
+        let completed_status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&successor_capture_id).unwrap(),
+        )
+        .unwrap();
+        let completed_error = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--dispose",
+            "abandoned",
+            "--capture-id",
+            &successor_capture_id,
+            "--registry",
+            &fixture.registry,
+            "--expected-registry-digest",
+            &value(&completed_status, "registry_digest"),
+            "--expected-projection-digest",
+            &value(&completed_status, "projection_digest"),
+        ])
+        .unwrap())
+        .expect_err("target-bearing operation cannot be disposed");
+        assert!(
+            completed_error
+                .to_string()
+                .contains("has target-bearing authority and cannot be disposed")
+        );
+
+        let no_open = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+        ])
+        .unwrap())
+        .expect("completed and superseded operations leave open inventory");
+        assert_eq!(value(&no_open, "total_matching"), "0");
+        let all_after = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-all",
+            "--registry",
+            &fixture.registry,
+            "--format",
+            "json",
+        ])
+        .unwrap())
+        .expect("all inventory retains completed and superseded operations");
+        let all_after_json: serde_json::Value = serde_json::from_str(&all_after).unwrap();
+        assert_eq!(all_after_json["total_matching"], serde_json::json!(2));
+        assert_eq!(
+            all_after_json["summary"]["operation_lifecycle"]["completed"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            all_after_json["summary"]["operation_lifecycle"]["superseded"],
+            serde_json::json!(1)
+        );
+    }
+
+    #[test]
     fn cli_operation_inventory_is_readonly_allowlisted_and_digest_pageable() {
         run_cli_test_with_large_stack(
             "operation-inventory-readonly-pageable-test",
@@ -70093,6 +70864,28 @@ mod tests {
         .expect("parse stale inventory cursor"))
         .expect_err("stale inventory digest must fail closed");
         assert_eq!(wrong.code(), ErrorCode::ControlPlaneInvalid);
+
+        let cross_scope = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-all",
+            "--registry",
+            &fixture.registry,
+            "--payload-kind",
+            "cognition_v2",
+            "--recovery-action",
+            "apply_binding_receipt",
+            "--limit",
+            "1",
+            "--after-capture-id",
+            &cursor,
+            "--expected-inventory-digest",
+            &digest,
+        ])
+        .expect("parse cross-scope inventory cursor"))
+        .expect_err("inventory digest must bind open versus all scope");
+        assert_eq!(cross_scope.code(), ErrorCode::ControlPlaneInvalid);
 
         let absent_cursor = CaptureId::new_v7().to_string();
         let absent = run(Cli::try_parse_from([
@@ -72115,6 +72908,278 @@ mod tests {
     }
 
     #[test]
+    fn cli_plan_manifest_validate_is_zero_write_and_routed_rejection_is_actionable() {
+        run_cli_test_with_large_stack(
+            "cli-plan-manifest-validation-test",
+            assert_cli_plan_manifest_validate_is_zero_write_and_routed_rejection_is_actionable,
+        );
+    }
+
+    fn assert_cli_plan_manifest_validate_is_zero_write_and_routed_rejection_is_actionable() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let registry_path = fs::canonicalize(&fixture.registry_path).unwrap();
+        let journal = CaptureJournal::for_project_registry(
+            &registry_path,
+            ProjectRegistryJournalAlias::RegistrySidecar,
+        )
+        .unwrap();
+        let valid_manifest = minimal_admit_manifest(
+            &value(&head, "head_commit_id"),
+            &value(&head, "state_digest"),
+            "plan-validation-valid",
+        );
+        let valid_path = fixture._tempdir.path().join("plan-validation-valid.json");
+        fs::write(&valid_path, valid_manifest).unwrap();
+        let registry_before = fs::read(&registry_path).unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let captures_before = journal.inspect_all_authority().unwrap().len();
+
+        let valid = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "validate",
+            "--operation",
+            "admit",
+            "--manifest",
+            &path_text(&valid_path),
+        ])
+        .unwrap())
+        .expect("valid manifest preflight");
+        assert_eq!(value(&valid, "action"), "plan_manifest_validate");
+        assert_eq!(value(&valid, "read_only"), "true");
+        assert_eq!(value(&valid, "valid"), "true");
+        assert!(!valid.contains("plan-validation-valid"));
+        assert_eq!(
+            journal.inspect_all_authority().unwrap().len(),
+            captures_before
+        );
+        assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let evolve_path = fixture._tempdir.path().join("plan-validation-evolve.json");
+        fs::write(
+            &evolve_path,
+            format!(
+                r#"{{
+  "mode":"in_place",
+  "schema_version":1,
+  "idempotency_key":"plan-validation-evolve",
+  "expected_head_commit_id":"{}",
+  "expected_state_digest":"{}",
+  "target_plan_entity_id":"{}",
+  "expected_plan_entity_version_id":"{}",
+  "expected_plan_state_digest":"{}",
+  "plan":{{"strategy":"Validate only"}},
+  "tasks":[],"records":[],"evidence":[],
+  "rationale":{{"source":"plan-validation-test"}}
+}}"#,
+                value(&head, "head_commit_id"),
+                value(&head, "state_digest"),
+                EntityId::new_v7(),
+                EntityVersionId::new_v7(),
+                Digest::domain_separated("workvcs.test.plan-validation.v1", b"plan-state")
+            ),
+        )
+        .unwrap();
+        let evolve_valid = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "validate",
+            "--operation",
+            "evolve",
+            "--manifest",
+            &path_text(&evolve_path),
+        ])
+        .unwrap())
+        .expect("valid evolution manifest preflight");
+        assert_eq!(value(&evolve_valid, "operation"), "evolve");
+        assert_eq!(value(&evolve_valid, "mode"), "in_place");
+        assert!(!evolve_valid.contains("plan-validation-evolve"));
+        assert_eq!(
+            journal.inspect_all_authority().unwrap().len(),
+            captures_before
+        );
+        assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let invalid_path = fixture._tempdir.path().join("plan-validation-invalid.json");
+        let invalid_manifest = minimal_admit_manifest(
+            &value(&head, "head_commit_id"),
+            &value(&head, "state_digest"),
+            "plan-validation-invalid",
+        )
+        .replace(
+            "\"records\": []",
+            "\"records\": [{\"local_id\":\"bad\",\"kind\":\"constraint\",\"statement\":\"unsupported\",\"scope\":{}}]",
+        );
+        fs::write(&invalid_path, &invalid_manifest).unwrap();
+        let validation_error = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "validate",
+            "--operation",
+            "admit",
+            "--manifest",
+            &path_text(&invalid_path),
+        ])
+        .unwrap())
+        .expect_err("invalid manifest preflight");
+        assert_eq!(validation_error.code().as_str(), "record_invalid");
+        assert!(validation_error.to_string().contains("record kind"));
+        assert_eq!(
+            journal.inspect_all_authority().unwrap().len(),
+            captures_before
+        );
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let routed_error = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&invalid_path),
+        ])
+        .unwrap())
+        .expect_err("routed invalid manifest terminalizes");
+        let rejected_capture_id = match &routed_error {
+            WorkVcsError::CaptureDeliveryIncomplete {
+                capture_id,
+                journal_persisted,
+                cause_error_code,
+                recovery_action,
+                message,
+            } => {
+                assert!(*journal_persisted);
+                assert_eq!(cause_error_code, "plan_manifest_rejected");
+                assert_eq!(
+                    recovery_action,
+                    "start_new_plan_operation_with_corrected_manifest"
+                );
+                assert!(message.contains("record kind"));
+                CaptureId::parse_canonical(capture_id).unwrap()
+            }
+            other => panic!("unexpected routed error: {other}"),
+        };
+        let status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            rejected_capture_id,
+        )
+        .unwrap();
+        assert_eq!(
+            value(&status, "projected_recovery_state"),
+            "plan_manifest_rejected"
+        );
+        assert_eq!(
+            value(&status, "effective_recovery_state"),
+            "plan_manifest_rejected"
+        );
+        assert_eq!(value(&status, "operation_lifecycle"), "terminal_failed");
+        let terminal_inventory = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-all",
+            "--registry",
+            &fixture.registry,
+            "--payload-kind",
+            "plan_admit_v1",
+            "--format",
+            "json",
+        ])
+        .unwrap())
+        .expect("all inventory retains terminal Plan operation");
+        let terminal_inventory_json: serde_json::Value =
+            serde_json::from_str(&terminal_inventory).unwrap();
+        let terminal_row = terminal_inventory_json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["capture_id"] == serde_json::json!(rejected_capture_id.to_string()))
+            .expect("terminal Plan row");
+        assert_eq!(
+            terminal_row["projected_recovery_state"],
+            serde_json::json!("plan_manifest_rejected")
+        );
+        assert_eq!(
+            terminal_row["operation_lifecycle"],
+            serde_json::json!("terminal_failed")
+        );
+        assert_eq!(
+            terminal_row["delivery_failure_code"],
+            serde_json::json!("plan_manifest_rejected")
+        );
+        assert_eq!(
+            journal.inspect_all_authority().unwrap().len(),
+            captures_before + 1
+        );
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let events_before_replay = journal
+            .inspect_authority(rejected_capture_id)
+            .unwrap()
+            .events()
+            .len();
+        let replay_error = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&invalid_path),
+        ])
+        .unwrap())
+        .expect_err("exact rejected Plan replay remains terminal");
+        match replay_error {
+            WorkVcsError::CaptureDeliveryIncomplete {
+                capture_id,
+                cause_error_code,
+                recovery_action,
+                ..
+            } => {
+                assert_eq!(capture_id, rejected_capture_id.to_string());
+                assert_eq!(cause_error_code, "plan_manifest_rejected");
+                assert_eq!(
+                    recovery_action,
+                    "start_new_plan_operation_with_corrected_manifest"
+                );
+            }
+            other => panic!("unexpected replay error: {other}"),
+        }
+        assert_eq!(
+            journal.inspect_all_authority().unwrap().len(),
+            captures_before + 1
+        );
+        assert_eq!(
+            journal
+                .inspect_authority(rejected_capture_id)
+                .unwrap()
+                .events()
+                .len(),
+            events_before_replay
+        );
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+    }
+
+    #[test]
     fn cli_v2_plan_admit_and_evolve_use_one_durable_journal() {
         run_cli_test_with_large_stack(
             "cli-v2-plan-durable-journal-test",
@@ -72663,7 +73728,7 @@ mod tests {
         ])
         .unwrap())
         .expect_err("stale routed Plan admission must preserve the target Store");
-        assert_eq!(conflict.code().as_str(), "control_plane_invalid");
+        assert_eq!(conflict.code().as_str(), "capture_delivery_incomplete");
         assert!(conflict.to_string().contains("plan_target_conflict"));
         assert_eq!(
             cli_sqlite_file_snapshots(&fixture.store_path),
@@ -72974,7 +74039,7 @@ mod tests {
         ])
         .unwrap())
         .expect_err("deterministic Plan validation failure must be terminalized");
-        assert_eq!(rejected.code().as_str(), "control_plane_invalid");
+        assert_eq!(rejected.code().as_str(), "capture_delivery_incomplete");
         assert!(rejected.to_string().contains("plan_manifest_rejected"));
         assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
 
@@ -73063,7 +74128,7 @@ mod tests {
         ])
         .unwrap())
         .expect_err("oversized future receipt must fail before the Plan Store commit");
-        assert_eq!(rejected.code().as_str(), "control_plane_invalid");
+        assert_eq!(rejected.code().as_str(), "capture_delivery_incomplete");
         assert!(rejected.to_string().contains("plan_receipt_too_large"));
         assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
 

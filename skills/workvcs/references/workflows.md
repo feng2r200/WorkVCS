@@ -212,6 +212,19 @@ strictly read-only inventory. Optional ProjectRef, payload-kind, and recovery-
 action filters narrow classification; a later page must carry both
 `--after-capture-id` and `--expected-inventory-digest`. Inventory membership
 does not authorize any returned recovery action.
+Use `--list-all` with the same filters and paging when completed,
+deterministic-terminal, superseded, and abandoned history must remain visible.
+The selected scope is bound into the inventory digest. Rows separate immutable
+projected state, current effective state, lifecycle, disposition, and
+successor; neither inventory mode may infer or apply a semantic decision.
+
+When verified current truth establishes that an owned operation is obsolete
+and it has no target-bearing event, use fresh status digests with
+`operation-recovery --dispose superseded --successor-capture-id <later-id>` or
+`--dispose abandoned`. Supersession requires a distinct later Capture;
+abandonment forbids one. Disposition is an immutable terminal classification,
+not delivery, and exact replay is zero-write. Do not batch-dispose historical
+rows or ask the user to monitor routine state the responsible task can resolve.
 
 ## No-Plan to Plan
 
@@ -240,6 +253,13 @@ lands before that receipt, repeat the exact Plan command or use
 idempotency key merely to escape an uncertain result. Registry v1 cwd and
 explicit `STORE --branch` remain direct compatibility boundaries.
 
+For a newly authored or materially changed Plan manifest, first run
+`workvcs plan validate --operation admit|evolve --manifest <path>`. The validator uses
+the same typed parser and intrinsic domain validation but performs no project
+resolution, registry/marker/journal access, Store open, target-guard comparison,
+or durable write. It reduces avoidable rejected intents without replacing the
+journal-first protocol or granting authority.
+
 Before either routed Plan operation first mutates the Store, it validates the
 typed manifest, compares explicit guards to one current target snapshot, and
 measures the typed receipt in a fixed maximum-timestamp envelope. Treat
@@ -258,6 +278,11 @@ Use the canonical Store vocabulary when interpreting receipt results:
 `record.kind=unknown` is the accepted input alias for canonical `question`.
 Once a terminal failure is present for a delivery attempt, never try to append
 a different failure or receipt to that same attempt.
+The routed invocation that records a terminal Plan failure returns
+`capture_delivery_incomplete` with its durable CaptureId, failure code,
+canonical recovery action, and bounded same-invocation cause. Preserve that ID
+and use the cause directly; later status remains authoritative even though the
+transient detail is not persisted in the global inventory.
 
 ## Recall and retrospective
 

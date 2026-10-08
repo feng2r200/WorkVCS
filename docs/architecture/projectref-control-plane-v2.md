@@ -1,18 +1,20 @@
 # ProjectRef Control Plane v2 Contract
 
-Status: Accepted implemented contract — roadmap rounds 1–11 complete with isolated fault evidence and bounded live local canary evidence
+Status: Accepted mixed contract — ADR-0513/0516/0517/0518 implemented; ADR-0519 sections implementation pending
 Date: 2026-09-23
-Last updated: 2026-10-07
-Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md), [ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md), [ADR-0517](../decisions/adr/0517-shared-project-binding-isolation.md), [ADR-0518](../decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)
+Last updated: 2026-10-08
+Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md), [ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md), [ADR-0517](../decisions/adr/0517-shared-project-binding-isolation.md), [ADR-0518](../decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md), [ADR-0519](../decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
 
 ## Contract language and scope
 
 `MUST`, `MUST NOT`, `SHOULD`, and `MAY` are normative within this contract.
 This document specifies the logical and serialized control-plane contract; it
 does not change the current SQLite Store schema. ADR-0513 accepts this target
-design. The core now contains the strict registry v2 model, pure ranked
-resolver, CaptureIntent model, and atomic/idempotent intent admission
-foundation. The core also contains the generic `ContextLocatorProvider`
+design. ADR-0519 separately accepts only the sections explicitly marked
+implementation-pending; those sections are not part of current source or
+installed-runtime claims. The core now contains the strict registry v2 model,
+pure ranked resolver, CaptureIntent model, and atomic/idempotent intent
+admission foundation. The core also contains the generic `ContextLocatorProvider`
 invocation and deterministic unified locator-input assembly. The CLI contains
 digest-locked v1-to-v2 apply and v2-to-v1 rollback paths plus
 a read-only rollback state probe in addition to preview. Core and CLI now also
@@ -640,6 +642,56 @@ relation type, endpoint-kind, label, and duplicate checks. Deterministic
 semantic failure is `record_invalid` and occurs before journal layout or intent
 installation. Target Branch guards remain a delivery concern.
 
+### Explicit existing-binding continuation (accepted; implementation pending)
+
+Default public cognition capture stops after durable admission. ADR-0519 adds
+the optional `--deliver-existing-binding` continuation for `cognition_v2` only
+when `capture_group=null`. The option is an explicit per-invocation authority
+signal; neither binding health nor activation-marker presence implies it.
+
+The intent is installed first. Continuation is eligible only for one resolved
+ProjectRef whose complete binding passes full validation and whose exact
+Store/Workspace/Branch target is not shared by another ProjectRef. The CLI then
+drives the existing recovery apply path with the just-observed registry and
+projection digests; recovery reacquires its normal locks and revalidates all
+guards. Success requires a current delivery receipt and `recovery_action=none`.
+Post-admission ineligibility or failure reports
+`capture_delivery_incomplete` with the durable CaptureId and underlying cause.
+It never bootstraps, isolates, changes a target, delivers a CaptureGroup, or
+creates a second queue.
+
+Marker/capability revalidation is scoped only to this same-command fast path
+and occurs under the recovery lock window. It does not alter explicit recovery:
+an already admitted operation remains manually recoverable under its exact
+registry/projection guards when a routing or admission marker later becomes
+inactive or stale.
+
+When the idempotency key reuses an older intent, the fast path reads every
+existing resolution, target-bearing event, and receipt before mutation. Every
+prior resolved ProjectRef and complete target tuple must match the current
+binding. A ProjectRef-only resolution recorded under a different registry
+digest requires later same-chain authority proving the complete current tuple;
+without that proof, the continuation fails before a new event or writable Store
+open and requires a new Capture. The more general manual recovery contract is
+unchanged; its ability to re-resolve some pre-delivery non-CaptureGroup intents
+does not widen standing existing-binding authority.
+
+The same accepted increment adds read-only
+`project operation-recovery --list-open`. It loads one registry snapshot,
+fully validates exactly once every distinct referenced binding needed for
+classification, reconstructs operation state from immutable intent/event
+authority across distinct journal aliases, and returns only operations whose
+current recovery action is not `none`. Projections remain replaceable caches
+and are not written by inventory. Filters, deterministic oldest-first ordering,
+bounded rows, complete pre-limit counts, and explicit truncation keep the result
+both actionable and bounded. An inventory digest over the complete matching
+set locks later `--after-capture-id` pages; mismatch or an absent cursor fails
+closed, so every row remains reachable without hiding concurrent change.
+Rows expose only bounded machine metadata and digests. They never render raw
+idempotency keys, semantic payloads, value reasons, locator/provider context,
+target paths, free-text diagnostics, credentials, environment data, or raw tool
+output. Listing supplies no recovery authority.
+
 ### CaptureGroupIntent
 
 | Field | Type | Required | Rules |
@@ -882,7 +934,10 @@ to a corrected new Capture.
 14. A stored projection is disposable and recoverable; immutable intent/event
     corruption is authoritative failure and MUST NOT be hidden by rebuilding.
 15. Recovery/bootstrap MUST NOT broaden the journal-admission marker or make
-    ordinary `capture` continue past intent admission.
+    default `capture` continue past intent admission. The only accepted
+    continuation is the explicit ADR-0519 existing-binding mode, and it MUST
+    satisfy INV-111 without bootstrap, target substitution, or CaptureGroup
+    delivery.
 16. A version-1 journal marker authorizes cognition admission only. Plan
     capabilities require an explicit exact-digest strict-superset refresh;
     recovery MUST NOT perform that refresh implicitly.
@@ -905,16 +960,27 @@ to a corrected new Capture.
 
 ## Stable failure codes
 
-The future implementation MUST expose at least these machine-routable codes:
+The contract exposes machine-routable top-level errors and journal/status
+conditions. Not every row is a top-level `ErrorCode`; the recovery projection
+states and resolver conditions remain successful status fields where their
+surface says so. In particular, historical `ownership_unbound` names the
+routing condition, while ADR-0519 `project_owner_unbound` is the dedicated
+top-level registry-v2 read error. Default capture/recovery status continues to
+report `resolution_status=unbound` instead of either top-level error.
+
+The future implementation MUST expose at least these machine-routable codes
+and conditions:
 
 | Code | Recovery |
 | --- | --- |
 | `capture_not_persisted` | Repair or select a writable control plane, then retry; no target write occurred. |
+| `capture_delivery_incomplete` | The intent is durable but explicitly requested existing-binding delivery did not complete. Inspect the named CaptureId and underlying cause before any separately authorized recovery. |
 | `ownership_unresolved` | Add/verify a locator or explicitly select a ProjectRef. |
-| `ownership_unbound` | Admit a durable write to bootstrap the winning locator, or explicitly bind its ProjectRef. |
+| `ownership_unbound` (routing condition; not a top-level ErrorCode) | Admit a durable write to bootstrap the winning locator, or explicitly bind its ProjectRef. |
 | `ownership_conflict` | Resolve same-rank candidates explicitly. |
 | `context_mismatch` | Inspect authoritative and derived semantic context; primary may still be resolved. |
 | `project_ref_not_found` | Correct the explicit ProjectRef; lower-ranked fallback was not attempted. |
+| `project_owner_unbound` (top-level v2 read ErrorCode) | The winning owner is valid but has no ProjectRef binding. Admit durable work first, then separately authorize exact ProjectRef/bootstrap convergence; do not fall back or call a read path a delivery. |
 | `locator_already_claimed` | Do not reassign automatically; explicitly link or resolve the ProjectRefs. |
 | `project_binding_invalid` | Repair the exact target binding before delivery. |
 | `registry_migration_required` | Run and inspect the read-only v1-to-v2 preview before separately authorizing apply. |

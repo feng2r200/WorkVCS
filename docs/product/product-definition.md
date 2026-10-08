@@ -67,7 +67,10 @@ separately under Current product stage. The product contract provides:
 - stable ProjectRef ownership resolved from tool-neutral semantic Project,
   repository, and CWD locators without equating any locator with the project;
 - journal-first durable capture after value admission, including recoverable
-  pending routing when the owning project is not yet bound; and
+  pending routing when the owning project is not yet bound;
+- an explicitly authorized continuation from a newly admitted cognition intent
+  to its exact existing, fully valid, non-shared binding, while journal-only
+  admission remains the default; and
 - explicit cross-project CaptureGroups with one canonical mutable Record and
   immutable secondary references that are not semantic authorities.
 
@@ -168,6 +171,16 @@ versioned reads, separate read and journal activation markers, target-neutral
 projections, status-first binding convergence, guarded primary delivery,
 complete receipts, CaptureGroup secondary references, missing-only retry, and
 Store-free recall by secondary ProjectRef.
+
+ADR-0519 accepts a narrower next increment that is not yet implemented: one
+per-invocation `capture --deliver-existing-binding` continuation, one read-only
+open-operation inventory, and a dedicated clean-unbound classification. The
+continuation reuses the existing recovery state machine and succeeds only after
+a current receipt. It does not infer authority from control-plane health and
+does not cover bootstrap, conflicting or shared ownership, target changes,
+CaptureGroups, or historical batch recovery. Until that source and adoption
+work is separately delivered, the installed cognition `capture` command
+remains admission-only.
 
 Isolated fixtures remain the authority for injected faults and concurrency.
 The bounded configured-local canary proves one canonical work-governance

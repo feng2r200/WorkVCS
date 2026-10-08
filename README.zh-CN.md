@@ -44,7 +44,9 @@ ProjectRef v2 按确定顺序判断内容归属：显式指定的 ProjectRef、�
 
 `workvcs project health` 可通过一次严格只读检查汇总注册表、完整绑定校验、激活标记、日志能力和可选 CWD 解析状态。持久操作恢复的规范命令是 `project operation-recovery`；`project capture-recovery` 继续作为同一 CaptureId 与日志状态机的可见兼容别名。
 
-进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ADR-0517（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)、[ADR-0518（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
+ADR-0519 已接受但尚未实现一项收窄优化：在调用方显式授权时，单项目 `capture` 可以继续交付到准入时解析出的同一个、完整有效且非共享的既有绑定，并增加一个严格只读的开放操作清单。默认行为仍只写日志；ProjectRef 启动、目标变化、CaptureGroup 和历史积压处理仍分别需要授权。
+
+进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ADR-0517（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)、[ADR-0518（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)、[ADR-0519（英文）](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
 
 ## Agent 参与策略
 
@@ -105,6 +107,7 @@ scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
 - [ProjectRef 归属与持久化捕获路由（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)——逻辑项目解析、日志准入、有界恢复和跨项目关联。
 - [共享 ProjectRef 绑定隔离（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)——零写入预览、精确替换、旧 Store 保留和激活刷新边界。
 - [操作者控制平面健康与恢复契约（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)——单次完整只读健康检查、稳定错误分类和恢复命令兼容边界。
+- [既有绑定授权交付与操作清单（英文）](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)——已接受但尚未实现的快速路径、积压可见性和保留的授权门。
 - [V1 就绪台账（英文）](docs/provenance/v1-readiness-ledger.md)和[发布门矩阵（英文）](docs/provenance/v1-release-gate-matrix.md)——支撑限定成熟度声明的证据。
 - [文档地图（英文）](docs/README.md)——完整的权威资料与证据索引。
 

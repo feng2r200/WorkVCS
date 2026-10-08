@@ -291,6 +291,25 @@ commit-before-receipt window by idempotency, install only missing immutable
 secondary references, and recall them without opening the secondary Store.
 Stale legacy guards preserve the original intent and target unchanged.
 
+ADR-0519 accepts an implementation-pending refinement for ordinary cognition:
+`capture --deliver-existing-binding` may continue the just-admitted intent only
+when the caller explicitly supplies that per-operation authority and the same
+resolved ProjectRef retains one fully valid, non-shared target. The continuation
+must invoke the existing recovery engine under fresh internal guards and report
+success only after a current receipt. The absent option remains journal-only;
+unbound/bootstrap, conflict, shared binding, target change, CaptureGroup, and
+historical reconciliation remain separately explicit.
+
+The same decision adds read-only `project operation-recovery --list-open`,
+which derives action-not-`none` operations from immutable journal authority
+while sharing one registry load and performing exactly one full validation for
+every distinct referenced binding needed for classification. It is an
+inventory, not an apply queue or authorization source. Clean
+unbound resolution receives a dedicated recoverable classification rather than
+being mislabeled as corrupt control-plane state. None of these accepted
+surfaces is part of the currently installed CLI until separately implemented
+and adopted.
+
 The eleven-round initial delivery roadmap completed locally on 2026-09-27.
 The configured registry was migrated and both exact markers activated in
 separate authorized rounds. The final installed canary admitted a new

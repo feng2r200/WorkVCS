@@ -12,9 +12,13 @@ digest-locked migration/rollback, versioned reads, separate exact read and
 journal activation markers, public target-neutral `cognition_v2` admission,
 explicit status-first recovery, canonical primary delivery, immutable
 secondary association, Store-free secondary recall, and typed durable
-`plan_admit_v1`/`plan_evolve_v1` routing through the same receipt protocol. The ordinary
-`capture` path remains admission-only; activation markers never imply target
-delivery authority.
+`plan_admit_v1`/`plan_evolve_v1` routing through the same receipt protocol. The
+currently implemented ordinary `capture` path remains admission-only;
+activation markers never imply target delivery authority. ADR-0519 accepts an
+implementation-pending, per-invocation existing-binding continuation plus one
+read-only open-operation inventory. Its default remains journal-only and it
+does not authorize bootstrap, target change, cross-project delivery, or batch
+recovery.
 
 The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
 on 2026-09-27. The final exact installed canary wrote one canonical
@@ -30,6 +34,7 @@ public release, and remote deployment remain separate decisions.
 - [ADR-0516: ProjectRef Plan Durable-Operation Routing](decisions/adr/0516-projectref-plan-durable-operation-routing.md)
 - [ADR-0517: Shared Project Binding Isolation](decisions/adr/0517-shared-project-binding-isolation.md)
 - [ADR-0518: Operator Control-Plane Health and Recovery Contract](decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)
+- [ADR-0519: Authorized Existing-Binding Delivery and Operation Inventory](decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)
@@ -47,6 +52,7 @@ public release, and remote deployment remain separate decisions.
 - [ProjectRef Plan Durable-Operation Routing Evidence](provenance/projectref-plan-durable-operation-routing.md)
 - [Referenced WorkVCS Issue Closure Matrix](provenance/referenced-workvcs-issue-closure-2026-10-07.md)
 - [Operator Control-Plane V1 Implementation Evidence](provenance/operator-control-plane-v1.md)
+- [Authorized Existing-Binding Delivery Design and Change Plan](provenance/authorized-existing-binding-delivery-plan.md)
 
 ## Implementation readiness
 

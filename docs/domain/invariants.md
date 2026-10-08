@@ -308,6 +308,46 @@ or racing authority remains `control_plane_invalid`. `operation-recovery` is
 the canonical operator spelling, while `capture-recovery` remains an alias for
 the same CaptureId, journal, projection, and receipt state machine.
 
+### INV-111 — Existing-binding continuation is explicit and journal-first
+
+Journal-only cognition admission remains the default. A caller may explicitly
+authorize the just-admitted operation to continue only to the exact resolved,
+fully valid, non-shared ProjectRef binding. The immutable intent must be durable
+first, and continuation must reuse the established recovery locks, fresh target
+validation, Branch guards, idempotency key, and receipt protocol. Command
+success requires a current verified receipt. Unbound or conflicting ownership,
+an invalid/shared/changed target, CaptureGroup delivery, bootstrap, isolation,
+or any uncertain failure must remain visible under the same CaptureId and must
+not fall back, substitute a target, or infer further authority.
+Reusing an older intent is permitted only when every prior resolved ProjectRef
+matches and every prior target-bearing event or receipt names the same complete
+ProjectRef/Store/Workspace/Branch tuple. A prior ProjectRef-only resolution
+whose registry digest differs from the current digest must have later
+same-chain authority proving that complete tuple. Mismatch or missing target
+continuity proof is rejected before any new event or Store write and requires
+a new Capture.
+
+This invariant is accepted by ADR-0519 and is implementation-pending. The
+existing admission-only implementation must not be described as satisfying it.
+
+### INV-112 — Operation inventory is read-only and unbound is not corruption
+
+An open-operation inventory derives state from immutable intent/event authority
+without replacing projections or mutating registry, marker, journal, or Store
+bytes. One invocation loads one registry snapshot and fully validates exactly
+once every distinct referenced binding needed to classify the matching
+operations. Listing an operation never authorizes its recovery action. Bounded
+pages remain completely enumerable through a CaptureId cursor locked to the
+digest of the full matching inventory. Rows expose bounded identifiers,
+digests, states, actions, and cache/binding classification only; they never
+render raw idempotency keys, semantic/value text, locator/provider context,
+paths, free-text causes, or secret-bearing material. A valid `unbound` resolver
+result is a recoverable missing-binding state, not `control_plane_invalid`;
+read paths still fail to obtain a target, never fall back to a weaker locator,
+and never bootstrap implicitly.
+
+This invariant is accepted by ADR-0519 and is implementation-pending.
+
 ## State and ownership
 
 ### INV-001 — State layers remain separate

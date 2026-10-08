@@ -54,6 +54,7 @@ public release, and remote deployment remain separate decisions.
 - [Referenced WorkVCS Issue Closure Matrix](provenance/referenced-workvcs-issue-closure-2026-10-07.md)
 - [Operator Control-Plane V1 Implementation Evidence](provenance/operator-control-plane-v1.md)
 - [Authorized Existing-Binding Delivery Design and Change Plan](provenance/authorized-existing-binding-delivery-plan.md)
+- [Authorized Existing-Binding Delivery Candidate Evidence](provenance/authorized-existing-binding-delivery-candidate.md)
 
 ## Implementation readiness
 

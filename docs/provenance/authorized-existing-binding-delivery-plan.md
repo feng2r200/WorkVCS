@@ -1,6 +1,6 @@
 # Authorized Existing-Binding Delivery Design and Change Plan
 
-Status: Stage B implementation locally validated; exact commit evidence pending
+Status: Stage B source implemented and locally validated; Stage C adoption pending
 Observed: 2026-10-08T06:37:47Z
 Authority: ADR-0519
 
@@ -64,14 +64,13 @@ Stop after a reviewed local documentation boundary. Do not change runtime,
 installed artifacts, activation, live registry/journal/Store state, historical
 backlog, or any remote state in this stage.
 
-### Stage B — source implementation (authorized; implementation validated, commit evidence pending)
+### Stage B — source implementation (authorized; candidate complete)
 
-The accepted contract is implemented in the current source boundary, with
-focused and full local validation prepared for the scoped local Commit. Exact
-commit identity and independent-review closure will be recorded in the
-candidate evidence after that Commit is created and read back. This stage does
-not install the binary or Skill and does not mutate the configured live control
-plane.
+The accepted contract is implemented in the repository, with focused and full
+local validation plus independent review recorded in
+[Authorized Existing-Binding Delivery Candidate Evidence](authorized-existing-binding-delivery-candidate.md).
+This stage does not install the binary or Skill and does not mutate the
+configured live control plane.
 
 ### Stage C — local adoption and bounded canary (conditionally authorized; pending)
 

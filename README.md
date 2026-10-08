@@ -121,6 +121,14 @@ Required participation changes selection policy only. It does not make a Plan
 mandatory and does not bypass the separate authorization and digest locks for
 migration, activation, recovery delivery, rollback, or other mutations.
 
+Within existing authority, the task that starts a durable operation is also
+responsible for its routine same-target completion and exact readback; users
+are not expected to watch ordinary pending receipts. Historical open rows are
+classification evidence rather than a batch queue. Before recovery, the Agent
+must compare each older intent with current project truth and explain the
+effect of acting now so that completed, terminal, superseded, and target-
+changed operations are not replayed as though they were equivalent.
+
 ## Quick start
 
 Prerequisites: Git and Rust `1.98.1` or newer.

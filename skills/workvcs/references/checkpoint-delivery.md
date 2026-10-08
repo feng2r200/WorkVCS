@@ -47,6 +47,35 @@ For a later page, supply both the returned `next_after_capture_id` and the same
 `inventory_digest`; a mismatch fails closed. A listed action is not authority
 to perform it.
 
+## Keep ownership with the responsible task
+
+The task that admits or starts a durable operation owns its ordinary follow-
+through. Keep its CaptureId and, when existing authority already covers the
+same operation and exact target, complete status, delivery, receipt repair,
+and exact target readback without asking the user to monitor routine pending
+state. A user decision is needed only when the next step introduces new
+authority, a changed owner or target, a material semantic-currentness choice,
+or another separately guarded mutation.
+
+Start with the current task's known CaptureIds. If an older open inventory is
+relevant, classify each operation before applying it and state the
+counterfactual effect of acting now. Read the projected and effective recovery
+states together with any delivery failure, receipt, and target commit:
+
+- a completed projection with a stale binding receipt is receipt-reconciliation
+  work and must not create the semantic objects again;
+- a deterministic terminal projection remains terminal even if a later
+  registry change makes the effective state look pending;
+- superseded undelivered intent must not be written into the Store merely to
+  clear the inventory; and
+- an immutable target change requires a new capture only when the semantics
+  are still current and separately authorized for that target.
+
+The provider has no authority to infer these semantic decisions from age or
+queue position. If currentness cannot be established from the responsible
+task's context and verified project truth, preserve the CaptureId and do not
+apply it.
+
 ## Deliver within the existing authority
 
 Explicit delivery authority must cover this operation and the verified target.

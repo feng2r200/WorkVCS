@@ -168,6 +168,16 @@ Key-value and JSON rows share the same bounded allowlist and never expose raw
 idempotency keys, payload/value text, provider/locator context, target paths,
 free-text causes, credentials, or environment data.
 
+The task that created an operation owns routine same-target completion and
+exact readback while its existing authority remains valid; it must not turn
+ordinary receipt work into a user monitoring requirement. A historical row is
+different: compare its admitted meaning with current project truth and the
+effect of acting now before apply. In particular, read projected and effective
+recovery state together. Registry refresh can make a completed or terminal
+projection look effectively pending; already-delivered receipt repair,
+terminal failure, superseded undelivered intent, and immutable target change
+must not be treated as one batch-recovery class.
+
 `--status` reports the intent `payload_kind`, validates the immutable event chain, derives the
 authoritative projection, compares any stored projection, re-resolves current
 ownership, and reports the exact next action. `--apply` is not implied by

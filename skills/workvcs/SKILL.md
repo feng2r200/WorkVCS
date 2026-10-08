@@ -151,6 +151,27 @@ classify, never as authority to apply, bootstrap, repair, isolate, or sweep a
 historical backlog. Continue paging only with both the returned CaptureId
 cursor and the same `inventory_digest`.
 
+Own the operations started by the current task. Retain each CaptureId and, when
+existing user or project authority already covers the exact same target,
+complete its bounded delivery and exact readback before handoff or closeout.
+Routine status polling, receipt repair, and same-target completion are the
+responsible caller's work, not a monitoring job to leave for the user. Stop
+only when the next step needs new authority, changes the owner or target,
+requires a material currentness decision, or crosses another guarded control-
+plane boundary.
+
+Before acting on an older inventory row, compare the admitted semantic intent
+with verified current project truth and state what acting now would change.
+Read `projected_recovery_state`, `effective_recovery_state`,
+`delivery_failure_code`, `delivery_receipt`, and `target_commit_id` together:
+a registry refresh can make the effective state look pending even when the
+immutable projection is completed or terminal. Repairing a stale receipt for
+an already delivered result, retrying an indeterminate current delivery,
+replaying a deterministic failure, delivering superseded undelivered intent,
+and creating a replacement after an immutable target change are different
+decisions. Never use an open-looking status alone to replay historical
+semantics.
+
 Registry-v2 cognition capture remains journal-only by default. Add
 `--deliver-existing-binding` only when current user or project authority
 already covers delivery of this operation to its exact existing binding. The

@@ -41,6 +41,10 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
   required-participation policy: WorkVCS is selected at task start and
   reconciled before closeout while Plan admission and all mutation authority
   gates remain independent. The public default remains value-gated.
+- The bundled Agent Skill now keeps routine same-target delivery and exact
+  readback with the task that created an operation, while historical open
+  inventories require semantic-currentness and counterfactual-effect
+  classification instead of user monitoring or batch replay.
 - Project discovery and durable capture no longer equate the ambient CWD with
   logical ownership; resolution follows explicit ProjectRef, verified semantic
   project, repository, then CWD precedence and fails closed on ambiguity.

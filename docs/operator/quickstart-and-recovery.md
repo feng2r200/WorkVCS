@@ -231,6 +231,15 @@ When `truncated=true`, request the next page with both
 changed digest or missing cursor fails closed. Inventory presence is not
 delivery authority.
 
+The responsible task keeps ownership of each operation it starts through
+ordinary same-target delivery and exact readback whenever existing authority
+already covers those steps; routine pending receipts are not left for the user
+to monitor. For older rows, classify semantic currentness and the effect of
+acting now before apply. Read projected and effective state together: a later
+registry refresh can make completed or deterministic-terminal history look
+effectively pending. Do not batch together stale receipt repair, terminal
+failure, superseded undelivered intent, and immutable target change.
+
 After binding convergence, apply may perform one primary delivery. It first
 persists `delivery_started` with exact target guards and then calls the existing
 atomic/idempotent cognition-capture engine. A successful

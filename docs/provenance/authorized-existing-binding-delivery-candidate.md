@@ -29,10 +29,14 @@ stored projections as cache, provides deterministic filtered and digest-locked
 paging, and renders only the bounded metadata allowlist. Backlog presence does
 not alter project-health classification or authorize recovery.
 
-The same commit aligns source Skill, product, domain, architecture, operator
-documentation, acceptance probes, and the isolated operator audit. It changes
-no Store schema, registry schema, journal envelope, activation version, or
-capability marker.
+The implementation commit aligns source Skill, product, domain, architecture,
+operator documentation, and the isolated operator audit, and introduces the
+acceptance probes. Evidence-closure commit
+`0bbd6425b9d06b342784be441f4af254916e5cd6` adds this exact-hash candidate and
+the final status links, and corrects one static probe to inspect the integration
+test file that actually owns the named test. Neither commit changes the Store
+schema, registry schema, journal envelope, activation version, or capability
+marker.
 
 ## Focused behavioral evidence
 
@@ -74,10 +78,17 @@ The exact implementation input that became commit
 - `scripts/operator-recovery-maturity-v0.1.sh`:
   `phase4ni_operator_recovery_maturity=PASS`, 60 core error codes plus the CLI
   parse error covered, zero missing or extra guide entries, and retryability
-  matching the core rule; and
-- `scripts/validate-projectref-acceptance-matrix.sh`: all 98 contract and
-  ledger rows matched, every status was valid, the authorized existing-binding
-  delivery probe passed, and the generic core remained tool-neutral.
+  matching the core rule.
+
+After the implementation commit was read back, evidence-closure commit
+`0bbd6425b9d06b342784be441f4af254916e5cd6` added this candidate, advanced the
+ADR and Plan to their final Stage B status, and corrected the static inventory
+test locator. That committed evidence closure then passed
+`scripts/validate-projectref-acceptance-matrix.sh`: all 98 contract and ledger
+rows matched, every status was valid, the authorized existing-binding delivery
+probe passed, and the generic core remained tool-neutral. This terminal check
+is evidence for `0bbd642...`; it is not attributed to the earlier `c89a75a...`
+tree, which intentionally lacked the exact-hash candidate and final statuses.
 
 The operator audit is behavioral rather than help-only. In one disposable
 root it performs v1 binding, digest-locked registry migration, exact read and
@@ -91,10 +102,11 @@ used by this audit.
 
 ## Independent review
 
-An independent read-only review challenged authorization scope, target
-continuity, shared-binding handling, immutable-authority inventory,
-machine-output truth, documentation timing, and validation completeness. Its
-final result reported no Blocker, High, or Medium finding.
+An independent read-only implementation-boundary review challenged
+authorization scope, target continuity, shared-binding handling,
+immutable-authority inventory, machine-output truth, documentation timing, and
+validation completeness. That implementation review reported no Blocker,
+High, or Medium finding.
 
 The review's earlier Medium gates were closed before this evidence was
 created:
@@ -108,6 +120,14 @@ created:
 The implementation Commit was then created and read back before this document
 recorded its exact hash. This file does not infer that exact identity from a
 dirty working tree.
+
+A later evidence-truthfulness review found one Medium documentation issue: the
+first candidate text incorrectly placed the terminal acceptance check under
+the earlier implementation commit. The validation itself passed, but only
+after the evidence closure and its static test-locator correction. The
+separate validation paragraphs above now preserve those two exact revision
+boundaries. Follow-up independent review confirmed the corrected attribution
+and closed this finding with no remaining Blocker, High, or Medium issue.
 
 ## Remaining authority and risk boundary
 

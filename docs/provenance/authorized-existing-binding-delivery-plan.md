@@ -1,6 +1,6 @@
 # Authorized Existing-Binding Delivery Design and Change Plan
 
-Status: accepted design evidence; runtime implementation not started
+Status: Stage B implementation locally validated; exact commit evidence pending
 Observed: 2026-10-08T06:37:47Z
 Authority: ADR-0519
 
@@ -51,7 +51,7 @@ the existing safety and authorization gates.
 
 ## Delivery stages and stop conditions
 
-### Stage A — design contract (current stage)
+### Stage A — design contract (completed)
 
 - Add ADR-0519.
 - Align confirmed product, domain, and architecture authority with an explicit
@@ -64,13 +64,16 @@ Stop after a reviewed local documentation boundary. Do not change runtime,
 installed artifacts, activation, live registry/journal/Store state, historical
 backlog, or any remote state in this stage.
 
-### Stage B — source implementation (separately authorized)
+### Stage B — source implementation (authorized; implementation validated, commit evidence pending)
 
-Implement the accepted contract in the repository only. Run focused tests,
-then the full required validation suite. Do not install the binary or Skill and
-do not mutate the configured live control plane.
+The accepted contract is implemented in the current source boundary, with
+focused and full local validation prepared for the scoped local Commit. Exact
+commit identity and independent-review closure will be recorded in the
+candidate evidence after that Commit is created and read back. This stage does
+not install the binary or Skill and does not mutate the configured live control
+plane.
 
-### Stage C — local adoption and bounded canary (separately authorized)
+### Stage C — local adoption and bounded canary (conditionally authorized; pending)
 
 After exact source/package/runtime parity is proven, install the reviewed
 candidate, update the installed Skill, and run one newly admitted eligible

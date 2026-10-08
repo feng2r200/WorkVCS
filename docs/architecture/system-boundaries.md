@@ -79,14 +79,15 @@ also proves public `cognition_v2`, one canonical primary delivery, Store-free
 secondary association recall, and zero-write replay. Durable write routing is
 never enabled by the read marker alone.
 
-ADR-0519 accepts, but has not yet implemented, one explicitly requested
-continuation from cognition admission to an already valid, non-shared binding.
+ADR-0519 source-implements one explicitly requested continuation from cognition
+admission to an already valid, non-shared binding.
 It remains journal-first and calls the same recovery state machine; it does not
 add a transaction, queue, worker, activation marker, or independent delivery
 authority. A companion open-operation inventory is a read-only projection over
 the existing registry and journal boundaries and validates each distinct
 classification-relevant binding exactly once per invocation. Its bounded pages
-are locked to a digest of the complete matching inventory.
+are locked to a digest of the complete matching inventory. Installed adoption
+and its bounded live canary remain a separate pending boundary.
 
 ## Store
 

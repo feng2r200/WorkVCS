@@ -327,8 +327,9 @@ same-chain authority proving that complete tuple. Mismatch or missing target
 continuity proof is rejected before any new event or Store write and requires
 a new Capture.
 
-This invariant is accepted by ADR-0519 and is implementation-pending. The
-existing admission-only implementation must not be described as satisfying it.
+This invariant is source-implemented under ADR-0519. Installed adoption and a
+bounded configured-local canary remain pending; the installed admission-only
+runtime must not yet be described as satisfying it.
 
 ### INV-112 — Operation inventory is read-only and unbound is not corruption
 
@@ -346,7 +347,8 @@ result is a recoverable missing-binding state, not `control_plane_invalid`;
 read paths still fail to obtain a target, never fall back to a weaker locator,
 and never bootstrap implicitly.
 
-This invariant is accepted by ADR-0519 and is implementation-pending.
+This invariant is source-implemented under ADR-0519; installed adoption and a
+bounded configured-local canary remain pending.
 
 ## State and ownership
 

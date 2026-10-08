@@ -1132,6 +1132,22 @@ impl DeliveryFailedPayload {
         self.delivery_id
     }
 
+    pub fn project_ref_id(&self) -> ProjectRefId {
+        self.project_ref_id
+    }
+
+    pub fn store_id(&self) -> StoreId {
+        self.store_id
+    }
+
+    pub fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+
+    pub fn branch_id(&self) -> BranchId {
+        self.branch_id
+    }
+
     pub fn failure_code(&self) -> DeliveryFailureCode {
         self.failure_code
     }
@@ -2801,6 +2817,37 @@ pub struct CaptureProjectionInspection {
     stored_issue: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptureAuthorityInspection {
+    intent: CaptureIntent,
+    events: Vec<CaptureEvent>,
+    projection: CaptureProjection,
+    stored_state: StoredProjectionState,
+    stored_issue: Option<String>,
+}
+
+impl CaptureAuthorityInspection {
+    pub fn intent(&self) -> &CaptureIntent {
+        &self.intent
+    }
+
+    pub fn events(&self) -> &[CaptureEvent] {
+        &self.events
+    }
+
+    pub fn projection(&self) -> &CaptureProjection {
+        &self.projection
+    }
+
+    pub fn stored_state(&self) -> StoredProjectionState {
+        self.stored_state
+    }
+
+    pub fn stored_issue(&self) -> Option<&str> {
+        self.stored_issue.as_deref()
+    }
+}
+
 impl CaptureProjectionInspection {
     pub fn projection(&self) -> &CaptureProjection {
         &self.projection
@@ -3555,9 +3602,81 @@ impl CaptureJournal {
     }
 
     pub fn inspect_projection(&self, capture_id: CaptureId) -> Result<CaptureProjectionInspection> {
+        let authority = self.inspect_authority(capture_id)?;
+        Ok(CaptureProjectionInspection {
+            projection: authority.projection,
+            stored_state: authority.stored_state,
+            stored_issue: authority.stored_issue,
+        })
+    }
+
+    pub fn inspect_authority(&self, capture_id: CaptureId) -> Result<CaptureAuthorityInspection> {
         let intent = self.load(capture_id)?;
         let events = self.load_events(capture_id)?;
         let projection = CaptureProjection::from_authority(&intent, &events)?;
+        let (stored_state, stored_issue) = self.inspect_stored_projection(&projection)?;
+        Ok(CaptureAuthorityInspection {
+            intent,
+            events,
+            projection,
+            stored_state,
+            stored_issue,
+        })
+    }
+
+    pub fn inspect_all_authority(&self) -> Result<Vec<CaptureAuthorityInspection>> {
+        let mut inspections = Vec::new();
+        for path in self.intent_paths_readonly()? {
+            let intent = self.load_path(&path)?;
+            let file_capture_id = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| {
+                    not_persisted(format!(
+                        "capture intent path {} has no canonical UTF-8 stem",
+                        path.display()
+                    ))
+                })
+                .and_then(|value| {
+                    CaptureId::parse_canonical(value).map_err(|error| {
+                        not_persisted(format!(
+                            "capture intent path {} has invalid capture ID: {error}",
+                            path.display()
+                        ))
+                    })
+                })?;
+            if file_capture_id != intent.capture_id() {
+                return Err(not_persisted(format!(
+                    "capture intent {} identity does not match its file name",
+                    path.display()
+                )));
+            }
+            let events = self.load_events(intent.capture_id())?;
+            let projection = CaptureProjection::from_authority(&intent, &events)?;
+            let (stored_state, stored_issue) = self.inspect_stored_projection(&projection)?;
+            inspections.push(CaptureAuthorityInspection {
+                intent,
+                events,
+                projection,
+                stored_state,
+                stored_issue,
+            });
+        }
+        inspections.sort_by(|left, right| {
+            left.intent
+                .created_at()
+                .as_str()
+                .cmp(right.intent.created_at().as_str())
+                .then_with(|| left.intent.capture_id().cmp(&right.intent.capture_id()))
+        });
+        Ok(inspections)
+    }
+
+    fn inspect_stored_projection(
+        &self,
+        projection: &CaptureProjection,
+    ) -> Result<(StoredProjectionState, Option<String>)> {
+        let capture_id = projection.capture_id();
         let projection_path = self.projection_path(capture_id);
         let (stored_state, stored_issue) = match fs::symlink_metadata(&projection_path) {
             Ok(metadata) => {
@@ -3597,11 +3716,7 @@ impl CaptureJournal {
                 )));
             }
         };
-        Ok(CaptureProjectionInspection {
-            projection,
-            stored_state,
-            stored_issue,
-        })
+        Ok((stored_state, stored_issue))
     }
 
     pub fn append_event_authority_only(

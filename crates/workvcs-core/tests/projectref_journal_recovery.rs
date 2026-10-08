@@ -80,6 +80,61 @@ fn event_paths(journal: &CaptureJournal, capture_id: CaptureId) -> Vec<std::path
 }
 
 #[test]
+fn authority_inventory_reads_each_chain_without_materializing_projection_cache() {
+    let temp = tempdir().unwrap();
+    let journal =
+        CaptureJournal::for_standalone_root(temp.path().join("capture-journal/v1")).unwrap();
+    let first_id = CaptureId::new_v7();
+    let second_id = CaptureId::new_v7();
+    let first = capture_intent(first_id);
+    let mut second_value: Value =
+        serde_json::from_slice(&capture_intent(second_id).canonical_json_bytes().unwrap()).unwrap();
+    second_value["idempotency_key"] = json!("round-2-journal-recovery-second");
+    let second = CaptureIntent::from_json_bytes(&serde_json::to_vec(&second_value).unwrap())
+        .expect("second fixture intent");
+    journal.admit(&first).unwrap();
+    journal.admit(&second).unwrap();
+    journal
+        .append_event_authority_only(
+            first_id,
+            UtcTimestamp::parse(NOW).unwrap(),
+            CaptureEventPayload::ResolutionRecorded(
+                ResolutionRecordedPayload::new(
+                    RegistryId::new_v7(),
+                    1,
+                    digest("inventory-registry"),
+                    first.initial_resolution().clone(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+
+    let inspections = journal.inspect_all_authority().unwrap();
+    assert_eq!(inspections.len(), 2);
+    assert!(inspections.windows(2).all(|pair| {
+        pair[0].intent().created_at().as_str() < pair[1].intent().created_at().as_str()
+            || pair[0].intent().capture_id() < pair[1].intent().capture_id()
+    }));
+    assert_eq!(
+        inspections
+            .iter()
+            .find(|inspection| inspection.intent().capture_id() == first_id)
+            .unwrap()
+            .events()
+            .len(),
+        1
+    );
+    assert!(
+        inspections
+            .iter()
+            .all(|inspection| inspection.stored_state() == StoredProjectionState::Absent)
+    );
+    assert!(!journal.projection_path(first_id).exists());
+    assert!(!journal.projection_path(second_id).exists());
+}
+
+#[test]
 fn immutable_events_rebuild_a_byte_equivalent_projection_and_replay_without_duplicates() {
     let temp = tempdir().unwrap();
     let journal =

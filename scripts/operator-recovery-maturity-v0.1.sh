@@ -11,6 +11,10 @@ mkdir -p "$log_dir"
 store="$tmp_dir/operator-recovery.sqlite"
 project_dir="$tmp_dir/project"
 scoped_file="$project_dir/src/lib.rs"
+registry="$tmp_dir/project-bindings.json"
+bound_manifest="$tmp_dir/existing-binding-pending.json"
+unbound_dir="$tmp_dir/unbound-project"
+unbound_manifest="$tmp_dir/existing-binding-unbound.json"
 mkdir -p "$(dirname "$scoped_file")"
 printf 'baseline local file\n' >"$scoped_file"
 
@@ -183,6 +187,15 @@ capture_success "cli-help-recovery" help_output --help
 expect_contains "$help_output" 'Usage: workvcs'
 expect_contains "$help_output" '--error-format <ERROR_FORMAT>'
 
+step "authorized existing-binding and inventory CLI surface"
+capture_success "capture-help-existing-binding" capture_help_output capture --help
+expect_contains "$capture_help_output" '--deliver-existing-binding'
+capture_success "operation-recovery-help-inventory" operation_recovery_help_output \
+    project operation-recovery --help
+expect_contains "$operation_recovery_help_output" '--list-open'
+expect_contains "$operation_recovery_help_output" '--expected-inventory-digest'
+expect_contains "$operation_recovery_help_output" '--format <FORMAT>'
+
 step "store and workspace setup"
 capture_success "init" init_output init "$store" --display-name "operator-recovery-maturity"
 capture_success "workspace-create" workspace_output workspace create "$store" --display-name "operator-recovery-workspace"
@@ -190,6 +203,107 @@ workspace_id="$(value "$workspace_output" "workspace_id")"
 branch_id="$(value "$workspace_output" "branch_id")"
 head_commit_id="$(value "$workspace_output" "genesis_commit_id")"
 expect_value "$workspace_output" "branch_name" "main"
+
+step "authorized existing-binding and inventory behavior"
+capture_success "project-bind-v1" bind_output \
+    project bind \
+    --cwd "$project_dir" \
+    --registry "$registry" \
+    --store "$store" \
+    --workspace "$workspace_id" \
+    --branch "$branch_id"
+expect_value "$bind_output" "binding_written" "true"
+
+capture_success "registry-migrate-preview" migration_preview_output \
+    project registry-migrate --preview --registry "$registry"
+expect_value "$migration_preview_output" "read_only" "true"
+expect_value "$migration_preview_output" "apply_eligible" "true"
+source_digest="$(value "$migration_preview_output" "source_digest")"
+preview_digest="$(value "$migration_preview_output" "preview_digest")"
+capture_success "registry-migrate-apply" migration_apply_output \
+    project registry-migrate --apply --registry "$registry" \
+    --expected-source-digest "$source_digest" \
+    --expected-preview-digest "$preview_digest"
+expect_value "$migration_apply_output" "post_install_verified" "true"
+
+capture_success "routing-activation-preview" routing_preview_output \
+    project routing-activation --preview --registry "$registry"
+routing_registry_digest="$(value "$routing_preview_output" "registry_digest")"
+routing_candidate_digest="$(value "$routing_preview_output" "candidate_digest")"
+capture_success "routing-activation-apply" routing_apply_output \
+    project routing-activation --apply --registry "$registry" \
+    --expected-registry-digest "$routing_registry_digest" \
+    --expected-candidate-digest "$routing_candidate_digest"
+expect_value "$routing_apply_output" "activation_state" "active"
+
+capture_success "journal-admission-preview" journal_preview_output \
+    project journal-admission-activation --preview --registry "$registry"
+journal_registry_digest="$(value "$journal_preview_output" "registry_digest")"
+journal_candidate_digest="$(value "$journal_preview_output" "candidate_digest")"
+capture_success "journal-admission-apply" journal_apply_output \
+    project journal-admission-activation --apply --registry "$registry" \
+    --expected-registry-digest "$journal_registry_digest" \
+    --expected-candidate-digest "$journal_candidate_digest"
+expect_value "$journal_apply_output" "journal_admission_active" "true"
+
+printf '%s\n' \
+    '{"schema_version":1,"idempotency_key":"operator-existing-binding-pending","records":[{"local_id":"finding","kind":"finding","statement":"Operator inventory exposes a pending existing-binding delivery without leaking raw idempotency data"}],"knowledge":[],"evidence":[],"relations":[],"rationale":{}}' \
+    >"$bound_manifest"
+capture_success "existing-binding-default-admission" pending_capture_output \
+    capture --cwd "$project_dir" --registry "$registry" \
+    --value-reason "Audit the default journal-only capture boundary" \
+    --manifest "$bound_manifest"
+expect_value "$pending_capture_output" "capture_status" "admitted"
+expect_value "$pending_capture_output" "delivery_status" "not_started"
+expect_value "$pending_capture_output" "store_written" "false"
+pending_capture_id="$(value "$pending_capture_output" "capture_id")"
+
+capture_success "existing-binding-inventory" inventory_output \
+    project operation-recovery --list-open --registry "$registry" \
+    --payload-kind cognition_v2 \
+    --recovery-action apply_binding_receipt \
+    --limit 1
+expect_value "$inventory_output" "action" "list_open"
+expect_value "$inventory_output" "read_only" "true"
+expect_value "$inventory_output" "total_matching" "1"
+expect_value "$inventory_output" "returned_rows" "1"
+expect_value "$inventory_output" "bindings_validated" "1"
+expect_value "$inventory_output" "bindings_verified" "1"
+expect_value "$inventory_output" "store_written" "false"
+expect_value "$inventory_output" "row.0.capture_id" "$pending_capture_id"
+expect_value "$inventory_output" "row.0.recovery_action" "apply_binding_receipt"
+[[ "$inventory_output" != *"operator-existing-binding-pending"* ]] \
+    || die "operation inventory leaked a raw idempotency key"
+
+mkdir -p "$unbound_dir"
+printf '%s\n' \
+    '{"schema_version":1,"idempotency_key":"operator-existing-binding-unbound","records":[{"local_id":"finding","kind":"finding","statement":"Unbound delivery must preserve the journal intent and refuse target selection"}],"knowledge":[],"evidence":[],"relations":[],"rationale":{}}' \
+    >"$unbound_manifest"
+capture_failure "capture-delivery-incomplete-key-value" partial_key_value_output \
+    --error-format key-value capture \
+    --cwd "$unbound_dir" --registry "$registry" \
+    --value-reason "Audit fail-closed unbound existing-binding delivery" \
+    --manifest "$unbound_manifest" \
+    --deliver-existing-binding
+expect_value "$partial_key_value_output" "error_code" "capture_delivery_incomplete"
+expect_value "$partial_key_value_output" "retryable" "false"
+expect_value "$partial_key_value_output" "journal_persisted" "true"
+expect_value "$partial_key_value_output" "cause_error_code" "project_owner_unbound"
+expect_value "$partial_key_value_output" "recovery_action" "inspect_operation_recovery_status"
+partial_capture_id="$(value "$partial_key_value_output" "capture_id")"
+
+capture_failure "capture-delivery-incomplete-json" partial_json_output \
+    --error-format json capture \
+    --cwd "$unbound_dir" --registry "$registry" \
+    --value-reason "Audit fail-closed unbound existing-binding delivery" \
+    --manifest "$unbound_manifest" \
+    --deliver-existing-binding
+expect_contains "$partial_json_output" '"error_code":"capture_delivery_incomplete"'
+expect_contains "$partial_json_output" '"retryable":false'
+expect_contains "$partial_json_output" '"journal_persisted":true'
+expect_contains "$partial_json_output" '"cause_error_code":"project_owner_unbound"'
+expect_contains "$partial_json_output" '"recovery_action":"inspect_operation_recovery_status"'
+expect_contains "$partial_json_output" "\"capture_id\":\"$partial_capture_id\""
 
 step "branch head conflict recovery"
 stale_head="$head_commit_id"
@@ -572,6 +686,10 @@ summary="$(
     printf 'guide_coverage_extra=0\n'
     printf 'guide_retryability_matches_core_rule=true\n'
     printf 'cli_parse_error_json_recovery=passed\n'
+    printf 'existing_binding_pending_capture_id=%s\n' "$pending_capture_id"
+    printf 'existing_binding_inventory=passed\n'
+    printf 'existing_binding_partial_capture_id=%s\n' "$partial_capture_id"
+    printf 'existing_binding_partial_error_contract=passed\n'
     printf 'branch_head_conflict_error_code=%s\n' "$(value "$branch_conflict_output" "error_code")"
     printf 'branch_head_conflict_retryable=%s\n' "$(value "$branch_conflict_output" "retryable")"
     printf 'branch_head_conflict_recovery=passed\n'

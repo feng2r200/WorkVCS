@@ -1,7 +1,7 @@
 # Local Operator Quickstart and Recovery
 
 Status: Local operator guide for CLI package `0.1.0`; verify registry version and activation state before selecting a route
-Last updated: 2026-10-06
+Last updated: 2026-10-08
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
 this repository. It describes the locally packaged v1 and ProjectRef-v2
@@ -176,6 +176,28 @@ the manifest idempotency key is
 valid only with the same semantic payload and byte-equivalent canonical group
 meaning; changing either fails closed. Admission itself writes no Store.
 
+For a non-group `cognition_v2` checkpoint, omission of the new option keeps the
+same journal-only default. Add the option only when existing authority already
+covers delivery of this operation to the exact selected existing binding:
+
+```sh
+workvcs capture --cwd "$CONTEXT" --registry "$REGISTRY" \
+  --project-ref "$PRIMARY_PROJECT_REF" \
+  --value-reason "$VALUE_REASON" \
+  --manifest "$CAPTURE_MANIFEST" \
+  --deliver-existing-binding
+```
+
+The option is rejected for registry v1 and CaptureGroup. It does not authorize
+bootstrap, repair, isolation, target change, marker work, or a historical
+sweep. The intent is installed or reused first, after which the same recovery
+engine revalidates the complete non-shared binding and historical target
+continuity under fresh locks and guards. Success requires a current receipt;
+completed replay is zero-write. If the command returns
+`capture_delivery_incomplete`, keep its CaptureId and run read-only status
+before any separately authorized next action. Do not change the idempotency key
+to escape an uncertain target result.
+
 Continue only from the admitted Capture ID. The canonical recovery surface
 also recognizes `plan_admit_v1` and `plan_evolve_v1`; status reports the exact
 `payload_kind`. The historical `capture-recovery` spelling remains a visible
@@ -187,6 +209,9 @@ workvcs project operation-recovery --apply --capture-id "$CAPTURE_ID" \
   --expected-registry-digest "$REGISTRY_DIGEST" \
   --expected-projection-digest "$PROJECTION_DIGEST" \
   [--registry "$REGISTRY"] [--store-root "$STORE_ROOT"]
+workvcs project operation-recovery --list-open [--registry "$REGISTRY"] \
+  [--project-ref "$PRIMARY_PROJECT_REF"] [--payload-kind cognition_v2] \
+  [--recovery-action ACTION] [--limit 100] [--format key-value|json]
 ```
 
 Always start with `--status`. It validates immutable events, derives the
@@ -195,6 +220,16 @@ owner plus exact recovery action without writing. Apply requires both observed
 digests again after all recovery locks are held. An unbound semantic/Git/CWD
 owner can converge to exactly one ProjectRef and binding; conflict or
 unresolved ownership stays pending and creates no fallback target.
+
+Use `--list-open` when the CaptureId is unknown or to classify a bounded
+backlog. It is mutually exclusive with status/apply and writes no registry,
+marker, event, projection, or Store data. It orders rows oldest-first, reports
+full matching counts before the limit, and exposes only allowlisted metadata.
+When `truncated=true`, request the next page with both
+`--after-capture-id "$NEXT_CAPTURE_ID"` and
+`--expected-inventory-digest "$INVENTORY_DIGEST"` plus the same filters. A
+changed digest or missing cursor fails closed. Inventory presence is not
+delivery authority.
 
 After binding convergence, apply may perform one primary delivery. It first
 persists `delivery_started` with exact target guards and then calls the existing
@@ -332,11 +367,21 @@ display name. Provider absence can legitimately fall back to Git/CWD, while
 an explicitly supplied malformed or mismatched context must remain visible and
 fail closed where no authoritative winner exists.
 
-If it returns `error_code=project_binding_not_found` and
-`recovery_action=project_ensure`, resolve the logical project rather than using
-an ambient temporary directory. If verified semantic Project context exists,
-do not silently substitute its repository or mirror; retain the pending packet
-until the current v1 logical owner is explicitly chosen, then run:
+For registry v1, `error_code=project_binding_not_found` and
+`recovery_action=project_ensure` retain the existing owner-selection workflow.
+For an activated registry-v2 read, a clean winning owner without a binding is
+`project_owner_unbound`: it is recoverable but non-retryable, and does not
+authorize fallback or ensure. `project health --cwd` reports that state as
+degraded; strict health returns the same top-level code. Default capture and
+recovery status instead retain successful `resolution_status=unbound`, while a
+flagged post-admission delivery attempt wraps the cause in
+`capture_delivery_incomplete`. Invalid or conflicting authority remains
+blocked/`control_plane_invalid`.
+
+Resolve the intended logical project rather than using an ambient temporary
+directory. If verified semantic Project context exists, do not silently
+substitute its repository or mirror; retain the pending packet until the
+applicable bootstrap action is separately authorized. On the v1 route, run:
 
 ```sh
 workvcs project ensure --cwd "$PROJECT"

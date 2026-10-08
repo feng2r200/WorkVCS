@@ -14,11 +14,12 @@ explicit status-first recovery, canonical primary delivery, immutable
 secondary association, Store-free secondary recall, and typed durable
 `plan_admit_v1`/`plan_evolve_v1` routing through the same receipt protocol. The
 currently implemented ordinary `capture` path remains admission-only;
-activation markers never imply target delivery authority. ADR-0519 accepts an
-implementation-pending, per-invocation existing-binding continuation plus one
+activation markers never imply target delivery authority. ADR-0519's source
+implementation adds a per-invocation existing-binding continuation plus one
 read-only open-operation inventory. Its default remains journal-only and it
 does not authorize bootstrap, target change, cross-project delivery, or batch
-recovery.
+recovery. Installed adoption and the bounded configured-local canary remain
+pending until their separate Stage C evidence exists.
 
 The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
 on 2026-09-27. The final exact installed canary wrote one canonical

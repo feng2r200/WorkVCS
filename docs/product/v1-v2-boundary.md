@@ -291,7 +291,7 @@ commit-before-receipt window by idempotency, install only missing immutable
 secondary references, and recall them without opening the secondary Store.
 Stale legacy guards preserve the original intent and target unchanged.
 
-ADR-0519 accepts an implementation-pending refinement for ordinary cognition:
+ADR-0519's source implementation adds a refinement for ordinary cognition:
 `capture --deliver-existing-binding` may continue the just-admitted intent only
 when the caller explicitly supplies that per-operation authority and the same
 resolved ProjectRef retains one fully valid, non-shared target. The continuation
@@ -306,9 +306,9 @@ while sharing one registry load and performing exactly one full validation for
 every distinct referenced binding needed for classification. It is an
 inventory, not an apply queue or authorization source. Clean
 unbound resolution receives a dedicated recoverable classification rather than
-being mislabeled as corrupt control-plane state. None of these accepted
-surfaces is part of the currently installed CLI until separately implemented
-and adopted.
+being mislabeled as corrupt control-plane state. These surfaces are source-
+implemented but are not part of the currently installed CLI until separately
+packaged and adopted in Stage C.
 
 The eleven-round initial delivery roadmap completed locally on 2026-09-27.
 The configured registry was migrated and both exact markers activated in

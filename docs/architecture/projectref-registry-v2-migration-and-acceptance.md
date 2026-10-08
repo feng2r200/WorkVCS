@@ -1,6 +1,6 @@
 # ProjectRef Registry v2 Migration and Acceptance Contract
 
-Status: Accepted implemented contract — complete 98-row acceptance ledger plus bounded live migration, activation, admission, delivery, and replay evidence
+Status: Accepted implemented contract — complete 98-row legacy ledger plus ADR-0519 source acceptance; installed adoption remains separately evidenced
 Date: 2026-09-23
 Last updated: 2026-10-06
 Parent: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md)
@@ -697,6 +697,35 @@ global Hooks, or remote release from one canary.
 | N-10 | Independent adversarial review | Reviewer finds no second mutable authority, false cross-Store atomicity claim, implicit migration, or silent-loss path. |
 | N-11 | Skill/integration sees valuable content and an unbound owner | It submits a journal-backed capture; binding absence is not converted to no-record. |
 | N-12 | User-facing durability claim | It states “no silent loss after admission” and does not claim complete cognition capture while the global Hook is deferred. |
+
+### E. ADR-0519 authorized existing-binding delivery and operation inventory
+
+These supplemental rows do not renumber or alter the established 98-row
+ProjectRef ledger. They govern the ADR-0519 source candidate; installed/live
+adoption still requires its separate evidence.
+
+| ID | Required scenario | Expected result |
+| --- | --- | --- |
+| ED-01 | Default registry-v2 cognition capture | Intent is durable, target Store is byte-stable, and `delivery_status=not_started`. |
+| ED-02 | Flag plus one resolved, fully valid, non-shared existing binding | Intent precedes target mutation, the shared recovery engine installs a current receipt, and the command succeeds. |
+| ED-03 | Same idempotency key with and without the flag, including completed replay | Admission identity is unchanged; only the flagged invocation continues, and a completed matching replay writes no event, projection, Store object, or commit. |
+| ED-04 | Any error after durable admission but before verified completion | Non-zero `capture_delivery_incomplete` names the CaptureId, `journal_persisted=true`, underlying cause code, and status-first recovery action. |
+| ED-05 | Clean unbound owner | Intent remains durable; no ProjectRef, binding, registry, or Store write occurs; bootstrap remains separately gated. |
+| ED-06 | Conflicting or unresolved owner | No fallback target or target write occurs. |
+| ED-07 | Invalid or exactly shared target | Refuse before a new recovery event or writable Store open; repair/isolation remains separate. |
+| ED-08 | Registry, marker, capability, ProjectRef, or target continuity differs after admission | Fresh fast-path guards fail closed without cross-target delivery; manual recovery remains marker-independent. |
+| ED-09 | Reused intent names another ProjectRef/target or lacks complete target proof after a registry-digest change | Refuse before any new event or Store open and require a new Capture for the current target. |
+| ED-10 | CaptureGroup or registry-v1/legacy capture combines with the flag | Reject before journal admission or Store mutation. |
+| OL-01 | Mixed open/completed/terminal journal | Only rows with action other than `none` are returned; full matching counts are exact. |
+| OL-02 | Filters, row limit, and multiple pages | Rows are oldest-first; counts precede the limit; the CaptureId cursor is accepted only with the unchanged full-inventory digest. |
+| OL-03 | Multiple operations reference one binding | The invocation loads one registry and performs complete validation exactly once per distinct classification-relevant binding. |
+| OL-04 | Projection cache is absent, stale, or malformed while immutable authority is valid | State is reconstructed without replacing the cache or writing any control-plane/Store artifact. |
+| OL-05 | Immutable authority or journal-alias identity disagrees | Inventory fails closed; cache repair never masks authority corruption. |
+| OL-06 | Intent contains control-bearing text or secret canaries | Key-value and JSON rows expose only bounded allowlisted metadata and never raw keys, payload/value text, provider/locator context, paths, free causes, credentials, or environment data. |
+| UB-01 | Registry-v2 read has a clean unbound winning owner | Key-value and JSON return recoverable, non-retryable `project_owner_unbound`; registry-v1 misses remain `project_binding_not_found`. |
+| UB-02 | Health evaluates that same owner | Default health is degraded with `resolution_issue=project_owner_unbound`; strict health returns the top-level error. |
+| UB-03 | Default capture/status and flagged capture evaluate that owner | Default journal/status output remains successful `resolution_status=unbound`; the flagged post-admission error wraps `cause_error_code=project_owner_unbound`. |
+| UB-04 | Authority is conflicting, malformed, stale, ambiguous, or unsafe | It remains blocked/`control_plane_invalid`; the clean-unbound classification does not weaken fail-closed authority checks. |
 
 ## Evidence required for future completion claims
 

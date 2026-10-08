@@ -179,13 +179,20 @@ activation markers, removes manifest transport fields, rejects caller target
 head/state guards, and records only immutable `cognition_v2`. Do not substitute
 a repository-local binary for the installation and live-activation gates.
 
-Primary delivery is a separate operator action, never an automatic continuation
-of `capture`: first run
+Primary delivery remains separate from `capture` by default. When authority is
+limited to admission, first run
 `workvcs project operation-recovery --status --capture-id <id>`, then use the
 fresh registry/projection digests with `--apply` only inside the explicitly
-authorized control plane. For status interpretation and the bounded same-target
-sequence, read [Checkpoint delivery](checkpoint-delivery.md). Apply records
-target guards before the Store commit;
+authorized control plane. When the caller already holds authority to deliver
+this single `cognition_v2` operation to its exact existing, valid, non-shared
+binding, it may instead add `--deliver-existing-binding` to the capture
+invocation. That option is incompatible with registry v1 and CaptureGroup and
+does not authorize bootstrap, repair, target change, marker work, or backlog
+reconciliation. It installs or reuses the intent first, invokes the same
+recovery engine, and reports success only after a current receipt. For status
+interpretation and both bounded same-target sequences, read
+[Checkpoint delivery](checkpoint-delivery.md). Recovery records target guards
+before the Store commit;
 if status remains `pending_primary` after an uncertain result, replay the same
 capture so target idempotency can recover a committed-but-unreceipted result.
 Receipt reuse across a registry refresh additionally requires the same
@@ -198,6 +205,13 @@ association read-only with
 `workvcs project capture-group-recall --project-ref-id <id> [--registry <path>]`.
 Recovery has isolated-fixture validation but remains a live write operation;
 require current status digests and explicit authority for the exact apply.
+
+When a CaptureId is not known, use
+`workvcs project operation-recovery --list-open [--registry <path>]` as a
+strictly read-only inventory. Optional ProjectRef, payload-kind, and recovery-
+action filters narrow classification; a later page must carry both
+`--after-capture-id` and `--expected-inventory-digest`. Inventory membership
+does not authorize any returned recovery action.
 
 ## No-Plan to Plan
 

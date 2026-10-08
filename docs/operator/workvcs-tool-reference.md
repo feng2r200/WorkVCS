@@ -1,7 +1,7 @@
 # WorkVCS Tool Reference For Governance Plan Carriers
 
 Status: current-main operator reference for Codex sessions
-Last updated: 2026-10-07
+Last updated: 2026-10-08
 
 This reference explains what the current `workvcs` tool can carry for an
 Agent-facing governance workflow. It is meant for other Codex sessions that
@@ -26,8 +26,11 @@ compatibility path. The `capture` caller has a separate,
 value-qualified journal route: on v1 it admits a target-neutral intent and
 reports that migration is required; on v2 it requires both exact activation
 markers and admits a registry-coupled intent. Neither path bootstraps a
-ProjectRef or writes a target Store. This command previews the exact v1-to-v2
-mapping without writing:
+ProjectRef. Registry-v2 capture remains Store-free by default; the separately
+explicit `--deliver-existing-binding` continuation can write only the exact
+existing binding when the caller already holds that delivery authority. The
+source implementation is complete, but installed adoption remains a separate
+boundary. This command previews the exact v1-to-v2 mapping without writing:
 
 ```text
 workvcs project registry-migrate --preview [--registry PATH] [--repair-manifest PATH] [--format text|json]
@@ -146,10 +149,24 @@ The source tree also contains a separately explicit recovery surface:
 ```text
 workvcs project operation-recovery --status --capture-id ID [--registry PATH]
 workvcs project operation-recovery --apply --capture-id ID --expected-registry-digest DIGEST --expected-projection-digest DIGEST [--registry PATH] [--store-root PATH]
+workvcs project operation-recovery --list-open [--registry PATH] [--project-ref PROJECT_REF] [--payload-kind KIND] [--recovery-action ACTION] [--limit N] [--format key-value|json]
+workvcs project operation-recovery --list-open --after-capture-id ID --expected-inventory-digest DIGEST [same filters]
 ```
 
 `capture-recovery` remains a visible compatibility alias. `--status` is
-read-only. It reports the intent `payload_kind`, validates the immutable event chain, derives the
+read-only. `--list-open` is also strictly read-only and mutually exclusive with
+status/apply. It scans immutable authority through the supported journal
+aliases, loads one registry snapshot, and fully validates each distinct
+classification-relevant binding exactly once. Open means
+`recovery_action != none`; listing never authorizes that action. Rows are
+oldest-first, the default limit is 100 and maximum is 1000, and summary counts
+cover the full matching set before the limit. Later pages require the exact
+returned CaptureId cursor together with the unchanged full-inventory digest.
+Key-value and JSON rows share the same bounded allowlist and never expose raw
+idempotency keys, payload/value text, provider/locator context, target paths,
+free-text causes, credentials, or environment data.
+
+`--status` reports the intent `payload_kind`, validates the immutable event chain, derives the
 authoritative projection, compares any stored projection, re-resolves current
 ownership, and reports the exact next action. `--apply` is not implied by
 either activation marker: it is a distinct Unix-only, digest-locked operator
@@ -186,16 +203,26 @@ new capture is required.
 Post-install or post-target uncertainty returns
 `capture_recovery_install_indeterminate` and requires `--status` before
 forward recovery; the command never guesses a rollback. The ordinary
-`capture` route remains admission-only, neither activation marker implicitly
-runs recovery. The recovery route and its fault boundaries are
+`capture` route remains admission-only unless the invocation explicitly adds
+the eligible existing-binding continuation described below; neither activation
+marker implicitly runs recovery. The recovery route and its fault boundaries are
 fixture-tested; current installed revision, registry identity, marker digests,
 and operation authority must be verified before use on a configured registry.
 
-Unless an installed route and both exact activation markers are verified,
-`project_binding_not_found` must
-preserve a valuable pending semantic packet and trigger deliberate owner
-selection; it must never be translated into “no record.” That active-context
-packet is not a current WorkVCS durability guarantee.
+Registry-v1 lookup still uses `project_binding_not_found`. Under an activated
+registry-v2 route, a valid resolver result whose winning owner is cleanly
+unbound uses `project_owner_unbound` for read commands that require a Store;
+this is recoverable but non-retryable and never permits fallback or implicit
+ensure. `project health --cwd` reports the same state as
+`health=degraded`/`resolution_issue=project_owner_unbound`, while
+`--require-healthy` returns the top-level error. Default capture and recovery
+status remain successful journal/control-plane reports with
+`resolution_status=unbound`; only a flagged post-admission continuation wraps
+that cause in `capture_delivery_incomplete`. Malformed, stale, ambiguous,
+conflicting, or unsafe authority remains `control_plane_invalid`/blocked.
+Every missing-owner result must preserve a valuable pending semantic packet and
+must never be translated into “no record.” That active-context packet is not a
+current WorkVCS durability guarantee.
 
 The accepted route guarantee is **no silent loss after admission**. It is
 not a claim that every valuable thought is observed or captured while the
@@ -269,12 +296,30 @@ workvcs capture --cwd PATH --manifest FILE [--registry PATH]
 
 The journal-first form adds `--value-reason TEXT` and may also add
 `--project-ref ID`, `--locator-context FILE`,
-`--locator-adapter-context FILE`, and `--capture-group FILE`. Registry v1
+`--locator-adapter-context FILE`, `--capture-group FILE`, or
+`--deliver-existing-binding`. Registry v1
 admits a `legacy_cognition_v1` target-neutral intent and reports migration
-required; it rejects `--capture-group`. Registry v2 requires both exact
+required; it rejects `--capture-group` and `--deliver-existing-binding`.
+Registry v2 requires both exact
 activation markers and admits `cognition_v2`: the CLI removes manifest
 transport fields and rejects caller-supplied target head/state guards so that
 recovery derives them from the selected target after admission.
+
+Without `--deliver-existing-binding`, admission writes no target Store. The
+option is mutually exclusive with `--capture-group` and is a per-invocation
+assertion that delivery of this operation to the exact selected existing
+binding is already authorized. It is not stored in or inherited through the
+intent identity. After intent install/reuse, the CLI requires one resolved,
+complete, fully validated, non-shared target; verifies current marker,
+capability, ProjectRef, registry lineage, and historical target continuity;
+then invokes the same recovery engine with fresh internal guards. It never
+bootstraps, repairs, isolates, retargets, refreshes markers, or processes a
+historical batch. Success requires a current receipt and reports completed
+delivery; a completed replay writes no new event, projection, Store object, or
+commit. A post-admission refusal or failure returns
+`capture_delivery_incomplete` with `capture_id`,
+`journal_persisted=true`, `cause_error_code`, and
+`recovery_action=inspect_operation_recovery_status`.
 
 CaptureGroup input is strict JSON and requires `--value-reason`. A resolved
 primary plus one related secondary has this shape:

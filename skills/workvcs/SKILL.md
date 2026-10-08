@@ -145,6 +145,23 @@ operations through the same intent/event/projection/receipt protocol;
 `project capture-recovery` remains a visible compatibility alias. Always read
 `payload_kind`; never reinterpret a Plan payload as cognition or create a
 second recovery queue.
+Use `project operation-recovery --list-open` for a bounded read-only inventory
+when the CaptureId is not already known. Treat its rows as recovery work to
+classify, never as authority to apply, bootstrap, repair, isolate, or sweep a
+historical backlog. Continue paging only with both the returned CaptureId
+cursor and the same `inventory_digest`.
+
+Registry-v2 cognition capture remains journal-only by default. Add
+`--deliver-existing-binding` only when current user or project authority
+already covers delivery of this operation to its exact existing binding. The
+option is limited to `cognition_v2` without a CaptureGroup and cannot authorize
+ProjectRef bootstrap, target change, shared-binding use or isolation, marker
+activation/refresh, migration, or historical reconciliation. It reuses the
+same recovery engine and succeeds only with a verified current receipt. If it
+returns `capture_delivery_incomplete`, retain the reported CaptureId and begin
+with operation-recovery status; do not submit a new identity or blindly retry
+an uncertain target mutation. A clean `project_owner_unbound` result is a
+recoverable missing-owner binding, not permission to fall back or ensure.
 For routed Plan output, distinguish `journal_admission_reused` from the target
 `admission_status` or `evolution_status`: an already admitted intent can still
 create its first target commit, while commit-before-receipt recovery reuses the

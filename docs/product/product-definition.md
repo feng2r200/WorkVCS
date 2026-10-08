@@ -172,15 +172,15 @@ projections, status-first binding convergence, guarded primary delivery,
 complete receipts, CaptureGroup secondary references, missing-only retry, and
 Store-free recall by secondary ProjectRef.
 
-ADR-0519 accepts a narrower next increment that is not yet implemented: one
+ADR-0519's narrower next increment is implemented in the source tree: one
 per-invocation `capture --deliver-existing-binding` continuation, one read-only
 open-operation inventory, and a dedicated clean-unbound classification. The
 continuation reuses the existing recovery state machine and succeeds only after
 a current receipt. It does not infer authority from control-plane health and
 does not cover bootstrap, conflicting or shared ownership, target changes,
-CaptureGroups, or historical batch recovery. Until that source and adoption
-work is separately delivered, the installed cognition `capture` command
-remains admission-only.
+CaptureGroups, or historical batch recovery. Installed adoption and its bounded
+live canary remain pending; until Stage C is delivered, the installed cognition
+`capture` command remains admission-only.
 
 Isolated fixtures remain the authority for injected faults and concurrency.
 The bounded configured-local canary proves one canonical work-governance

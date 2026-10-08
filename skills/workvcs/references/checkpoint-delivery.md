@@ -33,6 +33,20 @@ status call wrote, not whether an earlier delivery exists. Use the recovery
 state, receipt, and target commit together. A cached projection or a process
 exit code alone is not evidence that the checkpoint is recoverable.
 
+If the CaptureId was lost after admission, inspect the backlog without
+mutating it:
+
+```sh
+workvcs project operation-recovery --list-open [--registry <path>]
+```
+
+Filter by ProjectRef, payload kind, or recovery action when useful. The command
+derives state from immutable authority, treats stored projections only as
+cache, and renders allowlisted metadata rather than raw keys or payload text.
+For a later page, supply both the returned `next_after_capture_id` and the same
+`inventory_digest`; a mismatch fails closed. A listed action is not authority
+to perform it.
+
 ## Deliver within the existing authority
 
 Explicit delivery authority must cover this operation and the verified target.
@@ -64,6 +78,26 @@ from the verified Store/Workspace/Branch. Check its semantic scope and target
 commit. A bounded Recall may omit an older item; use its stable ID instead of
 cycling through broad profiles. For a CaptureGroup, also verify required
 references and completion. Once that boundary is proven, resume useful work.
+
+For a newly submitted, non-group `cognition_v2` operation whose authority
+already covers delivery to the exact existing binding, the shorter equivalent
+is:
+
+```sh
+workvcs capture --cwd <context> --manifest <file> --value-reason <reason> \
+  --deliver-existing-binding [--registry <path>] [--project-ref <id>]
+```
+
+The default without the option remains admission-only. The option never
+bootstraps an unbound owner, changes or repairs a target, writes a shared
+binding, refreshes markers, or processes a historical batch. It admits or
+reuses the intent first and then calls the same recovery engine with fresh
+guards. Success requires a current verified receipt; completed replay is
+zero-write. `capture_delivery_incomplete` means admission is durable but the
+requested continuation did not complete. Preserve its CaptureId and inspect
+status before deciding any separately authorized recovery. A clean underlying
+`project_owner_unbound` is a missing-binding classification, not corruption or
+fallback authority.
 
 ## If delivery is not currently authorized or possible
 

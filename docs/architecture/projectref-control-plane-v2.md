@@ -1,6 +1,6 @@
 # ProjectRef Control Plane v2 Contract
 
-Status: Accepted mixed contract — ADR-0513/0516/0517/0518 implemented; ADR-0519 sections implementation pending
+Status: Accepted mixed contract — ADR-0513/0516/0517/0518 implemented and adopted; ADR-0519 source implemented, adoption pending
 Date: 2026-09-23
 Last updated: 2026-10-08
 Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md), [ADR-0516](../decisions/adr/0516-projectref-plan-durable-operation-routing.md), [ADR-0517](../decisions/adr/0517-shared-project-binding-isolation.md), [ADR-0518](../decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md), [ADR-0519](../decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
@@ -10,9 +10,9 @@ Parents: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md)
 `MUST`, `MUST NOT`, `SHOULD`, and `MAY` are normative within this contract.
 This document specifies the logical and serialized control-plane contract; it
 does not change the current SQLite Store schema. ADR-0513 accepts this target
-design. ADR-0519 separately accepts only the sections explicitly marked
-implementation-pending; those sections are not part of current source or
-installed-runtime claims. The core now contains the strict registry v2 model,
+design. ADR-0519 separately governs the sections explicitly marked source-
+implemented/adoption-pending; those sections are part of the current source but
+not yet the installed-runtime claim. The core now contains the strict registry v2 model,
 pure ranked resolver, CaptureIntent model, and atomic/idempotent intent
 admission foundation. The core also contains the generic `ContextLocatorProvider`
 invocation and deterministic unified locator-input assembly. The CLI contains
@@ -642,7 +642,7 @@ relation type, endpoint-kind, label, and duplicate checks. Deterministic
 semantic failure is `record_invalid` and occurs before journal layout or intent
 installation. Target Branch guards remain a delivery concern.
 
-### Explicit existing-binding continuation (accepted; implementation pending)
+### Explicit existing-binding continuation (source implemented; adoption pending)
 
 Default public cognition capture stops after durable admission. ADR-0519 adds
 the optional `--deliver-existing-binding` continuation for `cognition_v2` only
@@ -676,7 +676,7 @@ open and requires a new Capture. The more general manual recovery contract is
 unchanged; its ability to re-resolve some pre-delivery non-CaptureGroup intents
 does not widen standing existing-binding authority.
 
-The same accepted increment adds read-only
+The same source-implemented increment adds read-only
 `project operation-recovery --list-open`. It loads one registry snapshot,
 fully validates exactly once every distinct referenced binding needed for
 classification, reconstructs operation state from immutable intent/event
@@ -968,8 +968,8 @@ routing condition, while ADR-0519 `project_owner_unbound` is the dedicated
 top-level registry-v2 read error. Default capture/recovery status continues to
 report `resolution_status=unbound` instead of either top-level error.
 
-The future implementation MUST expose at least these machine-routable codes
-and conditions:
+The source implementation exposes at least these machine-routable codes and
+conditions; installed adoption remains pending:
 
 | Code | Recovery |
 | --- | --- |

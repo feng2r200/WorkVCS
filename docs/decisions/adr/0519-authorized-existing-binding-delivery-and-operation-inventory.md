@@ -1,6 +1,6 @@
 # ADR-0519: Authorized Existing-Binding Delivery and Operation Inventory
 
-Status: Accepted; implementation pending
+Status: Accepted; Stage B implementation locally validated; exact commit evidence pending; adoption pending
 Date: 2026-10-08
 
 ## Context
@@ -238,10 +238,14 @@ canonical recovery surface with a read-only inventory and does not rename
 CaptureIds, journal paths, projections, events, receipts, or historical error
 codes. It does not change the journal envelope or Store schema.
 
-Source implementation, local Commit, installation, live adoption, historical
-reconciliation, Push, release, and deployment are not authorized by this ADR.
-Each later stage must retain its own evidence and applicable confirmation
-boundary.
+This ADR alone did not authorize source implementation, local Commit,
+installation, live adoption, historical reconciliation, Push, release, or
+deployment. Stage B source implementation and a scoped local Commit were
+separately authorized. The implementation and local validation are prepared in
+the current source boundary; exact commit and candidate evidence will be
+recorded after that boundary is committed and read back. Installation and the
+bounded canary remain Stage C; historical reconciliation and all remote actions
+retain their later confirmation boundaries.
 
 ## Consequences
 

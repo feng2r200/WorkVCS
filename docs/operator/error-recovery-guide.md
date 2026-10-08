@@ -1,7 +1,7 @@
 # WorkVCS Error Recovery Guide
 
 Status: Current V1-local and ProjectRef-v2 durable-operation recovery guidance
-Last updated: 2026-10-07
+Last updated: 2026-10-08
 
 This guide covers the stable error fields emitted by the current CLI. It is
 intentionally an operator recovery contract, not a new recovery engine or Store
@@ -66,8 +66,41 @@ conflicting control-plane authority remains `control_plane_invalid`. The
 value-qualified `capture` route can
 journal admitted content without target Store delivery when its exact
 installed revision and activation markers are verified. It reports routing
-state in successful output rather than dedicated `ownership_unbound` or
-`registry_migration_required` error codes.
+state in successful output rather than `registry_migration_required` error
+codes.
+
+Under registry v2, a valid resolver result whose winning owner has no binding
+is `project_owner_unbound` on reads that require a Store. It adds:
+
+```text
+recoverable=true
+recovery_action=admit_operation_then_authorize_project_bootstrap
+registry_path=<PATH>
+resolution_rank=<RANK>
+unmapped_locators=<COUNT>
+resolution_diagnostics=<COUNT>
+```
+
+This is a clean missing-owner state, not corrupt authority and not permission
+to fall back, ensure, or bootstrap. `project health --cwd` reports it as
+degraded unless `--require-healthy` turns it into the top-level error. Default
+capture and recovery status retain successful `resolution_status=unbound`.
+Malformed, stale, ambiguous, conflicting, or unsafe authority remains
+`control_plane_invalid`.
+
+An explicitly requested existing-binding continuation that admitted its intent
+but did not reach a verified receipt returns `capture_delivery_incomplete`:
+
+```text
+capture_id=<CAPTURE_ID>
+journal_persisted=true
+cause_error_code=<UNDERLYING_CODE>
+recovery_action=inspect_operation_recovery_status
+```
+
+The intent is durable. Start with read-only status for that CaptureId; do not
+change the idempotency key, infer rollback, or treat the wrapper as permission
+for the underlying bootstrap, repair, isolation, marker, or target action.
 
 The three inactive codes add bounded recovery fields in both key-value and
 JSON output:
@@ -304,6 +337,7 @@ through current CLI output.
 | `journal_admission_capability_inactive` | `control_plane` | `false` | The active journal marker lacks the named capability. Inspect the reported path/version/capability and explicitly refresh only with the exact installed-marker digest and strict capability-superset candidate. |
 | `capture_not_persisted` | `control_plane` | `false` | The journal did not durably admit the capture. Preserve the bounded pending semantic packet, repair the journal path, permissions, lock, or storage fault, and retry with the same idempotency key before any target Store write. |
 | `capture_idempotency_conflict` | `control_plane` | `false` | The idempotency key already names different capture content or identity. Inspect the existing immutable intent; reuse its exact payload or choose a genuinely new key for a distinct capture. Never overwrite the admitted intent. |
+| `capture_delivery_incomplete` | `control_plane` | `false` | The capture intent is durable but the explicitly requested existing-binding continuation did not reach a verified current receipt. Preserve `capture_id`, inspect `project operation-recovery --status` first, and decide any bootstrap, repair, isolation, marker, target, or recovery apply separately from the reported underlying cause. Never replace the idempotency identity to escape an uncertain target result. |
 | `registry_migration_apply_failed` | `control_plane` | `false` | The atomic registry replacement did not occur. Preserve v1, correct the reported digest, manifest, Store, lock, backup, or temp conflict, recompute both expected digests, and retry only with explicit apply authority. |
 | `registry_migration_install_indeterminate` | `control_plane` | `false` | The atomic rename occurred but later durability or verification failed. Inspect the actual v2 registry and exact backup with `registry-migrate --rollback-check`; do not retry apply or infer rollback. |
 | `registry_rollback_failed` | `control_plane` | `false` | The authoritative registry was not replaced. Correct the reported digest, receipt, activation, journal, backup, snapshot, lock, or temp conflict; reuse an exact retained v2 snapshot only through another explicitly authorized rollback. |
@@ -334,6 +368,7 @@ through current CLI output.
 | `plan_invalid` | `plan` | `false` | Correct Plan content, status, containment, or transition input. Keep Plan changes aligned with the current Goal and Task graph. |
 | `plan_not_found` | `plan` | `false` | Re-check the Plan id at the selected branch/head. If the Plan was superseded, use the current containment path. |
 | `project_binding_not_found` | `query` | `false` | Current v1: preserve any valuable semantic packet, confirm the intended logical owner, then run `project ensure`; supply `--store-root` for a direct registry locator. Discovery made no changes. Never interpret the miss as no-record. |
+| `project_owner_unbound` | `control_plane` | `false` | Registry v2 resolved a clean winning owner that has no usable binding. Preserve the semantic packet and owner rank, do not fall back to Git/CWD or auto-ensure, and admit first before seeking separate ProjectRef-bootstrap authority. Default capture/status may report the same state successfully as `resolution_status=unbound`; a flagged continuation wraps it in `capture_delivery_incomplete`. |
 | `query_invalid` | `query` | `false` | Fix selector syntax, required ids, filter values, or mutually exclusive arguments. Use the relevant subcommand help before rerunning. |
 | `query_unsupported` | `query` | `false` | Choose a supported query shape or defer the workflow. Do not treat this as a transient Store failure. |
 | `record_invalid` | `record` | `false` | Before admission, fix Record kind, content, support references, or relation inputs and submit again. If status for an already-admitted historical Capture is `semantic_manifest_invalid`, preserve that immutable Capture and start a corrected new Capture; do not retry or rewrite the old payload. Keep provenance links explicit. |

@@ -2,7 +2,7 @@ mod locator_adapter;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::{MatchOptions, Pattern, glob_with};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -13,9 +13,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use workvcs_core::control_plane::{
     BindingSource, BoundedAdapterContext, CanonicalPath, CaptureAdmissionOutcome,
-    CaptureCompletedPayload, CaptureEventAppendOutcome, CaptureEventPayload, CaptureGroupIntent,
-    CaptureGroupMemberDelivery, CaptureGroupResolvedPayload, CaptureIntent, CaptureJournal,
-    CapturePayloadKind, CaptureProjectionWriteOutcome, CaptureRecoveryState, ControlPlaneDigest,
+    CaptureAuthorityInspection, CaptureCompletedPayload, CaptureEvent, CaptureEventAppendOutcome,
+    CaptureEventPayload, CaptureGroupIntent, CaptureGroupMemberDelivery,
+    CaptureGroupResolvedPayload, CaptureIntent, CaptureJournal, CapturePayloadKind,
+    CaptureProjectionWriteOutcome, CaptureRecoveryState, ControlPlaneDigest,
     DeliveryAppliedPayload, DeliveryFailedPayload, DeliveryFailureCode, DeliveryStartedPayload,
     FirstWriteProjectBinding, JournalAdmissionActivationCandidate, JournalAdmissionCapability,
     JournalQuiescenceLock, LocatorAssurance, LocatorAuthority, LocatorEvidence, LocatorRole,
@@ -285,6 +286,12 @@ enum RecallProfileArg {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum MigrationPreviewFormatArg {
     Text,
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum OperationRecoveryOutputFormat {
+    KeyValue,
     Json,
 }
 
@@ -764,6 +771,12 @@ enum Command {
             help = "Optional strict CaptureGroup intent for registry-v2 journal admission; requires --value-reason"
         )]
         capture_group: Option<PathBuf>,
+
+        #[arg(
+            long,
+            help = "After durable registry-v2 admission, continue only through the exact verified, non-shared existing binding"
+        )]
+        deliver_existing_binding: bool,
     },
     #[command(
         about = "Read bounded project context without requiring a Session or Plan",
@@ -2041,7 +2054,7 @@ enum ProjectCommand {
         ArgGroup::new("operation-recovery-action")
             .required(true)
             .multiple(false)
-            .args(["status", "apply"])
+            .args(["status", "apply", "list_open"])
     ))]
     CaptureRecovery {
         #[arg(
@@ -2059,10 +2072,17 @@ enum ProjectCommand {
 
         #[arg(
             long,
+            help = "List all currently open durable operations without writing"
+        )]
+        list_open: bool,
+
+        #[arg(
+            long,
             value_name = "CAPTURE_ID",
             help = "Compatibility CaptureId naming the admitted durable operation"
         )]
-        capture_id: String,
+        #[arg(required_unless_present = "list_open")]
+        capture_id: Option<String>,
 
         #[arg(long, value_name = "PATH", help = "One-command registry override")]
         registry: Option<PathBuf>,
@@ -2070,6 +2090,7 @@ enum ProjectCommand {
         #[arg(
             long,
             value_name = "PATH",
+            requires = "apply",
             help = "Store directory required for unbound bootstrap when the registry locator has no WorkVCS home"
         )]
         store_root: Option<PathBuf>,
@@ -2089,6 +2110,35 @@ enum ProjectCommand {
             help = "Expected digest of the projection rebuilt from immutable intent and events"
         )]
         expected_projection_digest: Option<String>,
+
+        #[arg(long, value_name = "PROJECT_REF", requires = "list_open")]
+        project_ref: Option<String>,
+
+        #[arg(long, value_name = "KIND", requires = "list_open")]
+        payload_kind: Option<String>,
+
+        #[arg(long, value_name = "ACTION", requires = "list_open")]
+        recovery_action: Option<String>,
+
+        #[arg(long, default_value_t = 100, requires = "list_open")]
+        limit: usize,
+
+        #[arg(
+            long,
+            value_name = "CAPTURE_ID",
+            requires_all = ["list_open", "expected_inventory_digest"]
+        )]
+        after_capture_id: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            requires_all = ["list_open", "after_capture_id"]
+        )]
+        expected_inventory_digest: Option<String>,
+
+        #[arg(long, value_enum, default_value_t = OperationRecoveryOutputFormat::KeyValue, requires = "list_open")]
+        format: OperationRecoveryOutputFormat,
     },
     #[command(
         about = "Recall immutable CaptureGroup associations by a secondary ProjectRef without reading or mutating a semantic Store"
@@ -6185,6 +6235,43 @@ fn render_workvcs_error_key_value(error: &WorkVcsError) -> String {
         );
     }
     match error {
+        WorkVcsError::ProjectOwnerUnbound {
+            registry_path,
+            resolution_rank,
+            unmapped_locators,
+            resolution_diagnostics,
+        } => {
+            output.push_str("recoverable=true\n");
+            output.push_str("recovery_action=admit_operation_then_authorize_project_bootstrap\n");
+            let _ = writeln!(output, "registry_path={}", escape_key_value(registry_path));
+            let _ = writeln!(
+                output,
+                "resolution_rank={}",
+                escape_key_value(resolution_rank)
+            );
+            let _ = writeln!(output, "unmapped_locators={unmapped_locators}");
+            let _ = writeln!(output, "resolution_diagnostics={resolution_diagnostics}");
+        }
+        WorkVcsError::CaptureDeliveryIncomplete {
+            capture_id,
+            journal_persisted,
+            cause_error_code,
+            recovery_action,
+            ..
+        } => {
+            let _ = writeln!(output, "capture_id={}", escape_key_value(capture_id));
+            let _ = writeln!(output, "journal_persisted={journal_persisted}");
+            let _ = writeln!(
+                output,
+                "cause_error_code={}",
+                escape_key_value(cause_error_code)
+            );
+            let _ = writeln!(
+                output,
+                "recovery_action={}",
+                escape_key_value(recovery_action)
+            );
+        }
         WorkVcsError::RoutingActivationInactive {
             activation_path,
             activation_state,
@@ -6277,6 +6364,33 @@ fn render_workvcs_error_json(error: &WorkVcsError) -> String {
         value["recovery_registry"] = serde_json::Value::String(registry_path.clone());
     }
     match error {
+        WorkVcsError::ProjectOwnerUnbound {
+            registry_path,
+            resolution_rank,
+            unmapped_locators,
+            resolution_diagnostics,
+        } => {
+            value["recoverable"] = serde_json::Value::Bool(true);
+            value["recovery_action"] = serde_json::Value::String(
+                "admit_operation_then_authorize_project_bootstrap".to_owned(),
+            );
+            value["registry_path"] = serde_json::Value::String(registry_path.clone());
+            value["resolution_rank"] = serde_json::Value::String(resolution_rank.clone());
+            value["unmapped_locators"] = serde_json::Value::from(*unmapped_locators);
+            value["resolution_diagnostics"] = serde_json::Value::from(*resolution_diagnostics);
+        }
+        WorkVcsError::CaptureDeliveryIncomplete {
+            capture_id,
+            journal_persisted,
+            cause_error_code,
+            recovery_action,
+            ..
+        } => {
+            value["capture_id"] = serde_json::Value::String(capture_id.clone());
+            value["journal_persisted"] = serde_json::Value::Bool(*journal_persisted);
+            value["cause_error_code"] = serde_json::Value::String(cause_error_code.clone());
+            value["recovery_action"] = serde_json::Value::String(recovery_action.clone());
+        }
         WorkVcsError::RoutingActivationInactive {
             activation_path,
             activation_state,
@@ -7692,20 +7806,32 @@ fn run(cli: Cli) -> Result<String> {
             ProjectCommand::CaptureRecovery {
                 status,
                 apply,
+                list_open,
                 capture_id,
                 registry,
                 store_root,
                 expected_registry_digest,
                 expected_projection_digest,
-            } => match (status, apply) {
-                (true, false) => inspect_project_capture_recovery(
+                project_ref,
+                payload_kind,
+                recovery_action,
+                limit,
+                after_capture_id,
+                expected_inventory_digest,
+                format,
+            } => match (status, apply, list_open) {
+                (true, false, false) => inspect_project_capture_recovery(
                     registry,
-                    CaptureId::parse_canonical(&capture_id)?,
+                    CaptureId::parse_canonical(
+                        capture_id.as_deref().expect("clap requires capture ID"),
+                    )?,
                 ),
-                (false, true) => apply_project_capture_recovery(
+                (false, true, false) => apply_project_capture_recovery(
                     registry,
                     store_root,
-                    CaptureId::parse_canonical(&capture_id)?,
+                    CaptureId::parse_canonical(
+                        capture_id.as_deref().expect("clap requires capture ID"),
+                    )?,
                     required_control_plane_digest(
                         "operation recovery apply --expected-registry-digest",
                         expected_registry_digest,
@@ -7715,6 +7841,16 @@ fn run(cli: Cli) -> Result<String> {
                         expected_projection_digest,
                     )?,
                 ),
+                (false, false, true) => list_open_project_operations(OperationInventoryRequest {
+                    registry,
+                    project_ref,
+                    payload_kind,
+                    recovery_action,
+                    limit,
+                    after_capture_id,
+                    expected_inventory_digest,
+                    format,
+                }),
                 _ => unreachable!("clap requires exactly one operation recovery action"),
             },
             ProjectCommand::CaptureGroupRecall {
@@ -12988,6 +13124,7 @@ fn run(cli: Cli) -> Result<String> {
             value_reason,
             manifest,
             capture_group,
+            deliver_existing_binding,
         } => run_cognition_capture(
             cwd,
             registry,
@@ -12995,6 +13132,7 @@ fn run(cli: Cli) -> Result<String> {
             value_reason,
             manifest,
             capture_group,
+            deliver_existing_binding,
         ),
         Command::Recall {
             cwd,
@@ -17482,6 +17620,19 @@ fn discover_project_readonly_with_locator(
                 &current_identity,
             )?;
             let resolution = resolve_project(&registry, locator_input.resolution_context())?;
+            if resolution.status() == ResolutionStatus::Unbound {
+                return Err(WorkVcsError::ProjectOwnerUnbound {
+                    registry_path: registry_path.display().to_string(),
+                    resolution_rank: resolution
+                        .primary_basis()
+                        .map(ResolutionBasis::rank)
+                        .map(resolution_rank_text)
+                        .unwrap_or("none")
+                        .to_owned(),
+                    unmapped_locators: resolution.unmapped_locators().len(),
+                    resolution_diagnostics: resolution.diagnostics().len(),
+                });
+            }
             if resolution.status() != ResolutionStatus::Resolved {
                 return Err(WorkVcsError::ControlPlaneInvalid(format!(
                     "ProjectRef resolution failed closed with status {:?}, diagnostics {:?}; an unbound higher-ranked locator never falls back to Git or CWD",
@@ -18085,6 +18236,7 @@ fn inspect_project_health_v2(
     };
     let mut resolution_project_ref = None;
     let mut resolution_issue = None;
+    let mut unbound_resolution = None;
     if let Some(cwd) = cwd {
         let identity = resolve_project_identity(&cwd)?;
         let explicit_project_ref = project_ref
@@ -18127,6 +18279,18 @@ fn inspect_project_health_v2(
                 resolution_issue =
                     Some("resolved ProjectRef result did not include its primary owner".to_owned());
             }
+        } else if resolution.status() == ResolutionStatus::Unbound {
+            resolution_issue = Some("project_owner_unbound".to_owned());
+            unbound_resolution = Some((
+                resolution
+                    .primary_basis()
+                    .map(ResolutionBasis::rank)
+                    .map(resolution_rank_text)
+                    .unwrap_or("none")
+                    .to_owned(),
+                resolution.unmapped_locators().len(),
+                resolution.diagnostics().len(),
+            ));
         } else {
             resolution_issue = Some(format!(
                 "ProjectRef resolution ended with status {} and {} diagnostic(s)",
@@ -18144,15 +18308,17 @@ fn inspect_project_health_v2(
         journal.state,
         RoutingActivationState::Stale | RoutingActivationState::Invalid
     );
-    let resolution_healthy = !resolution_requested || resolution_issue.is_none();
+    let resolution_blocked =
+        resolution_requested && resolution_issue.is_some() && unbound_resolution.is_none();
     let capabilities_healthy = cognition_capture && plan_admit && plan_evolve;
     let health = if invalid_bindings != 0
         || activation_invalid
         || capability_issue.is_some()
-        || !resolution_healthy
+        || resolution_blocked
     {
         ProjectHealthState::Blocked
-    } else if routing.state != RoutingActivationState::Active
+    } else if unbound_resolution.is_some()
+        || routing.state != RoutingActivationState::Active
         || journal.state != RoutingActivationState::Active
         || !capabilities_healthy
     {
@@ -18173,6 +18339,7 @@ fn inspect_project_health_v2(
             plan_evolve,
             capability_issue.as_deref(),
             resolution_issue.as_deref(),
+            unbound_resolution.as_ref(),
         )?;
         unreachable!("non-healthy ProjectRef v2 health must fail closed");
     }
@@ -18255,6 +18422,7 @@ fn require_project_health_v2(
     plan_evolve: bool,
     capability_issue: Option<&str>,
     resolution_issue: Option<&str>,
+    unbound_resolution: Option<&(String, usize, usize)>,
 ) -> Result<()> {
     if invalid_bindings != 0 {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
@@ -18297,7 +18465,9 @@ fn require_project_health_v2(
             "journal-admission capability inspection failed: {issue}"
         )));
     }
-    if let Some(issue) = resolution_issue {
+    if unbound_resolution.is_none()
+        && let Some(issue) = resolution_issue
+    {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "project health CWD resolution failed closed: {issue}"
         )));
@@ -18334,6 +18504,14 @@ fn require_project_health_v2(
                 required_capability: capability.as_str().to_owned(),
             });
         }
+    }
+    if let Some((resolution_rank, unmapped_locators, resolution_diagnostics)) = unbound_resolution {
+        return Err(WorkVcsError::ProjectOwnerUnbound {
+            registry_path: registry_path.display().to_string(),
+            resolution_rank: resolution_rank.clone(),
+            unmapped_locators: *unmapped_locators,
+            resolution_diagnostics: *resolution_diagnostics,
+        });
     }
     Ok(())
 }
@@ -22694,6 +22872,14 @@ enum CaptureRecoveryFault {
     ProjectionReplace,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum CaptureRecoveryMode {
+    ExplicitManual,
+    DeliverExistingBinding {
+        invocation_resolution: Box<workvcs_core::control_plane::ResolutionResult>,
+    },
+}
+
 #[derive(Debug)]
 struct RecoveryBindingInspection<'a> {
     state: &'static str,
@@ -22808,6 +22994,622 @@ fn capture_recovery_journals(registry_path: &Path) -> Result<Vec<CaptureJournal>
     journals.sort_by(|left, right| left.root().cmp(right.root()));
     journals.dedup_by(|left, right| left.root() == right.root());
     Ok(journals)
+}
+
+#[derive(Debug)]
+struct OperationInventoryCandidate {
+    authority: CaptureAuthorityInspection,
+    resolution: workvcs_core::control_plane::ResolutionResult,
+}
+
+#[derive(Debug)]
+struct OperationInventoryRequest {
+    registry: Option<PathBuf>,
+    project_ref: Option<String>,
+    payload_kind: Option<String>,
+    recovery_action: Option<String>,
+    limit: usize,
+    after_capture_id: Option<String>,
+    expected_inventory_digest: Option<String>,
+    format: OperationRecoveryOutputFormat,
+}
+
+#[derive(Clone, Debug)]
+enum OperationInventoryBindingValidation {
+    Missing,
+    Valid(usize),
+    Invalid,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct OperationInventoryRow {
+    capture_id: String,
+    idempotency_key_digest: String,
+    payload_kind: String,
+    created_at: String,
+    project_ref: Option<String>,
+    effective_recovery_state: String,
+    recovery_action: String,
+    binding_classification: String,
+    projection_cache_state: String,
+    projection_digest: String,
+    intent_digest: String,
+    last_event_digest: Option<String>,
+    event_count: u64,
+    capture_group_id: Option<String>,
+    delivery_id: Option<String>,
+    result_object_ids: Vec<String>,
+    result_object_ids_truncated: bool,
+}
+
+fn parse_capture_payload_kind(value: &str) -> Result<CapturePayloadKind> {
+    match value {
+        "cognition_v2" => Ok(CapturePayloadKind::CognitionV2),
+        "legacy_cognition_v1" => Ok(CapturePayloadKind::LegacyCognitionV1),
+        "plan_admit_v1" => Ok(CapturePayloadKind::PlanAdmitV1),
+        "plan_evolve_v1" => Ok(CapturePayloadKind::PlanEvolveV1),
+        _ => Err(WorkVcsError::QueryInvalid(format!(
+            "operation inventory payload kind {value:?} is not supported"
+        ))),
+    }
+}
+
+fn operation_inventory_digest(
+    registry_digest: &ControlPlaneDigest,
+    project_ref: Option<ProjectRefId>,
+    payload_kind: Option<CapturePayloadKind>,
+    recovery_action: Option<&str>,
+    rows: &[OperationInventoryRow],
+) -> Result<ControlPlaneDigest> {
+    let value = serde_json::json!({
+        "inventory_version": 1,
+        "registry_digest": registry_digest.to_string(),
+        "filters": {
+            "project_ref": project_ref.map(|value| value.to_string()),
+            "payload_kind": payload_kind.map(|value| value.as_str()),
+            "recovery_action": recovery_action,
+        },
+        "rows": rows,
+    });
+    let raw = serde_json::to_vec(&value).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "cannot serialize operation inventory authority: {error}"
+        ))
+    })?;
+    let canonical = canonical_bytes(&parse_canonical_json(&raw)?)?;
+    Ok(ControlPlaneDigest::raw(&canonical))
+}
+
+fn list_open_project_operations(request: OperationInventoryRequest) -> Result<String> {
+    let OperationInventoryRequest {
+        registry,
+        project_ref,
+        payload_kind,
+        recovery_action,
+        limit,
+        after_capture_id,
+        expected_inventory_digest,
+        format,
+    } = request;
+    if !(1..=1000).contains(&limit) {
+        return Err(WorkVcsError::QueryInvalid(
+            "operation inventory --limit must be between 1 and 1000".to_owned(),
+        ));
+    }
+    let project_ref = project_ref
+        .map(|value| ProjectRefId::parse_canonical(&value))
+        .transpose()?;
+    let payload_kind = payload_kind
+        .as_deref()
+        .map(parse_capture_payload_kind)
+        .transpose()?;
+    let after_capture_id = after_capture_id
+        .map(|value| CaptureId::parse_canonical(&value))
+        .transpose()?;
+    let expected_inventory_digest = expected_inventory_digest
+        .map(|value| ControlPlaneDigest::from_text(&value))
+        .transpose()?;
+    let (_, registry_path, registry, registry_digest) = capture_recovery_registry(registry)?;
+    let journals = capture_recovery_journals(&registry_path)?;
+    let mut seen_capture_ids = std::collections::BTreeSet::new();
+    let mut candidates = Vec::new();
+    for journal in &journals {
+        for authority in journal.inspect_all_authority()? {
+            let capture_id = authority.intent().capture_id();
+            if !seen_capture_ids.insert(capture_id) {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "capture {capture_id} exists in more than one registry-derived journal alias"
+                )));
+            }
+            if payload_kind.is_some_and(|kind| authority.intent().payload_kind() != kind) {
+                continue;
+            }
+            let resolution = resolve_project(&registry, authority.intent().resolution_context())?;
+            if project_ref.is_some() && resolution.primary_project_ref() != project_ref {
+                continue;
+            }
+            candidates.push(OperationInventoryCandidate {
+                authority,
+                resolution,
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.authority
+            .intent()
+            .created_at()
+            .as_str()
+            .cmp(right.authority.intent().created_at().as_str())
+            .then_with(|| {
+                left.authority
+                    .intent()
+                    .capture_id()
+                    .cmp(&right.authority.intent().capture_id())
+            })
+    });
+
+    let mut binding_project_refs = candidates
+        .iter()
+        .filter_map(|candidate| candidate.resolution.primary_project_ref())
+        .collect::<std::collections::BTreeSet<_>>();
+    let candidate_bindings = binding_project_refs
+        .iter()
+        .filter_map(|project_ref_id| registry.binding(*project_ref_id))
+        .collect::<Vec<_>>();
+    for candidate_binding in candidate_bindings {
+        for related_binding in registry.bindings() {
+            if exact_project_binding_target(candidate_binding, related_binding) {
+                binding_project_refs.insert(related_binding.project_ref_id());
+            }
+        }
+    }
+
+    let mut binding_validations = std::collections::BTreeMap::new();
+    for project_ref_id in binding_project_refs {
+        let validation = match registry.binding(project_ref_id) {
+            None => OperationInventoryBindingValidation::Missing,
+            Some(binding) => match verify_v2_registry_binding_readonly(binding) {
+                Ok(verified) => OperationInventoryBindingValidation::Valid(verified),
+                Err(_) => OperationInventoryBindingValidation::Invalid,
+            },
+        };
+        binding_validations.insert(project_ref_id, validation);
+    }
+
+    let mut rows = Vec::new();
+    for candidate in candidates {
+        let authority = &candidate.authority;
+        let resolution = &candidate.resolution;
+        let project_ref_id = resolution.primary_project_ref();
+        let validation = project_ref_id.and_then(|value| binding_validations.get(&value));
+        let binding = project_ref_id.and_then(|value| registry.binding(value));
+        let (binding_state, verified_objects, binding_issue) = match validation {
+            Some(OperationInventoryBindingValidation::Valid(verified)) => {
+                ("valid", *verified, None)
+            }
+            Some(OperationInventoryBindingValidation::Invalid) => {
+                ("invalid", 0, Some("binding validation failed".to_owned()))
+            }
+            Some(OperationInventoryBindingValidation::Missing) => {
+                ("missing", 0, Some("binding is missing".to_owned()))
+            }
+            None => ("not_applicable", 0, None),
+        };
+        let binding_inspection = RecoveryBindingInspection {
+            state: binding_state,
+            binding,
+            verified_objects,
+            issue: binding_issue,
+        };
+        let effective_state = effective_capture_recovery_state(
+            resolution,
+            &binding_inspection,
+            authority.projection(),
+        );
+        let shared = binding.is_some_and(|binding| {
+            registry.bindings().iter().any(|other| {
+                other.project_ref_id() != binding.project_ref_id()
+                    && exact_project_binding_target(other, binding)
+            })
+        });
+        let status_action = capture_recovery_action(
+            resolution,
+            &binding_inspection,
+            authority.projection(),
+            effective_state,
+        );
+        let action = if shared
+            && matches!(
+                status_action,
+                "apply_binding_receipt" | "apply_primary_delivery"
+            ) {
+            "isolate_shared_binding_then_retry"
+        } else {
+            status_action
+        };
+        if action == "none"
+            || recovery_action
+                .as_deref()
+                .is_some_and(|value| value != action)
+        {
+            continue;
+        }
+        let binding_classification = if shared {
+            "shared"
+        } else if resolution.status() == ResolutionStatus::Unbound {
+            "unbound"
+        } else if resolution.status() == ResolutionStatus::Conflict {
+            "conflict"
+        } else if resolution.status() == ResolutionStatus::Unresolved {
+            "unresolved"
+        } else {
+            binding_state
+        };
+        let result_objects = authority
+            .projection()
+            .primary_delivery()
+            .map(DeliveryAppliedPayload::result_objects)
+            .unwrap_or_default();
+        let result_object_ids = result_objects
+            .iter()
+            .take(16)
+            .map(|object| {
+                format!(
+                    "{}:{}:{}",
+                    object.object_kind(),
+                    object.logical_object_id(),
+                    object.immutable_version_id()
+                )
+            })
+            .collect::<Vec<_>>();
+        rows.push(OperationInventoryRow {
+            capture_id: authority.intent().capture_id().to_string(),
+            idempotency_key_digest: ControlPlaneDigest::raw(
+                format!(
+                    "workvcs-operation-idempotency/v1\0{}",
+                    authority.intent().idempotency_key()
+                )
+                .as_bytes(),
+            )
+            .to_string(),
+            payload_kind: authority.intent().payload_kind().as_str().to_owned(),
+            created_at: authority.intent().created_at().as_str().to_owned(),
+            project_ref: project_ref_id.map(|value| value.to_string()),
+            effective_recovery_state: effective_state.as_str().to_owned(),
+            recovery_action: action.to_owned(),
+            binding_classification: binding_classification.to_owned(),
+            projection_cache_state: authority.stored_state().as_str().to_owned(),
+            projection_digest: authority.projection().digest()?.to_string(),
+            intent_digest: ControlPlaneDigest::raw(&authority.intent().canonical_json_bytes()?)
+                .to_string(),
+            last_event_digest: authority
+                .events()
+                .last()
+                .map(CaptureEvent::digest)
+                .transpose()?
+                .map(|value| value.to_string()),
+            event_count: authority.projection().event_count(),
+            capture_group_id: authority
+                .projection()
+                .capture_group()
+                .map(|group| group.capture_group_id().to_string()),
+            delivery_id: authority
+                .projection()
+                .delivery_started()
+                .map(|delivery| delivery.delivery_id().to_string()),
+            result_object_ids,
+            result_object_ids_truncated: result_objects.len() > 16,
+        });
+    }
+
+    let inventory_digest = operation_inventory_digest(
+        &registry_digest,
+        project_ref,
+        payload_kind,
+        recovery_action.as_deref(),
+        &rows,
+    )?;
+    if let Some(expected) = expected_inventory_digest.as_ref()
+        && expected != &inventory_digest
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "operation inventory changed: expected digest {expected}, found {inventory_digest}"
+        )));
+    }
+    let start = if let Some(after) = after_capture_id {
+        rows.iter()
+            .position(|row| row.capture_id == after.to_string())
+            .map(|index| index + 1)
+            .ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "operation inventory cursor {after} is absent from the complete matching set"
+                ))
+            })?
+    } else {
+        0
+    };
+    let end = std::cmp::min(start.saturating_add(limit), rows.len());
+    let page = &rows[start..end];
+    let truncated = end < rows.len();
+    let next_after_capture_id = truncated
+        .then(|| page.last().map(|row| row.capture_id.clone()))
+        .flatten();
+    let mut payload_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut state_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut action_counts = std::collections::BTreeMap::<String, usize>::new();
+    for row in &rows {
+        *payload_counts.entry(row.payload_kind.clone()).or_default() += 1;
+        *state_counts
+            .entry(row.effective_recovery_state.clone())
+            .or_default() += 1;
+        *action_counts
+            .entry(row.recovery_action.clone())
+            .or_default() += 1;
+    }
+    let bindings_validated = binding_validations
+        .values()
+        .filter(|value| !matches!(value, OperationInventoryBindingValidation::Missing))
+        .count();
+    let bindings_verified = binding_validations
+        .values()
+        .filter(|value| matches!(value, OperationInventoryBindingValidation::Valid(_)))
+        .count();
+    match format {
+        OperationRecoveryOutputFormat::KeyValue => render_operation_inventory_key_value(
+            &registry_path,
+            &registry,
+            &registry_digest,
+            journals.len(),
+            bindings_validated,
+            bindings_verified,
+            project_ref,
+            payload_kind,
+            recovery_action.as_deref(),
+            &inventory_digest,
+            &payload_counts,
+            &state_counts,
+            &action_counts,
+            rows.len(),
+            page,
+            truncated,
+            next_after_capture_id.as_deref(),
+        ),
+        OperationRecoveryOutputFormat::Json => render_operation_inventory_json(
+            &registry_path,
+            &registry,
+            &registry_digest,
+            journals.len(),
+            bindings_validated,
+            bindings_verified,
+            project_ref,
+            payload_kind,
+            recovery_action.as_deref(),
+            &inventory_digest,
+            &payload_counts,
+            &state_counts,
+            &action_counts,
+            rows.len(),
+            page,
+            truncated,
+            next_after_capture_id.as_deref(),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_operation_inventory_key_value(
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    registry_digest: &ControlPlaneDigest,
+    journal_aliases: usize,
+    bindings_validated: usize,
+    bindings_verified: usize,
+    project_ref: Option<ProjectRefId>,
+    payload_kind: Option<CapturePayloadKind>,
+    recovery_action: Option<&str>,
+    inventory_digest: &ControlPlaneDigest,
+    payload_counts: &std::collections::BTreeMap<String, usize>,
+    state_counts: &std::collections::BTreeMap<String, usize>,
+    action_counts: &std::collections::BTreeMap<String, usize>,
+    total_matching: usize,
+    rows: &[OperationInventoryRow],
+    truncated: bool,
+    next_after_capture_id: Option<&str>,
+) -> Result<String> {
+    let mut output = format!(
+        "action=list_open\nread_only=true\nregistry_path={}\nregistry_version=2\nregistry_id={}\nregistry_revision={}\nregistry_digest={}\njournal_aliases={}\nbindings_validated={}\nbindings_verified={}\nfilter.project_ref={}\nfilter.payload_kind={}\nfilter.recovery_action={}\ninventory_digest={}\ntotal_matching={}\nreturned_rows={}\ntruncated={}\nnext_after_capture_id={}\nregistry_written=false\njournal_event_written=false\nprojection_written=false\nstore_opened_readonly={}\nstore_written=false\nrouting_activated=false\n",
+        escape_key_value(&registry_path.display().to_string()),
+        registry.registry_id(),
+        registry.revision(),
+        registry_digest,
+        journal_aliases,
+        bindings_validated,
+        bindings_verified,
+        project_ref
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        payload_kind
+            .map(|value| value.as_str().to_owned())
+            .unwrap_or_else(|| "none".to_owned()),
+        recovery_action
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+        inventory_digest,
+        total_matching,
+        rows.len(),
+        truncated,
+        next_after_capture_id
+            .map(escape_key_value)
+            .unwrap_or_else(|| "none".to_owned()),
+        bindings_verified != 0,
+    );
+    for (kind, count) in payload_counts {
+        writeln!(
+            output,
+            "summary.payload_kind.{}={count}",
+            escape_key_value(kind)
+        )
+        .expect("String writes cannot fail");
+    }
+    for (state, count) in state_counts {
+        writeln!(
+            output,
+            "summary.recovery_state.{}={count}",
+            escape_key_value(state)
+        )
+        .expect("String writes cannot fail");
+    }
+    for (action, count) in action_counts {
+        writeln!(
+            output,
+            "summary.recovery_action.{}={count}",
+            escape_key_value(action)
+        )
+        .expect("String writes cannot fail");
+    }
+    for (index, row) in rows.iter().enumerate() {
+        for (key, value) in [
+            ("capture_id", row.capture_id.as_str()),
+            (
+                "idempotency_key_digest",
+                row.idempotency_key_digest.as_str(),
+            ),
+            ("payload_kind", row.payload_kind.as_str()),
+            ("created_at", row.created_at.as_str()),
+            (
+                "effective_recovery_state",
+                row.effective_recovery_state.as_str(),
+            ),
+            ("recovery_action", row.recovery_action.as_str()),
+            (
+                "binding_classification",
+                row.binding_classification.as_str(),
+            ),
+            (
+                "projection_cache_state",
+                row.projection_cache_state.as_str(),
+            ),
+            ("projection_digest", row.projection_digest.as_str()),
+            ("intent_digest", row.intent_digest.as_str()),
+        ] {
+            writeln!(output, "row.{index}.{key}={}", escape_key_value(value))
+                .expect("String writes cannot fail");
+        }
+        writeln!(
+            output,
+            "row.{index}.project_ref={}",
+            row.project_ref
+                .as_deref()
+                .map(escape_key_value)
+                .unwrap_or_else(|| "none".to_owned())
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "row.{index}.last_event_digest={}",
+            row.last_event_digest
+                .as_deref()
+                .map(escape_key_value)
+                .unwrap_or_else(|| "none".to_owned())
+        )
+        .expect("String writes cannot fail");
+        writeln!(output, "row.{index}.event_count={}", row.event_count)
+            .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "row.{index}.capture_group_id={}",
+            row.capture_group_id
+                .as_deref()
+                .map(escape_key_value)
+                .unwrap_or_else(|| "none".to_owned())
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "row.{index}.delivery_id={}",
+            row.delivery_id
+                .as_deref()
+                .map(escape_key_value)
+                .unwrap_or_else(|| "none".to_owned())
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "row.{index}.result_object_ids={}",
+            escape_key_value(&row.result_object_ids.join(","))
+        )
+        .expect("String writes cannot fail");
+        writeln!(
+            output,
+            "row.{index}.result_object_ids_truncated={}",
+            row.result_object_ids_truncated
+        )
+        .expect("String writes cannot fail");
+    }
+    Ok(output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_operation_inventory_json(
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    registry_digest: &ControlPlaneDigest,
+    journal_aliases: usize,
+    bindings_validated: usize,
+    bindings_verified: usize,
+    project_ref: Option<ProjectRefId>,
+    payload_kind: Option<CapturePayloadKind>,
+    recovery_action: Option<&str>,
+    inventory_digest: &ControlPlaneDigest,
+    payload_counts: &std::collections::BTreeMap<String, usize>,
+    state_counts: &std::collections::BTreeMap<String, usize>,
+    action_counts: &std::collections::BTreeMap<String, usize>,
+    total_matching: usize,
+    rows: &[OperationInventoryRow],
+    truncated: bool,
+    next_after_capture_id: Option<&str>,
+) -> Result<String> {
+    let value = serde_json::json!({
+        "action": "list_open",
+        "read_only": true,
+        "registry_path": registry_path.display().to_string(),
+        "registry_version": 2,
+        "registry_id": registry.registry_id().to_string(),
+        "registry_revision": registry.revision(),
+        "registry_digest": registry_digest.to_string(),
+        "journal_aliases": journal_aliases,
+        "bindings_validated": bindings_validated,
+        "bindings_verified": bindings_verified,
+        "filters": {
+            "project_ref": project_ref.map(|value| value.to_string()),
+            "payload_kind": payload_kind.map(|value| value.as_str()),
+            "recovery_action": recovery_action,
+        },
+        "inventory_digest": inventory_digest.to_string(),
+        "summary": {
+            "payload_kind": payload_counts,
+            "recovery_state": state_counts,
+            "recovery_action": action_counts,
+        },
+        "total_matching": total_matching,
+        "returned_rows": rows.len(),
+        "truncated": truncated,
+        "next_after_capture_id": next_after_capture_id,
+        "rows": rows,
+        "registry_written": false,
+        "journal_event_written": false,
+        "projection_written": false,
+        "store_opened_readonly": bindings_verified != 0,
+        "store_written": false,
+        "routing_activated": false,
+    });
+    let mut output = serde_json::to_string(&value).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "cannot serialize operation inventory output: {error}"
+        ))
+    })?;
+    output.push('\n');
+    Ok(output)
 }
 
 fn recall_project_capture_groups(
@@ -23007,6 +23809,196 @@ fn verify_opened_recovery_target(engine: &Engine, binding: &ProjectBindingV2) ->
     Ok(())
 }
 
+fn event_target_matches_binding(
+    payload: &CaptureEventPayload,
+    binding: &ProjectBindingV2,
+) -> Option<bool> {
+    let matches = match payload {
+        CaptureEventPayload::ProjectBindingReady(value) => {
+            value.project_ref_id() == binding.project_ref_id()
+                && value.store_path() == binding.store_path()
+                && value.store_id() == binding.store_id()
+                && value.workspace_id() == binding.workspace_id()
+                && value.branch_id() == binding.branch_id()
+        }
+        CaptureEventPayload::DeliveryStarted(value) => {
+            value.project_ref_id() == binding.project_ref_id()
+                && value.store_id() == binding.store_id()
+                && value.workspace_id() == binding.workspace_id()
+                && value.branch_id() == binding.branch_id()
+        }
+        CaptureEventPayload::DeliveryApplied(value) => {
+            value.project_ref_id() == binding.project_ref_id()
+                && value.store_id() == binding.store_id()
+                && value.workspace_id() == binding.workspace_id()
+                && value.branch_id() == binding.branch_id()
+        }
+        CaptureEventPayload::DeliveryFailed(value) => {
+            value.project_ref_id() == binding.project_ref_id()
+                && value.store_id() == binding.store_id()
+                && value.workspace_id() == binding.workspace_id()
+                && value.branch_id() == binding.branch_id()
+        }
+        _ => return None,
+    };
+    Some(matches)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_existing_binding_delivery_preflight(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    registry_digest: &ControlPlaneDigest,
+    intent: &CaptureIntent,
+    projection: &workvcs_core::control_plane::CaptureProjection,
+    resolution: &workvcs_core::control_plane::ResolutionResult,
+    invocation_resolution: &workvcs_core::control_plane::ResolutionResult,
+    events: &[CaptureEvent],
+    recovery_identity: &ProjectIdentity,
+) -> Result<ProjectBindingV2> {
+    require_active_journal_admission(effective, registry_path, registry)?;
+    if intent.payload_kind() != CapturePayloadKind::CognitionV2 || intent.capture_group().is_some()
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "existing-binding delivery accepts only cognition_v2 with capture_group=null"
+                .to_owned(),
+        ));
+    }
+    if projection.delivery_failure().is_some() {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "existing-binding delivery refuses an operation with a terminal delivery failure; inspect recovery status"
+                .to_owned(),
+        ));
+    }
+    if invocation_resolution.status() == ResolutionStatus::Unbound {
+        return Err(WorkVcsError::ProjectOwnerUnbound {
+            registry_path: registry_path.display().to_string(),
+            resolution_rank: invocation_resolution
+                .primary_basis()
+                .map(ResolutionBasis::rank)
+                .map(resolution_rank_text)
+                .unwrap_or("none")
+                .to_owned(),
+            unmapped_locators: invocation_resolution.unmapped_locators().len(),
+            resolution_diagnostics: invocation_resolution.diagnostics().len(),
+        });
+    }
+    if invocation_resolution.status() != ResolutionStatus::Resolved {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "existing-binding delivery invocation requires exactly one resolved ProjectRef; resolution status is {}",
+            resolution_status_text(invocation_resolution.status())
+        )));
+    }
+    if resolution.status() == ResolutionStatus::Unbound {
+        return Err(WorkVcsError::ProjectOwnerUnbound {
+            registry_path: registry_path.display().to_string(),
+            resolution_rank: resolution
+                .primary_basis()
+                .map(ResolutionBasis::rank)
+                .map(resolution_rank_text)
+                .unwrap_or("none")
+                .to_owned(),
+            unmapped_locators: resolution.unmapped_locators().len(),
+            resolution_diagnostics: resolution.diagnostics().len(),
+        });
+    }
+    if resolution.status() != ResolutionStatus::Resolved {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "existing-binding delivery requires exactly one resolved ProjectRef; resolution status is {}",
+            resolution_status_text(resolution.status())
+        )));
+    }
+    let project_ref_id = resolution.primary_project_ref().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "resolved existing-binding delivery has no primary ProjectRef".to_owned(),
+        )
+    })?;
+    if invocation_resolution.primary_project_ref() != Some(project_ref_id) {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "the current invocation and reused intent resolve to different ProjectRefs; start a new Capture for the current target"
+                .to_owned(),
+        ));
+    }
+    if intent.initial_resolution().status() != ResolutionStatus::Resolved
+        || intent.initial_resolution().primary_project_ref() != Some(project_ref_id)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "the admitted intent did not originally resolve to the current ProjectRef; start a new Capture for the current target"
+                .to_owned(),
+        ));
+    }
+    let binding =
+        registry
+            .binding(project_ref_id)
+            .ok_or_else(|| WorkVcsError::ProjectBindingNotFound {
+                identity_kind: "project-ref".to_owned(),
+                identity: project_ref_id.to_string(),
+                project_root: recovery_identity.root.clone(),
+                registry_path: registry_path.display().to_string(),
+            })?;
+    if registry.bindings().iter().any(|other| {
+        other.project_ref_id() != project_ref_id && exact_project_binding_target(other, binding)
+    }) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "existing ProjectRef {project_ref_id} target is shared by another ProjectRef; authorize isolation separately before delivery"
+        )));
+    }
+
+    for (index, event) in events.iter().enumerate() {
+        if let Some(matches) = event_target_matches_binding(event.payload(), binding)
+            && !matches
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "prior target-bearing authority differs from the current binding; start a new Capture for the current target"
+                    .to_owned(),
+            ));
+        }
+        if let CaptureEventPayload::ResolutionRecorded(recorded) = event.payload() {
+            if recorded.registry_id() != registry.registry_id()
+                || recorded.resolution().status() != ResolutionStatus::Resolved
+                || recorded.resolution().primary_project_ref() != Some(project_ref_id)
+            {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "prior resolution authority differs from the current ProjectRef; start a new Capture for the current target"
+                        .to_owned(),
+                ));
+            }
+            if recorded.registry_digest() != registry_digest
+                && !events[index + 1..].iter().any(|later| {
+                    event_target_matches_binding(later.payload(), binding) == Some(true)
+                })
+            {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "registry changed after a prior resolution without later complete target-tuple proof; start a new Capture for the current target"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+    if projection.project_binding_ready().is_some()
+        && !projection_binding_matches(projection, Some(binding))
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "projected binding authority differs from the current binding; start a new Capture"
+                .to_owned(),
+        ));
+    }
+    if projection.recovery_state() == CaptureRecoveryState::Completed
+        && projection.primary_delivery().is_none()
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "completed existing-binding projection has no primary delivery receipt".to_owned(),
+        ));
+    }
+    verify_v2_project_binding_readonly(binding, recovery_identity).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "existing ProjectRef {project_ref_id} binding is not fully valid: {error}"
+        ))
+    })?;
+    Ok(binding.clone())
+}
+
 fn effective_capture_recovery_state(
     resolution: &workvcs_core::control_plane::ResolutionResult,
     binding: &RecoveryBindingInspection<'_>,
@@ -23201,7 +24193,50 @@ fn apply_project_capture_recovery_with_fault(
     expected_projection_digest: &ControlPlaneDigest,
     fault: Option<CaptureRecoveryFault>,
 ) -> Result<CaptureRecoveryApplyReport> {
-    require_atomic_registry_replace_support("capture recovery apply")?;
+    apply_project_capture_recovery_with_fault_and_mode(
+        registry,
+        store_root,
+        capture_id,
+        expected_registry_digest,
+        expected_projection_digest,
+        fault,
+        CaptureRecoveryMode::ExplicitManual,
+    )
+}
+
+fn apply_project_capture_recovery_existing_binding(
+    registry: Option<PathBuf>,
+    capture_id: CaptureId,
+    expected_registry_digest: &ControlPlaneDigest,
+    expected_projection_digest: &ControlPlaneDigest,
+    invocation_resolution: workvcs_core::control_plane::ResolutionResult,
+) -> Result<CaptureRecoveryApplyReport> {
+    apply_project_capture_recovery_with_fault_and_mode(
+        registry,
+        None,
+        capture_id,
+        expected_registry_digest,
+        expected_projection_digest,
+        None,
+        CaptureRecoveryMode::DeliverExistingBinding {
+            invocation_resolution: Box::new(invocation_resolution),
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_project_capture_recovery_with_fault_and_mode(
+    registry: Option<PathBuf>,
+    store_root: Option<PathBuf>,
+    capture_id: CaptureId,
+    expected_registry_digest: &ControlPlaneDigest,
+    expected_projection_digest: &ControlPlaneDigest,
+    fault: Option<CaptureRecoveryFault>,
+    mode: CaptureRecoveryMode,
+) -> Result<CaptureRecoveryApplyReport> {
+    if matches!(&mode, CaptureRecoveryMode::ExplicitManual) {
+        require_atomic_registry_replace_support("capture recovery apply")?;
+    }
     let (effective, registry_path, _observed_registry, observed_digest) =
         capture_recovery_registry(registry)?;
     if &observed_digest != expected_registry_digest {
@@ -23245,6 +24280,59 @@ fn apply_project_capture_recovery_with_fault(
     let recovery_identity = capture_recovery_identity(&intent)?;
     reject_project_local_path("project registry", &registry_path, &recovery_identity)?;
     let mut resolution = resolve_project(&registry, intent.resolution_context())?;
+    let existing_binding = match &mode {
+        CaptureRecoveryMode::DeliverExistingBinding {
+            invocation_resolution,
+        } => {
+            let authority = journal.inspect_authority(capture_id)?;
+            Some(validate_existing_binding_delivery_preflight(
+                &effective,
+                &registry_path,
+                &registry,
+                &registry_digest,
+                &intent,
+                locked_projection.projection(),
+                &resolution,
+                invocation_resolution,
+                authority.events(),
+                &recovery_identity,
+            )?)
+        }
+        CaptureRecoveryMode::ExplicitManual => None,
+    };
+    if let Some(binding) = existing_binding.as_ref()
+        && locked_projection.projection().recovery_state() == CaptureRecoveryState::Completed
+    {
+        let (locator_id, _) = primary_identity_locator(&registry, &resolution)?;
+        return Ok(CaptureRecoveryApplyReport {
+            registry_path,
+            journal_root: journal.root().to_path_buf(),
+            capture_id,
+            registry,
+            registry_digest,
+            projection: locked_projection.projection().clone(),
+            projection_outcome: CaptureProjectionWriteOutcome::Reused,
+            resolution_event_written: false,
+            binding_event_written: false,
+            registry_written: false,
+            store_initialized: false,
+            store_recovered: false,
+            delivery_started_written: false,
+            delivery_receipt_written: false,
+            delivery_failure_written: false,
+            capture_group_resolution_written: false,
+            secondary_reference_events_written: 0,
+            capture_completed_written: false,
+            target_delivery_written: false,
+            target_delivery_reused: true,
+            delivery_started: locked_projection.projection().delivery_started().cloned(),
+            primary_delivery: locked_projection.projection().primary_delivery().cloned(),
+            delivery_failure: None,
+            project_ref_id: resolution.primary_project_ref(),
+            locator_id: Some(locator_id),
+            binding: Some(binding.clone()),
+        });
+    }
     let resolution_append = journal.append_event_authority_only(
         capture_id,
         UtcTimestamp::now()?,
@@ -26462,7 +27550,14 @@ fn run_cognition_capture(
     value_reason: Option<String>,
     manifest_path: PathBuf,
     capture_group_path: Option<PathBuf>,
+    deliver_existing_binding: bool,
 ) -> Result<String> {
+    if deliver_existing_binding && capture_group_path.is_some() {
+        return Err(WorkVcsError::QueryInvalid(
+            "--deliver-existing-binding does not authorize CaptureGroup or cross-project delivery"
+                .to_owned(),
+        ));
+    }
     if capture_group_path.is_some() && value_reason.is_none() {
         return Err(WorkVcsError::QueryInvalid(
             "--capture-group requires --value-reason because CaptureGroup is control-plane journal authority, not a legacy direct Store write"
@@ -26482,6 +27577,12 @@ fn run_cognition_capture(
     let registry_path = project_registry_path_from_effective(&effective, false, &current_identity)?;
     match load_project_registry_readonly(&registry_path, true)? {
         LoadedProjectRegistry::V1 { digest, .. } => {
+            if deliver_existing_binding {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "--deliver-existing-binding requires registry v2 and cannot continue legacy or registry-v1 capture"
+                        .to_owned(),
+                ));
+            }
             if capture_group_path.is_some() {
                 return Err(WorkVcsError::ControlPlaneInvalid(
                     "CaptureGroup journal admission requires registry v2; migrate and activate the exact v2 routing gates before retrying"
@@ -26565,6 +27666,7 @@ fn run_cognition_capture(
                 &current_identity,
             )?;
             let resolution = resolve_project(&registry_v2, locator_input.resolution_context())?;
+            let invocation_resolution = resolution.clone();
             if resolution
                 .diagnostics()
                 .contains(&ResolutionDiagnostic::ProjectRefNotFound)
@@ -26602,14 +27704,40 @@ fn run_cognition_capture(
                     Ok(())
                 },
             )?;
-            render_routed_cognition_admission(
-                &registry_path,
-                &registry_v2,
-                &registry_digest,
-                &intent,
-                &admission,
-                locator_input.provider_ids(),
-            )
+            if !deliver_existing_binding {
+                return render_routed_cognition_admission(
+                    &registry_path,
+                    &registry_v2,
+                    &registry_digest,
+                    &intent,
+                    &admission,
+                    locator_input.provider_ids(),
+                );
+            }
+            let capture_id = admission.capture_id();
+            (|| -> Result<String> {
+                let projection_digest = journal
+                    .inspect_projection(capture_id)?
+                    .projection()
+                    .digest()?;
+                let report = apply_project_capture_recovery_existing_binding(
+                    Some(registry_path.clone()),
+                    capture_id,
+                    &registry_digest,
+                    &projection_digest,
+                    invocation_resolution,
+                )?;
+                render_routed_cognition_delivery(
+                    &registry_path,
+                    &registry_v2,
+                    &registry_digest,
+                    &intent,
+                    &admission,
+                    locator_input.provider_ids(),
+                    &report,
+                )
+            })()
+            .map_err(|error| capture_delivery_incomplete(capture_id, error))
         }
     }
 }
@@ -26803,6 +27931,86 @@ fn render_routed_cognition_admission(
         escape_key_value(&admission.intent_path().display().to_string()),
         admission.outcome() == CaptureAdmissionOutcome::Created,
     ))
+}
+
+fn capture_delivery_incomplete(capture_id: CaptureId, error: WorkVcsError) -> WorkVcsError {
+    WorkVcsError::CaptureDeliveryIncomplete {
+        capture_id: capture_id.to_string(),
+        journal_persisted: true,
+        cause_error_code: error.code().as_str().to_owned(),
+        recovery_action: "inspect_operation_recovery_status".to_owned(),
+        message: error.to_string(),
+    }
+}
+
+fn render_routed_cognition_delivery(
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    registry_digest: &ControlPlaneDigest,
+    intent: &CaptureIntent,
+    admission: &workvcs_core::control_plane::CaptureAdmissionResult,
+    provider_ids: &[String],
+    report: &CaptureRecoveryApplyReport,
+) -> Result<String> {
+    let receipt = report.primary_delivery.as_ref().ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "existing-binding capture completed without a delivery_applied receipt".to_owned(),
+        )
+    })?;
+    if report.projection.recovery_state() != CaptureRecoveryState::Completed
+        || report.projection.capture_group().is_some()
+        || report.delivery_failure.is_some()
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "existing-binding capture did not reach one completed single-project receipt"
+                .to_owned(),
+        ));
+    }
+    let mut output = render_routed_cognition_admission(
+        registry_path,
+        registry,
+        registry_digest,
+        intent,
+        admission,
+        provider_ids,
+    )?;
+    output = output.replacen("capture_status=admitted", "capture_status=completed", 1);
+    output = output.replacen(
+        "store_written=false\ndelivery_status=not_started\ndelivery_activated=false",
+        &format!(
+            "store_written={}\ndelivery_status=completed\ndelivery_activated=true",
+            report.target_delivery_written
+        ),
+        1,
+    );
+    writeln!(output, "recovery_action=none").expect("String writes cannot fail");
+    writeln!(
+        output,
+        "delivery_id={}",
+        report
+            .delivery_started
+            .as_ref()
+            .map(|value| value.delivery_id().to_string())
+            .unwrap_or_else(|| "none".to_owned())
+    )
+    .expect("String writes cannot fail");
+    writeln!(output, "target_commit_id={}", receipt.commit_id())
+        .expect("String writes cannot fail");
+    writeln!(
+        output,
+        "target_delivery_reused={}",
+        report.target_delivery_reused
+    )
+    .expect("String writes cannot fail");
+    writeln!(output, "projection_digest={}", report.projection.digest()?)
+        .expect("String writes cannot fail");
+    writeln!(
+        output,
+        "projection_written={}",
+        report.projection_outcome != CaptureProjectionWriteOutcome::Reused
+    )
+    .expect("String writes cannot fail");
+    Ok(output)
 }
 
 fn resolve_resume_session(
@@ -39863,6 +41071,40 @@ mod tests {
             &capture_id,
         ])
         .expect("parse capture-recovery compatibility alias");
+        Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--format",
+            "json",
+        ])
+        .expect("parse canonical open-operation inventory");
+        assert!(
+            Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "operation-recovery",
+                "--list-open",
+                "--after-capture-id",
+                &capture_id,
+            ])
+            .is_err(),
+            "inventory cursor requires its complete-inventory digest"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "workvcs",
+                "project",
+                "operation-recovery",
+                "--status",
+                "--list-open",
+                "--capture-id",
+                &capture_id,
+            ])
+            .is_err(),
+            "recovery actions remain mutually exclusive"
+        );
 
         let project_help = Cli::try_parse_from(["workvcs", "project", "--help"])
             .expect_err("project help is rendered by clap")
@@ -64240,6 +65482,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .expect_err("stale journal authority must outrank absent routing authority");
         assert_eq!(stale.code(), ErrorCode::ControlPlaneInvalid);
@@ -64269,6 +65512,7 @@ mod tests {
             false,
             None,
             Some("ownership conflict"),
+            None,
         )
         .expect_err("blocked resolution must outrank a cleanly missing capability");
         assert_eq!(resolution.code(), ErrorCode::ControlPlaneInvalid);
@@ -64603,6 +65847,48 @@ mod tests {
             target,
             intent_path: admission.intent_path().to_path_buf(),
         }
+    }
+
+    fn write_v2_capture_manifest(
+        fixture: &ProjectBindingFixture,
+        file_name: &str,
+        idempotency_key: &str,
+        statement: &str,
+    ) -> PathBuf {
+        let path = fixture._tempdir.path().join(file_name);
+        fs::write(
+            &path,
+            format!(
+                "{{\"schema_version\":1,\"idempotency_key\":{},\"records\":[{{\"local_id\":\"finding\",\"kind\":\"finding\",\"statement\":{}}}],\"knowledge\":[],\"evidence\":[],\"relations\":[],\"rationale\":{{}}}}\n",
+                serde_json::to_string(idempotency_key).unwrap(),
+                serde_json::to_string(statement).unwrap(),
+            ),
+        )
+        .expect("write v2 capture manifest");
+        path
+    }
+
+    fn run_fixture_v2_capture(
+        fixture: &ProjectBindingFixture,
+        manifest_path: &Path,
+        deliver_existing_binding: bool,
+    ) -> Result<String> {
+        let mut args = vec![
+            "workvcs".to_owned(),
+            "capture".to_owned(),
+            "--cwd".to_owned(),
+            fixture.project_text.clone(),
+            "--registry".to_owned(),
+            fixture.registry.clone(),
+            "--value-reason".to_owned(),
+            "Persist a verified Stage B fixture finding".to_owned(),
+            "--manifest".to_owned(),
+            path_text(manifest_path),
+        ];
+        if deliver_existing_binding {
+            args.push("--deliver-existing-binding".to_owned());
+        }
+        run(Cli::try_parse_from(args).expect("parse v2 capture"))
     }
 
     fn create_capture_recovery_fixture() -> CaptureRecoveryFixture {
@@ -68540,6 +69826,1353 @@ mod tests {
     }
 
     #[test]
+    fn cli_capture_existing_binding_is_explicit_and_completed_replay_is_zero_write() {
+        run_cli_test_with_large_stack(
+            "capture-existing-binding-zero-write-replay-test",
+            assert_cli_capture_existing_binding_is_explicit_and_completed_replay_is_zero_write,
+        );
+    }
+
+    fn assert_cli_capture_existing_binding_is_explicit_and_completed_replay_is_zero_write() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest = write_v2_capture_manifest(
+            &fixture,
+            "existing-binding-capture.json",
+            "existing-binding-capture-key",
+            "Explicit existing-binding delivery is journal-first and replay-safe",
+        );
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let admitted = run_fixture_v2_capture(&fixture, &manifest, false)
+            .expect("default capture remains admission-only");
+        assert_eq!(value(&admitted, "capture_status"), "admitted");
+        assert_eq!(value(&admitted, "delivery_status"), "not_started");
+        assert_eq!(value(&admitted, "store_written"), "false");
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let delivered = run_fixture_v2_capture(&fixture, &manifest, true)
+            .expect("explicit existing-binding delivery");
+        assert_eq!(value(&delivered, "capture_status"), "completed");
+        assert_eq!(value(&delivered, "admission_outcome"), "reused");
+        assert_eq!(
+            value(&delivered, "capture_id"),
+            value(&admitted, "capture_id")
+        );
+        assert_eq!(value(&delivered, "delivery_status"), "completed");
+        assert_eq!(value(&delivered, "recovery_action"), "none");
+        assert_eq!(value(&delivered, "store_written"), "true");
+        assert_eq!(value(&delivered, "target_delivery_reused"), "false");
+
+        let capture_id = value(&delivered, "capture_id");
+        let intent_path = PathBuf::from(value(&delivered, "journal_path"));
+        let journal_root = intent_path
+            .parent()
+            .and_then(Path::parent)
+            .expect("journal root");
+        let projection_path = journal_root
+            .join("projections")
+            .join(format!("{capture_id}.json"));
+        let event_dir = journal_root.join("events").join(&capture_id);
+        let intent_snapshot = cli_file_snapshot(&intent_path);
+        let projection_snapshot = cli_file_snapshot(&projection_path);
+        let event_names = directory_entry_names(&event_dir);
+        let store_after_delivery = cli_sqlite_file_snapshots(&fixture.store_path);
+
+        let replayed = run_fixture_v2_capture(&fixture, &manifest, true)
+            .expect("completed explicit capture replay");
+        assert_eq!(value(&replayed, "capture_id"), capture_id);
+        assert_eq!(value(&replayed, "admission_outcome"), "reused");
+        assert_eq!(value(&replayed, "store_written"), "false");
+        assert_eq!(value(&replayed, "target_delivery_reused"), "true");
+        assert_eq!(value(&replayed, "projection_written"), "false");
+        assert_eq!(cli_file_snapshot(&intent_path), intent_snapshot);
+        assert_eq!(cli_file_snapshot(&projection_path), projection_snapshot);
+        assert_eq!(directory_entry_names(&event_dir), event_names);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_after_delivery
+        );
+    }
+
+    #[test]
+    fn capture_existing_binding_marker_guard_does_not_gate_manual_recovery() {
+        run_cli_test_with_large_stack(
+            "capture-existing-binding-marker-scope-test",
+            assert_capture_existing_binding_marker_guard_does_not_gate_manual_recovery,
+        );
+    }
+
+    fn assert_capture_existing_binding_marker_guard_does_not_gate_manual_recovery() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest = write_v2_capture_manifest(
+            &fixture,
+            "existing-binding-marker-scope.json",
+            "existing-binding-marker-scope-key",
+            "Fast-path marker checks must not disable manual recovery",
+        );
+        let admitted = run_fixture_v2_capture(&fixture, &manifest, false)
+            .expect("admit before marker removal");
+        let capture_id = CaptureId::parse_canonical(&value(&admitted, "capture_id")).unwrap();
+        let effective = effective_registry_config(Some(fixture.registry_path.clone())).unwrap();
+        let registry_path = fs::canonicalize(&fixture.registry_path).unwrap();
+        fs::remove_file(journal_admission_activation_path(
+            &effective,
+            &registry_path,
+        ))
+        .expect("remove fixture journal marker");
+
+        let fast_path = run_fixture_v2_capture(&fixture, &manifest, true)
+            .expect_err("inactive marker must refuse same-command continuation");
+        assert_eq!(
+            fast_path.code(),
+            ErrorCode::JournalAdmissionActivationInactive
+        );
+
+        let status =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .expect("manual status remains marker-independent");
+        let applied = apply_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            None,
+            capture_id,
+            ControlPlaneDigest::from_text(&value(&status, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&status, "projection_digest")).unwrap(),
+        )
+        .expect("manual recovery remains available after marker removal");
+        assert_eq!(value(&applied, "recovery_state"), "completed");
+        let completed =
+            inspect_project_capture_recovery(Some(fixture.registry_path.clone()), capture_id)
+                .expect("completed status remains marker-independent");
+        assert_eq!(value(&completed, "effective_recovery_state"), "completed");
+        assert_eq!(value(&completed, "recovery_action"), "none");
+    }
+
+    #[test]
+    fn cli_operation_inventory_is_readonly_allowlisted_and_digest_pageable() {
+        run_cli_test_with_large_stack(
+            "operation-inventory-readonly-pageable-test",
+            assert_cli_operation_inventory_is_readonly_allowlisted_and_digest_pageable,
+        );
+    }
+
+    fn assert_cli_operation_inventory_is_readonly_allowlisted_and_digest_pageable() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest_a = write_v2_capture_manifest(
+            &fixture,
+            "inventory-a.json",
+            "inventory-raw-secret-a",
+            "Inventory fixture A",
+        );
+        let manifest_b = write_v2_capture_manifest(
+            &fixture,
+            "inventory-b.json",
+            "inventory-raw-secret-b",
+            "Inventory fixture B",
+        );
+        let admitted_a =
+            run_fixture_v2_capture(&fixture, &manifest_a, false).expect("admit inventory A");
+        let admitted_b =
+            run_fixture_v2_capture(&fixture, &manifest_b, false).expect("admit inventory B");
+        let intent_a = PathBuf::from(value(&admitted_a, "journal_path"));
+        let intent_b = PathBuf::from(value(&admitted_b, "journal_path"));
+        let registry_before = fs::read(&fixture.registry_path).expect("registry before inventory");
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let intent_a_before = cli_file_snapshot(&intent_a);
+        let intent_b_before = cli_file_snapshot(&intent_b);
+
+        let first = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+            "--payload-kind",
+            "cognition_v2",
+            "--recovery-action",
+            "apply_binding_receipt",
+            "--limit",
+            "1",
+        ])
+        .expect("parse first inventory page"))
+        .expect("first inventory page");
+        assert_eq!(value(&first, "read_only"), "true");
+        assert_eq!(value(&first, "total_matching"), "2");
+        assert_eq!(value(&first, "returned_rows"), "1");
+        assert_eq!(value(&first, "truncated"), "true");
+        assert_eq!(value(&first, "bindings_validated"), "1");
+        assert_eq!(value(&first, "bindings_verified"), "1");
+        assert_eq!(value(&first, "row.0.binding_classification"), "valid");
+        assert_eq!(
+            value(&first, "row.0.recovery_action"),
+            "apply_binding_receipt"
+        );
+        assert!(!first.contains("inventory-raw-secret-a"));
+        assert!(!first.contains("inventory-raw-secret-b"));
+        assert!(!first.contains("value_reason"));
+        assert!(!first.contains("semantic_payload"));
+        assert!(!first.contains("store_path"));
+        assert!(!first.contains("journal_root"));
+
+        let project_filtered = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+            "--project-ref",
+            &value(&first, "row.0.project_ref"),
+        ])
+        .expect("parse ProjectRef-filtered inventory"))
+        .expect("ProjectRef-filtered inventory");
+        assert_eq!(value(&project_filtered, "total_matching"), "2");
+
+        let digest = value(&first, "inventory_digest");
+        let cursor = value(&first, "next_after_capture_id");
+        let second = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "capture-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+            "--payload-kind",
+            "cognition_v2",
+            "--recovery-action",
+            "apply_binding_receipt",
+            "--limit",
+            "1",
+            "--after-capture-id",
+            &cursor,
+            "--expected-inventory-digest",
+            &digest,
+        ])
+        .expect("parse second inventory page"))
+        .expect("second inventory page");
+        assert_eq!(value(&second, "inventory_digest"), digest);
+        assert_eq!(value(&second, "returned_rows"), "1");
+        assert_eq!(value(&second, "truncated"), "false");
+        assert_ne!(value(&second, "row.0.capture_id"), cursor);
+
+        let json = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+            "--format",
+            "json",
+        ])
+        .expect("parse JSON inventory"))
+        .expect("JSON inventory");
+        let json_value: serde_json::Value = serde_json::from_str(&json).expect("inventory JSON");
+        assert_eq!(json_value["total_matching"], serde_json::json!(2));
+        assert_eq!(json_value["rows"].as_array().unwrap().len(), 2);
+        assert!(!json.contains("inventory-raw-secret-a"));
+        assert!(!json.contains("inventory-raw-secret-b"));
+
+        let wrong = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+            "--after-capture-id",
+            &cursor,
+            "--expected-inventory-digest",
+            &ControlPlaneDigest::raw(b"wrong inventory").to_string(),
+        ])
+        .expect("parse stale inventory cursor"))
+        .expect_err("stale inventory digest must fail closed");
+        assert_eq!(wrong.code(), ErrorCode::ControlPlaneInvalid);
+
+        let absent_cursor = CaptureId::new_v7().to_string();
+        let absent = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+            "--payload-kind",
+            "cognition_v2",
+            "--recovery-action",
+            "apply_binding_receipt",
+            "--after-capture-id",
+            &absent_cursor,
+            "--expected-inventory-digest",
+            &digest,
+        ])
+        .expect("parse absent inventory cursor"))
+        .expect_err("absent inventory cursor must fail closed");
+        assert_eq!(absent.code(), ErrorCode::ControlPlaneInvalid);
+
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+        assert_eq!(cli_file_snapshot(&intent_a), intent_a_before);
+        assert_eq!(cli_file_snapshot(&intent_b), intent_b_before);
+        assert!(
+            !intent_a
+                .parent()
+                .and_then(Path::parent)
+                .unwrap()
+                .join("projections")
+                .join(format!("{}.json", value(&admitted_a, "capture_id")))
+                .exists()
+        );
+
+        let journal_root = intent_a.parent().and_then(Path::parent).unwrap();
+        let malformed_projection = journal_root
+            .join("projections")
+            .join(format!("{}.json", value(&admitted_a, "capture_id")));
+        fs::create_dir_all(malformed_projection.parent().unwrap()).unwrap();
+        fs::write(&malformed_projection, b"malformed projection cache\n").unwrap();
+        let malformed_before = cli_file_snapshot(&malformed_projection);
+        let cache_inventory = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse malformed-cache inventory"))
+        .expect("malformed projection remains disposable cache");
+        assert!(cache_inventory.contains("projection_cache_state=invalid"));
+        assert_eq!(cli_file_snapshot(&malformed_projection), malformed_before);
+
+        let canonical_registry = fs::canonicalize(&fixture.registry_path).unwrap();
+        let standard_journal = CaptureJournal::for_project_registry(
+            &canonical_registry,
+            ProjectRegistryJournalAlias::StandardRegistryHome,
+        )
+        .unwrap();
+        let duplicate_intent = standard_journal
+            .intent_path(CaptureId::parse_canonical(&value(&admitted_a, "capture_id")).unwrap());
+        fs::create_dir_all(duplicate_intent.parent().unwrap()).unwrap();
+        fs::copy(&intent_a, &duplicate_intent).unwrap();
+        let collision = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse alias-collision inventory"))
+        .expect_err("CaptureId collision across journal aliases must fail closed");
+        assert_eq!(collision.code(), ErrorCode::ControlPlaneInvalid);
+    }
+
+    #[test]
+    fn cli_operation_inventory_does_not_report_missing_binding_as_opened_store() {
+        run_cli_test_with_large_stack(
+            "operation-inventory-missing-binding-audit-test",
+            assert_cli_operation_inventory_does_not_report_missing_binding_as_opened_store,
+        );
+    }
+
+    fn assert_cli_operation_inventory_does_not_report_missing_binding_as_opened_store() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest = write_v2_capture_manifest(
+            &fixture,
+            "inventory-missing-binding.json",
+            "inventory-missing-binding-key",
+            "Missing binding classification must not claim a Store open",
+        );
+        run_fixture_v2_capture(&fixture, &manifest, false)
+            .expect("admit before removing fixture binding");
+
+        let mut registry_value: serde_json::Value = serde_json::from_slice(
+            &fs::read(&fixture.registry_path).expect("read registry before removing binding"),
+        )
+        .expect("parse registry JSON");
+        registry_value["bindings"] = serde_json::json!([]);
+        let serialized = serde_json::to_vec(&registry_value).expect("serialize edited registry");
+        let canonical = canonical_bytes(
+            &parse_canonical_json(&serialized).expect("canonicalize edited registry"),
+        )
+        .expect("encode edited registry");
+        let mut stored = canonical;
+        stored.push(b'\n');
+        fs::write(&fixture.registry_path, stored)
+            .expect("install fixture registry without binding");
+        ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.registry_path).expect("read registry without binding"),
+        )
+        .expect("registry without binding remains valid");
+
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let inventory = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse missing-binding inventory"))
+        .expect("classify missing binding without opening a Store");
+        assert_eq!(value(&inventory, "total_matching"), "1");
+        assert_eq!(value(&inventory, "bindings_validated"), "0");
+        assert_eq!(value(&inventory, "bindings_verified"), "0");
+        assert_eq!(value(&inventory, "store_opened_readonly"), "false");
+        assert_eq!(value(&inventory, "row.0.binding_classification"), "missing");
+        assert_eq!(
+            value(&inventory, "row.0.recovery_action"),
+            "repair_exact_binding_then_retry"
+        );
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+    }
+
+    #[test]
+    fn cli_operation_inventory_preserves_terminal_action_on_shared_binding() {
+        run_cli_test_with_large_stack(
+            "operation-inventory-shared-terminal-action-test",
+            assert_cli_operation_inventory_preserves_terminal_action_on_shared_binding,
+        );
+    }
+
+    fn assert_cli_operation_inventory_preserves_terminal_action_on_shared_binding() {
+        let fixture = create_shared_binding_isolation_fixture();
+        let pending_manifest = write_v2_capture_manifest(
+            &fixture.binding,
+            "inventory-shared-pending.json",
+            "inventory-shared-pending-key",
+            "Shared pending delivery requires isolation",
+        );
+        let pending = run_fixture_v2_capture(&fixture.binding, &pending_manifest, false)
+            .expect("admit shared pending capture");
+        let pending_capture_id = value(&pending, "capture_id");
+
+        let completed_manifest = write_v2_capture_manifest(
+            &fixture.binding,
+            "inventory-shared-completed.json",
+            "inventory-shared-completed-key",
+            "Completed operations are absent from the open inventory",
+        );
+        let completed = run_fixture_v2_capture(&fixture.binding, &completed_manifest, false)
+            .expect("admit capture for completed fixture row");
+        let completed_capture_id = CaptureId::parse_canonical(&value(&completed, "capture_id"))
+            .expect("completed fixture CaptureId");
+        let completed_status = inspect_project_capture_recovery(
+            Some(fixture.binding.registry_path.clone()),
+            completed_capture_id,
+        )
+        .expect("completed fixture status");
+        let completed_apply = apply_project_capture_recovery(
+            Some(fixture.binding.registry_path.clone()),
+            None,
+            completed_capture_id,
+            ControlPlaneDigest::from_text(&value(&completed_status, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&completed_status, "projection_digest")).unwrap(),
+        )
+        .expect("complete fixture capture through the manual recovery route");
+        assert_eq!(value(&completed_apply, "recovery_state"), "completed");
+
+        let registry_path = fs::canonicalize(&fixture.binding.registry_path).unwrap();
+        let registry = ProjectRegistryV2::from_json_bytes(&fs::read(&registry_path).unwrap())
+            .expect("shared fixture registry");
+        let project_ref_id = ProjectRefId::parse_canonical(&value(&pending, "project_ref_id"))
+            .expect("pending fixture ProjectRef");
+        let context =
+            ResolutionContext::new(ResolutionMode::DurableWrite).with_project_ref(project_ref_id);
+        let resolution = resolve_project(&registry, &context).unwrap();
+        let terminal_capture_id = CaptureId::new_v7();
+        let stale_manifest = serde_json::json!({
+            "schema_version": 1,
+            "idempotency_key": format!("inventory-shared-terminal-{terminal_capture_id}"),
+            "expected_head_commit_id": CommitId::new_v7(),
+            "expected_state_digest": Digest::raw(b"shared terminal stale state"),
+            "records": [{
+                "local_id": "legacy-finding",
+                "kind": "finding",
+                "statement": "Terminal follow-up outranks current shared binding classification"
+            }],
+            "knowledge": [],
+            "evidence": [],
+            "relations": [],
+            "rationale": {"source": "inventory-shared-terminal-test"}
+        });
+        let terminal_intent = CaptureIntent::new(
+            terminal_capture_id,
+            format!("inventory-shared-terminal-intent-{terminal_capture_id}"),
+            UtcTimestamp::parse("2026-10-08T09:00:00Z").unwrap(),
+            "Preserve the terminal recovery action in shared-target inventory",
+            CapturePayloadKind::LegacyCognitionV1,
+            stale_manifest,
+            context,
+            resolution,
+            None,
+        )
+        .unwrap();
+        let journal = CaptureJournal::for_project_registry(
+            &registry_path,
+            ProjectRegistryJournalAlias::RegistrySidecar,
+        )
+        .unwrap();
+        journal
+            .admit_for_project_registry(
+                &terminal_intent,
+                registry.revision(),
+                &registry.digest().unwrap(),
+            )
+            .expect("admit terminal fixture intent");
+        let terminal_status =
+            inspect_project_capture_recovery(Some(registry_path.clone()), terminal_capture_id)
+                .expect("terminal fixture status");
+        let terminal_apply = apply_project_capture_recovery(
+            Some(registry_path.clone()),
+            None,
+            terminal_capture_id,
+            ControlPlaneDigest::from_text(&value(&terminal_status, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&terminal_status, "projection_digest")).unwrap(),
+        )
+        .expect("terminalize stale legacy fixture");
+        assert_eq!(
+            value(&terminal_apply, "recovery_state"),
+            "legacy_manifest_upgrade_required"
+        );
+
+        let registry_before = fs::read(&registry_path).unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        let inventory = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.binding.registry,
+            "--format",
+            "json",
+        ])
+        .expect("parse mixed shared inventory"))
+        .expect("inventory mixed pending, completed, and terminal operations");
+        let value: serde_json::Value = serde_json::from_str(&inventory).unwrap();
+        assert_eq!(value["total_matching"], serde_json::json!(2));
+        assert_eq!(
+            value["summary"]["recovery_action"]["isolate_shared_binding_then_retry"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            value["summary"]["recovery_action"]["upgrade_legacy_manifest"],
+            serde_json::json!(1)
+        );
+        let rows = value["rows"].as_array().unwrap();
+        assert!(!rows.iter().any(|row| {
+            row["capture_id"] == serde_json::json!(completed_capture_id.to_string())
+        }));
+        let pending_row = rows
+            .iter()
+            .find(|row| row["capture_id"] == serde_json::json!(pending_capture_id))
+            .expect("pending shared row");
+        assert_eq!(
+            pending_row["recovery_action"],
+            serde_json::json!("isolate_shared_binding_then_retry")
+        );
+        let terminal_row = rows
+            .iter()
+            .find(|row| row["capture_id"] == serde_json::json!(terminal_capture_id.to_string()))
+            .expect("terminal shared row");
+        assert_eq!(
+            terminal_row["recovery_action"],
+            serde_json::json!("upgrade_legacy_manifest")
+        );
+        assert_eq!(
+            terminal_row["binding_classification"],
+            serde_json::json!("shared")
+        );
+        assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            store_before
+        );
+    }
+
+    #[test]
+    fn cli_capture_existing_binding_refuses_shared_target_before_new_event() {
+        run_cli_test_with_large_stack(
+            "capture-existing-binding-shared-target-test",
+            assert_cli_capture_existing_binding_refuses_shared_target_before_new_event,
+        );
+    }
+
+    fn assert_cli_capture_existing_binding_refuses_shared_target_before_new_event() {
+        let fixture = create_shared_binding_isolation_fixture();
+        let manifest = write_v2_capture_manifest(
+            &fixture.binding,
+            "shared-existing-binding.json",
+            "shared-existing-binding-key",
+            "Shared target must remain separately gated",
+        );
+        let registry_before = fs::read(&fixture.binding.registry_path).unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        let error = run_fixture_v2_capture(&fixture.binding, &manifest, true)
+            .expect_err("shared target must not receive fast-path delivery");
+        let capture_id = match &error {
+            WorkVcsError::CaptureDeliveryIncomplete {
+                capture_id,
+                journal_persisted,
+                cause_error_code,
+                recovery_action,
+                ..
+            } => {
+                assert!(*journal_persisted);
+                assert_eq!(cause_error_code, "control_plane_invalid");
+                assert_eq!(recovery_action, "inspect_operation_recovery_status");
+                CaptureId::parse_canonical(capture_id).unwrap()
+            }
+            other => panic!("unexpected error: {other}"),
+        };
+        let canonical_registry = fs::canonicalize(&fixture.binding.registry_path).unwrap();
+        let journal = capture_recovery_journal(&canonical_registry, capture_id)
+            .expect("durable rejected intent");
+        let authority = journal.inspect_authority(capture_id).unwrap();
+        assert!(authority.events().is_empty());
+        assert!(!journal.projection_path(capture_id).exists());
+        let cross_project = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.second_project_text,
+            "--registry",
+            &fixture.binding.registry,
+            "--value-reason",
+            "Persist a verified Stage B fixture finding",
+            "--manifest",
+            &path_text(&manifest),
+            "--deliver-existing-binding",
+        ])
+        .expect("parse cross-project idempotency reuse"))
+        .expect_err("current invocation cannot reuse authority for another ProjectRef");
+        match cross_project {
+            WorkVcsError::CaptureDeliveryIncomplete {
+                cause_error_code,
+                message,
+                ..
+            } => {
+                assert_eq!(cause_error_code, "control_plane_invalid");
+                assert!(message.contains("current invocation and reused intent"));
+            }
+            other => panic!("unexpected cross-project error: {other}"),
+        }
+        assert!(
+            journal
+                .inspect_authority(capture_id)
+                .unwrap()
+                .events()
+                .is_empty()
+        );
+        let inventory = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "operation-recovery",
+            "--list-open",
+            "--registry",
+            &fixture.binding.registry,
+            "--recovery-action",
+            "isolate_shared_binding_then_retry",
+        ])
+        .expect("parse shared-target inventory"))
+        .expect("classify shared-target inventory");
+        assert_eq!(value(&inventory, "total_matching"), "1");
+        assert_eq!(value(&inventory, "bindings_validated"), "2");
+        assert_eq!(value(&inventory, "bindings_verified"), "2");
+        assert_eq!(value(&inventory, "row.0.binding_classification"), "shared");
+        assert_eq!(
+            fs::read(&fixture.binding.registry_path).unwrap(),
+            registry_before
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            store_before
+        );
+    }
+
+    #[test]
+    fn cli_capture_existing_binding_rejects_capture_group_and_v1_before_admission() {
+        run_cli_test_with_large_stack(
+            "capture-existing-binding-unsupported-modes-test",
+            assert_cli_capture_existing_binding_rejects_capture_group_and_v1_before_admission,
+        );
+    }
+
+    fn assert_cli_capture_existing_binding_rejects_capture_group_and_v1_before_admission() {
+        let group_fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&group_fixture, None);
+        activate_fixture_v2_durable_operations(&group_fixture);
+        let group_manifest = write_v2_capture_manifest(
+            &group_fixture,
+            "group-existing-binding.json",
+            "group-existing-binding-key",
+            "CaptureGroup delivery remains separately authorized",
+        );
+        let group_intent = group_fixture._tempdir.path().join("capture-group.json");
+        fs::write(&group_intent, b"{}\n").unwrap();
+        let group_registry_before = fs::read(&group_fixture.registry_path).unwrap();
+        let group_store_before = cli_sqlite_file_snapshots(&group_fixture.store_path);
+        let group_error = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &group_fixture.project_text,
+            "--registry",
+            &group_fixture.registry,
+            "--value-reason",
+            "Do not widen one-project delivery authority",
+            "--manifest",
+            &path_text(&group_manifest),
+            "--capture-group",
+            &path_text(&group_intent),
+            "--deliver-existing-binding",
+        ])
+        .expect("parse CaptureGroup plus fast path"))
+        .expect_err("CaptureGroup plus fast path must fail before admission");
+        assert!(matches!(group_error, WorkVcsError::QueryInvalid(_)));
+        assert!(
+            group_error
+                .to_string()
+                .contains("does not authorize CaptureGroup")
+        );
+        let group_registry = fs::canonicalize(&group_fixture.registry_path).unwrap();
+        for journal in capture_recovery_journals(&group_registry).unwrap() {
+            assert!(!journal.root().exists());
+        }
+        assert_eq!(
+            fs::read(&group_fixture.registry_path).unwrap(),
+            group_registry_before
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&group_fixture.store_path),
+            group_store_before
+        );
+
+        let v1_fixture = create_project_binding_fixture(false);
+        let v1_manifest = write_v2_capture_manifest(
+            &v1_fixture,
+            "v1-existing-binding.json",
+            "v1-existing-binding-key",
+            "Registry v1 cannot use the existing-binding continuation",
+        );
+        let v1_registry_before = fs::read(&v1_fixture.registry_path).unwrap();
+        let v1_store_before = cli_sqlite_file_snapshots(&v1_fixture.store_path);
+        let v1_error = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &v1_fixture.project_text,
+            "--registry",
+            &v1_fixture.registry,
+            "--value-reason",
+            "Registry migration remains separately authorized",
+            "--manifest",
+            &path_text(&v1_manifest),
+            "--deliver-existing-binding",
+        ])
+        .expect("parse registry-v1 fast path"))
+        .expect_err("registry v1 must reject fast-path delivery before admission");
+        assert_eq!(v1_error.code(), ErrorCode::ControlPlaneInvalid);
+        assert!(v1_error.to_string().contains("requires registry v2"));
+        let v1_registry = fs::canonicalize(&v1_fixture.registry_path).unwrap();
+        for journal in capture_recovery_journals(&v1_registry).unwrap() {
+            assert!(!journal.root().exists());
+        }
+        assert_eq!(
+            fs::read(&v1_fixture.registry_path).unwrap(),
+            v1_registry_before
+        );
+        assert_eq!(
+            cli_sqlite_file_snapshots(&v1_fixture.store_path),
+            v1_store_before
+        );
+    }
+
+    #[test]
+    fn cli_capture_existing_binding_refuses_conflict_before_new_event() {
+        run_cli_test_with_large_stack(
+            "capture-existing-binding-conflict-test",
+            assert_cli_capture_existing_binding_refuses_conflict_before_new_event,
+        );
+    }
+
+    fn assert_cli_capture_existing_binding_refuses_conflict_before_new_event() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        let registry = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.registry_path).expect("migrated registry"),
+        )
+        .expect("registry v2");
+        let primary_project_ref = registry.projects()[0].project_ref_id();
+        let second_project_ref = ProjectRefId::new_v7();
+        let mut registry_value: serde_json::Value =
+            serde_json::from_slice(&registry.canonical_json_bytes().unwrap()).unwrap();
+        registry_value["revision"] = serde_json::json!(registry.revision() + 1);
+        registry_value["projects"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|project| project["project_ref_id"] == serde_json::json!(primary_project_ref))
+            .expect("primary fixture ProjectRef")["maturity"] = serde_json::json!("established");
+        registry_value["projects"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "project_ref_id": second_project_ref,
+                "maturity": "established",
+                "display_name": null,
+                "created_at": "2026-10-08T09:10:00Z",
+                "created_by": "explicit"
+            }));
+        registry_value["projects"]
+            .as_array_mut()
+            .unwrap()
+            .sort_by(|left, right| {
+                left["project_ref_id"]
+                    .as_str()
+                    .unwrap()
+                    .cmp(right["project_ref_id"].as_str().unwrap())
+            });
+        for (project_ref_id, normalized_value, digest_seed) in [
+            (
+                primary_project_ref,
+                "conflict-owner-a",
+                b"conflict-a".as_slice(),
+            ),
+            (
+                second_project_ref,
+                "conflict-owner-b",
+                b"conflict-b".as_slice(),
+            ),
+        ] {
+            registry_value["locators"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "locator_id": workvcs_core::ProjectLocatorId::new_v7(),
+                    "project_ref_id": project_ref_id,
+                    "role": "identity",
+                    "authority": "semantic_project",
+                    "provider": "fixture-tool",
+                    "namespace": "isolated:fast-path-conflict",
+                    "kind": "project_id",
+                    "normalized_value": normalized_value,
+                    "assurance": "authoritative",
+                    "source_adapter": "fixture-tool/v1",
+                    "evidence_digest": ControlPlaneDigest::raw(digest_seed),
+                    "observed_at": "2026-10-08T09:10:00Z",
+                    "state": "active"
+                }));
+        }
+        registry_value["locators"]
+            .as_array_mut()
+            .unwrap()
+            .sort_by(|left, right| {
+                left["locator_id"]
+                    .as_str()
+                    .unwrap()
+                    .cmp(right["locator_id"].as_str().unwrap())
+            });
+        let conflict_registry =
+            ProjectRegistryV2::from_json_bytes(&serde_json::to_vec(&registry_value).unwrap())
+                .expect("conflicting-owner registry remains structurally valid");
+        fs::write(
+            &fixture.registry_path,
+            conflict_registry.stored_json_bytes().unwrap(),
+        )
+        .expect("install conflict fixture registry");
+        activate_fixture_v2_durable_operations(&fixture);
+
+        let locator_path = fixture
+            ._tempdir
+            .path()
+            .join("fast-path-conflict-locators.json");
+        fs::write(
+            &locator_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "semantic_locator_evidence": [
+                    {
+                        "authority": "semantic_project",
+                        "provider": "fixture-tool",
+                        "namespace": "isolated:fast-path-conflict",
+                        "kind": "project_id",
+                        "normalized_value": "conflict-owner-a",
+                        "assurance": "authoritative",
+                        "source_adapter": "fixture-tool/v1",
+                        "evidence_digest": ControlPlaneDigest::raw(b"conflict-a")
+                    },
+                    {
+                        "authority": "semantic_project",
+                        "provider": "fixture-tool",
+                        "namespace": "isolated:fast-path-conflict",
+                        "kind": "project_id",
+                        "normalized_value": "conflict-owner-b",
+                        "assurance": "authoritative",
+                        "source_adapter": "fixture-tool/v1",
+                        "evidence_digest": ControlPlaneDigest::raw(b"conflict-b")
+                    }
+                ]
+            }))
+            .unwrap(),
+        )
+        .expect("write conflicting semantic context");
+        let manifest = write_v2_capture_manifest(
+            &fixture,
+            "conflict-existing-binding.json",
+            "conflict-existing-binding-key",
+            "Conflicting ownership cannot authorize target delivery",
+        );
+        let registry_before = fs::read(&fixture.registry_path).unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let error = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--locator-context",
+            &path_text(&locator_path),
+            "--value-reason",
+            "Persist conflict evidence without selecting a target",
+            "--manifest",
+            &path_text(&manifest),
+            "--deliver-existing-binding",
+        ])
+        .expect("parse conflicting existing-binding capture"))
+        .expect_err("conflicting ownership must stop after durable admission");
+        let capture_id = match &error {
+            WorkVcsError::CaptureDeliveryIncomplete {
+                capture_id,
+                journal_persisted,
+                cause_error_code,
+                ..
+            } => {
+                assert!(*journal_persisted);
+                assert_eq!(cause_error_code, "control_plane_invalid");
+                CaptureId::parse_canonical(capture_id).unwrap()
+            }
+            other => panic!("unexpected conflict error: {other}"),
+        };
+        let canonical_registry = fs::canonicalize(&fixture.registry_path).unwrap();
+        let journal = capture_recovery_journal(&canonical_registry, capture_id).unwrap();
+        assert!(
+            journal
+                .inspect_authority(capture_id)
+                .unwrap()
+                .events()
+                .is_empty()
+        );
+        assert!(!journal.projection_path(capture_id).exists());
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+    }
+
+    #[test]
+    fn cli_capture_existing_binding_refuses_invalid_binding_before_new_event() {
+        run_cli_test_with_large_stack(
+            "capture-existing-binding-invalid-target-test",
+            assert_cli_capture_existing_binding_refuses_invalid_binding_before_new_event,
+        );
+    }
+
+    fn assert_cli_capture_existing_binding_refuses_invalid_binding_before_new_event() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let manifest = write_v2_capture_manifest(
+            &fixture,
+            "invalid-existing-binding.json",
+            "invalid-existing-binding-key",
+            "An invalid binding cannot receive target delivery",
+        );
+        let admitted = run_fixture_v2_capture(&fixture, &manifest, false)
+            .expect("admit before invalidating target Store");
+        let capture_id = CaptureId::parse_canonical(&value(&admitted, "capture_id")).unwrap();
+        let corrupt_store = b"not a WorkVCS SQLite Store\n";
+        fs::write(&fixture.store_path, corrupt_store).expect("corrupt fixture Store");
+        let error = run_fixture_v2_capture(&fixture, &manifest, true)
+            .expect_err("invalid binding must stop after admission reuse");
+        match error {
+            WorkVcsError::CaptureDeliveryIncomplete {
+                cause_error_code,
+                journal_persisted,
+                ..
+            } => {
+                assert!(journal_persisted);
+                assert_eq!(cause_error_code, "control_plane_invalid");
+            }
+            other => panic!("unexpected invalid-binding error: {other}"),
+        }
+        let canonical_registry = fs::canonicalize(&fixture.registry_path).unwrap();
+        let journal = capture_recovery_journal(&canonical_registry, capture_id).unwrap();
+        assert!(
+            journal
+                .inspect_authority(capture_id)
+                .unwrap()
+                .events()
+                .is_empty()
+        );
+        assert!(!journal.projection_path(capture_id).exists());
+        assert_eq!(fs::read(&fixture.store_path).unwrap(), corrupt_store);
+    }
+
+    #[test]
+    fn capture_existing_binding_rejects_changed_registry_without_later_target_proof() {
+        let fixture = create_bound_capture_recovery_fixture(
+            serde_json::json!({
+                "records": [{
+                    "local_id": "finding",
+                    "kind": "finding",
+                    "statement": "Historical registry continuity must be proven"
+                }]
+            }),
+            "changed-registry-continuity",
+        );
+        activate_fixture_v2_durable_operations(&fixture.binding);
+        let registry = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.registry_path).expect("registry bytes"),
+        )
+        .expect("registry v2");
+        let journal = capture_recovery_journal(&fixture.registry_path, fixture.capture_id)
+            .expect("fixture journal");
+        let intent = journal.load(fixture.capture_id).unwrap();
+        let current_resolution = resolve_project(&registry, intent.resolution_context()).unwrap();
+        let invocation_resolution = current_resolution.clone();
+        journal
+            .append_event_authority_only(
+                fixture.capture_id,
+                UtcTimestamp::parse("2026-10-01T08:00:01Z").unwrap(),
+                CaptureEventPayload::ResolutionRecorded(
+                    ResolutionRecordedPayload::new(
+                        registry.registry_id(),
+                        registry.revision(),
+                        ControlPlaneDigest::raw(b"older registry snapshot"),
+                        current_resolution,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .expect("append historical resolution");
+        let before = journal.inspect_authority(fixture.capture_id).unwrap();
+        assert_eq!(before.events().len(), 1);
+        let store_before = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        let error = apply_project_capture_recovery_existing_binding(
+            Some(fixture.registry_path.clone()),
+            fixture.capture_id,
+            &registry.digest().unwrap(),
+            &before.projection().digest().unwrap(),
+            invocation_resolution,
+        )
+        .expect_err("changed registry without later complete tuple must fail");
+        assert!(error.to_string().contains("complete target-tuple proof"));
+        let after = journal.inspect_authority(fixture.capture_id).unwrap();
+        assert_eq!(after.events(), before.events());
+        assert_eq!(after.projection(), before.projection());
+        assert!(!journal.projection_path(fixture.capture_id).exists());
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            store_before
+        );
+    }
+
+    #[test]
+    fn capture_existing_binding_rejects_unresolved_invocation_before_new_event() {
+        let fixture = create_bound_capture_recovery_fixture(
+            serde_json::json!({
+                "records": [{
+                    "local_id": "finding",
+                    "kind": "finding",
+                    "statement": "The current invocation must still resolve one exact owner"
+                }]
+            }),
+            "unresolved-invocation",
+        );
+        activate_fixture_v2_durable_operations(&fixture.binding);
+        let registry = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.registry_path).expect("registry bytes"),
+        )
+        .expect("registry v2");
+        let journal = capture_recovery_journal(&fixture.registry_path, fixture.capture_id)
+            .expect("fixture journal");
+        let before = journal.inspect_authority(fixture.capture_id).unwrap();
+        assert!(before.events().is_empty());
+        let unresolved: workvcs_core::control_plane::ResolutionResult =
+            serde_json::from_value(serde_json::json!({
+                "status": "unresolved",
+                "primary_project_ref": null,
+                "primary_basis": null,
+                "related_project_refs": [],
+                "unmapped_locators": [],
+                "diagnostics": []
+            }))
+            .expect("valid unresolved invocation result");
+        let store_before = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        let error = apply_project_capture_recovery_existing_binding(
+            Some(fixture.registry_path.clone()),
+            fixture.capture_id,
+            &registry.digest().unwrap(),
+            &before.projection().digest().unwrap(),
+            unresolved,
+        )
+        .expect_err("an unresolved current invocation cannot select an existing target");
+        assert!(
+            error
+                .to_string()
+                .contains("invocation requires exactly one resolved ProjectRef")
+        );
+        let after = journal.inspect_authority(fixture.capture_id).unwrap();
+        assert_eq!(after.events(), before.events());
+        assert_eq!(after.projection(), before.projection());
+        assert!(!journal.projection_path(fixture.capture_id).exists());
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            store_before
+        );
+    }
+
+    #[test]
+    fn capture_existing_binding_rejects_prior_binding_path_mismatch_before_new_event() {
+        let fixture = create_bound_capture_recovery_fixture(
+            serde_json::json!({
+                "records": [{
+                    "local_id": "finding",
+                    "kind": "finding",
+                    "statement": "Physical Store path is part of target continuity"
+                }]
+            }),
+            "binding-path-continuity",
+        );
+        activate_fixture_v2_durable_operations(&fixture.binding);
+        let registry = ProjectRegistryV2::from_json_bytes(
+            &fs::read(&fixture.registry_path).expect("registry bytes"),
+        )
+        .expect("registry v2");
+        let registry_digest = registry.digest().unwrap();
+        let journal = capture_recovery_journal(&fixture.registry_path, fixture.capture_id)
+            .expect("fixture journal");
+        let intent = journal.load(fixture.capture_id).unwrap();
+        let resolution = resolve_project(&registry, intent.resolution_context()).unwrap();
+        let invocation_resolution = resolution.clone();
+        let project_ref_id = resolution.primary_project_ref().unwrap();
+        let project = registry.project(project_ref_id).unwrap();
+        let (locator_id, evidence) = primary_identity_locator(&registry, &resolution).unwrap();
+        journal
+            .append_event_authority_only(
+                fixture.capture_id,
+                UtcTimestamp::parse("2026-10-01T08:00:01Z").unwrap(),
+                CaptureEventPayload::ResolutionRecorded(
+                    ResolutionRecordedPayload::new(
+                        registry.registry_id(),
+                        registry.revision(),
+                        registry_digest.clone(),
+                        resolution,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .expect("append resolution authority");
+        let prior_path = CanonicalPath::parse(
+            fixture
+                .binding
+                ._tempdir
+                .path()
+                .join("historical-copy.sqlite")
+                .display()
+                .to_string(),
+        )
+        .unwrap();
+        assert_ne!(&prior_path, fixture.target.store_path());
+        journal
+            .append_event_authority_only(
+                fixture.capture_id,
+                UtcTimestamp::parse("2026-10-01T08:00:02Z").unwrap(),
+                CaptureEventPayload::ProjectBindingReady(
+                    ProjectBindingReadyPayload::new(
+                        registry.registry_id(),
+                        registry.revision(),
+                        registry_digest.clone(),
+                        project_ref_id,
+                        project.maturity(),
+                        locator_id,
+                        evidence,
+                        prior_path,
+                        fixture.target.store_id(),
+                        fixture.target.workspace_id(),
+                        fixture.target.branch_id(),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .expect("append historical target authority");
+
+        let before = journal.inspect_authority(fixture.capture_id).unwrap();
+        assert_eq!(before.events().len(), 2);
+        let store_before = cli_sqlite_file_snapshots(&fixture.binding.store_path);
+        let error = apply_project_capture_recovery_existing_binding(
+            Some(fixture.registry_path.clone()),
+            fixture.capture_id,
+            &registry_digest,
+            &before.projection().digest().unwrap(),
+            invocation_resolution,
+        )
+        .expect_err("a prior physical Store path cannot authorize the current target");
+        assert!(error.to_string().contains("prior target-bearing authority"));
+        let after = journal.inspect_authority(fixture.capture_id).unwrap();
+        assert_eq!(after.events(), before.events());
+        assert_eq!(after.projection(), before.projection());
+        assert!(!journal.projection_path(fixture.capture_id).exists());
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.binding.store_path),
+            store_before
+        );
+    }
+
+    #[test]
+    fn cli_clean_unbound_is_degraded_and_flagged_capture_is_partial() {
+        run_cli_test_with_large_stack(
+            "clean-unbound-health-and-capture-test",
+            assert_cli_clean_unbound_is_degraded_and_flagged_capture_is_partial,
+        );
+    }
+
+    fn assert_cli_clean_unbound_is_degraded_and_flagged_capture_is_partial() {
+        let fixture = create_project_binding_fixture(false);
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let unbound = fixture._tempdir.path().join("unbound-project");
+        fs::create_dir_all(&unbound).unwrap();
+        let unbound_text = path_text(&fs::canonicalize(&unbound).unwrap());
+
+        let health = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "health",
+            "--cwd",
+            &unbound_text,
+            "--registry",
+            &fixture.registry,
+        ])
+        .expect("parse unbound health"))
+        .expect("clean unbound health remains inspectable");
+        assert_eq!(value(&health, "health"), "degraded");
+        assert_eq!(value(&health, "resolution_status"), "unbound");
+        assert_eq!(value(&health, "resolution_issue"), "project_owner_unbound");
+
+        let required = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "health",
+            "--cwd",
+            &unbound_text,
+            "--registry",
+            &fixture.registry,
+            "--require-healthy",
+        ])
+        .expect("parse strict unbound health"))
+        .expect_err("strict health must reject clean unbound ownership");
+        assert_eq!(required.code(), ErrorCode::ProjectOwnerUnbound);
+        let required_json: serde_json::Value =
+            serde_json::from_str(&render_workvcs_error(&required, ErrorOutputFormat::Json))
+                .expect("strict health JSON error");
+        assert_eq!(
+            required_json["error_code"],
+            serde_json::json!("project_owner_unbound")
+        );
+        assert_eq!(required_json["retryable"], serde_json::json!(false));
+        assert_eq!(required_json["recoverable"], serde_json::json!(true));
+
+        let manifest = write_v2_capture_manifest(
+            &fixture,
+            "unbound-fast-capture.json",
+            "unbound-fast-capture-key",
+            "Unbound delivery remains separately authorized",
+        );
+        let registry_before = fs::read(&fixture.registry_path).unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let error = run(Cli::try_parse_from([
+            "workvcs",
+            "capture",
+            "--cwd",
+            &unbound_text,
+            "--registry",
+            &fixture.registry,
+            "--value-reason",
+            "Persist unbound evidence before any bootstrap authority",
+            "--manifest",
+            &path_text(&manifest),
+            "--deliver-existing-binding",
+        ])
+        .expect("parse unbound flagged capture"))
+        .expect_err("flagged capture cannot bootstrap an unbound owner");
+        let capture_id = match &error {
+            WorkVcsError::CaptureDeliveryIncomplete {
+                capture_id,
+                journal_persisted,
+                cause_error_code,
+                ..
+            } => {
+                assert!(*journal_persisted);
+                assert_eq!(cause_error_code, "project_owner_unbound");
+                CaptureId::parse_canonical(capture_id).unwrap()
+            }
+            other => panic!("unexpected error: {other}"),
+        };
+        let rendered = render_workvcs_error(&error, ErrorOutputFormat::KeyValue);
+        assert_eq!(
+            value(&rendered, "error_code"),
+            "capture_delivery_incomplete"
+        );
+        assert_eq!(value(&rendered, "journal_persisted"), "true");
+        assert_eq!(
+            value(&rendered, "cause_error_code"),
+            "project_owner_unbound"
+        );
+        assert_eq!(
+            value(&rendered, "recovery_action"),
+            "inspect_operation_recovery_status"
+        );
+        let rendered_json: serde_json::Value =
+            serde_json::from_str(&render_workvcs_error(&error, ErrorOutputFormat::Json))
+                .expect("partial delivery JSON error");
+        assert_eq!(
+            rendered_json["error_code"],
+            serde_json::json!("capture_delivery_incomplete")
+        );
+        assert_eq!(rendered_json["retryable"], serde_json::json!(false));
+        assert_eq!(
+            rendered_json["capture_id"],
+            serde_json::json!(capture_id.to_string())
+        );
+        assert_eq!(rendered_json["journal_persisted"], serde_json::json!(true));
+        assert_eq!(
+            rendered_json["cause_error_code"],
+            serde_json::json!("project_owner_unbound")
+        );
+        assert_eq!(
+            rendered_json["recovery_action"],
+            serde_json::json!("inspect_operation_recovery_status")
+        );
+        let canonical_registry = fs::canonicalize(&fixture.registry_path).unwrap();
+        let journal = capture_recovery_journal(&canonical_registry, capture_id).unwrap();
+        let authority = journal.inspect_authority(capture_id).unwrap();
+        assert!(authority.events().is_empty());
+        assert!(!journal.projection_path(capture_id).exists());
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+    }
+
+    #[test]
     fn cli_capture_recovery_delivers_primary_once_and_reuses_receipt() {
         run_cli_test_with_large_stack(
             "capture-recovery-primary-delivery-once-test",
@@ -70899,8 +73532,40 @@ mod tests {
         ])
         .expect("parse semantic discover"))
         .expect_err("unbound semantic owner must block CWD fallback");
-        assert!(unbound.to_string().contains("status Unbound"));
-        assert!(unbound.to_string().contains("never falls back"));
+        assert_eq!(unbound.code(), ErrorCode::ProjectOwnerUnbound);
+        let rendered = render_workvcs_error(&unbound, ErrorOutputFormat::KeyValue);
+        assert_eq!(value(&rendered, "error_code"), "project_owner_unbound");
+        assert_eq!(value(&rendered, "recoverable"), "true");
+        assert_eq!(
+            value(&rendered, "recovery_action"),
+            "admit_operation_then_authorize_project_bootstrap"
+        );
+        let rendered_json: serde_json::Value =
+            serde_json::from_str(&render_workvcs_error(&unbound, ErrorOutputFormat::Json))
+                .expect("unbound JSON error");
+        assert_eq!(
+            rendered_json["error_code"],
+            serde_json::json!("project_owner_unbound")
+        );
+        assert_eq!(rendered_json["retryable"], serde_json::json!(false));
+        assert_eq!(rendered_json["recoverable"], serde_json::json!(true));
+        assert_eq!(
+            rendered_json["recovery_action"],
+            serde_json::json!("admit_operation_then_authorize_project_bootstrap")
+        );
+        assert_eq!(
+            rendered_json["resolution_rank"],
+            serde_json::json!("semantic_project")
+        );
+        assert_eq!(
+            rendered_json["registry_path"],
+            serde_json::json!(
+                fs::canonicalize(&fixture.registry_path)
+                    .unwrap()
+                    .display()
+                    .to_string()
+            )
+        );
 
         let project_ref = registry.projects()[0].project_ref_id().to_string();
         let explicit = run(Cli::try_parse_from([

@@ -72,6 +72,7 @@ pub enum ErrorCode {
     JournalAdmissionCapabilityInactive,
     CaptureNotPersisted,
     CaptureIdempotencyConflict,
+    CaptureDeliveryIncomplete,
     CaptureRecoveryInstallIndeterminate,
     DigestInvalid,
     EvidenceInvalid,
@@ -95,6 +96,7 @@ pub enum ErrorCode {
     PlanInvalid,
     PlanNotFound,
     ProjectBindingNotFound,
+    ProjectOwnerUnbound,
     QueryInvalid,
     QueryUnsupported,
     RegistryMigrationApplyFailed,
@@ -135,6 +137,7 @@ impl ErrorCode {
             Self::JournalAdmissionCapabilityInactive => "journal_admission_capability_inactive",
             Self::CaptureNotPersisted => "capture_not_persisted",
             Self::CaptureIdempotencyConflict => "capture_idempotency_conflict",
+            Self::CaptureDeliveryIncomplete => "capture_delivery_incomplete",
             Self::CaptureRecoveryInstallIndeterminate => "capture_recovery_install_indeterminate",
             Self::DigestInvalid => "digest_invalid",
             Self::EvidenceInvalid => "evidence_invalid",
@@ -158,6 +161,7 @@ impl ErrorCode {
             Self::PlanInvalid => "plan_invalid",
             Self::PlanNotFound => "plan_not_found",
             Self::ProjectBindingNotFound => "project_binding_not_found",
+            Self::ProjectOwnerUnbound => "project_owner_unbound",
             Self::QueryInvalid => "query_invalid",
             Self::QueryUnsupported => "query_unsupported",
             Self::RegistryMigrationApplyFailed => "registry_migration_apply_failed",
@@ -243,6 +247,15 @@ pub enum WorkVcsError {
     #[error("capture idempotency conflict: {0}")]
     CaptureIdempotencyConflict(String),
 
+    #[error("capture {capture_id} was journal-persisted but delivery is incomplete: {message}")]
+    CaptureDeliveryIncomplete {
+        capture_id: String,
+        journal_persisted: bool,
+        cause_error_code: String,
+        recovery_action: String,
+        message: String,
+    },
+
     #[error("capture recovery installation indeterminate: {0}")]
     CaptureRecoveryInstallIndeterminate(String),
 
@@ -319,6 +332,16 @@ pub enum WorkVcsError {
         identity: String,
         project_root: String,
         registry_path: String,
+    },
+
+    #[error(
+        "project owner is unbound in {registry_path}; admit the operation, then explicitly authorize ProjectRef bootstrap before target delivery"
+    )]
+    ProjectOwnerUnbound {
+        registry_path: String,
+        resolution_rank: String,
+        unmapped_locators: usize,
+        resolution_diagnostics: usize,
     },
 
     #[error("query invalid: {0}")]
@@ -422,6 +445,7 @@ impl WorkVcsError {
             }
             Self::CaptureNotPersisted(_) => ErrorCode::CaptureNotPersisted,
             Self::CaptureIdempotencyConflict(_) => ErrorCode::CaptureIdempotencyConflict,
+            Self::CaptureDeliveryIncomplete { .. } => ErrorCode::CaptureDeliveryIncomplete,
             Self::CaptureRecoveryInstallIndeterminate(_) => {
                 ErrorCode::CaptureRecoveryInstallIndeterminate
             }
@@ -447,6 +471,7 @@ impl WorkVcsError {
             Self::PlanInvalid(_) => ErrorCode::PlanInvalid,
             Self::PlanNotFound(_) => ErrorCode::PlanNotFound,
             Self::ProjectBindingNotFound { .. } => ErrorCode::ProjectBindingNotFound,
+            Self::ProjectOwnerUnbound { .. } => ErrorCode::ProjectOwnerUnbound,
             Self::QueryInvalid(_) => ErrorCode::QueryInvalid,
             Self::QueryUnsupported(_) => ErrorCode::QueryUnsupported,
             Self::RegistryMigrationApplyFailed(_) => ErrorCode::RegistryMigrationApplyFailed,
@@ -497,7 +522,9 @@ impl WorkVcsError {
             | Self::JournalAdmissionCapabilityInactive { .. }
             | Self::CaptureNotPersisted(_)
             | Self::CaptureIdempotencyConflict(_)
+            | Self::CaptureDeliveryIncomplete { .. }
             | Self::CaptureRecoveryInstallIndeterminate(_)
+            | Self::ProjectOwnerUnbound { .. }
             | Self::LocatorAlreadyClaimed(_)
             | Self::RegistryMigrationApplyFailed(_)
             | Self::RegistryMigrationInstallIndeterminate(_)
@@ -583,6 +610,10 @@ mod tests {
             "capture_idempotency_conflict"
         );
         assert_eq!(
+            ErrorCode::CaptureDeliveryIncomplete.as_str(),
+            "capture_delivery_incomplete"
+        );
+        assert_eq!(
             ErrorCode::CaptureRecoveryInstallIndeterminate.as_str(),
             "capture_recovery_install_indeterminate"
         );
@@ -594,6 +625,10 @@ mod tests {
         assert_eq!(
             ErrorCode::ProjectBindingNotFound.as_str(),
             "project_binding_not_found"
+        );
+        assert_eq!(
+            ErrorCode::ProjectOwnerUnbound.as_str(),
+            "project_owner_unbound"
         );
         assert_eq!(
             ErrorCode::BranchHeadConflict.as_str(),
@@ -677,5 +712,26 @@ mod tests {
         assert_eq!(capture.code().as_str(), "capture_not_persisted");
         assert_eq!(capture.category().as_str(), "control_plane");
         assert!(!capture.retryable());
+
+        let unbound = WorkVcsError::ProjectOwnerUnbound {
+            registry_path: "/tmp/project-bindings.json".to_owned(),
+            resolution_rank: "semantic_project".to_owned(),
+            unmapped_locators: 1,
+            resolution_diagnostics: 1,
+        };
+        assert_eq!(unbound.code().as_str(), "project_owner_unbound");
+        assert_eq!(unbound.category().as_str(), "control_plane");
+        assert!(!unbound.retryable());
+
+        let incomplete = WorkVcsError::CaptureDeliveryIncomplete {
+            capture_id: "01900000-0000-7000-8000-000000000001".to_owned(),
+            journal_persisted: true,
+            cause_error_code: "project_owner_unbound".to_owned(),
+            recovery_action: "inspect_operation_recovery_status".to_owned(),
+            message: "owner is unbound".to_owned(),
+        };
+        assert_eq!(incomplete.code().as_str(), "capture_delivery_incomplete");
+        assert_eq!(incomplete.category().as_str(), "control_plane");
+        assert!(!incomplete.retryable());
     }
 }

@@ -307,8 +307,9 @@ every distinct referenced binding needed for classification. It is an
 inventory, not an apply queue or authorization source. Clean
 unbound resolution receives a dedicated recoverable classification rather than
 being mislabeled as corrupt control-plane state. These surfaces are source-
-implemented but are not part of the currently installed CLI until separately
-packaged and adopted in Stage C.
+implemented and were packaged and locally adopted in Stage C. One bounded
+same-binding canary proved exact target receipt, semantic readback, and
+zero-write replay without changing the default admission-only boundary.
 
 The eleven-round initial delivery roadmap completed locally on 2026-09-27.
 The configured registry was migrated and both exact markers activated in

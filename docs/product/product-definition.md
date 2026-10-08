@@ -178,9 +178,10 @@ open-operation inventory, and a dedicated clean-unbound classification. The
 continuation reuses the existing recovery state machine and succeeds only after
 a current receipt. It does not infer authority from control-plane health and
 does not cover bootstrap, conflicting or shared ownership, target changes,
-CaptureGroups, or historical batch recovery. Installed adoption and its bounded
-live canary remain pending; until Stage C is delivered, the installed cognition
-`capture` command remains admission-only.
+CaptureGroups, or historical batch recovery. Exact local installed adoption
+and one bounded same-binding canary are complete. The installed cognition
+`capture` command still remains admission-only by default; only an invocation
+carrying the explicit option may continue through this route.
 
 Isolated fixtures remain the authority for injected faults and concurrency.
 The bounded configured-local canary proves one canonical work-governance

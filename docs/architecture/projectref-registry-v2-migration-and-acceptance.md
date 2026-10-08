@@ -1,8 +1,8 @@
 # ProjectRef Registry v2 Migration and Acceptance Contract
 
-Status: Accepted implemented contract — complete 98-row legacy ledger plus ADR-0519 source acceptance; installed adoption remains separately evidenced
+Status: Accepted implemented contract — complete 98-row legacy ledger plus ADR-0519 source acceptance and separately evidenced local adoption
 Date: 2026-09-23
-Last updated: 2026-10-06
+Last updated: 2026-10-08
 Parent: [ADR-0513](../decisions/adr/0513-projectref-durable-capture-routing.md)
 Schema: [ProjectRef Control Plane v2 Contract](projectref-control-plane-v2.md)
 
@@ -701,8 +701,9 @@ global Hooks, or remote release from one canary.
 ### E. ADR-0519 authorized existing-binding delivery and operation inventory
 
 These supplemental rows do not renumber or alter the established 98-row
-ProjectRef ledger. They govern the ADR-0519 source candidate; installed/live
-adoption still requires its separate evidence.
+ProjectRef ledger. They govern the ADR-0519 source candidate; exact local
+installed adoption and one bounded same-binding canary are recorded in the
+[Stage C evidence](../provenance/authorized-existing-binding-delivery-local-adoption.md).
 
 | ID | Required scenario | Expected result |
 | --- | --- | --- |

@@ -1,6 +1,6 @@
 # ADR-0519: Authorized Existing-Binding Delivery and Operation Inventory
 
-Status: Accepted; source implemented and locally validated; adoption pending
+Status: Accepted; source implemented, locally validated, and locally adopted
 Date: 2026-10-08
 
 ## Context
@@ -243,8 +243,11 @@ installation, live adoption, historical reconciliation, Push, release, or
 deployment. Stage B source implementation and local Commit were separately
 authorized and are evidenced by
 [Authorized Existing-Binding Delivery Candidate Evidence](../../provenance/authorized-existing-binding-delivery-candidate.md).
-Installation and the bounded canary remain Stage C; historical reconciliation
-and all remote actions retain their later confirmation boundaries.
+Stage C installation and one bounded same-binding canary were subsequently
+authorized and are evidenced by
+[Authorized Existing-Binding Delivery Local Adoption Evidence](../../provenance/authorized-existing-binding-delivery-local-adoption.md).
+Historical reconciliation and all remote actions retain their later
+confirmation boundaries.
 
 ## Consequences
 

@@ -13,13 +13,13 @@ journal activation markers, public target-neutral `cognition_v2` admission,
 explicit status-first recovery, canonical primary delivery, immutable
 secondary association, Store-free secondary recall, and typed durable
 `plan_admit_v1`/`plan_evolve_v1` routing through the same receipt protocol. The
-currently implemented ordinary `capture` path remains admission-only;
-activation markers never imply target delivery authority. ADR-0519's source
-implementation adds a per-invocation existing-binding continuation plus one
-read-only open-operation inventory. Its default remains journal-only and it
-does not authorize bootstrap, target change, cross-project delivery, or batch
-recovery. Installed adoption and the bounded configured-local canary remain
-pending until their separate Stage C evidence exists.
+ordinary `capture` remains admission-only by default; activation markers never
+imply target delivery authority. ADR-0519 adds a per-invocation existing-binding
+continuation plus one read-only open-operation inventory. Its default remains
+journal-only and it does not authorize bootstrap, target change, cross-project
+delivery, or batch recovery. Exact local installed adoption and one bounded
+configured-local same-binding canary are complete under their separate Stage C
+evidence.
 
 The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
 on 2026-09-27. The final exact installed canary wrote one canonical
@@ -55,6 +55,7 @@ public release, and remote deployment remain separate decisions.
 - [Operator Control-Plane V1 Implementation Evidence](provenance/operator-control-plane-v1.md)
 - [Authorized Existing-Binding Delivery Design and Change Plan](provenance/authorized-existing-binding-delivery-plan.md)
 - [Authorized Existing-Binding Delivery Candidate Evidence](provenance/authorized-existing-binding-delivery-candidate.md)
+- [Authorized Existing-Binding Delivery Local Adoption Evidence](provenance/authorized-existing-binding-delivery-local-adoption.md)
 
 ## Implementation readiness
 

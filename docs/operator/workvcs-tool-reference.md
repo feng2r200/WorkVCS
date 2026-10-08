@@ -29,8 +29,10 @@ markers and admits a registry-coupled intent. Neither path bootstraps a
 ProjectRef. Registry-v2 capture remains Store-free by default; the separately
 explicit `--deliver-existing-binding` continuation can write only the exact
 existing binding when the caller already holds that delivery authority. The
-source implementation is complete, but installed adoption remains a separate
-boundary. This command previews the exact v1-to-v2 mapping without writing:
+source implementation and exact local installed adoption are complete, with
+one bounded same-binding canary and zero-write replay recorded in the
+[Stage C evidence](../provenance/authorized-existing-binding-delivery-local-adoption.md).
+This command previews the exact v1-to-v2 mapping without writing:
 
 ```text
 workvcs project registry-migrate --preview [--registry PATH] [--repair-manifest PATH] [--format text|json]

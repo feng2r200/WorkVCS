@@ -86,8 +86,9 @@ add a transaction, queue, worker, activation marker, or independent delivery
 authority. A companion open-operation inventory is a read-only projection over
 the existing registry and journal boundaries and validates each distinct
 classification-relevant binding exactly once per invocation. Its bounded pages
-are locked to a digest of the complete matching inventory. Installed adoption
-and its bounded live canary remain a separate pending boundary.
+are locked to a digest of the complete matching inventory. Exact local
+installed adoption and one bounded same-binding canary are complete under the
+separate [Stage C evidence](../provenance/authorized-existing-binding-delivery-local-adoption.md).
 
 ## Store
 

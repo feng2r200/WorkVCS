@@ -1,6 +1,6 @@
 # Authorized Existing-Binding Delivery Candidate Evidence
 
-Status: Stage B source implemented and locally validated; Stage C adoption pending
+Status: Stage B source implemented and locally validated; Stage C completed separately
 Date: 2026-10-08
 Decision: [ADR-0519](../decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
 Plan: [Authorized Existing-Binding Delivery Design and Change Plan](authorized-existing-binding-delivery-plan.md)
@@ -132,15 +132,17 @@ and closed this finding with no remaining Blocker, High, or Medium issue.
 ## Remaining authority and risk boundary
 
 This evidence closes Stage B source implementation and local validation only.
-It does not claim that the user-local binary or installed Skill contains this
-commit, that any configured live control plane has used the new route, or that
-the historical backlog has been reconciled.
+Stage C later proved the exact user-local binary and installed Skill, one
+configured-local use of the new route, semantic readback, and zero-write replay
+in the
+[local adoption evidence](authorized-existing-binding-delivery-local-adoption.md).
+Neither evidence claims that the historical backlog has been reconciled.
 
-Stage C remains limited to exact-source packaging, atomic replacement of the
-existing local binary and installed Skill, installed/source parity checks, and
-one newly admitted same-binding canary. If current marker inspection shows
-that activation refresh is required, Stage C must stop for separate user
-authorization; this evidence does not authorize refresh.
+At this candidate boundary, Stage C was limited to exact-source packaging,
+atomic replacement of the existing local binary and installed Skill,
+installed/source parity checks, and one newly admitted same-binding canary.
+Current marker inspection later showed that activation refresh was not
+required, and none was performed.
 
 Historical backlog recovery, Push, tag, release, remote deployment, rollback,
 and destructive cleanup remain outside the authorized boundary.

@@ -1,6 +1,6 @@
 # Authorized Existing-Binding Delivery Design and Change Plan
 
-Status: Stage B source implemented and locally validated; Stage C adoption pending
+Status: Stage B source implemented and locally validated; Stage C local adoption complete; Stage D separately gated
 Observed: 2026-10-08T06:37:47Z
 Authority: ADR-0519
 
@@ -72,13 +72,15 @@ local validation plus independent review recorded in
 This stage does not install the binary or Skill and does not mutate the
 configured live control plane.
 
-### Stage C — local adoption and bounded canary (conditionally authorized; pending)
+### Stage C — local adoption and bounded canary (completed)
 
-After exact source/package/runtime parity is proven, install the reviewed
-candidate, update the installed Skill, and run one newly admitted eligible
-capture canary. Verify intent-first ordering, exact target receipt, semantic
-readback, and replay. Activation refresh is permitted only if a separately
-inspected exact-digest contract says it is required and the user authorizes it.
+Exact source/package/runtime parity was proven, the reviewed candidate and
+Skill were installed, and one newly admitted eligible capture completed through
+intent-first delivery, exact target receipt, semantic readback, and zero-write
+replay. Current activation markers already satisfied the installed contract, so
+no activation refresh was required or performed. Exact hashes and durable IDs
+are recorded in
+[Authorized Existing-Binding Delivery Local Adoption Evidence](authorized-existing-binding-delivery-local-adoption.md).
 
 ### Stage D — historical reconciliation (separately authorized)
 

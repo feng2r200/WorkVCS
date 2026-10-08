@@ -91,8 +91,10 @@ ADR-0519 is implemented in the source tree: an explicitly authorized
 single-project capture may continue to the exact existing, fully valid,
 non-shared binding, and operators gain one read-only open-operation inventory.
 Default capture remains journal-only; bootstrap, target changes, CaptureGroups,
-and historical reconciliation retain separate authority. Installed adoption
-and its bounded live canary remain a separate delivery stage.
+and historical reconciliation retain separate authority. Exact local installed
+adoption and one bounded same-binding canary are complete; their
+[evidence](docs/provenance/authorized-existing-binding-delivery-local-adoption.md)
+does not authorize historical recovery or remote delivery.
 
 See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),
 [ADR-0517](docs/decisions/adr/0517-shared-project-binding-isolation.md),
@@ -183,8 +185,8 @@ before using WorkVCS as durable project infrastructure.
   — zero-write preview, exact registry replacement, source-Store preservation,
   and activation refresh boundaries.
 - [Authorized existing-binding delivery and operation inventory](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
-  — the source-implemented, adoption-pending fast path, backlog visibility,
-  and preserved authorization gates.
+  — the locally adopted fast path, backlog visibility, and preserved
+  authorization gates.
 - [V1 readiness ledger](docs/provenance/v1-readiness-ledger.md) and
   [release gate matrix](docs/provenance/v1-release-gate-matrix.md) — evidence
   behind the bounded maturity claim.

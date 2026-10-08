@@ -19,7 +19,9 @@ continuation plus one read-only open-operation inventory. Its default remains
 journal-only and it does not authorize bootstrap, target change, cross-project
 delivery, or batch recovery. Exact local installed adoption and one bounded
 configured-local same-binding canary are complete under their separate Stage C
-evidence.
+evidence. A separately authorized Stage D reconciled exactly two selected
+same-ProjectRef historical receipts without turning the global inventory into
+batch authority.
 
 The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
 on 2026-09-27. The final exact installed canary wrote one canonical
@@ -56,6 +58,7 @@ public release, and remote deployment remain separate decisions.
 - [Authorized Existing-Binding Delivery Design and Change Plan](provenance/authorized-existing-binding-delivery-plan.md)
 - [Authorized Existing-Binding Delivery Candidate Evidence](provenance/authorized-existing-binding-delivery-candidate.md)
 - [Authorized Existing-Binding Delivery Local Adoption Evidence](provenance/authorized-existing-binding-delivery-local-adoption.md)
+- [Authorized Existing-Binding Delivery Historical Reconciliation Evidence](provenance/authorized-existing-binding-delivery-historical-reconciliation.md)
 
 ## Implementation readiness
 

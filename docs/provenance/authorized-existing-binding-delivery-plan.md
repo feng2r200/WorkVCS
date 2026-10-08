@@ -1,6 +1,6 @@
 # Authorized Existing-Binding Delivery Design and Change Plan
 
-Status: Stage B source implemented and locally validated; Stage C local adoption complete; Stage D separately gated
+Status: Stages B-C complete; Stage D selected historical reconciliation complete; remote delivery pending
 Observed: 2026-10-08T06:37:47Z
 Authority: ADR-0519
 
@@ -82,14 +82,23 @@ no activation refresh was required or performed. Exact hashes and durable IDs
 are recorded in
 [Authorized Existing-Binding Delivery Local Adoption Evidence](authorized-existing-binding-delivery-local-adoption.md).
 
-### Stage D — historical reconciliation (separately authorized)
+### Stage D — selected historical reconciliation (completed)
 
-Use `--list-open` to classify the backlog. Apply only an explicitly selected
-set under fresh status evidence. Do not batch bootstrap unbound owners or treat
-standing same-binding authority as historical-sweep authority.
+`--list-open` classified the backlog, after which exactly two same-binding
+operations for the current WorkVCS ProjectRef were selected and applied under
+fresh status evidence. Their stale intermediate Findings were preserved and
+guardedly superseded by later verified facts. The filtered ProjectRef inventory
+then returned zero open rows, while the registry and activation markers stayed
+byte-stable. Exact durable IDs and postconditions are recorded in
+[Authorized Existing-Binding Delivery Historical Reconciliation Evidence](authorized-existing-binding-delivery-historical-reconciliation.md).
 
-Push, tag, public release, remote deployment, rollback, and destructive cleanup
-remain outside every stage above unless named explicitly.
+No unbound owner, bootstrap, repair, target-change, semantic-invalid,
+other-ProjectRef, legacy, or terminal new-capture action was selected. The
+remaining global inventory is not covered by this completed stage.
+
+Fast-forward Push of the completed ADR-0519 work and exact terminal CI closure
+are separately authorized and pending. Tag, public release, deployment,
+rollback, history rewrite, and destructive cleanup remain outside this Plan.
 
 ## Exact source change map for Stage B
 

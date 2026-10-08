@@ -1,6 +1,6 @@
 # Authorized Existing-Binding Delivery Local Adoption Evidence
 
-Status: Stage C local adoption complete; Stage D historical reconciliation separately gated
+Status: Stage C local adoption complete; selected Stage D reconciliation completed separately
 Date: 2026-10-08
 Decision: [ADR-0519](../decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
 Plan: [Authorized Existing-Binding Delivery Design and Change Plan](authorized-existing-binding-delivery-plan.md)
@@ -131,8 +131,10 @@ and the target Store SHA-256 was
 ## Remaining boundary
 
 Stage C proves local installed adoption for a newly admitted eligible capture;
-it does not grant standing authority over older open operations. The historical
-backlog remains Stage D and requires a separately selected, freshly inspected
-recovery set. In particular, no previously admitted Capture was recovered by
-this stage. Push, tag, release, remote deployment, rollback, and destructive
-cleanup also remain outside the completed local boundary.
+it did not grant standing authority over older open operations. A later,
+separately authorized Stage D selected and reconciled exactly two historical
+operations under fresh status evidence; see
+[Authorized Existing-Binding Delivery Historical Reconciliation Evidence](authorized-existing-binding-delivery-historical-reconciliation.md).
+No previously admitted Capture was recovered by Stage C itself. Tag, release,
+deployment, rollback, history rewrite, and destructive cleanup remain outside
+the completed local boundaries.

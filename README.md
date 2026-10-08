@@ -92,9 +92,12 @@ single-project capture may continue to the exact existing, fully valid,
 non-shared binding, and operators gain one read-only open-operation inventory.
 Default capture remains journal-only; bootstrap, target changes, CaptureGroups,
 and historical reconciliation retain separate authority. Exact local installed
-adoption and one bounded same-binding canary are complete; their
-[evidence](docs/provenance/authorized-existing-binding-delivery-local-adoption.md)
-does not authorize historical recovery or remote delivery.
+adoption and one bounded same-binding canary are complete. A later Stage D
+authorization reconciled exactly two selected same-ProjectRef historical
+receipts while every other global row remained outside this stage's authority;
+see the
+[Stage C evidence](docs/provenance/authorized-existing-binding-delivery-local-adoption.md)
+and [Stage D evidence](docs/provenance/authorized-existing-binding-delivery-historical-reconciliation.md).
 
 See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),
 [ADR-0517](docs/decisions/adr/0517-shared-project-binding-isolation.md),

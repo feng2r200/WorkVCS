@@ -44,7 +44,7 @@ ProjectRef v2 按确定顺序判断内容归属：显式指定的 ProjectRef、�
 
 `workvcs project health` 可通过一次严格只读检查汇总注册表、完整绑定校验、激活标记、日志能力和可选 CWD 解析状态。持久操作恢复的规范命令是 `project operation-recovery`；`project capture-recovery` 继续作为同一 CaptureId 与日志状态机的可见兼容别名。
 
-ADR-0519 已在源码树实现并完成精确的本地安装采用：在调用方显式授权时，单项目 `capture` 可以继续交付到准入时解析出的同一个、完整有效且非共享的既有绑定，并增加一个严格只读的开放操作清单。默认行为仍只写日志；ProjectRef 启动、目标变化、CaptureGroup 和历史积压处理仍分别需要授权。一个有界的同绑定现场 canary 及其零写入重放已经通过；该证据不授权历史恢复或远端交付。
+ADR-0519 已在源码树实现并完成精确的本地安装采用：在调用方显式授权时，单项目 `capture` 可以继续交付到准入时解析出的同一个、完整有效且非共享的既有绑定，并增加一个严格只读的开放操作清单。默认行为仍只写日志；ProjectRef 启动、目标变化、CaptureGroup 和历史积压处理仍分别需要授权。一个有界的同绑定现场 canary 及其零写入重放已经通过；随后单独授权的 Stage D 又只处理了当前 ProjectRef 下明确选中的两条历史回执，并保留其余全局清单的独立授权边界。
 
 进一步说明请参阅 [ADR-0513（英文）](docs/decisions/adr/0513-projectref-durable-capture-routing.md)、[ADR-0517（英文）](docs/decisions/adr/0517-shared-project-binding-isolation.md)、[ADR-0518（英文）](docs/decisions/adr/0518-operator-control-plane-health-and-recovery-contract.md)、[ADR-0519（英文）](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)、[ProjectRef 控制平面契约（英文）](docs/architecture/projectref-control-plane-v2.md)和[迁移与验收契约（英文）](docs/architecture/projectref-registry-v2-migration-and-acceptance.md)。
 

@@ -1,6 +1,6 @@
 # ADR-0519: Authorized Existing-Binding Delivery and Operation Inventory
 
-Status: Accepted; source implemented, locally validated, and locally adopted
+Status: Accepted; source implemented, locally validated, locally adopted, and selected historical reconciliation complete
 Date: 2026-10-08
 
 ## Context
@@ -246,8 +246,15 @@ authorized and are evidenced by
 Stage C installation and one bounded same-binding canary were subsequently
 authorized and are evidenced by
 [Authorized Existing-Binding Delivery Local Adoption Evidence](../../provenance/authorized-existing-binding-delivery-local-adoption.md).
-Historical reconciliation and all remote actions retain their later
-confirmation boundaries.
+The later Stage D authorization selected exactly two same-binding historical
+operations for this ProjectRef, completed their receipts under fresh guards,
+and reconciled their stale intermediate Findings. The exact evidence and
+preserved global-backlog boundary are recorded in
+[Authorized Existing-Binding Delivery Historical Reconciliation Evidence](../../provenance/authorized-existing-binding-delivery-historical-reconciliation.md).
+This selected reconciliation does not create standing historical-sweep
+authority. Fast-forward Push and exact CI closure retain their separately
+authorized delivery boundary; tag, release, deployment, rollback, history
+rewrite, and destructive cleanup remain excluded.
 
 ## Consequences
 

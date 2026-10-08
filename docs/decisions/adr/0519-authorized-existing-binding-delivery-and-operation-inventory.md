@@ -1,6 +1,6 @@
 # ADR-0519: Authorized Existing-Binding Delivery and Operation Inventory
 
-Status: Accepted; source implemented, locally validated, locally adopted, and selected historical reconciliation complete
+Status: Accepted; source implemented, locally validated, locally adopted, selected historical reconciliation complete, and delivered to main
 Date: 2026-10-08
 
 ## Context
@@ -252,9 +252,9 @@ and reconciled their stale intermediate Findings. The exact evidence and
 preserved global-backlog boundary are recorded in
 [Authorized Existing-Binding Delivery Historical Reconciliation Evidence](../../provenance/authorized-existing-binding-delivery-historical-reconciliation.md).
 This selected reconciliation does not create standing historical-sweep
-authority. Fast-forward Push and exact CI closure retain their separately
-authorized delivery boundary; tag, release, deployment, rollback, history
-rewrite, and destructive cleanup remain excluded.
+authority. Its separately authorized fast-forward Push and exact CI closure
+completed and are recorded by the same evidence. Tag, release, deployment,
+rollback, history rewrite, and destructive cleanup remain excluded.
 
 ## Consequences
 

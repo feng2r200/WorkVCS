@@ -1,6 +1,6 @@
 # Authorized Existing-Binding Delivery Design and Change Plan
 
-Status: Stages B-C complete; Stage D selected historical reconciliation complete; remote delivery pending
+Status: Stages B-D and exact remote delivery complete
 Observed: 2026-10-08T06:37:47Z
 Authority: ADR-0519
 
@@ -96,8 +96,10 @@ No unbound owner, bootstrap, repair, target-change, semantic-invalid,
 other-ProjectRef, legacy, or terminal new-capture action was selected. The
 remaining global inventory is not covered by this completed stage.
 
-Fast-forward Push of the completed ADR-0519 work and exact terminal CI closure
-are separately authorized and pending. Tag, public release, deployment,
+The Stage D evidence commit was fast-forward pushed, local/tracking/remote refs
+were read back as identical, and its exact GitHub Actions CI run completed
+successfully. The final documentation-only evidence closure is validated under
+the same exact-ref and terminal-CI rule. Tag, public release, deployment,
 rollback, history rewrite, and destructive cleanup remain outside this Plan.
 
 ## Exact source change map for Stage B

@@ -1,6 +1,6 @@
 # Authorized Existing-Binding Delivery Historical Reconciliation Evidence
 
-Status: Stage D selected historical reconciliation complete; remote delivery pending
+Status: Stage D selected historical reconciliation and exact remote delivery complete
 Date: 2026-10-08
 Decision: [ADR-0519](../decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
 Plan: [Authorized Existing-Binding Delivery Design and Change Plan](authorized-existing-binding-delivery-plan.md)
@@ -95,5 +95,16 @@ The remaining global inventory keeps its own ProjectRef, action, and
 authorization boundaries. Tag, release, deployment, rollback, history rewrite,
 and destructive cleanup remain outside ADR-0519 completion.
 
-The repository evidence commit, fast-forward Push, exact remote ref readback,
-and terminal CI result are the next and final delivery boundary for this work.
+The Stage D evidence commit
+`46210daec733c2add31dfbd730336056cb99d999` was fast-forward pushed to
+`origin/main`. Immediate readback proved the local `main`, local
+`origin/main`, and GitHub `refs/heads/main` values were exactly that commit.
+GitHub Actions CI run
+[`37762878714`](https://github.com/feng2r200/WorkVCS/actions/runs/37762878714)
+then completed with `success`: formatting, Clippy, the full locked workspace
+test suite, schema validation, CLI smoke, and the ProjectRef acceptance matrix
+all passed.
+
+This final evidence update is documentation-only. Its own pushed revision and
+terminal CI result are verified separately at closeout so the repository's
+final remote state, rather than only the preceding evidence commit, is covered.

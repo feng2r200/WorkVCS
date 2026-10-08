@@ -73,4 +73,6 @@ This candidate did not install or activate a binary or Skill, mutate any live
 historical operation, sweep a backlog, Push, release, tag, or deploy. Those
 actions remain separately gated. In particular, the previously rejected Plan
 Capture remains immutable audit history and was not rewritten or disposed by
-this source change.
+this source change. The later, separately authorized Push and local adoption
+are recorded in
+[Operation Disposition and Plan Validation Local Adoption Evidence](operation-disposition-and-plan-validation-local-adoption.md).

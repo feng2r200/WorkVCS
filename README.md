@@ -103,7 +103,9 @@ ADR-0520 adds explicit, digest-locked pre-delivery `superseded`/`abandoned`
 classification and a read-only `--list-all` lifecycle inventory; it never
 infers successors or sweeps history. ADR-0521 adds zero-write intrinsic Plan
 manifest validation plus Capture-aware terminal rejection diagnostics while
-retaining journal-first durable admission.
+retaining journal-first durable admission. Exact source commit `382cef20` is
+now pushed, CI-verified, and installed locally with package-to-install parity;
+see the [local adoption evidence](docs/provenance/operation-disposition-and-plan-validation-local-adoption.md).
 
 See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),
 [ADR-0517](docs/decisions/adr/0517-shared-project-binding-isolation.md),

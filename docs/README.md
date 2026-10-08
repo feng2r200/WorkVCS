@@ -65,6 +65,7 @@ public release, and remote deployment remain separate decisions.
 - [Authorized Existing-Binding Delivery Local Adoption Evidence](provenance/authorized-existing-binding-delivery-local-adoption.md)
 - [Authorized Existing-Binding Delivery Historical Reconciliation Evidence](provenance/authorized-existing-binding-delivery-historical-reconciliation.md)
 - [Operation Disposition and Plan Validation Candidate Evidence](provenance/operation-disposition-and-plan-validation-candidate.md)
+- [Operation Disposition and Plan Validation Local Adoption Evidence](provenance/operation-disposition-and-plan-validation-local-adoption.md)
 
 ## Implementation readiness
 

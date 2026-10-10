@@ -1,6 +1,6 @@
 # Local Operator Quickstart and Recovery
 
-Status: Local operator guide for CLI package `0.1.0`; verify registry version and activation state before selecting a route
+Status: Local operator guide for CLI package `0.2.0`; verify registry version and activation state before selecting a route
 Last updated: 2026-10-08
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from

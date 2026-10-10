@@ -72,6 +72,15 @@ absolute_path() {
     esac
 }
 
+read_workspace_package_version() {
+    local manifest="$1"
+    awk -F'"' '
+        /^\[workspace\.package\]$/ { in_workspace=1; next }
+        /^\[/ { in_workspace=0 }
+        in_workspace && /^version[[:space:]]*=[[:space:]]*"/ { print $2; exit }
+    ' "$manifest"
+}
+
 file_sha256() {
     local path="$1"
     if command -v shasum >/dev/null 2>&1; then
@@ -193,6 +202,9 @@ if command -v "$rustc_bin" >/dev/null 2>&1; then
 fi
 artifact_target="${target_triple:-$host_triple}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+package_version="$(read_workspace_package_version "$repo_root/Cargo.toml")"
+[[ "$package_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+    || die "invalid WorkVCS workspace package version: $package_version"
 git_head="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
 git_head_full="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 git_dirty="unknown"
@@ -203,7 +215,7 @@ if git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git_dirty="false"
     fi
 fi
-artifact_name="workvcs-${artifact_target}-${git_head}-${timestamp}-$$"
+artifact_name="workvcs-${package_version}-${artifact_target}-${git_head}-${timestamp}-$$"
 artifact_root="$package_dir/$artifact_name"
 package_binary="$artifact_root/bin/workvcs"
 source_skill="$repo_root/skills/workvcs"
@@ -291,6 +303,7 @@ skill_tree_sha256="$(file_sha256 "$skill_tree_manifest_path")"
 cat > "$manifest_path" <<EOF
 name=workvcs
 cargo_package=workvcs-cli
+cargo_package_version=$package_version
 cargo_bin=workvcs
 source_repo=$repo_root
 source_git_head=$git_head_full
@@ -326,6 +339,7 @@ fi
 printf 'workvcs_package_dir=%s\n' "$artifact_root"
 printf 'workvcs_package_archive=%s\n' "$archive_path"
 printf 'workvcs_package_manifest=%s\n' "$manifest_path"
+printf 'workvcs_package_version=%s\n' "$package_version"
 printf 'workvcs_package_binary=%s\n' "$package_binary"
 printf 'workvcs_package_binary_sha256=%s\n' "$binary_sha256"
 printf 'workvcs_package_binary_verified=%s\n' "$package_binary_verified"

@@ -21,6 +21,18 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate semantic version bump
+        env:
+          VERSION_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$VERSION_BASE_REF" ] && [ "$VERSION_BASE_REF" != "0000000000000000000000000000000000000000" ]; then
+            scripts/validate-version-bump.sh --base-ref "$VERSION_BASE_REF"
+          else
+            scripts/validate-version-bump.sh
+          fi
 
       - name: Install Rust 1.98.1
         run: |

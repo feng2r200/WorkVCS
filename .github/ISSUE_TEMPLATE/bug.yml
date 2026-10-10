@@ -12,7 +12,7 @@ body:
     id: revision
     attributes:
       label: Version or commit
-      placeholder: "workvcs 0.1.0 or commit SHA"
+      placeholder: "workvcs X.Y.Z or commit SHA"
     validations:
       required: true
   - type: input

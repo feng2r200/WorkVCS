@@ -59,7 +59,7 @@ WorkVCS source checkout and only for the bounded validation being performed;
 switch back to the stable installation before inspecting or changing any
 other project's WorkVCS state. `workvcs runtime status` records the executable
 path, build commit, source-dirty marker, and binary digest so a same-version
-(`0.1.0`) package cannot be mistaken for the same build.
+package cannot be mistaken for the same build.
 
 Required participation changes selection and admission timing only. It never
 forces a Plan and never authorizes migration, activation, recovery delivery,

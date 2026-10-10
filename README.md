@@ -18,10 +18,18 @@ conversation. WorkVCS covers the missing layer between them: the evolving
 review, and restore work.
 
 > **Project status:** the repository contains a locally release-ready bounded
-> V1 implementation. The Rust packages remain at `0.1.0`, and no public
+> V1 implementation. The current local package version is `0.2.0`, and no public
 > release has been made. The source is licensed under Apache-2.0; selecting a
 > release version, publishing artifacts, and making release commitments remain
 > separate decisions.
+
+Release-impacting optimizations must change the semantic package version. Patch
+increments cover compatible fixes and operational improvements, minor
+increments cover compatible capabilities such as runtime or installation
+guards, and major increments cover incompatible CLI, registry, or state
+contracts. Git commits, build timestamps, and binary digests identify a build;
+they do not replace the semantic version. CI enforces this rule for changes to
+the CLI, Skill, packaging, installation, and release workflow.
 
 ## What makes it different
 

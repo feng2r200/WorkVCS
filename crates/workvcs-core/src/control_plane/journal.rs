@@ -11,9 +11,9 @@ use crate::error::{Result, WorkVcsError};
 use crate::{
     BranchId, CaptureGroupId, CaptureId, ChangeSetId, CommitId, DeliveryId, Digest, EntityId,
     EntityVersionId, EventId, EvidenceId, PlanAdmissionGoalManifest, PlanAdmissionManifest,
-    PlanAdmissionRecordManifest, PlanAdmissionTaskManifest, PlanEvolutionManifest,
-    ProjectLocatorId, ProjectRefId, RegistryId, RelationId, RelationVersionId, StoreId,
-    WorkspaceId,
+    PlanAdmissionRecordManifest, PlanAdmissionTaskManifest, PlanEvolutionExpectedParentManifest,
+    PlanEvolutionManifest, PlanTaskDispositionAction, ProjectLocatorId, ProjectRefId, RegistryId,
+    RelationId, RelationVersionId, StoreId, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,6 +46,7 @@ pub enum CapturePayloadKind {
     LegacyCognitionV1,
     PlanAdmitV1,
     PlanEvolveV1,
+    PlanEvolveV2,
 }
 
 impl CapturePayloadKind {
@@ -55,6 +56,7 @@ impl CapturePayloadKind {
             Self::LegacyCognitionV1 => "legacy_cognition_v1",
             Self::PlanAdmitV1 => "plan_admit_v1",
             Self::PlanEvolveV1 => "plan_evolve_v1",
+            Self::PlanEvolveV2 => "plan_evolve_v2",
         }
     }
 
@@ -600,7 +602,9 @@ impl DeliveryAppliedPayload {
     ) -> Result<Self> {
         if !matches!(
             operation_payload_kind,
-            CapturePayloadKind::PlanAdmitV1 | CapturePayloadKind::PlanEvolveV1
+            CapturePayloadKind::PlanAdmitV1
+                | CapturePayloadKind::PlanEvolveV1
+                | CapturePayloadKind::PlanEvolveV2
         ) {
             return invalid("Plan delivery receipt requires a Plan operation payload kind");
         }
@@ -721,7 +725,9 @@ impl DeliveryAppliedPayload {
                 "delivery_applied operation_payload_kind may identify only a Plan operation",
             );
         }
-        if self.result_objects.is_empty() {
+        if self.result_objects.is_empty()
+            && self.operation_payload_kind != Some(CapturePayloadKind::PlanEvolveV2)
+        {
             return invalid("delivery_applied requires at least one result object");
         }
         let mut local_ids = BTreeSet::new();
@@ -757,7 +763,9 @@ impl DeliveryAppliedPayload {
                     | "verification_requirement"
             ) || object.object_kind.as_str().starts_with("record:");
         }
-        if !has_canonical_content {
+        if !has_canonical_content
+            && self.operation_payload_kind != Some(CapturePayloadKind::PlanEvolveV2)
+        {
             return invalid(
                 "delivery_applied requires at least one canonical entity or Record result",
             );
@@ -810,8 +818,10 @@ impl DeliveryAppliedPayload {
                             | "task"
                             | "acceptance_criterion"
                             | "verification_requirement"
-                    ) || matches!(kind, "relation:contains" | "relation:supersedes")
-                    {
+                    ) || matches!(
+                        kind,
+                        "relation:contains" | "relation:supersedes" | "relation:references"
+                    ) {
                         return invalid(format!(
                             "{} intent cannot carry Plan result object kind {kind:?}",
                             payload_kind.as_str()
@@ -819,7 +829,9 @@ impl DeliveryAppliedPayload {
                     }
                 }
             }
-            CapturePayloadKind::PlanAdmitV1 | CapturePayloadKind::PlanEvolveV1 => {
+            CapturePayloadKind::PlanAdmitV1
+            | CapturePayloadKind::PlanEvolveV1
+            | CapturePayloadKind::PlanEvolveV2 => {
                 if self.operation_payload_kind != Some(payload_kind) {
                     return invalid(format!(
                         "{} delivery receipt requires operation_payload_kind {}",
@@ -833,10 +845,11 @@ impl DeliveryAppliedPayload {
                         payload_kind.as_str()
                     ));
                 }
-                if !self
-                    .result_objects
-                    .iter()
-                    .any(|object| object.object_kind() == "plan")
+                if payload_kind != CapturePayloadKind::PlanEvolveV2
+                    && !self
+                        .result_objects
+                        .iter()
+                        .any(|object| object.object_kind() == "plan")
                 {
                     return invalid(format!(
                         "{} delivery receipt requires a Plan result",
@@ -855,6 +868,7 @@ impl DeliveryAppliedPayload {
                             | "evidence"
                             | "relation:contains"
                             | "relation:supersedes"
+                            | "relation:references"
                     ) || kind.starts_with("record:");
                     if !allowed {
                         return invalid(format!(
@@ -875,13 +889,18 @@ impl DeliveryAppliedPayload {
                         "plan_admit_v1 delivery receipt cannot carry Plan-evolution results",
                     );
                 }
-                if payload_kind == CapturePayloadKind::PlanEvolveV1
-                    && self
-                        .result_objects
-                        .iter()
-                        .any(|object| object.object_kind() == "goal")
+                if matches!(
+                    payload_kind,
+                    CapturePayloadKind::PlanEvolveV1 | CapturePayloadKind::PlanEvolveV2
+                ) && self
+                    .result_objects
+                    .iter()
+                    .any(|object| object.object_kind() == "goal")
                 {
-                    return invalid("plan_evolve_v1 delivery receipt cannot create a Goal result");
+                    return invalid(format!(
+                        "{} delivery receipt cannot create a Goal result",
+                        payload_kind.as_str()
+                    ));
                 }
             }
         }
@@ -896,7 +915,7 @@ impl DeliveryAppliedPayload {
                 let manifest = parse_plan_admission_intent(intent)?;
                 self.validate_exact_plan_result_shape(expected_admission_result_shape(&manifest)?)
             }
-            CapturePayloadKind::PlanEvolveV1 => {
+            CapturePayloadKind::PlanEvolveV1 | CapturePayloadKind::PlanEvolveV2 => {
                 let manifest = parse_plan_evolution_intent(intent)?;
                 self.validate_exact_plan_result_shape(expected_evolution_result_shape(&manifest)?)
             }
@@ -945,12 +964,14 @@ fn parse_plan_admission_intent(intent: &CaptureIntent) -> Result<PlanAdmissionMa
 fn parse_plan_evolution_intent(intent: &CaptureIntent) -> Result<PlanEvolutionManifest> {
     let bytes = serde_json::to_vec(intent.semantic_payload()).map_err(|error| {
         WorkVcsError::ControlPlaneInvalid(format!(
-            "cannot serialize admitted plan_evolve_v1 payload: {error}"
+            "cannot serialize admitted {} payload: {error}",
+            intent.payload_kind().as_str()
         ))
     })?;
     PlanEvolutionManifest::from_json_bytes(&bytes).map_err(|error| {
         WorkVcsError::ControlPlaneInvalid(format!(
-            "admitted plan_evolve_v1 payload is not a Plan evolution manifest: {error}"
+            "admitted {} payload is not a Plan evolution manifest: {error}",
+            intent.payload_kind().as_str()
         ))
     })
 }
@@ -975,34 +996,111 @@ fn expected_admission_result_shape(
 fn expected_evolution_result_shape(
     manifest: &PlanEvolutionManifest,
 ) -> Result<BTreeSet<(String, String)>> {
-    let mut expected = BTreeSet::from([("plan".to_owned(), "plan".to_owned())]);
-    let (tasks, records, evidence_len, supersede) = match manifest {
+    let mut expected = BTreeSet::new();
+    let (tasks, records, evidence_len, supersede): (
+        &[PlanAdmissionTaskManifest],
+        &[PlanAdmissionRecordManifest],
+        usize,
+        bool,
+    ) = match manifest {
         PlanEvolutionManifest::InPlace(manifest) => (
-            &manifest.tasks,
-            &manifest.records,
+            manifest.tasks.as_slice(),
+            manifest.records.as_slice(),
             manifest.evidence.len(),
             false,
         ),
         PlanEvolutionManifest::Supersede(manifest) => (
-            &manifest.tasks,
-            &manifest.records,
+            manifest.tasks.as_slice(),
+            manifest.records.as_slice(),
             manifest.evidence.len(),
             true,
         ),
+        PlanEvolutionManifest::TaskDisposition(manifest) => {
+            (manifest.tasks.as_slice(), &[], 0, false)
+        }
     };
+    if !matches!(manifest, PlanEvolutionManifest::TaskDisposition(_)) {
+        expected.insert(("plan".to_owned(), "plan".to_owned()));
+    }
     if supersede {
         expected.insert(("new_plan".to_owned(), "plan".to_owned()));
     }
+    if let PlanEvolutionManifest::TaskDisposition(repair) = manifest {
+        let mut relation_index = 0_usize;
+        for (index, disposition) in repair.task_dispositions.iter().enumerate() {
+            if matches!(
+                disposition.action,
+                PlanTaskDispositionAction::Supersede | PlanTaskDispositionAction::Cancel
+            ) {
+                expected.insert((format!("disposition.{index}.task"), "task".to_owned()));
+            }
+            let relation_kind = match disposition.action {
+                PlanTaskDispositionAction::Supersede => Some("relation:supersedes"),
+                PlanTaskDispositionAction::Continue => Some("relation:references"),
+                PlanTaskDispositionAction::Cancel | PlanTaskDispositionAction::RetainOriginal => {
+                    None
+                }
+            };
+            if let Some(relation_kind) = relation_kind {
+                expected.insert((
+                    format!("disposition_relation.{relation_index}"),
+                    relation_kind.to_owned(),
+                ));
+                relation_index += 1;
+            }
+        }
+    }
     append_expected_manifest_results(&mut expected, tasks, records, evidence_len)?;
     if supersede {
-        expected.insert((
-            "goal_contains_relation".to_owned(),
-            "relation:contains".to_owned(),
-        ));
+        let PlanEvolutionManifest::Supersede(manifest) = manifest else {
+            unreachable!("supersede result shape has supersede manifest")
+        };
+        let has_parent_relation = manifest.schema_version == 1
+            || !matches!(
+                manifest.expected_parent,
+                Some(PlanEvolutionExpectedParentManifest::None)
+            );
+        if has_parent_relation {
+            expected.insert((
+                "goal_contains_relation".to_owned(),
+                "relation:contains".to_owned(),
+            ));
+        }
         expected.insert((
             "supersedes_relation".to_owned(),
             "relation:supersedes".to_owned(),
         ));
+        if manifest.schema_version == 2 {
+            let mut relation_index = 0_usize;
+            for (index, disposition) in manifest.task_dispositions.iter().enumerate() {
+                if matches!(
+                    disposition.action,
+                    PlanTaskDispositionAction::Supersede | PlanTaskDispositionAction::Cancel
+                ) {
+                    expected.insert((format!("disposition.{index}.task"), "task".to_owned()));
+                }
+                let relation_kind = match disposition.action {
+                    PlanTaskDispositionAction::Supersede => Some("relation:supersedes"),
+                    PlanTaskDispositionAction::Continue => Some("relation:references"),
+                    PlanTaskDispositionAction::Cancel
+                    | PlanTaskDispositionAction::RetainOriginal => None,
+                };
+                if let Some(relation_kind) = relation_kind {
+                    expected.insert((
+                        format!("disposition_relation.{relation_index}"),
+                        relation_kind.to_owned(),
+                    ));
+                    relation_index += 1;
+                }
+            }
+            for _ in &manifest.nested_plan_continuations {
+                expected.insert((
+                    format!("disposition_relation.{relation_index}"),
+                    "relation:references".to_owned(),
+                ));
+                relation_index += 1;
+            }
+        }
     }
     Ok(expected)
 }
@@ -1467,7 +1565,9 @@ impl CaptureEventPayload {
                     | DeliveryFailureCode::PlanManifestRejected
                     | DeliveryFailureCode::PlanReceiptTooLarge => matches!(
                         intent.payload_kind(),
-                        CapturePayloadKind::PlanAdmitV1 | CapturePayloadKind::PlanEvolveV1
+                        CapturePayloadKind::PlanAdmitV1
+                            | CapturePayloadKind::PlanEvolveV1
+                            | CapturePayloadKind::PlanEvolveV2
                     ),
                 };
                 if !valid_family {
@@ -3291,6 +3391,25 @@ fn canonical_semantic_payload(payload: &Value) -> Result<Vec<u8>> {
     })
 }
 
+fn validate_fresh_capture_intent_authoring(intent: &CaptureIntent) -> Result<()> {
+    let expected_payload_version = match intent.payload_kind() {
+        CapturePayloadKind::PlanEvolveV1 => 1,
+        CapturePayloadKind::PlanEvolveV2 => 2,
+        _ => return Ok(()),
+    };
+    let manifest = PlanEvolutionManifest::from_json_bytes(&canonical_semantic_payload(
+        intent.semantic_payload(),
+    )?)?;
+    if manifest.payload_kind_version() != expected_payload_version {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "capture payload kind {} does not match Plan evolution schema payload version {}",
+            intent.payload_kind().as_str(),
+            manifest.payload_kind_version()
+        )));
+    }
+    manifest.validate_for_authoring()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureAdmissionOutcome {
     Created,
@@ -3528,6 +3647,56 @@ impl CaptureJournal {
         })
     }
 
+    pub fn find_exact_for_project_registry_with_check<F>(
+        &self,
+        intent: &CaptureIntent,
+        expected_registry_revision: u64,
+        expected_registry_digest: &ControlPlaneDigest,
+        additional_check: F,
+    ) -> Result<Option<CaptureAdmissionResult>>
+    where
+        F: FnOnce(&ProjectRegistryV2) -> Result<()>,
+    {
+        intent.validate()?;
+        let registry_path = self.registry_path.as_deref().ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(
+                "standalone capture journal cannot perform ProjectRef registry lookup".to_owned(),
+            )
+        })?;
+        self.ensure_lock_parent()?;
+        let _lock = JournalQuiescenceLock::acquire(&self.quiescence_lock_path)?;
+        let registry = Self::read_expected_project_registry(
+            registry_path,
+            expected_registry_revision,
+            expected_registry_digest,
+        )?;
+        additional_check(&registry)?;
+        Self::read_expected_project_registry(
+            registry_path,
+            expected_registry_revision,
+            expected_registry_digest,
+        )?;
+        let Some((existing, path)) = self.find_idempotency_key(intent.idempotency_key())? else {
+            return Ok(None);
+        };
+        if existing.payload_digest() != intent.payload_digest()
+            || existing.capture_group() != intent.capture_group()
+            || existing.payload_kind() != intent.payload_kind()
+        {
+            return Err(WorkVcsError::CaptureIdempotencyConflict(format!(
+                "idempotency key {:?} already belongs to capture {} with different admitted content",
+                intent.idempotency_key(),
+                existing.capture_id()
+            )));
+        }
+        Ok(Some(CaptureAdmissionResult {
+            outcome: CaptureAdmissionOutcome::Reused,
+            capture_id: existing.capture_id(),
+            payload_digest: existing.payload_digest().clone(),
+            intent_path: path,
+        }))
+    }
+
     fn read_expected_project_registry(
         registry_path: &Path,
         expected_registry_revision: u64,
@@ -3569,11 +3738,11 @@ impl CaptureJournal {
         self.ensure_lock_parent()?;
         let _lock = JournalQuiescenceLock::acquire(&self.quiescence_lock_path)?;
         check()?;
-        self.ensure_layout()?;
 
         if let Some((existing, path)) = self.find_idempotency_key(intent.idempotency_key())? {
             if existing.payload_digest() == intent.payload_digest()
                 && existing.capture_group() == intent.capture_group()
+                && existing.payload_kind() == intent.payload_kind()
             {
                 return Ok(CaptureAdmissionResult {
                     outcome: CaptureAdmissionOutcome::Reused,
@@ -3596,6 +3765,7 @@ impl CaptureJournal {
             if existing.idempotency_key() == intent.idempotency_key()
                 && existing.payload_digest() == intent.payload_digest()
                 && existing.capture_group() == intent.capture_group()
+                && existing.payload_kind() == intent.payload_kind()
             {
                 return Ok(CaptureAdmissionResult {
                     outcome: CaptureAdmissionOutcome::Reused,
@@ -3609,6 +3779,9 @@ impl CaptureJournal {
                 intent.capture_id()
             )));
         }
+
+        validate_fresh_capture_intent_authoring(intent)?;
+        self.ensure_layout()?;
 
         let stored = intent.stored_json_bytes()?;
         let temp = self.unique_temp_path(intent.capture_id())?;
@@ -4425,25 +4598,7 @@ impl CaptureJournal {
     }
 
     fn find_idempotency_key(&self, key: &str) -> Result<Option<(CaptureIntent, PathBuf)>> {
-        let mut paths = Vec::new();
-        for entry in fs::read_dir(self.intents_dir()).map_err(|error| {
-            not_persisted(format!(
-                "cannot read capture intents directory {}: {error}",
-                self.intents_dir().display()
-            ))
-        })? {
-            let entry = entry.map_err(|error| {
-                not_persisted(format!(
-                    "cannot inspect an entry in capture intents directory {}: {error}",
-                    self.intents_dir().display()
-                ))
-            })?;
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) == Some("json") {
-                paths.push(path);
-            }
-        }
-        paths.sort();
+        let paths = self.intent_paths_readonly()?;
         let mut found: Option<(CaptureIntent, PathBuf)> = None;
         for path in paths {
             let intent = self.load_path(&path)?;

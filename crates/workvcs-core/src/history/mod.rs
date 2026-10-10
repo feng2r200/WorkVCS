@@ -4,6 +4,7 @@ mod bundle;
 mod capture;
 mod checkpoint;
 mod containment;
+mod currentness;
 mod diff;
 mod entity;
 mod evidence;
@@ -27,21 +28,24 @@ mod resource;
 mod restore;
 mod semantic_snapshot;
 mod task;
+mod task_disposition_audit;
 mod why;
 
 pub use admission::{
-    PlanAdmissionAcceptanceCriterionManifest, PlanAdmissionAcceptanceCriterionResult,
-    PlanAdmissionEntityResult, PlanAdmissionEvidenceManifest, PlanAdmissionEvidenceResult,
-    PlanAdmissionGoalManifest, PlanAdmissionGoalResult, PlanAdmissionManifest,
-    PlanAdmissionOptions, PlanAdmissionOutcome, PlanAdmissionPlanManifest,
-    PlanAdmissionRecordManifest, PlanAdmissionRecordResult, PlanAdmissionResult,
-    PlanAdmissionTaskManifest, PlanAdmissionTaskResult,
+    NestedPlanContinuationManifest, PlanAdmissionAcceptanceCriterionManifest,
+    PlanAdmissionAcceptanceCriterionResult, PlanAdmissionEntityResult,
+    PlanAdmissionEvidenceManifest, PlanAdmissionEvidenceResult, PlanAdmissionGoalManifest,
+    PlanAdmissionGoalResult, PlanAdmissionManifest, PlanAdmissionOptions, PlanAdmissionOutcome,
+    PlanAdmissionPlanManifest, PlanAdmissionRecordManifest, PlanAdmissionRecordResult,
+    PlanAdmissionResult, PlanAdmissionTaskManifest, PlanAdmissionTaskResult,
     PlanAdmissionVerificationRequirementManifest, PlanAdmissionVerificationRequirementResult,
-    PlanEvolutionInPlaceManifest, PlanEvolutionManifest, PlanEvolutionOptions,
-    PlanEvolutionOutcome, PlanEvolutionPlanResult, PlanEvolutionPlanUpdateManifest,
-    PlanEvolutionRelationResult, PlanEvolutionResult, PlanEvolutionSupersedeConstraintsManifest,
-    PlanEvolutionSupersedeManifest, PlanEvolutionSupersedePlanManifest,
-    PlanSupersedesRelationSnapshot,
+    PlanEvolutionExpectedParentManifest, PlanEvolutionInPlaceManifest, PlanEvolutionManifest,
+    PlanEvolutionOptions, PlanEvolutionOutcome, PlanEvolutionPlanResult,
+    PlanEvolutionPlanUpdateManifest, PlanEvolutionRelationResult, PlanEvolutionResult,
+    PlanEvolutionSupersedeConstraintsManifest, PlanEvolutionSupersedeManifest,
+    PlanEvolutionSupersedePlanManifest, PlanSupersedesRelationSnapshot, PlanTaskDispositionAction,
+    PlanTaskDispositionCarrierManifest, PlanTaskDispositionManifest,
+    PlanTaskDispositionRepairManifest, PlanTaskDispositionResult, TaskSupersedesRelationSnapshot,
 };
 pub use branch::{BranchForkOptions, BranchForkResult, BranchForkSource};
 pub use bundle::{
@@ -74,6 +78,9 @@ pub use checkpoint::{
 pub use containment::{
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
     PrimaryContainmentEndpointKind, PrimaryContainmentSnapshot,
+};
+pub use currentness::{
+    CurrentEntityKind, CurrentScopeProjection, CurrentnessCarrier, CurrentnessCarrierKind,
 };
 pub use diff::{
     EntityVersionDiff, RelationVersionDiff, ResolvedWorkStateDiffTarget, WorkStateDiff,
@@ -213,6 +220,11 @@ pub use task::{
     VerificationRequirementState, VerificationResourceBasis, VerificationResult,
     VerificationSemanticDependency, VerificationSnapshot, VerificationState, VerificationTarget,
 };
+pub use task_disposition_audit::{
+    PlanTaskDispositionAuditDependent, PlanTaskDispositionAuditNestedPlan,
+    PlanTaskDispositionAuditOptions, PlanTaskDispositionAuditReference,
+    PlanTaskDispositionAuditResult, PlanTaskDispositionAuditTask,
+};
 pub use why::{
     ResolvedWhyQuerySubject, ResolvedWhyQueryTarget, WhyCausalAnchorChangeSet,
     WhyDeferredRelationFamily, WhyEntityKind, WhyEpistemicExplanation, WhyEvolutionChangeOperation,
@@ -236,6 +248,7 @@ pub(crate) use checkpoint::{
     checkpoint, checkpoints, create_checkpoint, latest_usable_checkpoint, validate_checkpoint,
 };
 pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
+pub(crate) use currentness::current_scope_at;
 pub(crate) use diff::diff_work_state;
 pub(crate) use entity::commit_entity_transition;
 pub(crate) use evidence::{create_evidence, evidence, evidences};
@@ -298,5 +311,6 @@ pub(crate) use task::{
     verification_at, verification_evidence_relations_at, verification_relations_at,
     verification_requirement_at, verification_requirements_at, verifications_at,
 };
+pub(crate) use task_disposition_audit::plan_task_disposition_audit;
 pub(crate) use why::explain_why;
 pub(crate) use why::knowledge_exposure_relation_edges_for_entities;

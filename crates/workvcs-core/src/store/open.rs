@@ -18,18 +18,19 @@ use crate::history::{
     ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
     CheckpointValidationResult, CognitionCaptureOptions, CognitionCaptureResult, CommitSnapshot,
-    EntityTransitionCommit, EntityTransitionOptions, EventListOptions, EventListResult,
-    EventSnapshot, EvidenceContentReadResult, EvidenceCreateOptions, EvidenceCreateResult,
-    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, GoalCreateCommit, GoalCreateOptions,
-    GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions,
-    HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions,
-    KnowledgeListOptions, KnowledgeListResult, KnowledgeRelationCreateCommit,
-    KnowledgeRelationCreateOptions, KnowledgeRelationListOptions, KnowledgeRelationListResult,
-    KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions, KnowledgeRelationRestoreCommit,
-    KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot, KnowledgeSnapshot,
-    KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanAdmissionOptions,
+    CurrentScopeProjection, EntityTransitionCommit, EntityTransitionOptions, EventListOptions,
+    EventListResult, EventSnapshot, EvidenceContentReadResult, EvidenceCreateOptions,
+    EvidenceCreateResult, EvidenceListOptions, EvidenceListResult, EvidenceSnapshot,
+    GoalCreateCommit, GoalCreateOptions, GoalSnapshot, GoalTransitionCommit, GoalTransitionOptions,
+    HistoryQueryOptions, HistoryQueryResult, IntegrityReport, KnowledgeCreateCommit,
+    KnowledgeCreateOptions, KnowledgeListOptions, KnowledgeListResult,
+    KnowledgeRelationCreateCommit, KnowledgeRelationCreateOptions, KnowledgeRelationListOptions,
+    KnowledgeRelationListResult, KnowledgeRelationRemoveCommit, KnowledgeRelationRemoveOptions,
+    KnowledgeRelationRestoreCommit, KnowledgeRelationRestoreOptions, KnowledgeRelationSnapshot,
+    KnowledgeSnapshot, KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanAdmissionOptions,
     PlanAdmissionResult, PlanCreateCommit, PlanCreateOptions, PlanEvolutionOptions,
-    PlanEvolutionResult, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
+    PlanEvolutionResult, PlanSnapshot, PlanTaskDispositionAuditOptions,
+    PlanTaskDispositionAuditResult, PlanTransitionCommit, PlanTransitionOptions,
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
     RecordCreateCommit, RecordCreateOptions, RecordCurrentnessAuditOptions,
     RecordCurrentnessAuditResult, RecordKnowledgeRelationCreateCommit,
@@ -2102,6 +2103,21 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         runtime::runnable_tasks(&self.connection, options)
+    }
+
+    pub(crate) fn current_scope_at(&self, commit_id: CommitId) -> Result<CurrentScopeProjection> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::current_scope_at(&self.connection, commit_id)
+    }
+
+    pub(crate) fn plan_task_disposition_audit(
+        &self,
+        options: &PlanTaskDispositionAuditOptions,
+    ) -> Result<PlanTaskDispositionAuditResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::plan_task_disposition_audit(&self.connection, options)
     }
 
     pub(crate) fn context_overview(

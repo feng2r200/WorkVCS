@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use super::admission::task_supersedes_relations_at;
 use super::containment::PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE;
 use super::goal::GOAL_ENTITY_KIND;
 use super::knowledge::{KNOWLEDGE_ENTITY_KIND, knowledge_at};
@@ -235,6 +236,7 @@ pub enum WhyRelationKind {
     KnowledgeExposureDerivedFrom,
     KnowledgeSupersedes,
     PlanSupersedes,
+    TaskSupersedes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -436,6 +438,26 @@ pub(crate) fn explain_why(
         {
             relation_edges.push(WhyRelationEdge {
                 relation_kind: WhyRelationKind::PlanSupersedes,
+                direction: relation_direction(options.subject(), source, target),
+                relation_id: relation.relation_id,
+                relation_version_id: relation.relation_version_id,
+                relation_label: None,
+                source,
+                target,
+                state_digest: relation.state_digest,
+            });
+        }
+    }
+    for relation in task_supersedes_relations_at(connection, resolved.target.commit_id)? {
+        let source =
+            WhyRelationEndpoint::entity(relation.replacement_task_entity_id, WhyEntityKind::Task);
+        let target =
+            WhyRelationEndpoint::entity(relation.prior_task_entity_id, WhyEntityKind::Task);
+        if endpoint_matches_subject(options.subject(), source)
+            || endpoint_matches_subject(options.subject(), target)
+        {
+            relation_edges.push(WhyRelationEdge {
+                relation_kind: WhyRelationKind::TaskSupersedes,
                 direction: relation_direction(options.subject(), source, target),
                 relation_id: relation.relation_id,
                 relation_version_id: relation.relation_version_id,
@@ -1265,6 +1287,32 @@ fn why_direct_relation_operation_subject_detail(
             )));
         }
     }
+    for relation in task_supersedes_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.replacement_task_entity_id,
+                WhyEntityKind::Task,
+            );
+            let target =
+                WhyRelationEndpoint::entity(relation.prior_task_entity_id, WhyEntityKind::Task);
+            if endpoint_matches_subject(subject, source)
+                || endpoint_matches_subject(subject, target)
+            {
+                return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                    WhyEvolutionSubjectRelationDetail {
+                        relation_kind: WhyRelationKind::TaskSupersedes,
+                        relation_version_id: relation.relation_version_id,
+                        relation_label: None,
+                        source,
+                        target,
+                        state_digest: relation.state_digest,
+                    },
+                )));
+            }
+        }
+    }
     if let Some(relation) = load_record_knowledge_relation_version(
         connection,
         resolved.target.workspace_id,
@@ -1463,6 +1511,28 @@ fn why_evolution_relation_subject_detail(
             return Ok(Some(WhyEvolutionSubjectDetail::Relation(
                 WhyEvolutionSubjectRelationDetail {
                     relation_kind: WhyRelationKind::PlanSupersedes,
+                    relation_version_id: relation.relation_version_id,
+                    relation_label: None,
+                    source,
+                    target,
+                    state_digest: relation.state_digest,
+                },
+            )));
+        }
+    }
+    for relation in task_supersedes_relations_at(connection, resolved.target.commit_id)? {
+        if relation.relation_id == relation_id
+            && relation.relation_version_id == relation_version_id
+        {
+            let source = WhyRelationEndpoint::entity(
+                relation.replacement_task_entity_id,
+                WhyEntityKind::Task,
+            );
+            let target =
+                WhyRelationEndpoint::entity(relation.prior_task_entity_id, WhyEntityKind::Task);
+            return Ok(Some(WhyEvolutionSubjectDetail::Relation(
+                WhyEvolutionSubjectRelationDetail {
+                    relation_kind: WhyRelationKind::TaskSupersedes,
                     relation_version_id: relation.relation_version_id,
                     relation_label: None,
                     source,

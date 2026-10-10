@@ -74,6 +74,19 @@ new `contains`, and creating a machine `new_plan→old_plan` `supersedes`
 relation. Constraints require explicit `carry_all` or `replace`; old Tasks,
 Records, and Evidence are not migrated. Expected IDs, versions, digests, and
 branch head provide CAS guards for the one idempotent transaction.
+
+The 1.0.0 source candidate adds schema-2 `mode=supersede` and
+`mode=task_disposition` assessment. The former replaces an active Plan; the
+latter repairs the bounded Task inventory of a superseded or abandoned Plan.
+Every affected non-terminal Task has an explicit action, including
+`retain_original`, which preserves the Task's identity, lifecycle state,
+version, and digest. The operation computes execution currentness separately
+from lifecycle status and uses guarded current Goal/Plan carriers for
+continuation. It is one transaction across branch CAS, work-state changes,
+structural references, scheduling checks, and ClaimRuntime checks. The
+read-only `plan task-disposition-audit` exposes its bounded preflight surface.
+See proposed [ADR-0524](../decisions/adr/0524-task-disposition-and-execution-currentness.md);
+the candidate is not an installed or activated capability.
 P0-3a `receipt issue`, `receipt show`, and `receipt list` are current mechanical
 capabilities using a dedicated AuthorizationReceipt Record subtype. Issue is
 transactional, idempotent, branch/target/action/contract bound, and guarded by

@@ -394,7 +394,7 @@ fn runnable_projection_rejects_missing_inactive_session_or_inactive_branch_witho
 }
 
 #[test]
-fn runnable_projection_rejects_terminal_task_statuses() {
+fn runnable_projection_omits_terminal_tasks_from_current_candidates() {
     let (_tempdir, path) = store_path();
     let (mut engine, workspace) = create_workspace(&path);
     let done_pending = create_task_snapshot(
@@ -450,24 +450,13 @@ fn runnable_projection_rejects_terminal_task_statuses() {
         .runnable_tasks(RunnableTasksOptions::new(started.session_id))
         .expect("runnable projection");
 
-    assert_eq!(projection.candidates.len(), 3);
-    let by_entity_id = candidates_by_entity_id(&projection.candidates);
-    for (snapshot, status) in [
-        (&done, TaskStatus::Done),
-        (&failed, TaskStatus::Failed),
-        (&cancelled, TaskStatus::Cancelled),
-    ] {
-        let candidate = by_entity_id
-            .get(&snapshot.task_entity_id)
-            .expect("terminal candidate");
-        assert_eq!(candidate.task.state.status, status);
-        assert!(!candidate.lifecycle_eligible);
-        assert!(candidate.dependency_ready);
-        assert!(candidate.unsatisfied_dependency_entity_ids.is_empty());
-        assert!(!candidate.runnable);
-        assert_eq!(
-            candidate.blocked_reasons,
-            vec![RunnableTaskBlockedReason::LifecycleIneligible]
+    assert!(projection.candidates.is_empty());
+    for snapshot in [&done, &failed, &cancelled] {
+        assert!(
+            projection
+                .candidates
+                .iter()
+                .all(|candidate| candidate.task.task_entity_id != snapshot.task_entity_id)
         );
     }
 }

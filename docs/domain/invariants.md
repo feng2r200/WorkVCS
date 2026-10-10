@@ -454,6 +454,59 @@ Done, failed, cancelled, superseded, invalidated, or abandoned objects leave
 the default working set as appropriate but remain queryable through history,
 why, diff, and restoration.
 
+### INV-115 — Plan disposition assesses every affected non-terminal Task
+
+This is a proposed ADR-0524 source-candidate invariant. The confirmed
+requirement is only that assessment may preserve an old Task unchanged. The
+candidate schema-version-2 supersede or retired-Plan Task-disposition repair
+enumerates the bounded non-terminal inventory exactly once, with stable Task
+identity/version/digest guards and one explicit action: `supersede`, `cancel`,
+`continue`, or `retain_original`. `retain_original` preserves the Task
+identity, lifecycle status, EntityVersion, and state digest; it records an
+immutable assessment rather than fabricating an Entity change. Existing
+valid current Goal/Plan references may keep such a Task current without a new
+carrier, while historical/deferred retention is also valid. Existing terminal
+Task history is audit-only. Static manifest defects, including duplicate or
+conflicting disposition entries and invalid replacement mappings, are rejected
+before journal admission. Coverage against the target inventory and all target
+versions, current-reference, dependency, claim, and branch-CAS fences require
+a target read; a routed operation may already have immutable journal/recovery
+evidence when one fails, while the target Store remains unchanged. The direct
+Store path creates no journal evidence and likewise leaves the Store unchanged.
+
+At the highest active nested-Plan frontier, a guarded explicit continuation
+covers that nested Plan subtree once. The containing replacement must not also
+duplicate individual Task dispositions for that covered subtree.
+
+The sole state-preserving normal-commit exception is a non-empty schema-2
+`task_disposition` manifest with only `retain_original` entries and no Task,
+relation, or replacement-Plan delta. Its empty ChangeOperation list is paired
+with a strict immutable assessment payload and strict replay. No other empty
+Plan evolution commit is permitted by this exception.
+
+### INV-116 — Execution currentness is a shared, non-lifecycle projection
+
+This is a proposed ADR-0524 source-candidate invariant. One fixed-point
+currentness resolver serves Recall, context, runnable work, explicit Task
+claims, and Task-disposition audit. Active Goals, active standalone Plans, and
+non-terminal standalone Tasks are roots. Reachable primary containment and
+Goal/Plan structural references carry scope; inactive Goals and Plans truncate
+it, and rootless reference cycles cannot activate themselves. A terminal Task
+may carry traversal to contained descendants but is never current or runnable
+itself. Default brief/handoff projections exclude non-current Tasks;
+retrospective projections retain them with history labels.
+
+### INV-117 — Disposition preserves truthful existing blockage
+
+This is a proposed ADR-0524 source-candidate invariant. One guarded
+transaction covers the branch-head CAS, affected entity/relation versions,
+surviving current references, scheduling dependencies, and active claims. A
+disposition cannot create a new currentness or dependency regression, or
+terminalize a Task required by a surviving current reference/dependent or
+active claim. A pure `retain_original` may report a blocker that already
+existed for a historical Task; it must not be rejected merely to force an
+untruthful currentness restoration or lifecycle transition.
+
 ## Work semantics
 
 ### INV-011 — Status and outcome are independent

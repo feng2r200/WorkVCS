@@ -18,9 +18,10 @@ pub use adapter::{
 };
 pub use delivery::{
     PlanDeliveryPreflight, PreparedPrimaryDelivery, PreparedPrimaryOperation,
-    build_plan_admission_delivery_receipt, build_plan_delivery_receipt_preflight,
-    build_plan_evolution_delivery_receipt, build_primary_delivery_receipt, preflight_plan_delivery,
-    prepare_primary_delivery, prepare_primary_delivery_from_projection,
+    admitted_legacy_plan_evolution_options, build_plan_admission_delivery_receipt,
+    build_plan_delivery_receipt_preflight, build_plan_evolution_delivery_receipt,
+    build_primary_delivery_receipt, preflight_plan_delivery, prepare_primary_delivery,
+    prepare_primary_delivery_from_projection,
 };
 pub use journal::{
     CanonicalRecordRef, CaptureAdmissionOutcome, CaptureAdmissionResult,

@@ -1,6 +1,7 @@
 use super::journal::{
-    CanonicalRecordRef, CaptureGroupProjection, CaptureIntent, CapturePayloadKind,
-    DeliveryAppliedPayload, DeliveryMode, DeliveryResultObject, DeliveryStartedPayload,
+    CanonicalRecordRef, CaptureAuthorityInspection, CaptureGroupProjection, CaptureIntent,
+    CapturePayloadKind, DeliveryAppliedPayload, DeliveryMode, DeliveryResultObject,
+    DeliveryStartedPayload,
 };
 use crate::canonical::{
     CanonicalValue, canonical_bytes, entity_version_digest, relation_version_digest,
@@ -10,9 +11,9 @@ use crate::{
     BranchId, ChangeSetId, CognitionCaptureManifest, CognitionCaptureOutcome,
     CognitionCaptureResult, CommitId, DeliveryId, Digest, Engine, EntityId, EntityVersionId,
     EvidenceId, GoalState, GoalStatus, PlanAdmissionGoalManifest, PlanAdmissionManifest,
-    PlanAdmissionOutcome, PlanAdmissionResult, PlanEvolutionManifest, PlanEvolutionOutcome,
-    PlanEvolutionResult, PlanStatus, ProjectRefId, RelationId, RelationVersionId, StoreId,
-    WorkspaceId,
+    PlanAdmissionOutcome, PlanAdmissionResult, PlanEvolutionExpectedParentManifest,
+    PlanEvolutionManifest, PlanEvolutionOptions, PlanEvolutionOutcome, PlanEvolutionResult,
+    PlanStatus, ProjectRefId, RelationId, RelationVersionId, StoreId, WorkspaceId,
 };
 use serde_json::{Map, Value};
 
@@ -27,6 +28,7 @@ pub struct PreparedPrimaryDelivery {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum PreparedPrimaryOperation {
     Cognition(CognitionCaptureManifest),
     PlanAdmission(PlanAdmissionManifest),
@@ -38,6 +40,46 @@ pub enum PlanDeliveryPreflight {
     Ready,
     TargetConflict(String),
     ManifestRejected(String),
+}
+
+pub fn admitted_legacy_plan_evolution_options(
+    authority: &CaptureAuthorityInspection,
+    branch_id: BranchId,
+    delivered_manifest: PlanEvolutionManifest,
+) -> Result<PlanEvolutionOptions> {
+    let intent = authority.intent();
+    if intent.payload_kind() != CapturePayloadKind::PlanEvolveV1 {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "legacy Plan evolution recovery requires an admitted plan_evolve_v1 intent".to_owned(),
+        ));
+    }
+    let Some(PreparedPrimaryOperation::PlanEvolution(admitted_manifest)) =
+        parse_plan_operation(intent)?
+    else {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "legacy Plan evolution recovery intent does not carry a Plan evolution manifest"
+                .to_owned(),
+        ));
+    };
+    if admitted_manifest != delivered_manifest {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "legacy Plan evolution recovery manifest does not match the admitted immutable intent"
+                .to_owned(),
+        ));
+    }
+    if !matches!(
+        &admitted_manifest,
+        PlanEvolutionManifest::Supersede(manifest) if manifest.schema_version == 1
+    ) {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "legacy Plan evolution recovery is limited to admitted schema_version 1 supersede intents"
+                .to_owned(),
+        ));
+    }
+    Ok(PlanEvolutionOptions::for_admitted_legacy_recovery(
+        branch_id,
+        admitted_manifest,
+    ))
 }
 
 impl PreparedPrimaryDelivery {
@@ -209,19 +251,31 @@ fn preflight_plan_evolution_target(
     manifest: &PlanEvolutionManifest,
     state: &crate::ReplayedState,
 ) -> Result<PlanDeliveryPreflight> {
-    let (target_plan_entity_id, expected_plan_entity_version_id, expected_plan_state_digest) =
-        match manifest {
-            PlanEvolutionManifest::InPlace(manifest) => (
-                &manifest.target_plan_entity_id,
-                &manifest.expected_plan_entity_version_id,
-                &manifest.expected_plan_state_digest,
-            ),
-            PlanEvolutionManifest::Supersede(manifest) => (
-                &manifest.target_plan_entity_id,
-                &manifest.expected_plan_entity_version_id,
-                &manifest.expected_plan_state_digest,
-            ),
-        };
+    let (
+        target_plan_entity_id,
+        expected_plan_entity_version_id,
+        expected_plan_state_digest,
+        retired_target_allowed,
+    ) = match manifest {
+        PlanEvolutionManifest::InPlace(manifest) => (
+            &manifest.target_plan_entity_id,
+            &manifest.expected_plan_entity_version_id,
+            &manifest.expected_plan_state_digest,
+            false,
+        ),
+        PlanEvolutionManifest::Supersede(manifest) => (
+            &manifest.target_plan_entity_id,
+            &manifest.expected_plan_entity_version_id,
+            &manifest.expected_plan_state_digest,
+            false,
+        ),
+        PlanEvolutionManifest::TaskDisposition(manifest) => (
+            &manifest.target_plan_entity_id,
+            &manifest.expected_plan_entity_version_id,
+            &manifest.expected_plan_state_digest,
+            true,
+        ),
+    };
     let target_plan_entity_id = EntityId::parse_canonical(target_plan_entity_id)?;
     let expected_plan_entity_version_id =
         EntityVersionId::parse_canonical(expected_plan_entity_version_id)?;
@@ -259,9 +313,15 @@ fn preflight_plan_evolution_target(
             plan.state_digest
         )));
     }
-    if plan.state.status != PlanStatus::Active {
+    if (!retired_target_allowed && plan.state.status != PlanStatus::Active)
+        || (retired_target_allowed
+            && !matches!(
+                plan.state.status,
+                PlanStatus::Superseded | PlanStatus::Abandoned
+            ))
+    {
         return Ok(PlanDeliveryPreflight::TargetConflict(format!(
-            "target Plan {target_plan_entity_id} is {}, not active",
+            "target Plan {target_plan_entity_id} has incompatible status {}",
             plan.state.status
         )));
     }
@@ -275,47 +335,6 @@ fn preflight_plan_evolution_target(
                 .to_owned(),
         ));
     }
-    let expected_goal_entity_id = EntityId::parse_canonical(&manifest.expected_goal_entity_id)?;
-    let expected_goal_entity_version_id =
-        EntityVersionId::parse_canonical(&manifest.expected_goal_entity_version_id)?;
-    if !state
-        .state
-        .entities()
-        .iter()
-        .any(|(entity_id, _)| *entity_id == expected_goal_entity_id)
-    {
-        return Ok(PlanDeliveryPreflight::TargetConflict(format!(
-            "expected Goal {expected_goal_entity_id} is absent from target head {}",
-            state.commit_id
-        )));
-    }
-    let goal = match engine.goal_at(state.commit_id, expected_goal_entity_id) {
-        Ok(goal) => goal,
-        Err(WorkVcsError::GoalNotFound(_)) => {
-            return Ok(PlanDeliveryPreflight::TargetConflict(format!(
-                "expected Goal {expected_goal_entity_id} exists at target head {} but is not a Goal",
-                state.commit_id
-            )));
-        }
-        Err(error) => return Err(error),
-    };
-    if goal.goal_entity_version_id != expected_goal_entity_version_id {
-        return Ok(PlanDeliveryPreflight::TargetConflict(format!(
-            "expected Goal {expected_goal_entity_id} version {expected_goal_entity_version_id}, found {}",
-            goal.goal_entity_version_id
-        )));
-    }
-    if goal.state.status != GoalStatus::Active {
-        return Ok(PlanDeliveryPreflight::TargetConflict(format!(
-            "expected Goal {expected_goal_entity_id} is {}, not active",
-            goal.state.status
-        )));
-    }
-
-    let expected_relation_id =
-        RelationId::parse_canonical(&manifest.expected_goal_plan_relation_id)?;
-    let expected_relation_version_id =
-        RelationVersionId::parse_canonical(&manifest.expected_goal_plan_relation_version_id)?;
     let relations = engine.primary_containment_relations_at(state.commit_id)?;
     let mut plan_parents = relations
         .iter()
@@ -326,18 +345,141 @@ fn preflight_plan_evolution_target(
             "target Plan {target_plan_entity_id} has multiple primary containment parents"
         )));
     }
+    let (
+        expected_parent,
+        expected_parent_version_id,
+        expected_relation_id,
+        expected_relation_version_id,
+    ) = if manifest.schema_version == 1 {
+        (
+            Some((
+                "Goal",
+                EntityId::parse_canonical(
+                    manifest
+                        .expected_goal_entity_id
+                        .as_deref()
+                        .expect("validated schema 1 Goal id"),
+                )?,
+            )),
+            Some(EntityVersionId::parse_canonical(
+                manifest
+                    .expected_goal_entity_version_id
+                    .as_deref()
+                    .expect("validated schema 1 Goal version"),
+            )?),
+            Some(RelationId::parse_canonical(
+                manifest
+                    .expected_goal_plan_relation_id
+                    .as_deref()
+                    .expect("validated schema 1 Goal relation"),
+            )?),
+            Some(RelationVersionId::parse_canonical(
+                manifest
+                    .expected_goal_plan_relation_version_id
+                    .as_deref()
+                    .expect("validated schema 1 Goal relation version"),
+            )?),
+        )
+    } else {
+        match manifest
+            .expected_parent
+            .as_ref()
+            .expect("validated schema 2 parent guard")
+        {
+            PlanEvolutionExpectedParentManifest::Goal {
+                entity_id,
+                expected_entity_version_id,
+                containment_relation_id,
+                containment_relation_version_id,
+            } => (
+                Some(("Goal", EntityId::parse_canonical(entity_id)?)),
+                Some(EntityVersionId::parse_canonical(
+                    expected_entity_version_id,
+                )?),
+                Some(RelationId::parse_canonical(containment_relation_id)?),
+                Some(RelationVersionId::parse_canonical(
+                    containment_relation_version_id,
+                )?),
+            ),
+            PlanEvolutionExpectedParentManifest::Plan {
+                entity_id,
+                expected_entity_version_id,
+                containment_relation_id,
+                containment_relation_version_id,
+            } => (
+                Some(("Plan", EntityId::parse_canonical(entity_id)?)),
+                Some(EntityVersionId::parse_canonical(
+                    expected_entity_version_id,
+                )?),
+                Some(RelationId::parse_canonical(containment_relation_id)?),
+                Some(RelationVersionId::parse_canonical(
+                    containment_relation_version_id,
+                )?),
+            ),
+            PlanEvolutionExpectedParentManifest::None => (None, None, None, None),
+        }
+    };
+    let Some((expected_parent_kind, expected_parent_entity_id)) = expected_parent else {
+        return Ok(if current_relation.is_none() {
+            PlanDeliveryPreflight::Ready
+        } else {
+            PlanDeliveryPreflight::TargetConflict(format!(
+                "standalone target Plan {target_plan_entity_id} gained a primary parent"
+            ))
+        });
+    };
     let Some(current_relation) = current_relation else {
         return Ok(PlanDeliveryPreflight::TargetConflict(format!(
-            "target Plan {target_plan_entity_id} has no current primary Goal relation"
+            "target Plan {target_plan_entity_id} has no current primary {expected_parent_kind} relation"
         )));
     };
-    if current_relation.parent_entity_id != expected_goal_entity_id
-        || current_relation.relation_id != expected_relation_id
-        || current_relation.relation_version_id != expected_relation_version_id
+    if current_relation.parent_entity_id != expected_parent_entity_id
+        || Some(current_relation.relation_id) != expected_relation_id
+        || Some(current_relation.relation_version_id) != expected_relation_version_id
     {
         return Ok(PlanDeliveryPreflight::TargetConflict(format!(
-            "target Plan {target_plan_entity_id} primary Goal relation no longer matches the manifest guards"
+            "target Plan {target_plan_entity_id} primary {expected_parent_kind} relation no longer matches the manifest guards"
         )));
+    }
+    let expected_parent_version_id = expected_parent_version_id.expect("guarded parent version");
+    match expected_parent_kind {
+        "Goal" => {
+            let goal = match engine.goal_at(state.commit_id, expected_parent_entity_id) {
+                Ok(goal) => goal,
+                Err(WorkVcsError::GoalNotFound(_)) => {
+                    return Ok(PlanDeliveryPreflight::TargetConflict(format!(
+                        "expected Goal {expected_parent_entity_id} is absent or has another kind"
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
+            if goal.goal_entity_version_id != expected_parent_version_id
+                || goal.state.status != GoalStatus::Active
+            {
+                return Ok(PlanDeliveryPreflight::TargetConflict(format!(
+                    "expected Goal {expected_parent_entity_id} version or active status no longer matches"
+                )));
+            }
+        }
+        "Plan" => {
+            let parent = match engine.plan_at(state.commit_id, expected_parent_entity_id) {
+                Ok(plan) => plan,
+                Err(WorkVcsError::PlanNotFound(_)) => {
+                    return Ok(PlanDeliveryPreflight::TargetConflict(format!(
+                        "expected Plan {expected_parent_entity_id} is absent or has another kind"
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
+            if parent.plan_entity_version_id != expected_parent_version_id
+                || parent.state.status != PlanStatus::Active
+            {
+                return Ok(PlanDeliveryPreflight::TargetConflict(format!(
+                    "expected Plan {expected_parent_entity_id} version or active status no longer matches"
+                )));
+            }
+        }
+        _ => unreachable!("validated parent kind"),
     }
     Ok(PlanDeliveryPreflight::Ready)
 }
@@ -475,9 +617,9 @@ fn prepare_primary_delivery_inner(
                     CapturePayloadKind::LegacyCognitionV1 => {
                         legacy_manifest(intent)?.idempotency_key
                     }
-                    CapturePayloadKind::PlanAdmitV1 | CapturePayloadKind::PlanEvolveV1 => {
-                        operation_idempotency_key.clone()
-                    }
+                    CapturePayloadKind::PlanAdmitV1
+                    | CapturePayloadKind::PlanEvolveV1
+                    | CapturePayloadKind::PlanEvolveV2 => operation_idempotency_key.clone(),
                 },
             ),
         };
@@ -584,14 +726,26 @@ fn parse_plan_operation(intent: &CaptureIntent) -> Result<Option<PreparedPrimary
                     "routed plan admission payload is not deliverable: {error}"
                 ))
             }),
-        CapturePayloadKind::PlanEvolveV1 => PlanEvolutionManifest::from_json_bytes(&bytes)
-            .map(PreparedPrimaryOperation::PlanEvolution)
-            .map(Some)
-            .map_err(|error| {
+        CapturePayloadKind::PlanEvolveV1 | CapturePayloadKind::PlanEvolveV2 => {
+            let manifest = PlanEvolutionManifest::from_json_bytes(&bytes).map_err(|error| {
                 WorkVcsError::ControlPlaneInvalid(format!(
                     "routed plan evolution payload is not deliverable: {error}"
                 ))
-            }),
+            })?;
+            let expected_kind = if manifest.payload_kind_version() == 2 {
+                CapturePayloadKind::PlanEvolveV2
+            } else {
+                CapturePayloadKind::PlanEvolveV1
+            };
+            if intent.payload_kind() != expected_kind {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "{} cannot carry a schema_version {} Plan evolution manifest",
+                    intent.payload_kind().as_str(),
+                    manifest.schema_version()
+                )));
+            }
+            Ok(Some(PreparedPrimaryOperation::PlanEvolution(manifest)))
+        }
     }
 }
 
@@ -706,7 +860,9 @@ pub fn build_primary_delivery_receipt(
             started.expected_state_digest(),
         )?,
         CapturePayloadKind::LegacyCognitionV1 => legacy_manifest(intent)?,
-        CapturePayloadKind::PlanAdmitV1 | CapturePayloadKind::PlanEvolveV1 => {
+        CapturePayloadKind::PlanAdmitV1
+        | CapturePayloadKind::PlanEvolveV1
+        | CapturePayloadKind::PlanEvolveV2 => {
             return Err(WorkVcsError::ControlPlaneInvalid(
                 "cognition delivery receipt cannot be built for a Plan payload".to_owned(),
             ));
@@ -906,7 +1062,7 @@ pub fn build_plan_evolution_delivery_receipt(
         Some(PreparedPrimaryOperation::PlanEvolution(manifest)) => manifest,
         _ => {
             return Err(WorkVcsError::ControlPlaneInvalid(
-                "plan evolution receipt requires a plan_evolve_v1 intent".to_owned(),
+                "plan evolution receipt requires a typed plan_evolve intent".to_owned(),
             ));
         }
     };
@@ -916,13 +1072,16 @@ pub fn build_plan_evolution_delivery_receipt(
         ));
     }
 
-    let mut objects = vec![DeliveryResultObject::new(
-        "plan",
-        "plan",
-        result.plan.entity_id.to_string(),
-        result.plan.entity_version_id.to_string(),
-        result.plan.state_digest,
-    )?];
+    let mut objects = Vec::new();
+    if result.plan_changed {
+        objects.push(DeliveryResultObject::new(
+            "plan",
+            "plan",
+            result.plan.entity_id.to_string(),
+            result.plan.entity_version_id.to_string(),
+            result.plan.state_digest,
+        )?);
+    }
     if let Some(plan) = &result.new_plan {
         objects.push(DeliveryResultObject::new(
             "new_plan",
@@ -934,11 +1093,26 @@ pub fn build_plan_evolution_delivery_receipt(
     }
     append_plan_task_objects(&mut objects, &result.tasks)?;
     append_plan_record_objects(&mut objects, &result.records)?;
-    let evidence_manifest = match &manifest {
-        PlanEvolutionManifest::InPlace(manifest) => &manifest.evidence,
-        PlanEvolutionManifest::Supersede(manifest) => &manifest.evidence,
+    let evidence_manifest: &[crate::PlanAdmissionEvidenceManifest] = match &manifest {
+        PlanEvolutionManifest::InPlace(manifest) => manifest.evidence.as_slice(),
+        PlanEvolutionManifest::Supersede(manifest) => manifest.evidence.as_slice(),
+        PlanEvolutionManifest::TaskDisposition(_) => &[],
     };
     append_plan_evidence_objects(&mut objects, &result.evidence, evidence_manifest)?;
+    for (index, disposition) in result.task_dispositions.iter().enumerate() {
+        if matches!(
+            disposition.action,
+            crate::PlanTaskDispositionAction::Supersede | crate::PlanTaskDispositionAction::Cancel
+        ) {
+            objects.push(DeliveryResultObject::new(
+                format!("disposition.{index}.task"),
+                "task",
+                disposition.task_entity_id.to_string(),
+                disposition.entity_version_id.to_string(),
+                disposition.state_digest,
+            )?);
+        }
+    }
     if let Some(relation) = &result.goal_contains_relation {
         objects.push(DeliveryResultObject::new(
             "goal_contains_relation",
@@ -957,9 +1131,18 @@ pub fn build_plan_evolution_delivery_receipt(
             relation.state_digest,
         )?);
     }
+    for (index, relation) in result.disposition_relations.iter().enumerate() {
+        objects.push(DeliveryResultObject::new(
+            format!("disposition_relation.{index}"),
+            format!("relation:{}", relation.relation_type),
+            relation.relation_id.to_string(),
+            relation.relation_version_id.to_string(),
+            relation.state_digest,
+        )?);
+    }
 
     DeliveryAppliedPayload::new_plan(
-        CapturePayloadKind::PlanEvolveV1,
+        intent.payload_kind(),
         started.delivery_id(),
         started.project_ref_id(),
         started.store_id(),
@@ -994,35 +1177,137 @@ pub fn build_plan_delivery_receipt_preflight(
             )?;
         }
         Some(PreparedPrimaryOperation::PlanEvolution(manifest)) => {
-            append_placeholder_entity(&mut objects, "plan", "plan", digest)?;
-            let (tasks, records, evidence, supersede) = match &manifest {
+            let (tasks, records, evidence, supersede): (
+                &[crate::PlanAdmissionTaskManifest],
+                &[crate::PlanAdmissionRecordManifest],
+                &[crate::PlanAdmissionEvidenceManifest],
+                bool,
+            ) = match &manifest {
                 PlanEvolutionManifest::InPlace(manifest) => (
-                    &manifest.tasks,
-                    &manifest.records,
-                    &manifest.evidence,
+                    manifest.tasks.as_slice(),
+                    manifest.records.as_slice(),
+                    manifest.evidence.as_slice(),
                     false,
                 ),
-                PlanEvolutionManifest::Supersede(manifest) => {
-                    (&manifest.tasks, &manifest.records, &manifest.evidence, true)
+                PlanEvolutionManifest::Supersede(manifest) => (
+                    manifest.tasks.as_slice(),
+                    manifest.records.as_slice(),
+                    manifest.evidence.as_slice(),
+                    true,
+                ),
+                PlanEvolutionManifest::TaskDisposition(manifest) => {
+                    (manifest.tasks.as_slice(), &[], &[], false)
                 }
             };
+            if !matches!(manifest, PlanEvolutionManifest::TaskDisposition(_)) {
+                append_placeholder_entity(&mut objects, "plan", "plan", digest)?;
+            }
             if supersede {
                 append_placeholder_entity(&mut objects, "new_plan", "plan", digest)?;
             }
             append_placeholder_manifest_objects(&mut objects, tasks, records, evidence, digest)?;
             if supersede {
-                append_placeholder_relation(
-                    &mut objects,
-                    "goal_contains_relation",
-                    "relation:contains",
-                    digest,
-                )?;
+                let PlanEvolutionManifest::Supersede(supersede_manifest) = &manifest else {
+                    unreachable!("supersede result uses supersede manifest")
+                };
+                let has_parent_relation = supersede_manifest.schema_version == 1
+                    || !matches!(
+                        supersede_manifest.expected_parent.as_ref(),
+                        Some(PlanEvolutionExpectedParentManifest::None)
+                    );
+                if has_parent_relation {
+                    append_placeholder_relation(
+                        &mut objects,
+                        "goal_contains_relation",
+                        "relation:contains",
+                        digest,
+                    )?;
+                }
                 append_placeholder_relation(
                     &mut objects,
                     "supersedes_relation",
                     "relation:supersedes",
                     digest,
                 )?;
+                if supersede_manifest.schema_version == 2 {
+                    let mut relation_index = 0_usize;
+                    for (index, disposition) in
+                        supersede_manifest.task_dispositions.iter().enumerate()
+                    {
+                        if matches!(
+                            disposition.action,
+                            crate::PlanTaskDispositionAction::Supersede
+                                | crate::PlanTaskDispositionAction::Cancel
+                        ) {
+                            append_placeholder_entity(
+                                &mut objects,
+                                format!("disposition.{index}.task"),
+                                "task",
+                                digest,
+                            )?;
+                        }
+                        let relation_kind = match disposition.action {
+                            crate::PlanTaskDispositionAction::Supersede => {
+                                Some("relation:supersedes")
+                            }
+                            crate::PlanTaskDispositionAction::Continue => {
+                                Some("relation:references")
+                            }
+                            crate::PlanTaskDispositionAction::Cancel
+                            | crate::PlanTaskDispositionAction::RetainOriginal => None,
+                        };
+                        if let Some(relation_kind) = relation_kind {
+                            append_placeholder_relation(
+                                &mut objects,
+                                format!("disposition_relation.{relation_index}"),
+                                relation_kind,
+                                digest,
+                            )?;
+                            relation_index += 1;
+                        }
+                    }
+                    for _ in &supersede_manifest.nested_plan_continuations {
+                        append_placeholder_relation(
+                            &mut objects,
+                            format!("disposition_relation.{relation_index}"),
+                            "relation:references",
+                            digest,
+                        )?;
+                        relation_index += 1;
+                    }
+                }
+            }
+            if let PlanEvolutionManifest::TaskDisposition(repair) = &manifest {
+                let mut relation_index = 0_usize;
+                for (index, disposition) in repair.task_dispositions.iter().enumerate() {
+                    if matches!(
+                        disposition.action,
+                        crate::PlanTaskDispositionAction::Supersede
+                            | crate::PlanTaskDispositionAction::Cancel
+                    ) {
+                        append_placeholder_entity(
+                            &mut objects,
+                            format!("disposition.{index}.task"),
+                            "task",
+                            digest,
+                        )?;
+                    }
+                    let relation_kind = match disposition.action {
+                        crate::PlanTaskDispositionAction::Supersede => Some("relation:supersedes"),
+                        crate::PlanTaskDispositionAction::Continue => Some("relation:references"),
+                        crate::PlanTaskDispositionAction::Cancel
+                        | crate::PlanTaskDispositionAction::RetainOriginal => None,
+                    };
+                    if let Some(relation_kind) = relation_kind {
+                        append_placeholder_relation(
+                            &mut objects,
+                            format!("disposition_relation.{relation_index}"),
+                            relation_kind,
+                            digest,
+                        )?;
+                        relation_index += 1;
+                    }
+                }
             }
         }
         _ => {

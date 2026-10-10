@@ -18,7 +18,7 @@ conversation. WorkVCS covers the missing layer between them: the evolving
 review, and restore work.
 
 > **Project status:** the repository contains a locally release-ready bounded
-> V1 implementation. The current local package version is `0.2.0`, and no public
+> V1 implementation. The source candidate package version is `1.0.0`, and no public
 > release has been made. The source is licensed under Apache-2.0; selecting a
 > release version, publishing artifacts, and making release commitments remain
 > separate decisions.
@@ -30,6 +30,12 @@ guards, and major increments cover incompatible CLI, registry, or state
 contracts. Git commits, build timestamps, and binary digests identify a build;
 they do not replace the semantic version. CI enforces this rule for changes to
 the CLI, Skill, packaging, installation, and release workflow.
+
+The 1.0.0 source candidate adds explicit Task-disposition assessment when a
+Plan is superseded or retired. An assessment can preserve an old Task exactly
+as it is; lifecycle status and execution currentness are separate. The
+candidate has not been installed, merged, released, or activated. See proposed
+[ADR-0524](docs/decisions/adr/0524-task-disposition-and-execution-currentness.md).
 
 ## What makes it different
 

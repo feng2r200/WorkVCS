@@ -41,10 +41,10 @@ use crate::history::{
     ChangeSetSnapshot, CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
     CheckpointValidationResult, CognitionCaptureOptions, CognitionCaptureResult, CommitSnapshot,
-    DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, EntityTransitionCommit,
-    EntityTransitionOptions, EventListOptions, EventListResult, EventSnapshot,
-    EvidenceContentReadResult, EvidenceCreateOptions, EvidenceCreateResult, EvidenceListOptions,
-    EvidenceListResult, EvidenceSnapshot, FindingRecordCorrectionCommit,
+    CurrentScopeProjection, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions,
+    EntityTransitionCommit, EntityTransitionOptions, EventListOptions, EventListResult,
+    EventSnapshot, EvidenceContentReadResult, EvidenceCreateOptions, EvidenceCreateResult,
+    EvidenceListOptions, EvidenceListResult, EvidenceSnapshot, FindingRecordCorrectionCommit,
     FindingRecordCorrectionOptions, GoalCreateCommit, GoalCreateOptions, GoalSnapshot,
     GoalTransitionCommit, GoalTransitionOptions, HistoryQueryOptions, HistoryQueryResult,
     IntegrityReport, KnowledgeCreateCommit, KnowledgeCreateOptions, KnowledgeExposureAdoptOptions,
@@ -65,7 +65,8 @@ use crate::history::{
     KnowledgeSpaceSourceStaleExposuresOptions, KnowledgeSpaceSourceStaleExposuresResult,
     KnowledgeTransitionCommit, KnowledgeTransitionOptions, PlanAdmissionOptions,
     PlanAdmissionResult, PlanCreateCommit, PlanCreateOptions, PlanEvolutionOptions,
-    PlanEvolutionResult, PlanSnapshot, PlanTransitionCommit, PlanTransitionOptions,
+    PlanEvolutionResult, PlanSnapshot, PlanTaskDispositionAuditOptions,
+    PlanTaskDispositionAuditResult, PlanTransitionCommit, PlanTransitionOptions,
     PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions, PrimaryContainmentSnapshot,
     RecordCreateCommit, RecordCreateOptions, RecordCurrentnessAuditOptions,
     RecordCurrentnessAuditResult, RecordKnowledgeRelationCreateCommit,
@@ -201,6 +202,17 @@ impl Engine {
         options: PlanEvolutionOptions,
     ) -> Result<Option<PlanEvolutionResult>> {
         self.store.find_plan_evolution_result(&options)
+    }
+
+    pub fn current_scope_at(&self, commit_id: CommitId) -> Result<CurrentScopeProjection> {
+        self.store.current_scope_at(commit_id)
+    }
+
+    pub fn plan_task_disposition_audit(
+        &self,
+        options: PlanTaskDispositionAuditOptions,
+    ) -> Result<PlanTaskDispositionAuditResult> {
+        self.store.plan_task_disposition_audit(&options)
     }
 
     pub fn issue_authorization_receipt(

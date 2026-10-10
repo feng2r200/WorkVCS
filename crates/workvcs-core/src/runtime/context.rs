@@ -538,6 +538,8 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let current_scope = history::current_scope_at(connection, branch.head_commit_id)?;
+    let focused_entity_id = session.focus.as_ref().map(|focus| focus.focus_entity_id);
     let tasks = history::tasks_at(connection, branch.head_commit_id)?;
     if tasks.iter().any(|task| {
         task.workspace_id != active_workspace_id || task.commit_id != branch.head_commit_id
@@ -547,6 +549,13 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let tasks = tasks
+        .into_iter()
+        .filter(|task| {
+            current_scope.current_tasks.contains(&task.task_entity_id)
+                || focused_entity_id == Some(task.task_entity_id)
+        })
+        .collect::<Vec<_>>();
     let plans = history::plans_at(connection, branch.head_commit_id)?;
     if plans.iter().any(|plan| {
         plan.workspace_id != active_workspace_id || plan.commit_id != branch.head_commit_id
@@ -556,6 +565,10 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let plans = plans
+        .into_iter()
+        .filter(|plan| current_scope.current_plans.contains(&plan.plan_entity_id))
+        .collect::<Vec<_>>();
     let goals = history::goals_at(connection, branch.head_commit_id)?;
     if goals.iter().any(|goal| {
         goal.workspace_id != active_workspace_id || goal.commit_id != branch.head_commit_id
@@ -565,6 +578,10 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let goals = goals
+        .into_iter()
+        .filter(|goal| current_scope.current_goals.contains(&goal.goal_entity_id))
+        .collect::<Vec<_>>();
     let primary_containment_relations =
         history::primary_containment_relations_at(connection, branch.head_commit_id)?;
     if primary_containment_relations.iter().any(|relation| {
@@ -575,6 +592,18 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let primary_containment_relations = primary_containment_relations
+        .into_iter()
+        .filter(|relation| {
+            current_scope.has_relation_carrier(
+                relation.child_entity_id,
+                history::CurrentnessCarrierKind::PrimaryContainment,
+                relation.parent_entity_id,
+                relation.relation_id,
+                relation.relation_version_id,
+            )
+        })
+        .collect::<Vec<_>>();
     let structural_references =
         history::structural_references_at(connection, branch.head_commit_id)?;
     if structural_references.iter().any(|reference| {
@@ -586,12 +615,37 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let structural_references = structural_references
+        .into_iter()
+        .filter(|reference| {
+            current_scope.has_relation_carrier(
+                reference.target_entity_id,
+                history::CurrentnessCarrierKind::StructuralReference,
+                reference.referrer_entity_id,
+                reference.relation_id,
+                reference.relation_version_id,
+            )
+        })
+        .collect::<Vec<_>>();
     let acceptance_criteria = context_acceptance_criteria(
         connection,
         branch.head_commit_id,
         active_workspace_id,
         active_branch_id,
     )?;
+    let acceptance_criteria = acceptance_criteria
+        .into_iter()
+        .filter(|criterion| {
+            current_scope
+                .current_tasks
+                .contains(&criterion.snapshot.task_entity_id)
+                || focused_entity_id == Some(criterion.snapshot.task_entity_id)
+        })
+        .collect::<Vec<_>>();
+    let current_acceptance_criteria = acceptance_criteria
+        .iter()
+        .map(|criterion| criterion.snapshot.acceptance_criterion_entity_id)
+        .collect::<std::collections::BTreeSet<_>>();
     let verification_requirements =
         history::verification_requirements_at(connection, branch.head_commit_id)?;
     if verification_requirements.iter().any(|requirement| {
@@ -603,6 +657,12 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
+    let verification_requirements = verification_requirements
+        .into_iter()
+        .filter(|requirement| {
+            current_acceptance_criteria.contains(&requirement.acceptance_criterion_entity_id)
+        })
+        .collect::<Vec<_>>();
     let records = history::records_at(connection, &RecordListOptions::new(branch.head_commit_id))?;
     if records.workspace_id != active_workspace_id || records.commit_id != branch.head_commit_id {
         return Err(WorkVcsError::SessionInvalid(format!(
@@ -1635,6 +1695,28 @@ fn collect_context_items(
                 summary,
             );
         }
+    }
+    if let Some(focus) = session.focus.as_ref()
+        && !context
+            .runnable_tasks
+            .candidates
+            .iter()
+            .any(|candidate| candidate.task.task_entity_id == focus.focus_entity_id)
+        && let Some(task) = tasks_by_id.get(&focus.focus_entity_id)
+    {
+        push_context_item(
+            &mut items,
+            profile,
+            ContextPriority::P0,
+            ContextItemCategory::CurrentTask,
+            ContextItemSubject::Task {
+                task_entity_id: task.task_entity_id,
+            },
+            format!(
+                "task status={} priority={} runnable=false: {}",
+                task.state.status, task.state.priority, task.state.description
+            ),
+        );
     }
     push_focused_peer_resource_requirement_context_items(
         &mut items,
@@ -3227,6 +3309,7 @@ fn why_relation_kind_summary(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::KnowledgeExposureDerivedFrom => "knowledge_exposure_derived_from",
         WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
         WhyRelationKind::PlanSupersedes => "plan_supersedes",
+        WhyRelationKind::TaskSupersedes => "task_supersedes",
     }
 }
 

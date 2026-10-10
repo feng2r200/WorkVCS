@@ -155,6 +155,7 @@ pub(crate) fn runnable_tasks(
     connection.verify_foreign_keys()?;
     let anchor = projection_anchor(connection, options.session_id())?;
     let all_tasks = history::tasks_at(connection, anchor.head_commit_id)?;
+    let current_scope = history::current_scope_at(connection, anchor.head_commit_id)?;
     let scheduling_relations =
         history::task_scheduling_relations_at(connection, anchor.head_commit_id)?;
     let dependency_readiness = dependency_readiness_by_task(&all_tasks, &scheduling_relations)?;
@@ -171,6 +172,7 @@ pub(crate) fn runnable_tasks(
     )?;
     let mut candidates = all_tasks
         .into_iter()
+        .filter(|task| current_scope.current_tasks.contains(&task.task_entity_id))
         .filter(|task| candidate_scope.includes(task.task_entity_id))
         .map(|task| {
             let dependency_readiness = dependency_readiness

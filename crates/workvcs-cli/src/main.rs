@@ -30,11 +30,12 @@ use workvcs_core::control_plane::{
     RegistryMigrationPreview, ResolutionBasis, ResolutionDiagnostic, ResolutionMode,
     ResolutionRank, ResolutionRecordedPayload, ResolutionStatus, RoutingActivationCandidate,
     SharedTargetIsolation, UnifiedLocatorInput, UtcTimestamp,
-    build_plan_admission_delivery_receipt, build_plan_delivery_receipt_preflight,
-    build_plan_evolution_delivery_receipt, build_primary_delivery_receipt,
-    build_registry_v1_migration_preview_with_repairs, materialize_registry_v1_migration_candidate,
-    preflight_plan_delivery, prepare_primary_delivery_from_projection,
-    project_registry_journal_quiescence_lock_path, resolve_project, resolve_unbound_project,
+    admitted_legacy_plan_evolution_options, build_plan_admission_delivery_receipt,
+    build_plan_delivery_receipt_preflight, build_plan_evolution_delivery_receipt,
+    build_primary_delivery_receipt, build_registry_v1_migration_preview_with_repairs,
+    materialize_registry_v1_migration_candidate, preflight_plan_delivery,
+    prepare_primary_delivery_from_projection, project_registry_journal_quiescence_lock_path,
+    resolve_project, resolve_unbound_project,
 };
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
@@ -112,7 +113,8 @@ use workvcs_core::{
     MergeStartResult, MigrationId, NextWorkOptions, NextWorkResult, OperationId,
     PlanAdmissionManifest, PlanAdmissionOptions, PlanAdmissionOutcome, PlanAdmissionResult,
     PlanCreateCommit, PlanCreateOptions, PlanEvolutionManifest, PlanEvolutionOptions,
-    PlanEvolutionOutcome, PlanEvolutionResult, PlanSnapshot, PlanStatus, PlanTransitionCommit,
+    PlanEvolutionOutcome, PlanEvolutionResult, PlanSnapshot, PlanStatus,
+    PlanTaskDispositionAuditOptions, PlanTaskDispositionAuditResult, PlanTransitionCommit,
     PlanTransitionOptions, PrimaryContainmentCreateCommit, PrimaryContainmentCreateOptions,
     PrimaryContainmentSnapshot, ProjectRefId, RecordCreateCommit, RecordCreateOptions,
     RecordCurrentnessAuditItem, RecordCurrentnessAuditOptions, RecordCurrentnessAuditResult,
@@ -2115,7 +2117,7 @@ enum ProjectCommand {
         name = "operation-recovery",
         visible_alias = "capture-recovery",
         about = "Inspect or explicitly converge one admitted durable operation",
-        long_about = "Canonical recovery surface for cognition_v2, plan_admit_v1, and plan_evolve_v1 intents. The capture-recovery spelling remains a compatibility alias. Status is read-only and reports payload_kind plus fresh registry/projection guards. Apply converges only the named operation through the shared ProjectRef binding, target-delivery, and durable-receipt state machine."
+        long_about = "Canonical recovery surface for cognition_v2, plan_admit_v1, plan_evolve_v1 legacy intents, and plan_evolve_v2 intents. The capture-recovery spelling remains a compatibility alias. Status is read-only and reports payload_kind plus fresh registry/projection guards. Apply converges only the named operation through the shared ProjectRef binding, target-delivery, and durable-receipt state machine."
     )]
     #[command(group(
         ArgGroup::new("operation-recovery-action")
@@ -3762,7 +3764,7 @@ enum PlanCommand {
     },
     #[command(
         about = "Atomically evolve one Plan through an explicit Store or verified project route",
-        long_about = "Explicit STORE plus --branch uses the direct Plan engine. The --cwd form resolves the verified project binding; on registry v2 it requires the plan_evolve journal capability, durably admits plan_evolve_v1 into the shared operation journal, and returns only after the target result has a durable receipt. In-place and supersede semantics remain those of the strict manifest, and exact replay repairs a missing receipt without another Plan commit."
+        long_about = "Explicit STORE plus --branch uses the direct Plan engine. The --cwd form resolves the verified project binding; on registry v2 it requires the plan_evolve journal capability, durably admits plan_evolve_v1 for in-place evolution or plan_evolve_v2 for schema 2 supersede/task disposition into the shared operation journal, and returns only after the target result has a durable receipt. Fresh schema 1 supersede is rejected; an already-admitted legacy intent remains recoverable, and exact replay repairs a missing receipt without another Plan commit."
     )]
     #[command(group(
         ArgGroup::new("plan-evolve-target")
@@ -3797,6 +3799,32 @@ enum PlanCommand {
             help = "Strict in-place or supersede manifest containing idempotency and compare-and-swap guards"
         )]
         manifest: PathBuf,
+    },
+    #[command(
+        name = "task-disposition-audit",
+        about = "Read a bounded Task-disposition preview for one Plan without writing"
+    )]
+    #[command(group(
+        ArgGroup::new("plan-task-disposition-audit-target")
+            .required(true)
+            .multiple(false)
+            .args(["store", "cwd"])
+    ))]
+    TaskDispositionAudit {
+        #[arg(value_name = "STORE", help = "Explicit WorkVCS Store path")]
+        store: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH", help = "Project checkout or worktree")]
+        cwd: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(long, help = "Required Work Branch for an explicit Store target")]
+        branch: Option<String>,
+
+        #[arg(long, help = "Plan stable entity id to audit")]
+        plan: String,
     },
     Create {
         #[arg(value_name = "STORE")]
@@ -10282,6 +10310,13 @@ fn run(cli: Cli) -> Result<String> {
                 branch,
                 manifest,
             } => run_plan_evolve(store, cwd, registry, branch, manifest),
+            PlanCommand::TaskDispositionAudit {
+                store,
+                cwd,
+                registry,
+                branch,
+                plan,
+            } => run_plan_task_disposition_audit(store, cwd, registry, branch, plan),
             PlanCommand::Create {
                 store,
                 branch,
@@ -23528,6 +23563,7 @@ fn parse_capture_payload_kind(value: &str) -> Result<CapturePayloadKind> {
         "legacy_cognition_v1" => Ok(CapturePayloadKind::LegacyCognitionV1),
         "plan_admit_v1" => Ok(CapturePayloadKind::PlanAdmitV1),
         "plan_evolve_v1" => Ok(CapturePayloadKind::PlanEvolveV1),
+        "plan_evolve_v2" => Ok(CapturePayloadKind::PlanEvolveV2),
         _ => Err(WorkVcsError::QueryInvalid(format!(
             "operation inventory payload kind {value:?} is not supported"
         ))),
@@ -24995,35 +25031,33 @@ fn apply_project_capture_recovery_with_fault_and_mode(
             "capture recovery registry digest changed under lock: expected {expected_registry_digest}, found {registry_digest}"
         )));
     }
-    let locked_projection = journal.inspect_projection(capture_id)?;
+    let locked_projection = locked_journal.inspect_projection(capture_id)?;
     if &locked_projection.projection().digest()? != expected_projection_digest {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "capture recovery projection digest changed under lock: expected {expected_projection_digest}, found {}",
             locked_projection.projection().digest()?
         )));
     }
-    let intent = journal.load(capture_id)?;
+    let locked_authority = locked_journal.inspect_authority(capture_id)?;
+    let intent = locked_authority.intent().clone();
     let recovery_identity = capture_recovery_identity(&intent)?;
     reject_project_local_path("project registry", &registry_path, &recovery_identity)?;
     let mut resolution = resolve_project(&registry, intent.resolution_context())?;
     let existing_binding = match &mode {
         CaptureRecoveryMode::DeliverExistingBinding {
             invocation_resolution,
-        } => {
-            let authority = journal.inspect_authority(capture_id)?;
-            Some(validate_existing_binding_delivery_preflight(
-                &effective,
-                &registry_path,
-                &registry,
-                &registry_digest,
-                &intent,
-                locked_projection.projection(),
-                &resolution,
-                invocation_resolution,
-                authority.events(),
-                &recovery_identity,
-            )?)
-        }
+        } => Some(validate_existing_binding_delivery_preflight(
+            &effective,
+            &registry_path,
+            &registry,
+            &registry_digest,
+            &intent,
+            locked_projection.projection(),
+            &resolution,
+            invocation_resolution,
+            locked_authority.events(),
+            &recovery_identity,
+        )?),
         CaptureRecoveryMode::ExplicitManual => None,
     };
     if let Some(binding) = existing_binding.as_ref()
@@ -25452,10 +25486,21 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                             )
                         }
                         PreparedPrimaryOperation::PlanEvolution(manifest) => {
-                            let result = engine.evolve_plan(PlanEvolutionOptions::new(
-                                binding.branch_id(),
-                                manifest,
-                            ))?;
+                            let legacy_recovery = matches!(
+                                &manifest,
+                                PlanEvolutionManifest::Supersede(value)
+                                    if value.schema_version == 1
+                            );
+                            let options = if legacy_recovery {
+                                admitted_legacy_plan_evolution_options(
+                                    &locked_authority,
+                                    binding.branch_id(),
+                                    manifest,
+                                )?
+                            } else {
+                                PlanEvolutionOptions::new(binding.branch_id(), manifest)
+                            };
+                            let result = engine.evolve_plan(options)?;
                             let receipt =
                                 build_plan_evolution_delivery_receipt(&intent, &started, &result)?;
                             (
@@ -27452,6 +27497,7 @@ fn run_recall(
         semantic_options = semantic_options.with_knowledge_relations();
     }
     let semantic = engine.semantic_snapshot(semantic_options)?;
+    let current_scope = engine.current_scope_at(commit_id)?;
 
     let mut goals = semantic.goals;
     let mut plans = semantic.plans;
@@ -27471,9 +27517,9 @@ fn run_recall(
     knowledge.reverse();
 
     if profile != RecallProfileArg::Retrospective {
-        goals.retain(|goal| goal.state.status == GoalStatus::Active);
-        plans.retain(|plan| plan.state.status == PlanStatus::Active);
-        tasks.retain(|task| !task.state.status.is_terminal());
+        goals.retain(|goal| current_scope.current_goals.contains(&goal.goal_entity_id));
+        plans.retain(|plan| current_scope.current_plans.contains(&plan.plan_entity_id));
+        tasks.retain(|task| current_scope.current_tasks.contains(&task.task_entity_id));
         knowledge.retain(|item| item.state.status == KnowledgeStatus::Active);
     }
     match profile {
@@ -27606,6 +27652,39 @@ fn run_recall(
     let mut ordered = Vec::with_capacity(total_items);
     const CURRENT_CATEGORY_RESERVE: usize = 1;
     if profile == RecallProfileArg::Retrospective {
+        let current_goals = goals
+            .iter()
+            .filter(|goal| current_scope.current_goals.contains(&goal.goal_entity_id))
+            .collect::<Vec<_>>();
+        let historical_goals = goals
+            .iter()
+            .filter(|goal| !current_scope.current_goals.contains(&goal.goal_entity_id))
+            .collect::<Vec<_>>();
+        let current_plans = plans
+            .iter()
+            .filter(|plan| current_scope.current_plans.contains(&plan.plan_entity_id))
+            .collect::<Vec<_>>();
+        let historical_plans = plans
+            .iter()
+            .filter(|plan| !current_scope.current_plans.contains(&plan.plan_entity_id))
+            .collect::<Vec<_>>();
+        let current_tasks = tasks
+            .iter()
+            .filter(|task| current_scope.current_tasks.contains(&task.task_entity_id))
+            .collect::<Vec<_>>();
+        let historical_tasks = tasks
+            .iter()
+            .filter(|task| !current_scope.current_tasks.contains(&task.task_entity_id))
+            .collect::<Vec<_>>();
+        let retrospective_claims = claims
+            .iter()
+            .filter(|claim| current_scope.current_tasks.contains(&claim.task_entity_id))
+            .chain(
+                claims
+                    .iter()
+                    .filter(|claim| !current_scope.current_tasks.contains(&claim.task_entity_id)),
+            )
+            .collect::<Vec<_>>();
         let retrospective_records = records
             .iter()
             .filter(|record| record_status_is_current(record.state.status))
@@ -27625,31 +27704,19 @@ fn run_recall(
             )
             .collect::<Vec<_>>();
         for index in 0..CURRENT_CATEGORY_RESERVE {
-            if let Some(goal) = goals
-                .iter()
-                .filter(|goal| goal.state.status == GoalStatus::Active)
-                .nth(index)
-            {
+            if let Some(goal) = current_goals.get(index) {
                 ordered.push(RecallItem::Goal(goal));
             }
-            if let Some(plan) = plans
-                .iter()
-                .filter(|plan| plan.state.status == PlanStatus::Active)
-                .nth(index)
-            {
+            if let Some(plan) = current_plans.get(index) {
                 ordered.push(RecallItem::Plan(plan));
             }
             if let Some(session) = sessions.get(index) {
                 ordered.push(RecallItem::Session(session));
             }
-            if let Some(claim) = claims.get(index) {
+            if let Some(claim) = retrospective_claims.get(index) {
                 ordered.push(RecallItem::Claim(claim));
             }
-            if let Some(task) = tasks
-                .iter()
-                .filter(|task| !task.state.status.is_terminal())
-                .nth(index)
-            {
+            if let Some(task) = current_tasks.get(index) {
                 ordered.push(RecallItem::Task(task));
             }
         }
@@ -27679,18 +27746,16 @@ fn run_recall(
         }
 
         ordered.extend(
-            goals
+            current_goals
                 .iter()
-                .filter(|goal| goal.state.status == GoalStatus::Active)
                 .skip(CURRENT_CATEGORY_RESERVE)
-                .map(RecallItem::Goal),
+                .map(|goal| RecallItem::Goal(goal)),
         );
         ordered.extend(
-            plans
+            current_plans
                 .iter()
-                .filter(|plan| plan.state.status == PlanStatus::Active)
                 .skip(CURRENT_CATEGORY_RESERVE)
-                .map(RecallItem::Plan),
+                .map(|plan| RecallItem::Plan(plan)),
         );
         ordered.extend(
             sessions
@@ -27699,17 +27764,16 @@ fn run_recall(
                 .map(RecallItem::Session),
         );
         ordered.extend(
-            claims
+            retrospective_claims
                 .iter()
                 .skip(CURRENT_CATEGORY_RESERVE)
-                .map(RecallItem::Claim),
+                .map(|claim| RecallItem::Claim(claim)),
         );
         ordered.extend(
-            tasks
+            current_tasks
                 .iter()
-                .filter(|task| !task.state.status.is_terminal())
                 .skip(CURRENT_CATEGORY_RESERVE)
-                .map(RecallItem::Task),
+                .map(|task| RecallItem::Task(task)),
         );
 
         ordered.extend(
@@ -27748,24 +27812,9 @@ fn run_recall(
                 .skip(CATEGORY_RESERVE)
                 .map(RecallItem::KnowledgeRelation),
         );
-        ordered.extend(
-            goals
-                .iter()
-                .filter(|goal| goal.state.status != GoalStatus::Active)
-                .map(RecallItem::Goal),
-        );
-        ordered.extend(
-            plans
-                .iter()
-                .filter(|plan| plan.state.status != PlanStatus::Active)
-                .map(RecallItem::Plan),
-        );
-        ordered.extend(
-            tasks
-                .iter()
-                .filter(|task| task.state.status.is_terminal())
-                .map(RecallItem::Task),
-        );
+        ordered.extend(historical_goals.iter().map(|goal| RecallItem::Goal(goal)));
+        ordered.extend(historical_plans.iter().map(|plan| RecallItem::Plan(plan)));
+        ordered.extend(historical_tasks.iter().map(|task| RecallItem::Task(task)));
     } else {
         for index in 0..CURRENT_CATEGORY_RESERVE {
             if let Some(goal) = goals.get(index) {
@@ -27832,7 +27881,7 @@ fn run_recall(
                 writeln!(
                     output,
                     "item.{index}.temporal_scope={}",
-                    if goal.state.status == GoalStatus::Active {
+                    if current_scope.current_goals.contains(&goal.goal_entity_id) {
                         "current_active"
                     } else {
                         "historical_or_terminal"
@@ -27865,7 +27914,7 @@ fn run_recall(
                 writeln!(
                     output,
                     "item.{index}.temporal_scope={}",
-                    if plan.state.status == PlanStatus::Active {
+                    if current_scope.current_plans.contains(&plan.plan_entity_id) {
                         "current_active"
                     } else {
                         "historical_or_terminal"
@@ -27904,10 +27953,10 @@ fn run_recall(
                 writeln!(
                     output,
                     "item.{index}.temporal_scope={}",
-                    if task.state.status.is_terminal() {
-                        "historical_or_terminal"
-                    } else {
+                    if current_scope.current_tasks.contains(&task.task_entity_id) {
                         "current_active"
+                    } else {
+                        "historical_or_terminal"
                     }
                 )
                 .expect("write to String");
@@ -27975,8 +28024,16 @@ fn run_recall(
             }
             RecallItem::Claim(claim) => {
                 writeln!(output, "item.{index}.category=claim").expect("write to String");
-                writeln!(output, "item.{index}.temporal_scope=live_runtime")
-                    .expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.temporal_scope={}",
+                    if current_scope.current_tasks.contains(&claim.task_entity_id) {
+                        "live_runtime"
+                    } else {
+                        "live_runtime_stale_scope"
+                    }
+                )
+                .expect("write to String");
                 writeln!(output, "item.{index}.id={}", claim.claim_id).expect("write to String");
                 writeln!(
                     output,
@@ -28815,13 +28872,34 @@ fn try_routed_plan_delivery(
     manifest_idempotency_key: &str,
     manifest_bytes: &[u8],
 ) -> Result<Option<RoutedPlanDelivery>> {
-    try_routed_plan_delivery_with_fault(
+    try_routed_plan_delivery_with_policy(
         cwd,
         registry,
         payload_kind,
         capability,
         manifest_idempotency_key,
         manifest_bytes,
+        true,
+        None,
+    )
+}
+
+fn try_existing_routed_plan_delivery(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    payload_kind: CapturePayloadKind,
+    capability: JournalAdmissionCapability,
+    manifest_idempotency_key: &str,
+    manifest_bytes: &[u8],
+) -> Result<Option<RoutedPlanDelivery>> {
+    try_routed_plan_delivery_with_policy(
+        cwd,
+        registry,
+        payload_kind,
+        capability,
+        manifest_idempotency_key,
+        manifest_bytes,
+        false,
         None,
     )
 }
@@ -28834,6 +28912,29 @@ fn try_routed_plan_delivery_with_fault(
     capability: JournalAdmissionCapability,
     manifest_idempotency_key: &str,
     manifest_bytes: &[u8],
+    fault: Option<CaptureRecoveryFault>,
+) -> Result<Option<RoutedPlanDelivery>> {
+    try_routed_plan_delivery_with_policy(
+        cwd,
+        registry,
+        payload_kind,
+        capability,
+        manifest_idempotency_key,
+        manifest_bytes,
+        true,
+        fault,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_routed_plan_delivery_with_policy(
+    cwd: PathBuf,
+    registry: Option<PathBuf>,
+    payload_kind: CapturePayloadKind,
+    capability: JournalAdmissionCapability,
+    manifest_idempotency_key: &str,
+    manifest_bytes: &[u8],
+    allow_new_admission: bool,
     fault: Option<CaptureRecoveryFault>,
 ) -> Result<Option<RoutedPlanDelivery>> {
     let current_identity = resolve_project_identity(&cwd)?;
@@ -28867,7 +28968,9 @@ fn try_routed_plan_delivery_with_fault(
         UtcTimestamp::now()?,
         match payload_kind {
             CapturePayloadKind::PlanAdmitV1 => "durable Plan admission",
-            CapturePayloadKind::PlanEvolveV1 => "durable Plan evolution",
+            CapturePayloadKind::PlanEvolveV1 | CapturePayloadKind::PlanEvolveV2 => {
+                "durable Plan evolution"
+            }
             _ => "durable WorkVCS operation",
         },
         payload_kind,
@@ -28880,20 +28983,32 @@ fn try_routed_plan_delivery_with_fault(
         &registry_path,
         project_registry_journal_alias(&effective),
     )?;
-    let admission = journal.admit_for_project_registry_with_check(
-        &intent,
-        registry_v2.revision(),
-        &registry_digest,
-        |locked_registry| {
-            require_active_journal_capability(
-                &effective,
-                &registry_path,
-                locked_registry,
-                capability,
-            )?;
-            Ok(())
-        },
-    )?;
+    let registry_check = |locked_registry: &workvcs_core::control_plane::ProjectRegistryV2| {
+        require_active_journal_capability(&effective, &registry_path, locked_registry, capability)?;
+        Ok(())
+    };
+    let admission = if allow_new_admission {
+        journal.admit_for_project_registry_with_check(
+            &intent,
+            registry_v2.revision(),
+            &registry_digest,
+            registry_check,
+        )?
+    } else {
+        journal
+            .find_exact_for_project_registry_with_check(
+                &intent,
+                registry_v2.revision(),
+                &registry_digest,
+                registry_check,
+            )?
+            .ok_or_else(|| {
+                WorkVcsError::PlanInvalid(
+                    "fresh schema_version 1 Plan supersede is prohibited; no exact admitted legacy operation exists to recover"
+                        .to_owned(),
+                )
+            })?
+    };
     let capture_id = admission.capture_id();
     let projection_digest = journal
         .inspect_projection(capture_id)?
@@ -28989,7 +29104,7 @@ fn validate_plan_manifest(
         }
         PlanManifestOperationArg::Evolve => {
             let manifest = PlanEvolutionManifest::from_json_bytes(&manifest_bytes)?;
-            manifest.validate_for_delivery()?;
+            manifest.validate_for_authoring()?;
             (
                 manifest.payload_digest()?.to_string(),
                 manifest.idempotency_key().to_owned(),
@@ -29118,6 +29233,10 @@ fn run_plan_evolve(
         ))
     })?;
     let manifest = PlanEvolutionManifest::from_json_bytes(&manifest_bytes)?;
+    let legacy_supersede = matches!(
+        &manifest,
+        workvcs_core::PlanEvolutionManifest::Supersede(value) if value.schema_version == 1
+    );
     match (store, cwd) {
         (Some(store_path), None) => {
             if registry.is_some() {
@@ -29139,8 +29258,21 @@ fn run_plan_evolve(
             let store_path = canonical_existing_path("plan evolve store", &store_path)?;
             reject_project_local_path("plan evolve store", &store_path, &current_identity)?;
             let branch_id = BranchId::parse_canonical(&branch)?;
+            let options = PlanEvolutionOptions::new(branch_id, manifest.clone());
+            let readonly = open_verified_store_readonly(&store_path)?;
+            if let Some(mut result) = readonly.find_plan_evolution_result(options.clone())? {
+                result.outcome = PlanEvolutionOutcome::Reused;
+                return Ok(render_plan_evolution(&result));
+            }
+            if legacy_supersede {
+                return Err(WorkVcsError::PlanInvalid(
+                    "fresh schema_version 1 Plan supersede is prohibited; exact read-only reuse found no committed operation"
+                        .to_owned(),
+                ));
+            }
+            manifest.validate_for_authoring()?;
             let mut engine = open_verified_store(&store_path)?;
-            let result = engine.evolve_plan(PlanEvolutionOptions::new(branch_id, manifest))?;
+            let result = engine.evolve_plan(options)?;
             Ok(render_plan_evolution(&result))
         }
         (None, Some(cwd)) => {
@@ -29149,14 +29281,32 @@ fn run_plan_evolve(
                     "plan evolve --cwd uses bound branch and must not pass --branch".to_owned(),
                 ));
             }
-            if let Some(routed) = try_routed_plan_delivery(
-                cwd.clone(),
-                registry.clone(),
-                CapturePayloadKind::PlanEvolveV1,
-                JournalAdmissionCapability::PlanEvolve,
-                manifest.idempotency_key(),
-                &manifest_bytes,
-            )? {
+            let payload_kind = if manifest.payload_kind_version() == 2 {
+                CapturePayloadKind::PlanEvolveV2
+            } else {
+                CapturePayloadKind::PlanEvolveV1
+            };
+            let routed = if legacy_supersede {
+                try_existing_routed_plan_delivery(
+                    cwd.clone(),
+                    registry.clone(),
+                    payload_kind,
+                    JournalAdmissionCapability::PlanEvolve,
+                    manifest.idempotency_key(),
+                    &manifest_bytes,
+                )?
+            } else {
+                manifest.validate_for_authoring()?;
+                try_routed_plan_delivery(
+                    cwd.clone(),
+                    registry.clone(),
+                    payload_kind,
+                    JournalAdmissionCapability::PlanEvolve,
+                    manifest.idempotency_key(),
+                    &manifest_bytes,
+                )?
+            };
+            if let Some(routed) = routed {
                 let engine = open_verified_store_readonly(routed.binding.store_path().as_path())?;
                 let mut result = engine
                     .find_plan_evolution_result(PlanEvolutionOptions::new(
@@ -29187,6 +29337,20 @@ fn run_plan_evolve(
                 Ok(output)
             } else {
                 let discovery = discover_project(cwd, registry)?;
+                if legacy_supersede {
+                    let engine =
+                        open_verified_store_readonly(Path::new(&discovery.binding.store_path))?;
+                    let mut result = engine
+                        .find_plan_evolution_result(PlanEvolutionOptions::new(
+                            discovery.binding.branch_id,
+                            manifest,
+                        ))?
+                        .ok_or_else(|| WorkVcsError::PlanInvalid(
+                            "fresh schema_version 1 Plan supersede is prohibited; exact read-only reuse found no committed operation".to_owned(),
+                        ))?;
+                    result.outcome = PlanEvolutionOutcome::Reused;
+                    return Ok(render_plan_evolution(&result));
+                }
                 let mut engine = open_verified_store(Path::new(&discovery.binding.store_path))?;
                 let result = engine.evolve_plan(PlanEvolutionOptions::new(
                     discovery.binding.branch_id,
@@ -29199,6 +29363,216 @@ fn run_plan_evolve(
             "plan evolve requires exactly one of STORE or --cwd".to_owned(),
         )),
     }
+}
+
+fn run_plan_task_disposition_audit(
+    store: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    branch: Option<String>,
+    plan: String,
+) -> Result<String> {
+    let plan_entity_id = EntityId::parse_canonical(&plan)?;
+    let (engine, branch_id, route) = match (store, cwd) {
+        (Some(store_path), None) => {
+            if registry.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "plan task-disposition-audit explicit STORE does not accept --registry"
+                        .to_owned(),
+                ));
+            }
+            let branch_id = BranchId::parse_canonical(branch.as_deref().ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "plan task-disposition-audit explicit STORE requires --branch".to_owned(),
+                )
+            })?)?;
+            (
+                open_verified_store_readonly(&store_path)?,
+                branch_id,
+                "explicit_store",
+            )
+        }
+        (None, Some(cwd)) => {
+            if branch.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "plan task-disposition-audit --cwd uses the bound branch and must not pass --branch"
+                        .to_owned(),
+                ));
+            }
+            let discovery = discover_project_readonly(cwd, registry)?;
+            (
+                open_verified_store_readonly(Path::new(&discovery.binding.store_path))?,
+                discovery.binding.branch_id,
+                "projectref_readonly",
+            )
+        }
+        _ => {
+            return Err(WorkVcsError::QueryInvalid(
+                "plan task-disposition-audit requires exactly one of STORE or --cwd".to_owned(),
+            ));
+        }
+    };
+    let result = engine.plan_task_disposition_audit(PlanTaskDispositionAuditOptions::new(
+        branch_id,
+        plan_entity_id,
+    ))?;
+    Ok(render_plan_task_disposition_audit(&result, route))
+}
+
+fn render_plan_task_disposition_audit(
+    result: &PlanTaskDispositionAuditResult,
+    route: &str,
+) -> String {
+    let nonterminal = result
+        .tasks
+        .iter()
+        .filter(|task| !task.terminal_history)
+        .count();
+    let current = result.tasks.iter().filter(|task| task.current).count();
+    let stale_claims = result
+        .tasks
+        .iter()
+        .filter(|task| task.stale_scope_claim)
+        .count();
+    let mut output = format!(
+        "action=plan_task_disposition_audit\nread_only=true\nroute={}\nworkspace_id={}\nbranch_id={}\ncommit_id={}\nplan_entity_id={}\nplan_entity_version_id={}\nplan_state_digest={}\nplan_status={}\nplan_current={}\nretired_plan_orphan={}\ntasks={}\nnonterminal_tasks={}\ncurrent_tasks={}\nstale_scope_claim_tasks={}\nnested_plans={}\nstore_written=false\njournal_event_written=false\n",
+        route,
+        result.workspace_id,
+        result.branch_id,
+        result.commit_id,
+        result.plan_entity_id,
+        result.plan_entity_version_id,
+        result.plan_state_digest,
+        result.plan_status,
+        result.plan_current,
+        result.retired_plan_orphan,
+        result.tasks.len(),
+        nonterminal,
+        current,
+        stale_claims,
+        result.nested_plans.len(),
+    );
+    for (index, task) in result.tasks.iter().enumerate() {
+        writeln!(output, "task.{index}.entity_id={}", task.task_entity_id)
+            .expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.entity_version_id={}",
+            task.task_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(output, "task.{index}.state_digest={}", task.state_digest)
+            .expect("write to String");
+        writeln!(output, "task.{index}.status={}", task.status).expect("write to String");
+        writeln!(output, "task.{index}.current={}", task.current).expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.terminal_history={}",
+            task.terminal_history
+        )
+        .expect("write to String");
+        writeln!(output, "task.{index}.active_claims={}", task.active_claims)
+            .expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.stale_scope_claim={}",
+            task.stale_scope_claim
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.currentness_carriers_json={}",
+            serde_json::to_string(&task.currentness_carriers).expect("serialize carriers")
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task.{index}.reverse_references={}",
+            task.reverse_references.len()
+        )
+        .expect("write to String");
+        for (reference_index, reference) in task.reverse_references.iter().enumerate() {
+            writeln!(
+                output,
+                "task.{index}.reverse_reference.{reference_index}.relation_id={}",
+                reference.relation_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{index}.reverse_reference.{reference_index}.source_entity_id={}",
+                reference.source_entity_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{index}.reverse_reference.{reference_index}.source_kind={}",
+                reference.source_kind
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{index}.reverse_reference.{reference_index}.source_current={}",
+                reference.source_current
+            )
+            .expect("write to String");
+        }
+        writeln!(
+            output,
+            "task.{index}.external_dependents={}",
+            task.external_dependents.len()
+        )
+        .expect("write to String");
+        for (dependent_index, dependent) in task.external_dependents.iter().enumerate() {
+            writeln!(
+                output,
+                "task.{index}.external_dependent.{dependent_index}.task_entity_id={}",
+                dependent.task_entity_id
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{index}.external_dependent.{dependent_index}.current={}",
+                dependent.current
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "task.{index}.external_dependent.{dependent_index}.external_to_target_scope={}",
+                dependent.external_to_target_scope
+            )
+            .expect("write to String");
+        }
+        writeln!(
+            output,
+            "task.{index}.ordered_before_hints={}",
+            task.ordered_before_hints.len()
+        )
+        .expect("write to String");
+    }
+    for (index, plan) in result.nested_plans.iter().enumerate() {
+        writeln!(
+            output,
+            "nested_plan.{index}.entity_id={}",
+            plan.plan_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "nested_plan.{index}.entity_version_id={}",
+            plan.plan_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "nested_plan.{index}.state_digest={}",
+            plan.state_digest
+        )
+        .expect("write to String");
+        writeln!(output, "nested_plan.{index}.status={}", plan.status).expect("write to String");
+        writeln!(output, "nested_plan.{index}.current={}", plan.current).expect("write to String");
+    }
+    output
 }
 
 fn run_receipt_issue(
@@ -33001,7 +33375,7 @@ fn render_plan_evolution(result: &PlanEvolutionResult) -> String {
         .map(|plan| plan.state_digest)
         .unwrap_or(result.plan.state_digest);
     let mut output = format!(
-        "mode={}\nevolution_status={}\noutcome={}\nreused={}\nworkspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nhead_commit_id={}\nchangeset_id={}\nidempotency_key={}\npayload_digest={}\nwork_state_digest={}\ngoal_entity_id={}\nplan_entity_id={}\nold_plan_entity_id={}\nold_plan_entity_version_id={}\nold_plan_state_digest={}\nsuperseded_plan_entity_version_id={}\nsuperseded_plan_state_digest={}\nnew_plan_entity_id={}\nnew_plan_entity_version_id={}\nnew_plan_state_digest={}\ntasks={}\nrecords={}\nevidence={}\n",
+        "mode={}\nevolution_status={}\noutcome={}\nreused={}\nworkspace_id={}\nbranch_id={}\nprevious_head_commit_id={}\ncommit_id={}\nhead_commit_id={}\nchangeset_id={}\nidempotency_key={}\npayload_digest={}\nwork_state_digest={}\nplan_changed={}\ngoal_entity_id={}\nparent_entity_id={}\nparent_kind={}\nplan_entity_id={}\nold_plan_entity_id={}\nold_plan_entity_version_id={}\nold_plan_state_digest={}\nsuperseded_plan_entity_version_id={}\nsuperseded_plan_state_digest={}\nnew_plan_entity_id={}\nnew_plan_entity_version_id={}\nnew_plan_state_digest={}\ntask_dispositions={}\ndisposition_relations={}\ntasks={}\nrecords={}\nevidence={}\n",
         result.mode,
         result.outcome.as_str(),
         result.outcome.as_str(),
@@ -33015,7 +33389,19 @@ fn render_plan_evolution(result: &PlanEvolutionResult) -> String {
         result.idempotency_key,
         result.payload_digest,
         result.work_state_digest,
-        result.goal_entity_id,
+        result.plan_changed,
+        result
+            .goal_entity_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        result
+            .parent_entity_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_owned()),
+        result
+            .parent_kind
+            .map(|value| value.as_str().to_owned())
+            .unwrap_or_else(|| "none".to_owned()),
         result.plan.entity_id,
         result.plan.entity_id,
         result.plan.previous_entity_version_id,
@@ -33025,6 +33411,8 @@ fn render_plan_evolution(result: &PlanEvolutionResult) -> String {
         new_plan_entity_id,
         new_plan_entity_version_id,
         new_plan_state_digest,
+        result.task_dispositions.len(),
+        result.disposition_relations.len(),
         result.tasks.len(),
         result.records.len(),
         result.evidence.len()
@@ -33050,6 +33438,89 @@ fn render_plan_evolution(result: &PlanEvolutionResult) -> String {
             relation.state_digest,
             relation.source_entity_id,
             relation.target_entity_id
+        )
+        .expect("write to String");
+    }
+    for (index, disposition) in result.task_dispositions.iter().enumerate() {
+        writeln!(
+            output,
+            "task_disposition.{index}.task_entity_id={}",
+            disposition.task_entity_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.previous_entity_version_id={}",
+            disposition.previous_entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.previous_state_digest={}",
+            disposition.previous_state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.action={}",
+            disposition.action.as_str()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.entity_version_id={}",
+            disposition.entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.state_digest={}",
+            disposition.state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.post_current={}",
+            disposition.post_current
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.post_carriers_json={}",
+            serde_json::to_string(&disposition.post_carriers).expect("serialize carriers")
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.risks_json={}",
+            serde_json::to_string(&disposition.risks).expect("serialize risks")
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "task_disposition.{index}.return_condition_json={}",
+            serde_json::to_string(&disposition.return_condition)
+                .expect("serialize return condition")
+        )
+        .expect("write to String");
+    }
+    for (index, relation) in result.disposition_relations.iter().enumerate() {
+        writeln!(
+            output,
+            "disposition_relation.{index}.type={}",
+            relation.relation_type
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "disposition_relation.{index}.relation_id={}",
+            relation.relation_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "disposition_relation.{index}.relation_version_id={}",
+            relation.relation_version_id
         )
         .expect("write to String");
     }
@@ -41139,6 +41610,7 @@ fn why_relation_kind(kind: WhyRelationKind) -> &'static str {
         WhyRelationKind::KnowledgeExposureDerivedFrom => "knowledge_exposure_derived_from",
         WhyRelationKind::KnowledgeSupersedes => "knowledge_supersedes",
         WhyRelationKind::PlanSupersedes => "plan_supersedes",
+        WhyRelationKind::TaskSupersedes => "task_supersedes",
     }
 }
 
@@ -65730,6 +66202,60 @@ mod tests {
         )
     }
 
+    fn supersede_manifest_for_cli_admission(
+        fixture: &ProjectBindingFixture,
+        admitted: &str,
+        key: &str,
+        schema_version: u64,
+    ) -> String {
+        let goal_id = value(admitted, "goal_entity_id");
+        let plan_id = value(admitted, "plan_entity_id");
+        let relation = {
+            let engine = Engine::open(&fixture.store_path).expect("open supersede fixture store");
+            let commit_id = CommitId::parse_canonical(&value(admitted, "commit_id")).unwrap();
+            let goal_id = EntityId::parse_canonical(&goal_id).unwrap();
+            let plan_id = EntityId::parse_canonical(&plan_id).unwrap();
+            engine
+                .primary_containment_relations_at(commit_id)
+                .unwrap()
+                .into_iter()
+                .find(|candidate| {
+                    candidate.parent_entity_id == goal_id && candidate.child_entity_id == plan_id
+                })
+                .expect("goal-plan containment")
+        };
+        let parent = if schema_version == 1 {
+            format!(
+                r#""expected_goal_entity_id":"{}","expected_goal_entity_version_id":"{}","expected_goal_plan_relation_id":"{}","expected_goal_plan_relation_version_id":"{}""#,
+                goal_id,
+                value(admitted, "goal_entity_version_id"),
+                relation.relation_id,
+                relation.relation_version_id,
+            )
+        } else {
+            format!(
+                r#""expected_parent":{{"kind":"goal","entity_id":"{}","expected_entity_version_id":"{}","containment_relation_id":"{}","containment_relation_version_id":"{}"}}"#,
+                goal_id,
+                value(admitted, "goal_entity_version_id"),
+                relation.relation_id,
+                relation.relation_version_id,
+            )
+        };
+        let disposition_fields = if schema_version == 1 {
+            String::new()
+        } else {
+            r#","task_dispositions":[],"nested_plan_continuations":[]"#.to_owned()
+        };
+        format!(
+            r#"{{"mode":"supersede","schema_version":{schema_version},"idempotency_key":"{key}","expected_head_commit_id":"{}","expected_state_digest":"{}","target_plan_entity_id":"{}","expected_plan_entity_version_id":"{}","expected_plan_state_digest":"{}",{parent},"plan":{{"description":"Replacement","strategy":"Replacement through recovery","constraints":{{"mode":"carry_all"}}}},"tasks":[]{disposition_fields},"records":[],"evidence":[],"rationale":{{"source":"cli-recovery-test"}}}}"#,
+            value(admitted, "commit_id"),
+            value(admitted, "work_state_digest"),
+            plan_id,
+            value(admitted, "plan_entity_version_id"),
+            value(admitted, "plan_state_digest"),
+        )
+    }
+
     fn create_project_binding_fixture(start_session: bool) -> ProjectBindingFixture {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let store_path = tempdir.path().join("workvcs.sqlite");
@@ -73743,19 +74269,26 @@ mod tests {
 
         let goal_id = value(&admit, "goal_entity_id");
         let plan_id = value(&admit, "plan_entity_id");
-        let relation = {
+        let (relation, prior_task) = {
             let engine = Engine::open(&fixture.store_path).unwrap();
             let commit_id = CommitId::parse_canonical(&value(&evolve, "commit_id")).unwrap();
             let goal_id = EntityId::parse_canonical(&goal_id).unwrap();
             let plan_id = EntityId::parse_canonical(&plan_id).unwrap();
-            engine
-                .primary_containment_relations_at(commit_id)
-                .unwrap()
-                .into_iter()
+            let containment = engine.primary_containment_relations_at(commit_id).unwrap();
+            let relation = containment
+                .iter()
                 .find(|relation| {
                     relation.parent_entity_id == goal_id && relation.child_entity_id == plan_id
                 })
                 .unwrap()
+                .clone();
+            let task_id = containment
+                .iter()
+                .find(|relation| relation.parent_entity_id == plan_id)
+                .expect("Plan Task containment")
+                .child_entity_id;
+            let task = engine.task_at(commit_id, task_id).expect("admitted Task");
+            (relation, task)
         };
         let supersede_path = fixture._tempdir.path().join("v2-plan-supersede.json");
         fs::write(
@@ -73763,19 +74296,22 @@ mod tests {
             format!(
                 r#"{{
   "mode":"supersede",
-  "schema_version":1,
+  "schema_version":2,
   "idempotency_key":"v2-plan-durable-supersede",
   "expected_head_commit_id":"{}",
   "expected_state_digest":"{}",
   "target_plan_entity_id":"{}",
   "expected_plan_entity_version_id":"{}",
   "expected_plan_state_digest":"{}",
-  "expected_goal_entity_id":"{}",
-  "expected_goal_entity_version_id":"{}",
-  "expected_goal_plan_relation_id":"{}",
-  "expected_goal_plan_relation_version_id":"{}",
+  "expected_parent":{{
+    "kind":"goal",
+    "entity_id":"{}",
+    "expected_entity_version_id":"{}",
+    "containment_relation_id":"{}",
+    "containment_relation_version_id":"{}"
+  }},
   "plan":{{"description":"Replacement v2 Plan","strategy":"Supersede through the same journal","constraints":{{"mode":"carry_all"}}}},
-  "tasks":[],"records":[],"evidence":[],
+  "tasks":[],"task_dispositions":[{{"task_entity_id":"{}","expected_task_entity_version_id":"{}","expected_task_state_digest":"{}","action":"retain_original","return_condition":"keep the prior Task as historical context","rationale":{{"assessment":"state-preserving retirement"}}}}],"nested_plan_continuations":[],"records":[],"evidence":[],
   "rationale":{{"source":"v2-plan-routing-test"}}
 }}"#,
                 value(&evolve, "commit_id"),
@@ -73786,7 +74322,10 @@ mod tests {
                 goal_id,
                 value(&admit, "goal_entity_version_id"),
                 relation.relation_id,
-                relation.relation_version_id
+                relation.relation_version_id,
+                prior_task.task_entity_id,
+                prior_task.task_entity_version_id,
+                prior_task.state_digest,
             ),
         )
         .unwrap();
@@ -73807,6 +74346,16 @@ mod tests {
         assert_eq!(value(&supersede, "evolution_status"), "created");
         assert_ne!(value(&supersede, "new_plan_entity_id"), plan_id);
         assert_eq!(value(&supersede, "delivery_receipt"), "true");
+        let supersede_status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&value(&supersede, "capture_id")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value(&supersede_status, "payload_kind"), "plan_evolve_v2");
+        assert_eq!(
+            value(&supersede_status, "effective_recovery_state"),
+            "completed"
+        );
     }
 
     #[test]
@@ -74005,6 +74554,246 @@ mod tests {
         .unwrap();
         assert_eq!(value(&status, "effective_recovery_state"), "completed");
         assert_eq!(value(&status, "delivery_receipt"), "true");
+    }
+
+    #[test]
+    fn cli_admitted_legacy_supersede_recovers_but_fresh_schema1_is_zero_journal_write() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let admit_path = fixture._tempdir.path().join("legacy-recovery-admit.json");
+        fs::write(
+            &admit_path,
+            minimal_admit_manifest(
+                &value(&head, "head_commit_id"),
+                &value(&head, "state_digest"),
+                "legacy-recovery-admit",
+            ),
+        )
+        .unwrap();
+        let admitted = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&admit_path),
+        ])
+        .unwrap())
+        .unwrap();
+
+        let fresh_manifest = supersede_manifest_for_cli_admission(
+            &fixture,
+            &admitted,
+            "fresh-schema1-must-not-admit",
+            1,
+        );
+        let fresh_path = fixture._tempdir.path().join("fresh-schema1.json");
+        fs::write(&fresh_path, &fresh_manifest).unwrap();
+        let canonical_registry = fs::canonicalize(&fixture.registry_path).unwrap();
+        let journal = CaptureJournal::for_project_registry(
+            &canonical_registry,
+            ProjectRegistryJournalAlias::RegistrySidecar,
+        )
+        .unwrap();
+        let captures_before = journal.inspect_all_authority().unwrap().len();
+        let fresh_error = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&fresh_path),
+        ])
+        .unwrap())
+        .expect_err("fresh schema 1 supersede must fail before journal admission");
+        assert_eq!(fresh_error.code(), ErrorCode::PlanInvalid);
+        assert_eq!(
+            journal.inspect_all_authority().unwrap().len(),
+            captures_before
+        );
+
+        let legacy_manifest =
+            supersede_manifest_for_cli_admission(&fixture, &admitted, "admitted-legacy-schema1", 1);
+        let legacy_path = fixture._tempdir.path().join("admitted-legacy-schema1.json");
+        fs::write(&legacy_path, &legacy_manifest).unwrap();
+        let current_identity =
+            resolve_project_identity(Path::new(&fixture.project_text)).expect("project identity");
+        let effective = effective_registry_config(Some(fixture.registry_path.clone()))
+            .expect("registry config");
+        let registry_path =
+            project_registry_path_from_effective(&effective, false, &current_identity)
+                .expect("registry path");
+        let (registry, _) =
+            match load_project_registry_readonly(&registry_path, true).expect("registry") {
+                LoadedProjectRegistry::V2 { registry, digest } => (*registry, digest),
+                LoadedProjectRegistry::V1 { .. } => panic!("expected registry v2"),
+            };
+        let locator_input = unified_locator_input_for_identity_with_mode(
+            ResolutionMode::DurableWrite,
+            None,
+            load_semantic_locator_evidence(None).expect("locator evidence"),
+            None,
+            &current_identity,
+        )
+        .expect("locator input");
+        let resolution =
+            resolve_project(&registry, locator_input.resolution_context()).expect("resolution");
+        let historical_intent = CaptureIntent::new(
+            CaptureId::new_v7(),
+            "plan_evolve_v1:admitted-legacy-schema1",
+            UtcTimestamp::parse("2026-10-10T00:00:00Z").expect("historical timestamp"),
+            "durable Plan evolution",
+            CapturePayloadKind::PlanEvolveV1,
+            canonical_durable_operation_payload(
+                legacy_manifest.as_bytes(),
+                CapturePayloadKind::PlanEvolveV1,
+            )
+            .expect("legacy semantic payload"),
+            locator_input.resolution_context().clone(),
+            resolution,
+            None,
+        )
+        .expect("historical immutable intent");
+        fs::create_dir_all(journal.root().join("intents")).expect("historical intents directory");
+        fs::write(
+            journal.intent_path(historical_intent.capture_id()),
+            historical_intent
+                .stored_json_bytes()
+                .expect("historical intent bytes"),
+        )
+        .expect("pre-store historical schema 1 intent");
+        let recovered = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&legacy_path),
+        ])
+        .unwrap())
+        .expect("exact admitted legacy intent remains recoverable");
+        assert_eq!(value(&recovered, "evolution_status"), "created");
+        assert_eq!(value(&recovered, "delivery_receipt"), "true");
+        let status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&value(&recovered, "capture_id")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value(&status, "payload_kind"), "plan_evolve_v1");
+        assert_eq!(value(&status, "effective_recovery_state"), "completed");
+    }
+
+    #[test]
+    fn cli_v2_plan_evolve_commit_before_receipt_recovers_exact_assessment() {
+        let fixture = create_project_binding_fixture(false);
+        let head = run(Cli::try_parse_from([
+            "workvcs",
+            "branch",
+            "head",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+        ])
+        .unwrap())
+        .unwrap();
+        migrate_fixture_registry_to_v2(&fixture, None);
+        activate_fixture_v2_durable_operations(&fixture);
+        let admit_path = fixture
+            ._tempdir
+            .path()
+            .join("v2-evolve-recovery-admit.json");
+        fs::write(
+            &admit_path,
+            minimal_admit_manifest(
+                &value(&head, "head_commit_id"),
+                &value(&head, "state_digest"),
+                "v2-evolve-recovery-admit",
+            ),
+        )
+        .unwrap();
+        let admitted = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "admit",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&admit_path),
+        ])
+        .unwrap())
+        .unwrap();
+        let manifest = supersede_manifest_for_cli_admission(
+            &fixture,
+            &admitted,
+            "v2-evolve-commit-before-receipt",
+            2,
+        );
+        let manifest_path = fixture._tempdir.path().join("v2-evolve-recovery.json");
+        fs::write(&manifest_path, &manifest).unwrap();
+        let interrupted = try_routed_plan_delivery_with_fault(
+            PathBuf::from(&fixture.project_text),
+            Some(fixture.registry_path.clone()),
+            CapturePayloadKind::PlanEvolveV2,
+            JournalAdmissionCapability::PlanEvolve,
+            "v2-evolve-commit-before-receipt",
+            manifest.as_bytes(),
+            Some(CaptureRecoveryFault::TargetCommit),
+        )
+        .expect_err("target commit fault must leave the v2 receipt recoverable");
+        assert_eq!(
+            interrupted.code().as_str(),
+            "capture_recovery_install_indeterminate"
+        );
+        let store_after_target_commit = cli_sqlite_file_snapshots(&fixture.store_path);
+        let recovered = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "evolve",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--manifest",
+            &path_text(&manifest_path),
+        ])
+        .unwrap())
+        .expect("same v2 evolution reconstructs its durable receipt");
+        assert_eq!(value(&recovered, "evolution_status"), "reused");
+        assert_eq!(value(&recovered, "delivery_receipt"), "true");
+        assert_eq!(
+            cli_sqlite_file_snapshots(&fixture.store_path),
+            store_after_target_commit,
+            "receipt repair must not churn the target Store"
+        );
+        let status = inspect_project_capture_recovery(
+            Some(fixture.registry_path.clone()),
+            CaptureId::parse_canonical(&value(&recovered, "capture_id")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value(&status, "payload_kind"), "plan_evolve_v2");
+        assert_eq!(value(&status, "effective_recovery_state"), "completed");
     }
 
     #[test]
@@ -77726,23 +78515,28 @@ mod tests {
             format!(
                 r#"{{
   "mode": "supersede",
-  "schema_version": 1,
+  "schema_version": 2,
   "idempotency_key": "cli-plan-evolve-supersede",
   "expected_head_commit_id": "{admitted_head}",
   "expected_state_digest": "{admitted_state}",
   "target_plan_entity_id": "{plan_id}",
   "expected_plan_entity_version_id": "{old_plan_version}",
   "expected_plan_state_digest": "{old_plan_digest}",
-  "expected_goal_entity_id": "{goal_id}",
-  "expected_goal_entity_version_id": "{goal_version}",
-  "expected_goal_plan_relation_id": "{relation_id}",
-  "expected_goal_plan_relation_version_id": "{relation_version}",
+  "expected_parent": {{
+    "kind": "goal",
+    "entity_id": "{goal_id}",
+    "expected_entity_version_id": "{goal_version}",
+    "containment_relation_id": "{relation_id}",
+    "containment_relation_version_id": "{relation_version}"
+  }},
   "plan": {{
     "description": "Replacement Plan",
     "strategy": "Replacement Strategy",
     "constraints": {{"mode":"carry_all"}}
   }},
   "tasks": [],
+  "task_dispositions": [],
+  "nested_plan_continuations": [],
   "records": [],
   "evidence": [],
   "rationale": {{"kind": "strategy-change", "source": "cli-test"}}
@@ -77897,23 +78691,28 @@ mod tests {
             format!(
                 r#"{{
   "mode": "supersede",
-  "schema_version": 1,
+  "schema_version": 2,
   "idempotency_key": "cli-plan-evolve-cwd-supersede",
   "expected_head_commit_id": "{admitted_head}",
   "expected_state_digest": "{admitted_state}",
   "target_plan_entity_id": "{plan_id}",
   "expected_plan_entity_version_id": "{old_plan_version}",
   "expected_plan_state_digest": "{old_plan_digest}",
-  "expected_goal_entity_id": "{goal_id}",
-  "expected_goal_entity_version_id": "{goal_version}",
-  "expected_goal_plan_relation_id": "{relation_id}",
-  "expected_goal_plan_relation_version_id": "{relation_version}",
+  "expected_parent": {{
+    "kind": "goal",
+    "entity_id": "{goal_id}",
+    "expected_entity_version_id": "{goal_version}",
+    "containment_relation_id": "{relation_id}",
+    "containment_relation_version_id": "{relation_version}"
+  }},
   "plan": {{
     "description": "CWD Replacement Plan",
     "strategy": "CWD Replacement Strategy",
     "constraints": {{"mode":"carry_all"}}
   }},
   "tasks": [],
+  "task_dispositions": [],
+  "nested_plan_continuations": [],
   "records": [],
   "evidence": [],
   "rationale": {{"kind": "strategy-change", "source": "cwd-cli-test"}}
@@ -78007,6 +78806,79 @@ mod tests {
         assert_eq!(value(&why, "relation.0.relation_kind"), "plan_supersedes");
         assert_eq!(value(&why, "relation.0.source_entity_id"), new_plan_id);
         assert_eq!(value(&why, "relation.0.target_entity_id"), plan_id);
+    }
+
+    #[test]
+    fn cli_task_disposition_audit_is_bounded_and_read_only_for_retired_plan() {
+        let fixture = create_project_binding_fixture(false);
+        let branch_id = BranchId::parse_canonical(&fixture.branch).unwrap();
+        let mut engine = Engine::open(&fixture.store_path).unwrap();
+        let head = engine.branch_head(branch_id).unwrap();
+        let plan = engine
+            .create_plan(
+                PlanCreateOptions::new(
+                    branch_id,
+                    head.head_commit_id,
+                    "Retired audit Plan",
+                    "Audit exact Task inventory",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let task = engine
+            .create_task(
+                TaskCreateOptions::new(branch_id, plan.commit_id, "Historical Task").unwrap(),
+            )
+            .unwrap();
+        let containment = engine
+            .create_primary_containment(
+                PrimaryContainmentCreateOptions::new(
+                    branch_id,
+                    task.commit_id,
+                    plan.plan_entity_id,
+                    task.task_entity_id,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let retired = engine
+            .transition_plan(
+                PlanTransitionOptions::abandon(
+                    branch_id,
+                    containment.commit_id,
+                    plan.plan_entity_id,
+                    plan.plan_entity_version_id,
+                    "audit the retired Plan before any repair",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        drop(engine);
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let output = run(Cli::try_parse_from([
+            "workvcs",
+            "plan",
+            "task-disposition-audit",
+            &fixture.store,
+            "--branch",
+            &fixture.branch,
+            "--plan",
+            &plan.plan_entity_id.to_string(),
+        ])
+        .unwrap())
+        .expect("read-only Task disposition audit");
+        assert_eq!(value(&output, "read_only"), "true");
+        assert_eq!(value(&output, "store_written"), "false");
+        assert_eq!(value(&output, "journal_event_written"), "false");
+        assert_eq!(value(&output, "retired_plan_orphan"), "true");
+        assert_eq!(value(&output, "tasks"), "1");
+        assert_eq!(
+            value(&output, "task.0.entity_id"),
+            task.task_entity_id.to_string()
+        );
+        assert_eq!(value(&output, "task.0.current"), "false");
+        assert_eq!(value(&output, "commit_id"), retired.commit_id.to_string());
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
     }
 
     #[test]
@@ -89992,6 +90864,239 @@ mod tests {
         run_cli_test_with_large_stack(
             "cli-recall-current-work-live-runtime-test",
             assert_cli_recall_reserves_current_work_and_live_runtime_spine,
+        );
+    }
+
+    fn assert_cli_recall_uses_resolved_current_scope_before_newer_stale_work() {
+        let fixture = create_project_binding_fixture(false);
+        let branch_id = BranchId::parse_canonical(&fixture.branch).expect("branch id");
+        let mut engine = Engine::open(&fixture.store_path).expect("open recall Store");
+        let current_task = engine
+            .create_task(
+                TaskCreateOptions::new(
+                    branch_id,
+                    CommitId::parse_canonical(&fixture.genesis_commit_id)
+                        .expect("genesis commit id"),
+                    "Older standalone current Task",
+                )
+                .expect("current Task options"),
+            )
+            .expect("create current Task");
+        let outer_plan = engine
+            .create_plan(
+                PlanCreateOptions::new(
+                    branch_id,
+                    current_task.commit_id,
+                    "Retired outer Plan",
+                    "Retire the only ancestry path",
+                )
+                .expect("outer Plan options"),
+            )
+            .expect("create outer Plan");
+        let nested_plan = engine
+            .create_plan(
+                PlanCreateOptions::new(
+                    branch_id,
+                    outer_plan.commit_id,
+                    "Newer active but unreachable nested Plan",
+                    "Must not consume current recall budget",
+                )
+                .expect("nested Plan options"),
+            )
+            .expect("create nested Plan");
+        let nested_contains = engine
+            .create_primary_containment(
+                PrimaryContainmentCreateOptions::new(
+                    branch_id,
+                    nested_plan.commit_id,
+                    outer_plan.plan_entity_id,
+                    nested_plan.plan_entity_id,
+                )
+                .expect("nested containment options"),
+            )
+            .expect("contain nested Plan");
+        let stale_task = engine
+            .create_task(
+                TaskCreateOptions::new(
+                    branch_id,
+                    nested_contains.commit_id,
+                    "Newer pending but unreachable Task",
+                )
+                .expect("stale Task options"),
+            )
+            .expect("create stale Task");
+        let stale_contains = engine
+            .create_primary_containment(
+                PrimaryContainmentCreateOptions::new(
+                    branch_id,
+                    stale_task.commit_id,
+                    nested_plan.plan_entity_id,
+                    stale_task.task_entity_id,
+                )
+                .expect("stale Task containment options"),
+            )
+            .expect("contain stale Task");
+        drop(engine);
+
+        let stale_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            &fixture.store,
+            "--workspace",
+            &fixture.workspace_id,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse stale-scope session"))
+        .expect("start stale-scope session");
+        let stale_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            &fixture.store,
+            "--session",
+            &value(&stale_session, "session_id"),
+            "--task",
+            &stale_task.task_entity_id.to_string(),
+        ])
+        .expect("parse pre-retirement claim"))
+        .expect("claim Task before its scope retires");
+
+        let mut engine = Engine::open(&fixture.store_path).expect("reopen recall Store");
+        engine
+            .transition_plan(
+                PlanTransitionOptions::abandon(
+                    branch_id,
+                    stale_contains.commit_id,
+                    outer_plan.plan_entity_id,
+                    outer_plan.plan_entity_version_id,
+                    "retire the outer scope while preserving runtime diagnosis",
+                )
+                .expect("retire outer Plan options"),
+            )
+            .expect("retire outer Plan");
+        drop(engine);
+
+        for profile in ["brief", "handoff"] {
+            let recalled = run(Cli::try_parse_from([
+                "workvcs",
+                "recall",
+                "--cwd",
+                &fixture.project_text,
+                "--registry",
+                &fixture.registry,
+                "--profile",
+                profile,
+                "--budget-items",
+                "20",
+            ])
+            .expect("parse current-scope recall"))
+            .expect("current-scope recall");
+            assert_eq!(value(&recalled, "plans_total"), "0");
+            assert_eq!(value(&recalled, "tasks_total"), "1");
+            assert!(recalled.contains(&format!("task_entity_id={}", stale_task.task_entity_id)));
+            assert!(recalled.contains("temporal_scope=live_runtime_stale_scope"));
+            assert!(recalled.contains(&format!("id={}", current_task.task_entity_id)));
+        }
+
+        let retrospective = run(Cli::try_parse_from([
+            "workvcs",
+            "recall",
+            "--cwd",
+            &fixture.project_text,
+            "--registry",
+            &fixture.registry,
+            "--profile",
+            "retrospective",
+            "--budget-items",
+            "3",
+        ])
+        .expect("parse bounded retrospective"))
+        .expect("bounded retrospective");
+        assert_eq!(value(&retrospective, "item.0.category"), "session");
+        assert_eq!(value(&retrospective, "item.1.category"), "claim");
+        assert_eq!(
+            value(&retrospective, "item.1.id"),
+            value(&stale_claim, "claim_id")
+        );
+        assert_eq!(
+            value(&retrospective, "item.1.temporal_scope"),
+            "live_runtime_stale_scope"
+        );
+        assert_eq!(value(&retrospective, "item.2.category"), "task");
+        assert_eq!(
+            value(&retrospective, "item.2.id"),
+            current_task.task_entity_id.to_string()
+        );
+        assert_eq!(
+            value(&retrospective, "item.2.temporal_scope"),
+            "current_active"
+        );
+
+        let current_session = run(Cli::try_parse_from([
+            "workvcs",
+            "session",
+            "start",
+            &fixture.store,
+            "--workspace",
+            &fixture.workspace_id,
+            "--branch",
+            &fixture.branch,
+        ])
+        .expect("parse current-scope session"))
+        .expect("start current-scope session");
+        let current_session_id = value(&current_session, "session_id");
+        let runnable = run(Cli::try_parse_from([
+            "workvcs",
+            "runnable",
+            "tasks",
+            &fixture.store,
+            "--session",
+            &current_session_id,
+        ])
+        .expect("parse current-scope runnable"))
+        .expect("current-scope runnable");
+        assert_eq!(value(&runnable, "candidates"), "1");
+        assert_eq!(
+            value(&runnable, "candidate.0.task_entity_id"),
+            current_task.task_entity_id.to_string()
+        );
+        let stale_claim_attempt = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            &fixture.store,
+            "--session",
+            &current_session_id,
+            "--task",
+            &stale_task.task_entity_id.to_string(),
+        ])
+        .expect("parse stale-scope claim attempt"));
+        assert!(stale_claim_attempt.is_err());
+        let current_claim = run(Cli::try_parse_from([
+            "workvcs",
+            "claim",
+            "task",
+            &fixture.store,
+            "--session",
+            &current_session_id,
+            "--task",
+            &current_task.task_entity_id.to_string(),
+        ])
+        .expect("parse current-scope claim"))
+        .expect("claim current Task");
+        assert_eq!(
+            value(&current_claim, "task_entity_id"),
+            current_task.task_entity_id.to_string()
+        );
+    }
+
+    #[test]
+    fn cli_recall_uses_resolved_current_scope_before_newer_stale_work() {
+        run_cli_test_with_large_stack(
+            "cli-recall-resolved-current-scope-test",
+            assert_cli_recall_uses_resolved_current_scope_before_newer_stale_work,
         );
     }
 

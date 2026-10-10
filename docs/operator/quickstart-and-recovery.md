@@ -1,6 +1,8 @@
 # Local Operator Quickstart and Recovery
 
-Status: Local operator guide for CLI package `0.2.0`; verify registry version and activation state before selecting a route
+Status: Local operator guide; the installed package may remain `0.2.0` while
+the source candidate is `1.0.0`. Verify executable identity, registry version,
+and activation state before selecting a route.
 Last updated: 2026-10-08
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from
@@ -484,8 +486,8 @@ existed. The command's `admission_status` or `evolution_status` describes the
 target Store result: a retry after only `delivery_started` is still `created`,
 while a target commit replayed to repair its receipt is `reused`.
 
-`workvcs plan evolve` requires a manifest with `mode=in_place` or
-`mode=supersede`. In-place mode updates only explicitly supplied Plan fields,
+`workvcs plan evolve` accepts `mode=in_place`, `mode=supersede`, or the
+schema-2 `mode=task_disposition` repair form. In-place mode updates only explicitly supplied Plan fields,
 preserves omitted fields, and atomically
 appends Tasks with AC/VR, Records, and Evidence without implicit deletion or
 replacement. Expected guards, target Plan identity/version/digest, and
@@ -499,6 +501,38 @@ The registry-v2 cwd form analogously requires `plan_evolve`, persists
 contract. Re-running the identical manifest reuses the original intent and
 Store result; if a command stops after the Store commit, use its Capture ID or
 repeat the exact command to converge the missing receipt.
+
+Before authoring a schema-2 supersede or retired-Plan repair, inspect the
+bounded inventory without writing:
+
+```text
+workvcs plan task-disposition-audit --cwd PATH --plan PLAN_ID
+```
+
+For an explicit Store, replace `--cwd PATH` with `STORE --branch BRANCH`.
+The audit pins the branch head, Plan guards, descendant Task versions/digests,
+currentness carriers, reverse references, external dependents, nested Plans,
+and active or stale-scope claims. It creates no journal event and changes no
+Store state. Use it to assemble a fully guarded manifest; it does not choose a
+business disposition or grant any execution authority.
+
+Schema-2 manifests explicitly disposition every affected non-terminal Task as
+`supersede`, `cancel`, `continue`, or `retain_original`. `retain_original` is
+a valid assessed result: it leaves identity, status, version, and digest
+unchanged, with no synthetic carrier. `continue` requires a guarded existing
+active Goal or Plan carrier for a retired-Plan `task_disposition` repair. In a
+schema-2 `supersede`, continuation is carried by the newly created replacement
+Plan instead. Neither form authorizes a claim, handoff, budget, or external
+execution. A fresh schema-1 supersede manifest is rejected before durable
+admission; exact legacy schema-1 intents and their receipt recovery remain
+replayable. Do not use omitted fields or a new idempotency key to reinterpret a
+legacy operation.
+
+When every non-terminal Task is `retain_original`, the schema-2 repair records
+the immutable assessment in a state-preserving commit without changing a Task
+or relation. That narrow result is replayable and must not be mistaken for a
+general empty-commit form; any replacement, continuation, cancellation, or
+relation delta requires its ordinary declared result.
 
 Before the first Plan Store write, WorkVCS validates the typed manifest,
 compares its explicit guards to one current target snapshot, and measures the

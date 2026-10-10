@@ -837,6 +837,17 @@ pub(crate) fn claim_task(
         branch_head.head_commit_id,
         options.task_entity_id(),
     )?;
+    let current_scope = history::current_scope_at(connection, branch_head.head_commit_id)?;
+    if !current_scope
+        .current_tasks
+        .contains(&options.task_entity_id())
+    {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "task {} is not current at branch head {}",
+            options.task_entity_id(),
+            branch_head.head_commit_id
+        )));
+    }
 
     let claim_id = ClaimId::new_v7();
     let event_id = EventId::new_v7();
@@ -885,6 +896,19 @@ pub(crate) fn claim_task(
         return Err(WorkVcsError::BranchHeadConflict(format!(
             "branch {} head changed before claim {} could be written",
             active.active_branch_id, claim_id
+        )));
+    }
+    // The branch-head CAS above makes the currentness projection immutable for
+    // this Immediate transaction. Rechecking membership here keeps the guard
+    // adjacent to the write boundary and prevents read/write races.
+    if !current_scope
+        .current_tasks
+        .contains(&options.task_entity_id())
+    {
+        return Err(WorkVcsError::ClaimInvalid(format!(
+            "task {} lost current scope before claim {} could be written",
+            options.task_entity_id(),
+            claim_id
         )));
     }
     ensure_active_claim_mode_allowed(

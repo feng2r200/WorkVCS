@@ -242,13 +242,41 @@ Use `mode=supersede` when the confirmed Plan contract is being replaced and its
 ancestry must remain visible. Do not maintain parallel Plan versions merely as
 a testing ritual.
 
+Before a schema-2 Plan replacement or repair of a superseded/abandoned Plan,
+read the bounded `plan task-disposition-audit` projection. It is a no-write
+inventory of Task guards, currentness carriers, reverse references,
+dependencies, nested Plans, and claim risks:
+
+```text
+workvcs plan task-disposition-audit --cwd <path> --plan <plan-id>
+```
+
+The corresponding `plan evolve` manifest must explicitly assess every affected
+non-terminal Task as `supersede`, `cancel`, `continue`, or `retain_original`.
+`retain_original` is a valid result: it preserves the Task identity, status,
+version, and digest. An already-valid current Goal/Plan reference may preserve
+its currentness; historical/deferred retention is also valid, and neither adds
+or replaces a carrier. `continue` needs a
+guarded existing current Goal or Plan carrier only for a retired-Plan
+`task_disposition` repair. In schema-2 `supersede`, the new replacement Plan
+carries a continued Task instead. Neither form authorizes execution, claims,
+handoff, budgets, deployment, or any external action. Schema-2 authoring and
+legacy schema-1 recovery are distinct: do not reinterpret an old admitted
+payload by filling omitted disposition fields.
+
+An all-`retain_original` schema-2 repair records an immutable, replayable
+assessment without changing Task or relation versions. That narrowly permitted
+state-preserving commit is not a general empty-commit mechanism.
+
 With registry v2, the cwd forms are typed durable operations, not direct Store
 writes: `plan admit` requires the `plan_admit` marker capability and admits
-`plan_admit_v1`; `plan evolve` requires `plan_evolve` and admits
-`plan_evolve_v1`. Both use the same journal, recovery projection, target
-idempotency, and receipt protocol as routed cognition while retaining Plan
-manifest semantics. Success requires the durable receipt. If the Store commit
-lands before that receipt, repeat the exact Plan command or use
+`plan_admit_v1`; `plan evolve` requires `plan_evolve`. Schema-1 in-place
+authoring uses `plan_evolve_v1`; schema-1 supersede is limited to exact
+previous-intent reuse or recovery. Schema-2 supersede and `task_disposition`
+use `plan_evolve_v2`. Both payload versions use the same journal, recovery
+projection, target idempotency, and receipt protocol as routed cognition while
+retaining their immutable manifest semantics. Success requires the durable
+receipt. If the Store commit lands before that receipt, repeat the exact Plan command or use
 `project operation-recovery` with the same CaptureId; never choose a new
 idempotency key merely to escape an uncertain result. Registry v1 cwd and
 explicit `STORE --branch` remain direct compatibility boundaries.

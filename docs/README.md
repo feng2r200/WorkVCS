@@ -25,6 +25,9 @@ batch authority. ADR-0520 adds immutable pre-delivery disposition and a
 read-only all-operation lifecycle inventory without automatic history sweeps.
 ADR-0521 adds zero-write intrinsic Plan-manifest validation and Capture-aware
 routed terminal diagnostics while preserving journal-first audit.
+The proposed 1.0.0 source candidate in ADR-0524 adds explicit Task disposition
+assessment and execution-currentness projection; it is not installation or
+activation evidence.
 
 The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
 on 2026-09-27. The final exact installed canary wrote one canonical
@@ -43,6 +46,7 @@ public release, and remote deployment remain separate decisions.
 - [ADR-0519: Authorized Existing-Binding Delivery and Operation Inventory](decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
 - [ADR-0520: Operation Disposition and Global Inventory Classification](decisions/adr/0520-operation-disposition-and-global-inventory-classification.md)
 - [ADR-0521: Plan Manifest Validation and Routed Rejection Diagnostics](decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md)
+- [ADR-0524: Task Disposition and Execution Currentness](decisions/adr/0524-task-disposition-and-execution-currentness.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)
@@ -374,9 +378,12 @@ Recent repository-level CLI smoke gates:
 
 These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is
-tracked in the V1 release gate matrix. The current Rust implementation is
-locally release-ready and dogfood-complete for the bounded V1 scope; its local
-crate and CLI package version is `0.2.0`. Public release, tag, push, deploy,
+tracked in the V1 release gate matrix. The previously delivered `0.2.0` Rust
+implementation is locally release-ready and dogfood-complete for the bounded
+V1 scope. This branch's crate and CLI package version is `1.0.0`, the
+uninstalled, unmerged, unreleased source candidate described by ADR-0524;
+the prior maturity judgment does not establish readiness for this candidate.
+Public release, tag, push, deploy,
 remote, production, credential, and global installation actions remain separate
 authority decisions.
 `scripts/package-workvcs.sh` provides local binary packaging and an explicit

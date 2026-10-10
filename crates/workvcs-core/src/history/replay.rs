@@ -1,6 +1,7 @@
 use super::admission::{
     ADMISSION_OPERATION_SCHEMA_VERSION, ADMISSION_OPERATION_TYPE,
-    EVOLUTION_OPERATION_SCHEMA_VERSION, EVOLUTION_OPERATION_TYPE,
+    EVOLUTION_OPERATION_SCHEMA_VERSION, EVOLUTION_OPERATION_SCHEMA_VERSION_V2,
+    EVOLUTION_OPERATION_TYPE,
 };
 use super::capture::{CAPTURE_OPERATION_SCHEMA_VERSION, CAPTURE_OPERATION_TYPE};
 use super::containment::PRIMARY_CONTAINMENT_CREATE_OPERATION_TYPE;
@@ -406,6 +407,8 @@ fn replay_normal(
         connection,
         commit.workspace_id,
         commit.changeset_id,
+        commit_id,
+        parent_commit_id,
         parent.state,
     )?;
     let actual_digest = work_state_mapping_digest(&state);
@@ -449,6 +452,8 @@ fn replay_merge(
         connection,
         commit.workspace_id,
         commit.changeset_id,
+        commit_id,
+        primary_parent_commit_id,
         primary_parent.state,
     )?;
     let actual_digest = work_state_mapping_digest(&state);
@@ -561,12 +566,33 @@ fn apply_replayable_changeset(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     changeset_id: ChangeSetId,
+    commit_id: CommitId,
+    previous_head_commit_id: CommitId,
     parent_state: WorkState,
 ) -> Result<WorkState> {
     let changeset = validate_entity_transition_changeset(connection, workspace_id, changeset_id)?;
     let operations = load_change_operations(connection, changeset_id)?;
     if operations.is_empty() {
         if changeset.operation_type == MERGE_CONTINUE_OPERATION_TYPE {
+            return Ok(parent_state);
+        }
+        if changeset.operation_type == EVOLUTION_OPERATION_TYPE
+            && changeset.operation_schema_version == EVOLUTION_OPERATION_SCHEMA_VERSION_V2
+        {
+            super::admission::validate_state_preserving_task_disposition_payload_json(
+                connection.inner(),
+                &parent_state,
+                &changeset.operation_payload_json,
+                workspace_id,
+                changeset_id,
+                commit_id,
+                previous_head_commit_id,
+            )
+            .map_err(|error| {
+                WorkVcsError::ReplayInvalid(format!(
+                    "ChangeSet {changeset_id} has invalid state-preserving task disposition payload: {error}"
+                ))
+            })?;
             return Ok(parent_state);
         }
         return Err(WorkVcsError::ReplayInvalid(format!(
@@ -760,7 +786,10 @@ fn validate_entity_transition_changeset(
             }
         }
         EVOLUTION_OPERATION_TYPE => {
-            if operation_schema_version != EVOLUTION_OPERATION_SCHEMA_VERSION {
+            if !matches!(
+                operation_schema_version,
+                EVOLUTION_OPERATION_SCHEMA_VERSION | EVOLUTION_OPERATION_SCHEMA_VERSION_V2
+            ) {
                 return Err(WorkVcsError::ReplayUnsupported(format!(
                     "normal ChangeSet {changeset_id} operation schema version {operation_schema_version} is deferred"
                 )));
@@ -825,12 +854,14 @@ fn validate_entity_transition_changeset(
     validate_canonical_json_text("changeset.rationale_json", &rationale_json)?;
     Ok(ChangeSetRow {
         operation_type,
+        operation_schema_version,
         operation_payload_json,
     })
 }
 
 struct ChangeSetRow {
     operation_type: String,
+    operation_schema_version: i64,
     operation_payload_json: String,
 }
 

@@ -43,6 +43,24 @@ or reusable conclusion with a concrete consumer beyond this turn. Mere
 possibility of future usefulness is not enough. If none of these conditions is
 present, make no WorkVCS call.
 
+## Select the CLI entrypoint
+
+Unless the task is developing or validating WorkVCS itself, use the system
+stable installation, never an absolute binary under a source `target`, dated
+package, or `adoption` directory. Before a control-plane read or write in a
+non-development task, run the installed command's read-only gate:
+
+```text
+workvcs runtime status --require-stable
+```
+
+For WorkVCS development, a candidate binary may be used only inside the
+WorkVCS source checkout and only for the bounded validation being performed;
+switch back to the stable installation before inspecting or changing any
+other project's WorkVCS state. `workvcs runtime status` records the executable
+path, build commit, source-dirty marker, and binary digest so a same-version
+(`0.1.0`) package cannot be mistaken for the same build.
+
 Required participation changes selection and admission timing only. It never
 forces a Plan and never authorizes migration, activation, recovery delivery,
 rollback, Push, release, deployment, or another separately guarded mutation.
@@ -124,6 +142,20 @@ registry-sidecar selection as global unavailability, scan arbitrary registries,
 or activate a different route. Read
 [Configuration](references/configuration.md) only after an observed
 configuration, locator, registry, binding, or marker problem.
+
+When a newer CLI encounters an existing registry, run the read-only compatibility
+probe before choosing a migration path:
+
+```text
+workvcs project registry-migrate --compatibility [--registry PATH]
+```
+
+For readable v1 state, continue with the existing preview and exact
+digest-locked apply. For readable v2 state, including `binding_source=isolation`,
+use the current stable CLI without rewriting the registry. Unknown versions,
+unknown enum values, malformed JSON, or invalid shapes remain fail-closed: keep
+the raw registry bytes and move to a newer compatible CLI rather than guessing
+a conversion.
 
 Registry migration, rollback, shared-binding isolation, read-routing
 activation, journal-admission activation, marker refresh, and operation-recovery
@@ -235,6 +267,19 @@ same content.
 The command forms in this Skill and its references are established. Do not
 prepend Help calls to them. Use command help only for a genuinely different
 form or after an argument rejection.
+
+After a WorkVCS development/install cycle is complete, remove historical CLI
+packages explicitly and retain only the current package needed for evidence:
+
+```text
+scripts/prune-workvcs-artifacts.sh --root PACKAGE_ROOT \
+  --keep-artifact CURRENT_PACKAGE_DIR
+```
+
+Pass each separately verified adoption/package root with another `--root` and
+omit `--keep-artifact` there when all entries are historical. The cleanup
+script only removes manifest- and digest-verified WorkVCS package artifacts;
+it does not remove source, registry, Store, or durable WorkVCS records.
 
 ## Keep Plan, records, and authority independent
 

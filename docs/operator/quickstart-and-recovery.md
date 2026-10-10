@@ -8,6 +8,33 @@ this repository. It describes the locally packaged v1 and ProjectRef-v2
 boundaries, runnable local commands, and the package/install helper. It is not evidence that a
 public release, tag, or remote distribution has occurred.
 
+## Stable entry and compatibility preflight
+
+For every task except WorkVCS source development and its bounded validation,
+use the system stable installation. A same-version CLI string is not enough to
+identify a build, so gate the selected executable before control-plane work:
+
+```sh
+workvcs runtime status --require-stable
+```
+
+The result includes the resolved executable path, build commit, source-dirty
+marker, and binary digest. A candidate under `target/`, a dated package, or an
+`adoption/` directory is not a stable entrypoint.
+
+When a new CLI encounters an existing registry, inspect compatibility without
+writing first:
+
+```sh
+workvcs project registry-migrate --compatibility [--registry "$REGISTRY"]
+```
+
+Readable v1 state reports the existing `v1_to_v2` preview/apply route.
+Readable v2 state, including `binding_source=isolation`, is already readable
+by the current CLI and does not need a registry rewrite. Unknown versions,
+unknown enum values, malformed JSON, and invalid shapes remain fail-closed and
+must be preserved for a newer compatible CLI.
+
 ## Accepted Target Versus Current Commands
 
 ADR-0513 accepts stable ProjectRef ownership, semantic-Project-before-Git/CWD
@@ -650,6 +677,22 @@ binary:
 scripts/package-workvcs.sh --install --bin-dir /usr/local/bin
 workvcs --help
 ```
+
+After implementation, installation, Push, stable-entry readback, and any
+target-session reconciliation are complete, remove historical package copies
+from each explicitly verified root:
+
+```bash
+scripts/prune-workvcs-artifacts.sh \
+  --root target/package \
+  --keep-artifact target/package/CURRENT_PACKAGE_DIRECTORY \
+  --root /path/to/verified/historical/adoption/package
+```
+
+The cleanup command removes only direct WorkVCS package directories and
+archives whose manifest and binary digest agree. It preserves the named
+current package, source, registry, Stores, and durable WorkVCS records;
+unrecognized or tampered entries are left in place for inspection.
 
 If `/usr/local/bin` is not writable, the script uses `sudo` for the directory
 creation or final overwrite step. The destination basename must be `workvcs`,

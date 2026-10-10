@@ -1,7 +1,7 @@
 # WorkVCS Tool Reference For Governance Plan Carriers
 
 Status: current-main operator reference for Codex sessions
-Last updated: 2026-10-08
+Last updated: 2026-10-10
 
 This reference explains what the current `workvcs` tool can carry for an
 Agent-facing governance workflow. It is meant for other Codex sessions that
@@ -32,6 +32,31 @@ existing binding when the caller already holds that delivery authority. The
 source implementation and exact local installed adoption are complete, with
 one bounded same-binding canary and zero-write replay recorded in the
 [Stage C evidence](../provenance/authorized-existing-binding-delivery-local-adoption.md).
+
+Unless WorkVCS itself is being developed or validated, use the system stable
+CLI rather than an absolute binary under a source `target`, dated package, or
+`adoption` directory. Verify the selected entrypoint before registry work:
+
+```text
+workvcs runtime status --require-stable
+```
+
+The result includes the executable path, build commit, source-dirty marker,
+and binary digest; the package version alone is not a build identity.
+
+When a new CLI meets existing registry data, inspect the compatibility route
+without writing:
+
+```text
+workvcs project registry-migrate --compatibility [--registry PATH] [--format text|json]
+```
+
+The probe reports readable v1 as `migration_required=true` with the existing
+preview/digest-locked-apply route, and readable v2—including
+`binding_source=isolation`—as directly usable by the current stable CLI.
+Unknown versions, unknown v2 enum values, malformed JSON, and invalid shapes
+remain preserved and fail-closed; the probe never coerces or rewrites them.
+
 This command previews the exact v1-to-v2 mapping without writing:
 
 ```text
@@ -619,6 +644,22 @@ tmp_bin="$(mktemp -d "${TMPDIR:-/tmp}/workvcs-bin.XXXXXX")"
 scripts/package-workvcs.sh --install --bin-dir "$tmp_bin" --profile debug
 "$tmp_bin/workvcs" --help
 ```
+
+After implementation, installation, Push, stable-entry readback, and any
+target-session reconciliation are complete, remove historical package copies
+from each explicitly verified root:
+
+```bash
+scripts/prune-workvcs-artifacts.sh \
+  --root target/package \
+  --keep-artifact target/package/CURRENT_PACKAGE_DIRECTORY \
+  --root /path/to/verified/historical/adoption/package
+```
+
+The cleanup script removes only direct WorkVCS package directories and matching
+archives whose manifest and binary digest agree. It preserves the named
+current package, source, registry, Stores, and durable WorkVCS records; unknown
+or tampered entries remain for inspection.
 
 The script is an availability helper, not an authority grant. A Codex session
 still needs current user authorization before running a real global

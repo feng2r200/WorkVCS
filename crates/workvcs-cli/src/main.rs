@@ -176,6 +176,7 @@ Commands:
   id            Generate and validate typed WorkVCS identifiers
   store         Inspect Store metadata, lineage, and migrations
   config        Inspect effective WorkVCS configuration
+  runtime       Inspect CLI identity and stability role
   project       Inspect and manage the project control plane
   history       List commit history from a branch or commit
   changeset     Inspect changesets and change operations
@@ -413,6 +414,11 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    #[command(about = "Inspect CLI identity and stability role")]
+    Runtime {
+        #[command(subcommand)]
+        command: RuntimeCommand,
     },
     #[command(about = "Inspect and manage the project control plane")]
     Project {
@@ -914,6 +920,24 @@ enum ConfigCommand {
             help = "One-command registry override whose precedence should be inspected"
         )]
         registry: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RuntimeCommand {
+    #[command(
+        about = "Show executable path, build identity, digest, and stable-entry classification",
+        long_about = "Read-only runtime identity for distinguishing the installed stable CLI from a development candidate or historical package artifact. --require-stable fails closed unless the executable resolves to an accepted stable install path."
+    )]
+    Status {
+        #[arg(
+            long,
+            help = "Fail unless the current executable is a stable installation"
+        )]
+        require_stable: bool,
+
+        #[arg(long, value_enum, default_value_t = MigrationPreviewFormatArg::Text)]
+        format: MigrationPreviewFormatArg,
     },
 }
 
@@ -1891,7 +1915,13 @@ enum ProjectCommand {
         ArgGroup::new("registry-migration-action")
             .required(true)
             .multiple(false)
-            .args(["preview", "apply", "rollback_check", "rollback"])
+            .args([
+                "compatibility",
+                "preview",
+                "apply",
+                "rollback_check",
+                "rollback",
+            ])
     ))]
     #[command(group(
         ArgGroup::new("registry-rollback-action")
@@ -1900,6 +1930,12 @@ enum ProjectCommand {
             .args(["rollback_check", "rollback"])
     ))]
     RegistryMigrate {
+        #[arg(
+            long,
+            help = "Inspect registry/version compatibility without writing or migrating"
+        )]
+        compatibility: bool,
+
         #[arg(long, help = "Run the read-only migration preview")]
         preview: bool,
 
@@ -7666,6 +7702,12 @@ fn run(cli: Cli) -> Result<String> {
         Command::Config { command } => match command {
             ConfigCommand::Show { registry } => show_effective_config(registry),
         },
+        Command::Runtime { command } => match command {
+            RuntimeCommand::Status {
+                require_stable,
+                format,
+            } => inspect_runtime_status(require_stable, format),
+        },
         Command::Project { command } => match command {
             ProjectCommand::Ensure {
                 cwd,
@@ -7734,6 +7776,7 @@ fn run(cli: Cli) -> Result<String> {
                 _ => unreachable!("clap requires exactly one shared-binding isolation action"),
             },
             ProjectCommand::RegistryMigrate {
+                compatibility,
                 preview,
                 apply,
                 rollback_check,
@@ -7745,11 +7788,21 @@ fn run(cli: Cli) -> Result<String> {
                 expected_installed_digest,
                 expected_backup_digest,
                 format,
-            } => match (preview, apply, rollback_check, rollback) {
-                (true, false, false, false) => {
+            } => match (compatibility, preview, apply, rollback_check, rollback) {
+                (true, false, false, false, false) => {
+                    if repair_manifest.is_some() {
+                        Err(WorkVcsError::QueryInvalid(
+                            "registry migration --compatibility does not accept --repair-manifest"
+                                .to_owned(),
+                        ))
+                    } else {
+                        inspect_project_registry_compatibility(registry, format)
+                    }
+                }
+                (false, true, false, false, false) => {
                     preview_project_registry_migration(registry, repair_manifest, format)
                 }
-                (false, true, false, false) => apply_project_registry_migration(
+                (false, false, true, false, false) => apply_project_registry_migration(
                     registry,
                     repair_manifest,
                     required_migration_digest(
@@ -7762,7 +7815,7 @@ fn run(cli: Cli) -> Result<String> {
                     )?,
                     format,
                 ),
-                (false, false, true, false) => inspect_project_registry_rollback_readiness(
+                (false, false, false, true, false) => inspect_project_registry_rollback_readiness(
                     registry,
                     repair_manifest,
                     required_migration_digest(
@@ -7775,7 +7828,7 @@ fn run(cli: Cli) -> Result<String> {
                     )?,
                     format,
                 ),
-                (false, false, false, true) => rollback_project_registry_migration(
+                (false, false, false, false, true) => rollback_project_registry_migration(
                     registry,
                     repair_manifest,
                     required_migration_digest(
@@ -7788,7 +7841,9 @@ fn run(cli: Cli) -> Result<String> {
                     )?,
                     format,
                 ),
-                _ => unreachable!("clap requires exactly one migration action"),
+                _ => unreachable!(
+                    "clap requires exactly one registry compatibility/migration action"
+                ),
             },
             ProjectCommand::RoutingActivation {
                 preview,
@@ -18996,6 +19051,260 @@ fn open_verified_registry_binding_readonly(binding: &ProjectBinding) -> Result<(
     }
     let local_content_objects_verified = engine.validate_local_content_storage()?;
     Ok((engine, local_content_objects_verified))
+}
+
+const WORKVCS_BUILD_GIT_COMMIT: &str = env!("WORKVCS_BUILD_GIT_COMMIT");
+const WORKVCS_BUILD_GIT_DIRTY: &str = env!("WORKVCS_BUILD_GIT_DIRTY");
+
+fn inspect_runtime_status(
+    require_stable: bool,
+    format: MigrationPreviewFormatArg,
+) -> Result<String> {
+    let executable = std::env::current_exe().map_err(|error| {
+        WorkVcsError::QueryInvalid(format!("cannot resolve the executing WorkVCS CLI: {error}"))
+    })?;
+    let executable = fs::canonicalize(&executable).unwrap_or(executable);
+    let bytes = fs::read(&executable).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read the executing WorkVCS CLI {}: {error}",
+            executable.display()
+        ))
+    })?;
+    let digest = ControlPlaneDigest::raw(&bytes).to_string();
+    let stable_paths = stable_workvcs_paths();
+    let stable_path = stable_paths.iter().find(|path| {
+        fs::canonicalize(path)
+            .map(|candidate| candidate == executable)
+            .unwrap_or(false)
+    });
+    let role = if stable_path.is_some() {
+        "stable_installed"
+    } else if path_has_component(&executable, "adoption")
+        || path_has_component(&executable, "package")
+    {
+        "historical_artifact"
+    } else if path_has_component(&executable, "target") {
+        "development_candidate"
+    } else {
+        "unclassified_installed"
+    };
+    let stable = role == "stable_installed";
+    if require_stable && !stable {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "WorkVCS stable-entry gate rejected executable {} with role={role}; use one of the configured stable paths: {}",
+            executable.display(),
+            stable_paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+
+    let stable_path_text = stable_path
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    match format {
+        MigrationPreviewFormatArg::Text => Ok(format!(
+            "action=runtime_status\nread_only=true\nexecutable_path={}\nexecutable_role={}\nstable_entry={}\nstable_path={}\nbuild_version={}\nbuild_commit={}\nbuild_dirty={}\nbinary_digest={}\nbinary_size_bytes={}\nrequire_stable={}\nregistry_written=false\njournal_written=false\nstore_written=false\n",
+            escape_key_value(&executable.display().to_string()),
+            role,
+            stable,
+            escape_key_value(&stable_path_text),
+            env!("CARGO_PKG_VERSION"),
+            WORKVCS_BUILD_GIT_COMMIT,
+            WORKVCS_BUILD_GIT_DIRTY,
+            digest,
+            bytes.len(),
+            require_stable,
+        )),
+        MigrationPreviewFormatArg::Json => {
+            let value = serde_json::json!({
+                "action": "runtime_status",
+                "read_only": true,
+                "executable_path": executable.display().to_string(),
+                "executable_role": role,
+                "stable_entry": stable,
+                "stable_path": stable_path_text,
+                "stable_path_candidates": stable_paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>(),
+                "build_version": env!("CARGO_PKG_VERSION"),
+                "build_commit": WORKVCS_BUILD_GIT_COMMIT,
+                "build_dirty": WORKVCS_BUILD_GIT_DIRTY,
+                "binary_digest": digest,
+                "binary_size_bytes": bytes.len(),
+                "require_stable": require_stable,
+                "registry_written": false,
+                "journal_written": false,
+                "store_written": false,
+            });
+            let mut output = serde_json::to_string(&value).map_err(|error| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "cannot serialize runtime status: {error}"
+                ))
+            })?;
+            output.push('\n');
+            Ok(output)
+        }
+    }
+}
+
+fn stable_workvcs_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = std::env::var_os("WORKVCS_STABLE_PATH")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    {
+        paths.push(path);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        paths.push(PathBuf::from(home).join(".local/bin/workvcs"));
+    }
+    paths.push(PathBuf::from("/usr/local/bin/workvcs"));
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn path_has_component(path: &Path, expected: &str) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|value| value == expected)
+    })
+}
+
+fn inspect_project_registry_compatibility(
+    registry: Option<PathBuf>,
+    format: MigrationPreviewFormatArg,
+) -> Result<String> {
+    let effective = effective_registry_config(registry)?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path)?,
+        false,
+    )?;
+    let bytes = fs::read(&registry_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read project registry {}: {error}",
+            registry_path.display()
+        ))
+    })?;
+    let raw_digest = ControlPlaneDigest::raw(&bytes).to_string();
+    let mut observed_version = "unknown".to_owned();
+    let mut state = "invalid_json";
+    let mut current_cli_readable = false;
+    let mut migration_required = false;
+    let mut migration_route = "none";
+    let mut next_action = "preserve_exact_bytes_and_use_a_newer_compatible_cli";
+    let mut canonical_digest = None;
+    let mut issue = None;
+
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(value) => {
+            let version = value
+                .as_object()
+                .and_then(|object| object.get("version"))
+                .and_then(serde_json::Value::as_u64);
+            if let Some(version) = version {
+                observed_version = version.to_string();
+                match version {
+                    1 => match ProjectRegistryV1::from_json_bytes(&bytes) {
+                        Ok(registry) => {
+                            state = "legacy_v1_readable";
+                            current_cli_readable = true;
+                            migration_required = true;
+                            migration_route = "v1_to_v2";
+                            next_action = "run_registry_migrate_preview_then_digest_locked_apply";
+                            canonical_digest = Some(registry.source_digest()?.to_string());
+                        }
+                        Err(error) => {
+                            state = "invalid_v1_shape";
+                            issue = Some(error.to_string());
+                        }
+                    },
+                    2 => match ProjectRegistryV2::from_json_bytes(&bytes) {
+                        Ok(registry) => {
+                            state = "v2_readable";
+                            current_cli_readable = true;
+                            canonical_digest = Some(registry.digest()?.to_string());
+                            next_action = "use_current_stable_cli_without_registry_rewrite";
+                        }
+                        Err(error) => {
+                            state = "unsupported_or_invalid_v2_shape";
+                            issue = Some(error.to_string());
+                        }
+                    },
+                    _ => {
+                        state = "unsupported_registry_version";
+                        issue = Some(format!("registry version {version} is not supported"));
+                    }
+                }
+            } else {
+                state = "missing_registry_version";
+                issue = Some("registry requires unsigned integer version".to_owned());
+            }
+        }
+        Err(error) => issue = Some(format!("registry is not valid JSON: {error}")),
+    }
+
+    let issue = issue
+        .as_deref()
+        .map(bounded_migration_validation_detail)
+        .unwrap_or_else(|| "none".to_owned());
+    match format {
+        MigrationPreviewFormatArg::Text => Ok(format!(
+            "action=compatibility\nread_only=true\nregistry_path={}\nregistry_digest={}\nobserved_registry_version={}\ncurrent_cli_version={}\nbuild_commit={}\ncompatibility_state={}\ncurrent_cli_readable={}\nmigration_required={}\nmigration_route={}\nnext_action={}\nsupported_binding_sources=explicit,migration,first_write,isolation\ncanonical_digest={}\nissue={}\nregistry_written=false\njournal_written=false\nstore_written=false\n",
+            escape_key_value(&registry_path.display().to_string()),
+            raw_digest,
+            observed_version,
+            env!("CARGO_PKG_VERSION"),
+            WORKVCS_BUILD_GIT_COMMIT,
+            state,
+            current_cli_readable,
+            migration_required,
+            migration_route,
+            next_action,
+            canonical_digest.as_deref().unwrap_or("none"),
+            escape_key_value(&issue),
+        )),
+        MigrationPreviewFormatArg::Json => {
+            let value = serde_json::json!({
+                "action": "compatibility",
+                "read_only": true,
+                "registry_path": registry_path.display().to_string(),
+                "registry_digest": raw_digest,
+                "observed_registry_version": observed_version,
+                "current_cli_version": env!("CARGO_PKG_VERSION"),
+                "build_commit": WORKVCS_BUILD_GIT_COMMIT,
+                "compatibility_state": state,
+                "current_cli_readable": current_cli_readable,
+                "migration_required": migration_required,
+                "migration_route": migration_route,
+                "next_action": next_action,
+                "supported_binding_sources": [
+                    "explicit",
+                    "migration",
+                    "first_write",
+                    "isolation"
+                ],
+                "canonical_digest": canonical_digest.unwrap_or_else(|| "none".to_owned()),
+                "issue": issue,
+                "registry_written": false,
+                "journal_written": false,
+                "store_written": false,
+            });
+            let mut output = serde_json::to_string(&value).map_err(|error| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "cannot serialize registry compatibility output: {error}"
+                ))
+            })?;
+            output.push('\n');
+            Ok(output)
+        }
+    }
 }
 
 fn preview_project_registry_migration(
@@ -41528,6 +41837,30 @@ mod tests {
     }
 
     #[test]
+    fn cli_runtime_status_reports_build_identity_without_workvcs_writes() {
+        let output = run(
+            Cli::try_parse_from(["workvcs", "runtime", "status", "--format", "json"])
+                .expect("parse runtime status"),
+        )
+        .expect("runtime status");
+        let value: serde_json::Value = serde_json::from_str(&output).expect("runtime JSON");
+        assert_eq!(value["action"], "runtime_status");
+        assert_eq!(value["read_only"], true);
+        assert!(value["executable_path"].as_str().is_some());
+        assert!(value["binary_digest"].as_str().is_some());
+        assert!(value["build_commit"].as_str().is_some());
+        assert_eq!(value["registry_written"], false);
+        assert_eq!(value["store_written"], false);
+
+        let error = run(
+            Cli::try_parse_from(["workvcs", "runtime", "status", "--require-stable"])
+                .expect("parse stable runtime status"),
+        )
+        .expect_err("the test executable is not a stable installation");
+        assert!(error.to_string().contains("stable-entry gate rejected"));
+    }
+
+    #[test]
     fn cli_exposes_canonical_operation_recovery_and_compatibility_alias() {
         let capture_id = CaptureId::new_v7().to_string();
         Cli::try_parse_from([
@@ -41607,6 +41940,7 @@ mod tests {
                 "id",
                 "store",
                 "config",
+                "runtime",
                 "project",
                 "history",
                 "changeset",
@@ -41673,6 +42007,7 @@ mod tests {
             ("id", "Generate and validate typed WorkVCS identifiers"),
             ("store", "Inspect Store metadata, lineage, and migrations"),
             ("config", "Inspect effective WorkVCS configuration"),
+            ("runtime", "Inspect CLI identity and stability role"),
             ("project", "Inspect and manage the project control plane"),
             ("history", "List commit history from a branch or commit"),
             ("changeset", "Inspect changesets and change operations"),
@@ -41794,6 +42129,19 @@ mod tests {
         assert!(project_help.contains("bind"));
         assert!(project_help.contains("discover"));
         assert!(project_help.contains("registry-migrate"));
+
+        let compatibility =
+            Cli::try_parse_from(["workvcs", "project", "registry-migrate", "--compatibility"])
+                .expect("parse registry compatibility");
+        assert!(matches!(
+            compatibility.command.as_ref(),
+            Command::Project {
+                command: ProjectCommand::RegistryMigrate {
+                    compatibility: true,
+                    ..
+                }
+            }
+        ));
 
         let resume_help = Cli::try_parse_from(["workvcs", "resume", "--help"])
             .expect_err("resume help should render through clap DisplayHelp")
@@ -68175,6 +68523,66 @@ mod tests {
             .is_err(),
             "actions must remain mutually exclusive"
         );
+    }
+
+    #[test]
+    fn cli_project_registry_compatibility_distinguishes_legacy_and_current_v2() {
+        let legacy = create_project_binding_fixture(false);
+        let legacy_output = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--compatibility",
+            "--registry",
+            &legacy.registry,
+        ])
+        .expect("parse legacy compatibility"))
+        .expect("inspect legacy compatibility");
+        assert_eq!(
+            value(&legacy_output, "compatibility_state"),
+            "legacy_v1_readable"
+        );
+        assert_eq!(value(&legacy_output, "current_cli_readable"), "true");
+        assert_eq!(value(&legacy_output, "migration_required"), "true");
+        assert_eq!(value(&legacy_output, "migration_route"), "v1_to_v2");
+        assert_eq!(value(&legacy_output, "registry_written"), "false");
+
+        let current = create_shared_binding_isolation_fixture();
+        let preview = preview_project_shared_binding_isolation(
+            PathBuf::from(&current.binding.project_text),
+            None,
+            Some(current.binding.registry_path.clone()),
+            Some(current.store_root.clone()),
+        )
+        .expect("preview current v2 isolation");
+        apply_project_shared_binding_isolation(
+            PathBuf::from(&current.binding.project_text),
+            None,
+            Some(current.binding.registry_path.clone()),
+            Some(current.store_root.clone()),
+            ControlPlaneDigest::from_text(&value(&preview, "registry_digest")).unwrap(),
+            ControlPlaneDigest::from_text(&value(&preview, "candidate_digest")).unwrap(),
+        )
+        .expect("apply current v2 isolation fixture");
+
+        let current_output = run(Cli::try_parse_from([
+            "workvcs",
+            "project",
+            "registry-migrate",
+            "--compatibility",
+            "--registry",
+            &current.binding.registry,
+        ])
+        .expect("parse current v2 compatibility"))
+        .expect("inspect current v2 compatibility");
+        assert_eq!(value(&current_output, "compatibility_state"), "v2_readable");
+        assert_eq!(value(&current_output, "current_cli_readable"), "true");
+        assert_eq!(value(&current_output, "migration_required"), "false");
+        assert_eq!(
+            value(&current_output, "next_action"),
+            "use_current_stable_cli_without_registry_rewrite"
+        );
+        assert_eq!(value(&current_output, "registry_written"), "false");
     }
 
     #[test]

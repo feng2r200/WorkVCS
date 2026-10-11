@@ -1,6 +1,6 @@
 # ADR-0524: Task disposition and execution currentness
 
-Status: Accepted — implemented in local source; stable adoption evidence pending
+Status: Accepted — implemented and stably adopted locally; no public release
 Date: 2026-10-10
 Accepted: 2026-10-11
 
@@ -113,8 +113,8 @@ and execution semantics; schema-1 in-place evolution also remains supported.
 Missing schema-2 disposition fields are never defaulted into a legacy result.
 
 This authoring incompatibility requires the local source package version to be
-1.0.0. It establishes the version boundary, while stable installation and
-adoption remain separately evidenced.
+1.0.0. Local installation and stable adoption are evidenced in
+[the adoption record](../../provenance/task-disposition-and-currentness-local-adoption.md).
 
 ## Consequences and boundaries
 
@@ -125,5 +125,6 @@ continued Task into a claim, handoff, budget, or execution authorization.
 
 The user confirmed the assessment/retention requirement and accepted the typed
 manifest, resolver, journal, and receipt mechanics described here on
-2026-10-11. That acceptance does not by itself establish installation,
-stable adoption, public release, or authorization for external execution.
+2026-10-11. The linked adoption evidence establishes local installation and
+bounded stable-fixture behavior; it does not establish public release or
+authorization for external execution.

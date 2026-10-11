@@ -148,10 +148,11 @@ This repository contains the confirmed WorkVCS design baseline and a locally
 release-ready V1 implementation in Rust, followed by focused post-V1 local
 improvements. This branch's crate and CLI package version is `1.0.0`, the
 local-source implementation of accepted ADR-0524. Stable installed adoption
-and public release remain separately evidenced. The previously delivered
+is evidenced locally in [the adoption record](../provenance/task-disposition-and-currentness-local-adoption.md);
+public release remains separate. The previously delivered
 `0.2.0` implementation remains the boundary of the bounded V1
-product-maturity judgment; that judgment does not itself establish stable
-adoption of the 1.0.0 implementation.
+product-maturity judgment; that judgment does not establish a public release
+or broader maturity claim for the 1.0.0 implementation.
 
 Implementation readiness is tracked in
 [V1 Readiness Ledger](../provenance/v1-readiness-ledger.md). That ledger

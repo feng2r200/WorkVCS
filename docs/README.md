@@ -26,8 +26,8 @@ read-only all-operation lifecycle inventory without automatic history sweeps.
 ADR-0521 adds zero-write intrinsic Plan-manifest validation and Capture-aware
 routed terminal diagnostics while preserving journal-first audit.
 Accepted ADR-0524 defines the 1.0.0 Task-disposition assessment and
-execution-currentness projection. Stable local adoption evidence remains
-pending and is separate from this source authority.
+execution-currentness projection. Its local installation and stable adoption
+are recorded separately in [the adoption evidence](provenance/task-disposition-and-currentness-local-adoption.md).
 
 The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
 on 2026-09-27. The final exact installed canary wrote one canonical
@@ -47,6 +47,7 @@ public release, and remote deployment remain separate decisions.
 - [ADR-0520: Operation Disposition and Global Inventory Classification](decisions/adr/0520-operation-disposition-and-global-inventory-classification.md)
 - [ADR-0521: Plan Manifest Validation and Routed Rejection Diagnostics](decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md)
 - [ADR-0524: Task Disposition and Execution Currentness](decisions/adr/0524-task-disposition-and-execution-currentness.md)
+- [Task Disposition and Currentness Local Adoption Evidence](provenance/task-disposition-and-currentness-local-adoption.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
 - [ProjectRef Adapter Input and Migration Preview Evidence](provenance/projectref-adapter-migration-preview.md)

@@ -1,9 +1,10 @@
 # Local Operator Quickstart and Recovery
 
-Status: Local operator guide for the 1.0.0 source definition. Verify the
-installed executable identity, registry version, and activation state before
-selecting a route; this guide does not itself prove stable installation or
-adoption.
+Status: Local operator guide for the 1.0.0 source definition. Local
+installation and bounded stable adoption are recorded in
+[the adoption evidence](../provenance/task-disposition-and-currentness-local-adoption.md).
+Verify the installed executable identity, registry version, and activation
+state before selecting a route; this guide does not prove a public release.
 Last updated: 2026-10-08
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from

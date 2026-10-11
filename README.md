@@ -34,8 +34,9 @@ the CLI, Skill, packaging, installation, and release workflow.
 The 1.0.0 implementation adds explicit Task-disposition assessment when a
 Plan is superseded or retired. An assessment can preserve an old Task exactly
 as it is; lifecycle status and execution currentness are separate. The
-stable installation/adoption evidence remains pending; no public release has
-been made. See accepted
+local installation and stable adoption are evidenced in
+[the adoption record](docs/provenance/task-disposition-and-currentness-local-adoption.md);
+no public release has been made. See accepted
 [ADR-0524](docs/decisions/adr/0524-task-disposition-and-execution-currentness.md).
 
 ## What makes it different

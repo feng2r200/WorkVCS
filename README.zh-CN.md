@@ -14,7 +14,7 @@ Git 对文件进行版本控制，任务管理工具描述工作分配，对话�
 
 凡是影响运行时、Skill、打包、安装或发布工作流的优化，都必须变更语义版本号。兼容性修复和运维改进递增 patch；新增且保持兼容的能力（例如运行时或安装保护）递增 minor；不兼容的 CLI、registry 或状态契约递增 major。Git commit、构建时间和二进制摘要只能标识构建，不能替代语义版本。CI 会对这些发布相关改动强制检查版本是否变化。
 
-1.0.0 实现新增了 Plan 被取代或退役时的显式 Task 处置评估。评估可以原样保留旧 Task；生命周期状态与执行当前性是两个独立概念。稳定安装与采用证据仍待完成，且尚未公开发布，详见已接受的 [ADR-0524（英文）](docs/decisions/adr/0524-task-disposition-and-execution-currentness.md)。
+1.0.0 实现新增了 Plan 被取代或退役时的显式 Task 处置评估。评估可以原样保留旧 Task；生命周期状态与执行当前性是两个独立概念。本地安装与稳定采用见[采用证据（英文）](docs/provenance/task-disposition-and-currentness-local-adoption.md)，且尚未公开发布，详见已接受的 [ADR-0524（英文）](docs/decisions/adr/0524-task-disposition-and-execution-currentness.md)。
 
 ## 它有什么不同
 

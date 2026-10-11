@@ -645,9 +645,20 @@ prerequisite_completion_output="$(run_workvcs \
     --outcome completed \
     --session "$session_id")"
 prerequisite_task_version_id="$(value "$prerequisite_completion_output" "task_entity_version_id")"
+prerequisite_completed_state_digest="$(value "$prerequisite_completion_output" "task_state_digest")"
 head_commit_id="$(value "$prerequisite_completion_output" "commit_id")"
 expect_value "$prerequisite_completion_output" "task_entity_id" "$prerequisite_task_id"
 expect_value "$prerequisite_completion_output" "status" "done"
+
+prerequisite_completed_task_output="$(run_workvcs \
+    task show "$store" \
+    --branch "$branch_id" \
+    --task "$prerequisite_task_id" \
+    --expected-state-digest "$prerequisite_completed_state_digest")"
+expect_value "$prerequisite_completed_task_output" "task_entity_id" "$prerequisite_task_id"
+expect_value "$prerequisite_completed_task_output" "task_entity_version_id" "$prerequisite_task_version_id"
+expect_value "$prerequisite_completed_task_output" "status" "done"
+expect_value "$prerequisite_completed_task_output" "matches_expected" "true"
 
 prerequisite_claim_release_output="$(run_workvcs \
     claim release "$store" \
@@ -737,16 +748,14 @@ ready_runnable_output="$(run_workvcs \
     runnable tasks "$store" \
     --session "$session_id" \
     --expected-head "$head_commit_id" \
-    --expected-candidates 2)"
+    --expected-candidates 1)"
 expect_value "$ready_runnable_output" "candidate.0.task_entity_id" "$task_id"
+expect_value "$ready_runnable_output" "candidate.0.status" "pending"
 expect_value "$ready_runnable_output" "candidate.0.priority" "7"
 expect_value "$ready_runnable_output" "candidate.0.runnable" "true"
 expect_value "$ready_runnable_output" "candidate.0.dependency_ready" "true"
 expect_value "$ready_runnable_output" "candidate.0.claim" "unclaimed"
-expect_value "$ready_runnable_output" "candidate.1.task_entity_id" "$prerequisite_task_id"
-expect_value "$ready_runnable_output" "candidate.1.status" "done"
-expect_value "$ready_runnable_output" "candidate.1.runnable" "false"
-expect_value "$ready_runnable_output" "candidate.1.blocked_reasons" "lifecycle_ineligible"
+expect_value "$ready_runnable_output" "candidates" "1"
 expect_value "$ready_runnable_output" "candidates_match_expected" "true"
 
 step "next dependent task"
@@ -755,7 +764,7 @@ next_output="$(run_workvcs \
     --session "$session_id" \
     --expected-selected true \
     --expected-head "$head_commit_id" \
-    --expected-inspected-candidates 2 \
+    --expected-inspected-candidates 1 \
     --expected-task "$task_id" \
     --expected-mode exclusive \
     --expected-lifecycle-state active)"
@@ -791,6 +800,7 @@ completed_task_output="$(run_workvcs \
     --branch "$branch_id" \
     --task "$task_id" \
     --expected-state-digest "$completed_task_state_digest")"
+expect_value "$completed_task_output" "task_entity_id" "$task_id"
 expect_value "$completed_task_output" "task_entity_version_id" "$task_version_id"
 expect_value "$completed_task_output" "status" "done"
 expect_value "$completed_task_output" "priority" "7"
@@ -801,12 +811,8 @@ completed_runnable_output="$(run_workvcs \
     --session "$session_id" \
     --task "$task_id" \
     --expected-head "$head_commit_id" \
-    --expected-candidates 1)"
-expect_value "$completed_runnable_output" "candidate.0.task_entity_id" "$task_id"
-expect_value "$completed_runnable_output" "candidate.0.status" "done"
-expect_value "$completed_runnable_output" "candidate.0.priority" "7"
-expect_value "$completed_runnable_output" "candidate.0.runnable" "false"
-expect_value "$completed_runnable_output" "candidate.0.lifecycle_eligible" "false"
+    --expected-candidates 0)"
+expect_value "$completed_runnable_output" "candidates" "0"
 expect_value "$completed_runnable_output" "head_matches_expected" "true"
 expect_value "$completed_runnable_output" "candidates_match_expected" "true"
 
@@ -1887,6 +1893,14 @@ expect_value "$handoff_show_output" "session_diff_matches_expected" "true"
 expect_value "$handoff_show_output" "focus_matches_expected" "true"
 
 step "claim replacement recovery"
+claim_recovery_task_id="$target_merge_task_id"
+claim_recovery_task_output="$(run_workvcs \
+    task show "$store" \
+    --branch "$branch_id" \
+    --task "$claim_recovery_task_id")"
+expect_value "$claim_recovery_task_output" "task_entity_id" "$claim_recovery_task_id"
+expect_value "$claim_recovery_task_output" "status" "pending"
+
 claim_recovery_source_session_output="$(run_workvcs \
     session start "$store" \
     --workspace "$workspace_id" \
@@ -1914,10 +1928,22 @@ claim_recovery_takeover_session_output="$(run_workvcs \
     --expected-lifecycle-state active)"
 claim_recovery_takeover_session_id="$(value "$claim_recovery_takeover_session_output" "session_id")"
 
+claim_recovery_runnable_output="$(run_workvcs \
+    runnable tasks "$store" \
+    --session "$claim_recovery_source_session_id" \
+    --task "$claim_recovery_task_id" \
+    --expected-head "$head_commit_id" \
+    --expected-candidates 1)"
+expect_value "$claim_recovery_runnable_output" "candidate.0.task_entity_id" "$claim_recovery_task_id"
+expect_value "$claim_recovery_runnable_output" "candidate.0.status" "pending"
+expect_value "$claim_recovery_runnable_output" "candidate.0.runnable" "true"
+expect_value "$claim_recovery_runnable_output" "head_matches_expected" "true"
+expect_value "$claim_recovery_runnable_output" "candidates_match_expected" "true"
+
 claim_recovery_claim_output="$(run_workvcs \
     claim task "$store" \
     --session "$claim_recovery_source_session_id" \
-    --task "$task_id" \
+    --task "$claim_recovery_task_id" \
     --expected-mode exclusive \
     --expected-lifecycle-state active)"
 claim_recovery_claim_id="$(value "$claim_recovery_claim_output" "claim_id")"
@@ -1925,7 +1951,7 @@ claim_recovery_claim_id="$(value "$claim_recovery_claim_output" "claim_id")"
 claim_recovery_blocked_guard_output="$(run_workvcs \
     claim guard "$store" \
     --session "$claim_recovery_target_session_id" \
-    --task "$task_id" \
+    --task "$claim_recovery_task_id" \
     --expected-allowed false \
     --expected-reason exclusive_claim_owned_by_other_session \
     --expected-active-claims 1)"
@@ -1956,7 +1982,7 @@ expect_value "$claim_transfer_output" "lifecycle_state_match_expected" "true"
 claim_transfer_guard_output="$(run_workvcs \
     claim guard "$store" \
     --session "$claim_recovery_target_session_id" \
-    --task "$task_id" \
+    --task "$claim_recovery_task_id" \
     --expected-allowed true \
     --expected-reason owned_exclusive_claim \
     --expected-active-claims 1)"
@@ -2011,7 +2037,7 @@ expect_value "$claim_takeover_output" "lifecycle_state_match_expected" "true"
 claim_takeover_guard_output="$(run_workvcs \
     claim guard "$store" \
     --session "$claim_recovery_takeover_session_id" \
-    --task "$task_id" \
+    --task "$claim_recovery_task_id" \
     --expected-allowed true \
     --expected-reason owned_exclusive_claim \
     --expected-active-claims 1)"

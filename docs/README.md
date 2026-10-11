@@ -25,9 +25,9 @@ batch authority. ADR-0520 adds immutable pre-delivery disposition and a
 read-only all-operation lifecycle inventory without automatic history sweeps.
 ADR-0521 adds zero-write intrinsic Plan-manifest validation and Capture-aware
 routed terminal diagnostics while preserving journal-first audit.
-The proposed 1.0.0 source candidate in ADR-0524 adds explicit Task disposition
-assessment and execution-currentness projection; it is not installation or
-activation evidence.
+Accepted ADR-0524 defines the 1.0.0 Task-disposition assessment and
+execution-currentness projection. Stable local adoption evidence remains
+pending and is separate from this source authority.
 
 The authoritative eleven-round delivery roadmap in ADR-0513 completed locally
 on 2026-09-27. The final exact installed canary wrote one canonical
@@ -381,8 +381,8 @@ is tracked separately in the V1 readiness ledger and release-maturity status is
 tracked in the V1 release gate matrix. The previously delivered `0.2.0` Rust
 implementation is locally release-ready and dogfood-complete for the bounded
 V1 scope. This branch's crate and CLI package version is `1.0.0`, the
-uninstalled, unmerged, unreleased source candidate described by ADR-0524;
-the prior maturity judgment does not establish readiness for this candidate.
+local-source implementation described by accepted ADR-0524; the prior maturity
+judgment does not establish stable installed adoption of this implementation.
 Public release, tag, push, deploy,
 remote, production, credential, and global installation actions remain separate
 authority decisions.

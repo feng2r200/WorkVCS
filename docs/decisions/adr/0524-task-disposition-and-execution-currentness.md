@@ -1,8 +1,8 @@
 # ADR-0524: Task disposition and execution currentness
 
-Status: Proposed — source candidate; not installed, merged, released, or
-activated
+Status: Accepted — implemented in local source; stable adoption evidence pending
 Date: 2026-10-10
+Accepted: 2026-10-11
 
 ## Context
 
@@ -19,9 +19,9 @@ truthful result. This requirement does not authorize execution, budgets,
 claims, handoffs, external actions, or repair of any particular project's
 existing state.
 
-## Proposed decision
+## Decision
 
-The source candidate introduces schema-version-2 Plan evolution for two
+The local source implementation introduces schema-version-2 Plan evolution for two
 manifest modes: `supersede` and `task_disposition`. A fresh schema-2
 supersede replaces an active Plan. `task_disposition` repairs the bounded
 Task inventory of a `superseded` or `abandoned` Plan. Both require branch and
@@ -43,7 +43,7 @@ current Goal/Plan reference may keep it current; historical or deferred
 retention is also valid. Neither result fabricates an Entity update or adds or
 replaces a carrier merely to make the Task look current.
 
-For the narrow all-retain repair case, the candidate records a state-preserving
+For the narrow all-retain repair case, the implementation records a state-preserving
 normal commit with no ChangeOperation. This is permitted only for a non-empty
 schema-2 `task_disposition` manifest whose dispositions are all
 `retain_original`, whose task/relation result sets are empty, and whose result
@@ -112,19 +112,18 @@ results, receipts, and commit-before-receipt recovery retain the legacy parser
 and execution semantics; schema-1 in-place evolution also remains supported.
 Missing schema-2 disposition fields are never defaulted into a legacy result.
 
-This authoring incompatibility requires the source package version to advance
-to 1.0.0. It is evidence for a version boundary, not evidence that the
-candidate has been installed or adopted by another project.
+This authoring incompatibility requires the local source package version to be
+1.0.0. It establishes the version boundary, while stable installation and
+adoption remain separately evidenced.
 
 ## Consequences and boundaries
 
-The candidate makes a Plan replacement auditable without conflating historical
+The implementation makes a Plan replacement auditable without conflating historical
 retention, lifecycle status, and executable scope. It deliberately does not
 choose a business disposition, mutate a different project's Tasks, or turn a
 continued Task into a claim, handoff, budget, or execution authorization.
 
-Acceptance of this ADR remains a maintainer decision. The user confirmation
-establishes the assessment and retention requirement; the typed manifest,
-resolver, journal, and receipt mechanics above are this source candidate's
-implementation choices and require source validation and review before they
-can be promoted to accepted project truth.
+The user confirmed the assessment/retention requirement and accepted the typed
+manifest, resolver, journal, and receipt mechanics described here on
+2026-10-11. That acceptance does not by itself establish installation,
+stable adoption, public release, or authorization for external execution.

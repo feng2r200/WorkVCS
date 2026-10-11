@@ -72,7 +72,10 @@ separately under Current product stage. The product contract provides:
   to its exact existing, fully valid, non-shared binding, while journal-only
   admission remains the default; and
 - explicit cross-project CaptureGroups with one canonical mutable Record and
-  immutable secondary references that are not semantic authorities.
+  immutable secondary references that are not semantic authorities; and
+- explicit Plan supersede and retired-Plan Task disposition assessment that
+  preserves Task lifecycle/history independently from execution currentness,
+  as defined by ADR-0524.
 
 ## Primary user and interaction model
 
@@ -144,10 +147,11 @@ records from a transcript.
 This repository contains the confirmed WorkVCS design baseline and a locally
 release-ready V1 implementation in Rust, followed by focused post-V1 local
 improvements. This branch's crate and CLI package version is `1.0.0`, the
-source candidate proposed in ADR-0524; it has not been installed, merged, or
-released. The previously delivered `0.2.0` implementation remains the boundary
-of the bounded V1 product-maturity judgment. Candidate validation and an
-external public release are separate decisions from that prior judgment.
+local-source implementation of accepted ADR-0524. Stable installed adoption
+and public release remain separately evidenced. The previously delivered
+`0.2.0` implementation remains the boundary of the bounded V1
+product-maturity judgment; that judgment does not itself establish stable
+adoption of the 1.0.0 implementation.
 
 Implementation readiness is tracked in
 [V1 Readiness Ledger](../provenance/v1-readiness-ledger.md). That ledger

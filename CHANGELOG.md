@@ -15,11 +15,10 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
 
 ### Added
 
-- Source-candidate schema-2 Plan disposition assessment for fresh supersede
+- Schema-2 Plan disposition assessment for fresh supersede
   and retired-Plan repair, including explicit `retain_original` preservation,
   a shared execution-currentness resolver, and a bounded read-only
-  `plan task-disposition-audit` projection. This source change is not yet
-  installed, merged, released, or activated.
+  `plan task-disposition-audit` projection.
 
 - ProjectRef v2 control-plane models, deterministic logical-project
   resolution, tool-neutral locator input, and a concrete desktop-project

@@ -266,13 +266,13 @@ rationale.
 **Relations:** May be contained by a Goal or another Plan; may contain or
 reference Plans and Tasks. A Task may be referenced by multiple Plans.
 
-**Candidate execution-currentness model:** The user-confirmed requirement is
-that a Plan replacement assesses its affected Tasks and may preserve one
-unchanged. Proposed ADR-0524 supplies the source candidate's implementation:
+**Execution-currentness model:** An accepted ADR-0524 requirement is that a
+Plan replacement assesses its affected Tasks and may preserve one unchanged.
+ADR-0524 defines the implementation:
 Plan lifecycle is not Task execution currentness, and an active Goal or Plan
 can carry a reachable Task through primary containment or a structural
-reference. This candidate mechanism does not change a Task lifecycle or
-authorize execution.
+reference. This mechanism does not change a Task lifecycle or authorize
+execution.
 
 **Version behavior:** Plan state and structure participate in Work-State
 versioning. A Plan is not claimed or executed directly.
@@ -301,9 +301,9 @@ priority, stable local Acceptance Criteria, and optional child ordering.
 Workspace. It may be referenced by other Plans, may contain SubTasks, and may
 carry dependency, order, evolution, causal, and verification relations.
 
-**Candidate disposition and currentness:** The confirmed assessment
-requirement does not require a Task state change. In the ADR-0524 source
-candidate, `retain_original` preserves a Task exactly as it is and records why
+**Disposition and currentness:** The accepted assessment requirement does not
+require a Task state change. Under ADR-0524, `retain_original` preserves a
+Task exactly as it is and records why
 it remains historical/deferred or stays current through an already-valid
 Goal/Plan reference; it adds or replaces no carrier. A terminal Task can remain
 a structural container: a current Goal or Plan can still make its non-terminal

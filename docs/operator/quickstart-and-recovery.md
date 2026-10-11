@@ -1,8 +1,9 @@
 # Local Operator Quickstart and Recovery
 
-Status: Local operator guide; the installed package may remain `0.2.0` while
-the source candidate is `1.0.0`. Verify executable identity, registry version,
-and activation state before selecting a route.
+Status: Local operator guide for the 1.0.0 source definition. Verify the
+installed executable identity, registry version, and activation state before
+selecting a route; this guide does not itself prove stable installation or
+adoption.
 Last updated: 2026-10-08
 
 This guide is for a local operator or Agent using the current WorkVCS CLI from

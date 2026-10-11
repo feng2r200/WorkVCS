@@ -456,9 +456,8 @@ why, diff, and restoration.
 
 ### INV-115 — Plan disposition assesses every affected non-terminal Task
 
-This is a proposed ADR-0524 source-candidate invariant. The confirmed
-requirement is only that assessment may preserve an old Task unchanged. The
-candidate schema-version-2 supersede or retired-Plan Task-disposition repair
+ADR-0524 requires that assessment may preserve an old Task unchanged. The
+schema-version-2 supersede or retired-Plan Task-disposition repair
 enumerates the bounded non-terminal inventory exactly once, with stable Task
 identity/version/digest guards and one explicit action: `supersede`, `cancel`,
 `continue`, or `retain_original`. `retain_original` preserves the Task
@@ -486,7 +485,7 @@ Plan evolution commit is permitted by this exception.
 
 ### INV-116 — Execution currentness is a shared, non-lifecycle projection
 
-This is a proposed ADR-0524 source-candidate invariant. One fixed-point
+ADR-0524 requires one fixed-point
 currentness resolver serves Recall, context, runnable work, explicit Task
 claims, and Task-disposition audit. Active Goals, active standalone Plans, and
 non-terminal standalone Tasks are roots. Reachable primary containment and
@@ -498,7 +497,7 @@ retrospective projections retain them with history labels.
 
 ### INV-117 — Disposition preserves truthful existing blockage
 
-This is a proposed ADR-0524 source-candidate invariant. One guarded
+ADR-0524 requires one guarded
 transaction covers the branch-head CAS, affected entity/relation versions,
 surviving current references, scheduling dependencies, and active claims. A
 disposition cannot create a new currentness or dependency regression, or

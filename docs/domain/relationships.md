@@ -123,7 +123,7 @@ create a cycle. Multi-Plan reuse uses `references`, not another primary
 order is canonical semantics, but its physical storage representation remains
 Open.
 
-ADR-0524 proposes the source candidate's execution-currentness mechanics:
+ADR-0524 defines the execution-currentness mechanics:
 only Goals and Plans are structural-reference carriers. Goal-to-Plan/Task and
 Plan-to-Plan/Task references are supported; Task-origin structural references
 are not. Existing Task-to-Task containment remains valid decomposition. A

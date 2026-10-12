@@ -74,6 +74,14 @@ Store/Workspace/Branch binding. An optional `--registry` is a one-command
 locator override, not authority to create a binding or activate a marker.
 An unbound or unsafe route remains a routing error.
 
+The local candidate implementation and its frozen model comparison are
+complete. See
+[the phase-2 candidate evidence](../provenance/on-demand-local-search-phase2-candidate.md)
+for exact source, test, model and WorkVCS identities. The five known-positive
+questions show a narrow BGE reranking signal, while 45 questions remain
+unlabelled. The study therefore does not configure a semantic default or change
+the lexical command described here.
+
 Current mode captures the selected branch's native eligible cognition. Record
 status remains active/running/unverified/validated as applicable, and Knowledge
 must be active; a returned uncertainty/validation status is not upgraded. To search

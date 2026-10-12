@@ -13,14 +13,17 @@ acceptance are tracked separately from stable installation or remote delivery.
 The separately authorized local stable adoption of 1.1.0 is complete;
 exact installation and subsequent delivery are recorded independently.
 The current 1.2.0 source candidate adds on-demand generation preparation under
-ADR-0526 and routine Skill routing. Its local validation and semantic research
-remain separate from the adopted 1.1.0 runtime.
+ADR-0526 and routine Skill routing. Its local implementation, frozen
+50-question model study and independent review are complete; the evidence does
+not select a default semantic model. The candidate remains separate from the
+adopted 1.1.0 runtime.
 
 - [ADR-0525: Local Derived FTS Search and Canonical Readback](decisions/adr/0525-local-derived-fts-search-and-canonical-readback.md)
 - [ADR-0526: On-demand Local Search Generations](decisions/adr/0526-on-demand-local-search-generations.md)
 - [Local Derived Search Architecture](architecture/local-derived-search.md)
 - [Local Derived Search Operator Guide](operator/local-derived-search.md)
 - [Local Derived Search Candidate Evidence](provenance/local-derived-search-candidate.md)
+- [On-demand Local Search Phase-2 Candidate Evidence](provenance/on-demand-local-search-phase2-candidate.md)
 - [Local Derived Search Local Adoption Evidence](provenance/local-derived-search-local-adoption.md)
 
 ## Accepted ProjectRef design and bounded implementation status

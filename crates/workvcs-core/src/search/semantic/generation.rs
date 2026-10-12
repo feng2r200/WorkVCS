@@ -229,25 +229,25 @@ pub(super) fn query_semantic(
         options.reranker_model_path.as_deref(),
     )?;
     let generation_path = generation_root.join(basis_digest.to_hex());
-    let embedding_cache = options
-        .embedding_cache_root
-        .as_deref()
-        .map(|root| {
-            prepare_embedding_cache(
-                root,
-                source_path,
-                &options.protected_paths,
-                &options.embedding_model_path,
-                options.reranker_model_path.as_deref(),
-                &generation_path,
-                embedding_manifest.manifest_digest,
-            )
-        })
-        .transpose()?;
     let publication_lock = super::super::SearchPublicationLock::acquire(&generation_path)?;
     let maintenance = if generation_path.exists() {
         SearchRefreshOutcome::Reused
     } else {
+        let embedding_cache = options
+            .embedding_cache_root
+            .as_deref()
+            .map(|root| {
+                prepare_embedding_cache(
+                    root,
+                    source_path,
+                    &options.protected_paths,
+                    &options.embedding_model_path,
+                    options.reranker_model_path.as_deref(),
+                    &generation_path,
+                    embedding_manifest.manifest_digest,
+                )
+            })
+            .transpose()?;
         build_generation(
             source,
             &snapshot,
@@ -2234,6 +2234,16 @@ mod tests {
             .is_err(),
             "a cache vector cannot be reused for another model"
         );
+        assert!(
+            encode_embedding_cache_vector(key, model_digest, &[0.0; 16]).is_err(),
+            "a wrong-dimensional cache vector must be rejected"
+        );
+        let mut non_finite = vec![0.0_f32; EMBEDDING_DIMENSION];
+        non_finite[0] = f32::NAN;
+        assert!(
+            encode_embedding_cache_vector(key, model_digest, &non_finite).is_err(),
+            "a non-finite cache vector must be rejected"
+        );
     }
 
     #[test]
@@ -2350,6 +2360,17 @@ mod tests {
             assert!(
                 cache.load("passage: exposed").is_err(),
                 "a group- or world-readable cache vector must fail closed"
+            );
+
+            let linked_input = "passage: linked";
+            let linked = cache.path(embedding_cache_key(model_digest, linked_input));
+            create_private_directory_if_missing(linked.parent().expect("linked cache prefix"))
+                .expect("create linked cache prefix");
+            std::os::unix::fs::symlink(&destination, &linked)
+                .expect("create symbolic-link cache fixture");
+            assert!(
+                cache.load(linked_input).is_err(),
+                "a symbolic-link cache vector must fail closed"
             );
         }
     }

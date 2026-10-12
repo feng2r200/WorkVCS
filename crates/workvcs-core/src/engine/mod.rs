@@ -117,6 +117,10 @@ use crate::search::semantic::{
     SemanticModelProvisionOptions, SemanticModelProvisionResult, SemanticQueryOptions,
     SemanticQueryResult,
 };
+use crate::search::source_archive::{
+    SourceArchiveImportOptions, SourceArchiveImportResult, SourceArchiveQueryOptions,
+    SourceArchiveQueryResult,
+};
 use crate::search::{
     SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
 };
@@ -1265,6 +1269,18 @@ impl Engine {
         options: SemanticModelProvisionOptions,
     ) -> Result<SemanticModelProvisionResult> {
         crate::search::semantic::provision_model(&options)
+    }
+
+    pub fn import_source_archive(
+        options: SourceArchiveImportOptions,
+    ) -> Result<SourceArchiveImportResult> {
+        crate::search::source_archive::import_source_archive(&options)
+    }
+
+    pub fn query_source_archive(
+        options: SourceArchiveQueryOptions,
+    ) -> Result<SourceArchiveQueryResult> {
+        crate::search::source_archive::query_source_archive(&options)
     }
 
     pub fn semantic_search(&self, options: SemanticQueryOptions) -> Result<SemanticQueryResult> {

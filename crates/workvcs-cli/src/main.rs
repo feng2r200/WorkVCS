@@ -141,13 +141,14 @@ use workvcs_core::{
     SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
     SessionLifecycleState, SessionListOptions, SessionListResult, SessionMarkStaleOptions,
     SessionMarkStaleResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
-    SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInfo, StoreInitOptions,
-    StoreLineageListOptions, StoreLineageListResult, StoreLineageRecordOptions,
-    StoreLineageRecordResult, StoreLineageSnapshot, StoreManifest, StoreMigrationAttemptSnapshot,
-    StoreMigrationListOptions, StoreMigrationListResult, StoreMigrationRecordOptions,
-    StoreMigrationRecordResult, StructuralReferenceCreateCommit, StructuralReferenceCreateOptions,
-    StructuralReferenceSnapshot, TaskCreateCommit, TaskCreateOptions,
-    TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
+    SessionSwitchOptions, SessionSwitchResult, SourceArchiveImportOptions,
+    SourceArchiveImportResult, SourceArchiveQueryOptions, SourceArchiveQueryResult, StoreId,
+    StoreInfo, StoreInitOptions, StoreLineageListOptions, StoreLineageListResult,
+    StoreLineageRecordOptions, StoreLineageRecordResult, StoreLineageSnapshot, StoreManifest,
+    StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
+    StoreMigrationRecordOptions, StoreMigrationRecordResult, StructuralReferenceCreateCommit,
+    StructuralReferenceCreateOptions, StructuralReferenceSnapshot, TaskCreateCommit,
+    TaskCreateOptions, TaskSchedulingRelationCreateCommit, TaskSchedulingRelationCreateOptions,
     TaskSchedulingRelationSnapshot, TaskSnapshot, TaskStatus, TaskTransitionCommit,
     TaskTransitionOptions, VerificationApplicability, VerificationApplicabilityCacheListOptions,
     VerificationApplicabilityCacheListResult, VerificationApplicabilityCacheSnapshot,
@@ -1815,6 +1816,57 @@ enum SearchCommand {
 
         #[arg(long, value_name = "PATH")]
         destination: PathBuf,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+    },
+    #[command(
+        about = "Import explicit local Codex history into an immutable reference-only archive"
+    )]
+    SourceImport {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
+
+        #[arg(long, value_name = "PATH", required = true)]
+        source: Vec<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        archive_dir: PathBuf,
+
+        #[arg(
+            long,
+            help = "Import user messages only; assistant text is otherwise included"
+        )]
+        user_only: bool,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+    },
+    #[command(about = "Query one immutable historical source archive without granting authority")]
+    SourceQuery {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
+
+        #[arg(long, value_name = "PATH")]
+        archive: PathBuf,
+
+        #[arg(long, value_name = "TEXT")]
+        query: String,
+
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
 
         #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
         format: SearchOutputFormatArg,
@@ -28512,6 +28564,90 @@ fn run_search(command: SearchCommand) -> Result<String> {
             ))?;
             render_semantic_model_provision(&result, format)
         }
+        SearchCommand::SourceImport {
+            cwd,
+            registry,
+            locator,
+            source,
+            archive_dir,
+            user_only,
+            format,
+        } => {
+            let discovery = discover_project_readonly_with_locator(
+                cwd,
+                registry,
+                locator.project_ref,
+                locator.locator_context,
+                locator.locator_adapter_context,
+            )?;
+            let project_ref_id = discovery.project_ref_id.ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(
+                    "source import requires a verified registry-v2 ProjectRef read binding"
+                        .to_owned(),
+                )
+            })?;
+            let engine = Engine::open_readonly(Path::new(&discovery.binding.store_path))?;
+            let store_info = engine.store_info()?;
+            if store_info.store_id != discovery.binding.store_id {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source import binding Store identity does not match the opened Store"
+                        .to_owned(),
+                ));
+            }
+            let identity = SearchSourceIdentity::new(
+                project_ref_id,
+                discovery.binding.store_id,
+                discovery.binding.workspace_id,
+                discovery.binding.branch_id,
+            );
+            let options = SourceArchiveImportOptions::new(identity, archive_dir, source)?
+                .include_assistant(!user_only);
+            let result = Engine::import_source_archive(options)?;
+            render_source_archive_import(&result, format)
+        }
+        SearchCommand::SourceQuery {
+            cwd,
+            registry,
+            locator,
+            archive,
+            query,
+            limit,
+            format,
+        } => {
+            let discovery = discover_project_readonly_with_locator(
+                cwd,
+                registry,
+                locator.project_ref,
+                locator.locator_context,
+                locator.locator_adapter_context,
+            )?;
+            let project_ref_id = discovery.project_ref_id.ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(
+                    "source query requires a verified registry-v2 ProjectRef read binding"
+                        .to_owned(),
+                )
+            })?;
+            let engine = Engine::open_readonly(Path::new(&discovery.binding.store_path))?;
+            let store_info = engine.store_info()?;
+            if store_info.store_id != discovery.binding.store_id {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source query binding Store identity does not match the opened Store"
+                        .to_owned(),
+                ));
+            }
+            let identity = SearchSourceIdentity::new(
+                project_ref_id,
+                discovery.binding.store_id,
+                discovery.binding.workspace_id,
+                discovery.binding.branch_id,
+            );
+            let mut options = SourceArchiveQueryOptions::new(identity, archive, query)?;
+            if let Some(limit) = limit {
+                options = options.with_result_limit(limit)?;
+            }
+            let result = Engine::query_source_archive(options)?;
+            render_source_archive_query(&result, format)
+        }
         SearchCommand::Refresh {
             cwd,
             registry,
@@ -28705,6 +28841,109 @@ fn render_semantic_model_provision(
         result.inference_canary_passed,
         result.network_access_used,
     ))
+}
+
+fn render_source_archive_import(
+    result: &SourceArchiveImportResult,
+    format: SearchOutputFormatArg,
+) -> Result<String> {
+    if format == SearchOutputFormatArg::Json {
+        let mut output = serde_json::to_string_pretty(result).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "source archive import result could not be rendered as JSON: {error}"
+            ))
+        })?;
+        output.push('\n');
+        return Ok(output);
+    }
+    Ok(format!(
+        "action=source_archive_import\noutcome={}\narchive_path={}\nbasis_sha256={}\nmanifest_sha256={}\nfiles={}\ndocuments={}\nauthority_class={}\ncurrentness_class={}\naction_authority={}\ncanonical_source_written={}\nraw_source_copied={}\n",
+        match result.outcome {
+            workvcs_core::SourceArchiveImportOutcome::Imported => "imported",
+            workvcs_core::SourceArchiveImportOutcome::Reused => "reused",
+        },
+        escape_key_value(&result.archive_path.display().to_string()),
+        result.manifest.basis_sha256,
+        result.manifest.manifest_sha256,
+        result.manifest.files.len(),
+        result.manifest.document_count,
+        result.manifest.authority_class,
+        result.manifest.currentness_class,
+        result.manifest.action_authority,
+        result.canonical_source_written,
+        result.raw_source_copied,
+    ))
+}
+
+fn render_source_archive_query(
+    result: &SourceArchiveQueryResult,
+    format: SearchOutputFormatArg,
+) -> Result<String> {
+    if format == SearchOutputFormatArg::Json {
+        let mut output = serde_json::to_string_pretty(result).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "source archive query result could not be rendered as JSON: {error}"
+            ))
+        })?;
+        output.push('\n');
+        return Ok(output);
+    }
+    let mut output = String::new();
+    writeln!(output, "status={}", result.status).expect("write to String");
+    writeln!(output, "query={}", escape_key_value(&result.query)).expect("write to String");
+    writeln!(
+        output,
+        "archive_path={}",
+        escape_key_value(&result.archive_path.display().to_string())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "candidates_considered={}",
+        result.candidates_considered
+    )
+    .expect("write to String");
+    writeln!(output, "matched_documents={}", result.matched_documents).expect("write to String");
+    writeln!(output, "omitted_results={}", result.omitted_results).expect("write to String");
+    writeln!(
+        output,
+        "serialized_item_tokens={}",
+        result.serialized_item_tokens
+    )
+    .expect("write to String");
+    writeln!(output, "authority_class={}", result.authority_class).expect("write to String");
+    writeln!(output, "currentness_class={}", result.currentness_class).expect("write to String");
+    writeln!(output, "action_authority={}", result.action_authority).expect("write to String");
+    for (index, item) in result.items.iter().enumerate() {
+        writeln!(
+            output,
+            "item.{index}.document_id={}",
+            item.document.document_id
+        )
+        .expect("write to String");
+        writeln!(output, "item.{index}.role={}", item.document.source_role)
+            .expect("write to String");
+        writeln!(output, "item.{index}.score={}", item.score).expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.source_path={}",
+            escape_key_value(&item.document.source_path.display().to_string())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.source_line={}",
+            item.document.source_line
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.text={}",
+            escape_key_value(&item.document.text)
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_semantic_query(
@@ -92065,6 +92304,71 @@ mod tests {
                 }
             } if source.as_path() == Path::new("/tmp/model-source")
                 && destination.as_path() == Path::new("/tmp/model-destination")
+        ));
+
+        let source_import = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "source-import",
+            "--cwd",
+            "/tmp/project",
+            "--source",
+            "/tmp/one.jsonl",
+            "--source",
+            "/tmp/two.jsonl",
+            "--archive-dir",
+            "/tmp/source-archives",
+            "--user-only",
+            "--format",
+            "json",
+        ])
+        .expect("parse source import contract");
+        assert!(matches!(
+            *source_import.command,
+            Command::Search {
+                command: SearchCommand::SourceImport {
+                    cwd,
+                    source,
+                    archive_dir,
+                    user_only: true,
+                    format: SearchOutputFormatArg::Json,
+                    ..
+                }
+            } if cwd.as_path() == Path::new("/tmp/project")
+                && source.len() == 2
+                && archive_dir.as_path() == Path::new("/tmp/source-archives")
+        ));
+
+        let source_query = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "source-query",
+            "--cwd",
+            "/tmp/project",
+            "--archive",
+            "/tmp/source-archive",
+            "--query",
+            "历史证据",
+            "--limit",
+            "7",
+            "--format",
+            "json",
+        ])
+        .expect("parse source query contract");
+        assert!(matches!(
+            *source_query.command,
+            Command::Search {
+                command: SearchCommand::SourceQuery {
+                    cwd,
+                    archive,
+                    query,
+                    limit: Some(7),
+                    format: SearchOutputFormatArg::Json,
+                    ..
+                }
+            } if cwd.as_path() == Path::new("/tmp/project")
+                && archive.as_path() == Path::new("/tmp/source-archive")
+                && query == "历史证据"
         ));
 
         let semantic = Cli::try_parse_from([

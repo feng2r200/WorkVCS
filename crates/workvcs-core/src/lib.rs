@@ -225,6 +225,12 @@ pub use search::semantic::{
     SemanticPassageScore, SemanticQueryOptions, SemanticQueryResult, SemanticRankingMode,
     SemanticResourceObservations, SemanticSearchItem,
 };
+pub use search::source_archive::{
+    SourceArchiveDocument, SourceArchiveFileManifest, SourceArchiveFileState, SourceArchiveFormat,
+    SourceArchiveImportOptions, SourceArchiveImportOutcome, SourceArchiveImportResult,
+    SourceArchiveManifest, SourceArchiveQueryOptions, SourceArchiveQueryResult,
+    SourceArchiveSearchItem,
+};
 pub use search::{
     SearchDerivedStatus, SearchIndexManifest, SearchItem, SearchQueryOptions, SearchQueryResult,
     SearchRangeRole, SearchRefreshOptions, SearchRefreshOutcome, SearchRefreshResult,

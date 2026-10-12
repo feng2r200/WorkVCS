@@ -1,5 +1,6 @@
 pub mod semantic;
 mod snippet;
+pub mod source_archive;
 mod tokenizer;
 
 use crate::canonical::canonical_bytes;

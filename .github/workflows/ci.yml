@@ -52,7 +52,7 @@ jobs:
         # test-only debug symbols from the hosted-runner artifacts.
         env:
           CARGO_PROFILE_TEST_DEBUG: "0"
-          RUSTFLAGS: -C link-arg=-Wl,--no-threads
+          RUSTFLAGS: -C link-arg=-Wl,--threads=1
         run: cargo test --workspace --all-targets --locked --jobs 1
 
       - name: Validate schema

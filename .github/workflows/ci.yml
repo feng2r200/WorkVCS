@@ -46,9 +46,13 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        # Large semantic-search test binaries can exhaust a hosted runner when
-        # lld links several of them concurrently. Serialize linking without
-        # reducing the workspace, target, or test coverage.
+        # Large semantic-search test binaries have exhausted hosted runners in
+        # both concurrent Cargo links and lld's own parallel link phase. Keep
+        # the complete target set while serializing both layers and omitting
+        # test-only debug symbols from the hosted-runner artifacts.
+        env:
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          RUSTFLAGS: -C link-arg=-Wl,--no-threads
         run: cargo test --workspace --all-targets --locked --jobs 1
 
       - name: Validate schema

@@ -12,8 +12,12 @@ and all lifecycle and authorization semantics. Implementation and local
 acceptance are tracked separately from stable installation or remote delivery.
 The separately authorized local stable adoption of 1.1.0 is complete;
 exact installation and subsequent delivery are recorded independently.
+The current 1.2.0 source candidate adds on-demand generation preparation under
+ADR-0526 and routine Skill routing. Its local validation and semantic research
+remain separate from the adopted 1.1.0 runtime.
 
 - [ADR-0525: Local Derived FTS Search and Canonical Readback](decisions/adr/0525-local-derived-fts-search-and-canonical-readback.md)
+- [ADR-0526: On-demand Local Search Generations](decisions/adr/0526-on-demand-local-search-generations.md)
 - [Local Derived Search Architecture](architecture/local-derived-search.md)
 - [Local Derived Search Operator Guide](operator/local-derived-search.md)
 - [Local Derived Search Candidate Evidence](provenance/local-derived-search-candidate.md)
@@ -397,9 +401,9 @@ These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is
 tracked in the V1 release gate matrix. The previously delivered `0.2.0` Rust
 implementation is locally release-ready and dogfood-complete for the bounded
-V1 scope. This branch's crate and CLI package version is `1.1.0`, described by
-accepted ADR-0525. Its separately authorized stable local adoption is recorded
-in the focused adoption evidence; exact build and delivery identities remain
+V1 scope. This branch's crate and CLI package version is `1.2.0`, extending
+accepted ADR-0525 through ADR-0526. The separately authorized stable local
+adoption of 1.1.0 is recorded in the focused adoption evidence; exact build and delivery identities remain
 separately identified by runtime and Git provenance.
 Public release, tag, push, deploy,
 remote, production, credential, and global installation actions remain separate

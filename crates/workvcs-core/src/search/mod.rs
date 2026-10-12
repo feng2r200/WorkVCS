@@ -205,6 +205,7 @@ pub struct SearchQueryOptions {
     commit_id: Option<CommitId>,
     result_limit: Option<usize>,
     protected_paths: Vec<PathBuf>,
+    managed_directory: bool,
 }
 
 impl SearchQueryOptions {
@@ -222,7 +223,20 @@ impl SearchQueryOptions {
             commit_id: None,
             result_limit: None,
             protected_paths: Vec::new(),
+            managed_directory: false,
         })
+    }
+
+    /// Prepare or reuse an immutable generation in this local directory.
+    /// This may write derived files; the canonical source remains read-only.
+    pub fn managed(
+        identity: SearchSourceIdentity,
+        directory: impl Into<PathBuf>,
+        query: impl Into<String>,
+    ) -> Result<Self> {
+        let mut options = Self::new(identity, directory, query)?;
+        options.managed_directory = true;
+        Ok(options)
     }
 
     pub fn at_commit(mut self, commit_id: CommitId) -> Self {
@@ -338,6 +352,8 @@ pub struct SearchQueryResult {
     pub omitted_results: usize,
     pub items: Vec<SearchItem>,
     pub canonical_readback_verified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_maintenance: Option<SearchRefreshOutcome>,
 }
 
 #[derive(Clone, Debug)]
@@ -474,28 +490,49 @@ pub(crate) fn refresh_index(
         )));
     }
 
-    let mut temp_file = SearchTempFile::create(&destination)?;
-    let manifest = build_index(temp_file.path(), &snapshot)?;
-    validate_built_index(temp_file.path(), &manifest)?;
-    sync_file(temp_file.path())?;
-    validate_refresh_destination(
-        &destination,
+    publish_index(
+        source,
         source_path,
         &options.protected_paths,
         &snapshot,
-    )?;
+        &destination,
+        PublicationFreshness::Refresh,
+    )
+}
+
+enum PublicationFreshness {
+    Refresh,
+    ManagedQuery,
+}
+
+fn publish_index(
+    source: &StoreConnection,
+    source_path: &Path,
+    protected_paths: &[PathBuf],
+    snapshot: &SourceSnapshot,
+    destination: &Path,
+    freshness: PublicationFreshness,
+) -> Result<SearchRefreshResult> {
+    let mut temp_file = SearchTempFile::create(destination)?;
+    let manifest = build_index(temp_file.path(), snapshot)?;
+    validate_built_index(temp_file.path(), &manifest)?;
+    sync_file(temp_file.path())?;
+    validate_refresh_destination(destination, source_path, protected_paths, snapshot)?;
     search_test_pause(SearchTestPoint::RefreshBeforePublish);
     search_test_pause(SearchTestPoint::RefreshBeforeFreshness);
-    if !source_still_matches_snapshot(source, &snapshot)? {
+    if !source_still_matches_snapshot(source, snapshot)? {
         return Err(WorkVcsError::BranchHeadConflict(format!(
             "search source branch {} changed after snapshot {}; discard the derived candidate and refresh again",
             snapshot.identity.branch_id, snapshot.source_commit_id
         )));
     }
-    atomic_publish_new_index(temp_file.path(), &destination)?;
+    atomic_publish_new_index(temp_file.path(), destination)?;
     temp_file.disarm();
-    sync_parent(&destination)?;
-    if !source_still_matches_snapshot(source, &snapshot)? {
+    sync_parent(destination)?;
+    search_test_pause(SearchTestPoint::RefreshAfterPublish);
+    if matches!(freshness, PublicationFreshness::Refresh)
+        && !source_still_matches_snapshot(source, snapshot)?
+    {
         return Err(WorkVcsError::BranchHeadConflict(format!(
             "search source branch {} changed while publishing snapshot {}; the immutable index at {} is stale and must not be reused for current search; select a new index path and refresh again",
             snapshot.identity.branch_id,
@@ -504,17 +541,19 @@ pub(crate) fn refresh_index(
         )));
     }
 
-    let published = read_manifest(&open_index_readonly(&destination).map_err(derived_issue_error)?)
+    let published = read_manifest(&open_index_readonly(destination).map_err(derived_issue_error)?)
         .map_err(derived_issue_error)?;
-    if require_manifest_matches_snapshot(&published, &snapshot).is_err()
-        || !existing_index_matches_snapshot(&destination, &published, &snapshot)
+    if require_manifest_matches_snapshot(&published, snapshot).is_err()
+        || !existing_index_matches_snapshot(destination, &published, snapshot)
     {
         return Err(WorkVcsError::StorageFailure(format!(
             "published search index {} did not read back a complete index for the selected source snapshot",
             destination.display()
         )));
     }
-    if !source_still_matches_snapshot(source, &snapshot)? {
+    if matches!(freshness, PublicationFreshness::Refresh)
+        && !source_still_matches_snapshot(source, snapshot)?
+    {
         return Err(WorkVcsError::BranchHeadConflict(format!(
             "search source branch {} changed while reading back published snapshot {}; the immutable index at {} is stale and must not be reused for current search; select a new index path and refresh again",
             snapshot.identity.branch_id,
@@ -525,7 +564,7 @@ pub(crate) fn refresh_index(
     let (records_indexed, knowledge_indexed) = source_counts(&snapshot.documents);
     Ok(SearchRefreshResult {
         outcome: SearchRefreshOutcome::Refreshed,
-        index_path: destination,
+        index_path: destination.to_path_buf(),
         manifest: published,
         records_indexed,
         knowledge_indexed,
@@ -544,22 +583,234 @@ pub(crate) fn query_index(
         WorkVcsError::QueryInvalid("search query contains no indexable terms".to_owned())
     })?;
     let snapshot = source_snapshot(source, options.identity, options.commit_id)?;
+    if options.managed_directory {
+        return managed_query_index(source, source_path, options, &snapshot, &query_expression);
+    }
+    query_index_with_snapshot(source, source_path, options, &snapshot, &query_expression)
+}
+
+fn managed_query_index(
+    source: &StoreConnection,
+    source_path: &Path,
+    options: &SearchQueryOptions,
+    snapshot: &SourceSnapshot,
+    query_expression: &str,
+) -> Result<SearchQueryResult> {
+    let directory =
+        prepare_managed_directory(&options.index_path, source_path, &options.protected_paths)?;
+    // Share the publication lock with explicit refreshes. No mutable pointer
+    // file or replacement of a previously published generation is needed.
+    let basis = format!(
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        SEARCH_INDEX_FORMAT_VERSION,
+        TOKENIZER_VERSION,
+        SNIPPET_POLICY_VERSION,
+        TOKEN_COUNT_ENCODING,
+        snapshot.identity.project_ref_id,
+        snapshot.identity.store_id,
+        snapshot.identity.workspace_id,
+        snapshot.identity.branch_id,
+        snapshot.temporal_scope.as_str(),
+        snapshot.source_commit_id,
+        snapshot.source_state_digest,
+        snapshot.object_version_basis_digest,
+    );
+    let prefix = format!("generation-{}-", Digest::raw(basis.as_bytes()));
+    if let Some(result) = try_managed_generations(
+        source,
+        source_path,
+        options,
+        snapshot,
+        query_expression,
+        &directory,
+        &prefix,
+    )? {
+        return Ok(result);
+    }
+    let publication_lock = SearchPublicationLock::acquire(&directory.join("generation.sqlite"))?;
+    // A cooperative publisher may have completed after the lock-free lookup.
+    if let Some(result) = try_managed_generations(
+        source,
+        source_path,
+        options,
+        snapshot,
+        query_expression,
+        &directory,
+        &prefix,
+    )? {
+        return Ok(result);
+    }
+    let mut selected = options.clone();
+    selected.managed_directory = false;
+    selected.index_path = directory.join(format!("{prefix}{}.sqlite", uuid::Uuid::now_v7()));
+    let destination = validate_refresh_destination(
+        &selected.index_path,
+        source_path,
+        &options.protected_paths,
+        snapshot,
+    )?;
+    publish_index(
+        source,
+        source_path,
+        &options.protected_paths,
+        snapshot,
+        &destination,
+        PublicationFreshness::ManagedQuery,
+    )?;
+    drop(publication_lock);
+    let mut result =
+        query_index_with_snapshot(source, source_path, &selected, snapshot, query_expression)?;
+    result.index_maintenance = Some(SearchRefreshOutcome::Refreshed);
+    Ok(result)
+}
+
+fn try_managed_generations(
+    source: &StoreConnection,
+    source_path: &Path,
+    options: &SearchQueryOptions,
+    snapshot: &SourceSnapshot,
+    query_expression: &str,
+    directory: &Path,
+    prefix: &str,
+) -> Result<Option<SearchQueryResult>> {
+    let mut generations = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|error| {
+        WorkVcsError::StorageFailure(format!(
+            "cannot inspect managed search directory {}: {error}",
+            directory.display()
+        ))
+    })? {
+        let entry = entry.map_err(|error| WorkVcsError::StorageFailure(error.to_string()))?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".sqlite"))
+        {
+            generations.push(entry.path());
+        }
+    }
+    generations.sort();
+    let mut selected = options.clone();
+    selected.managed_directory = false;
+    for path in generations {
+        selected.index_path = path;
+        let mut result =
+            query_index_with_snapshot(source, source_path, &selected, snapshot, query_expression)?;
+        if result.status == SearchDerivedStatus::Ready {
+            result.index_maintenance = Some(SearchRefreshOutcome::Reused);
+            return Ok(Some(result));
+        }
+        if result.reason_code.as_deref() == Some("source_changed_during_query") {
+            result.index_maintenance = Some(SearchRefreshOutcome::Reused);
+            return Ok(Some(result));
+        }
+        // Unknown, damaged, aliased or incompatible entries are preserved.
+        // Their names never establish that they belong to this source basis.
+    }
+    Ok(None)
+}
+
+fn prepare_managed_directory(
+    path: &Path,
+    source_path: &Path,
+    protected_paths: &[PathBuf],
+) -> Result<PathBuf> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "managed search directory must be absolute without dot or parent components".to_owned(),
+        ));
+    }
+    let source = fs::canonicalize(source_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!("canonical Store path is unavailable: {error}"))
+    })?;
+    let protected = protected_paths
+        .iter()
+        .map(fs::canonicalize)
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|error| {
+            WorkVcsError::QueryInvalid(format!("protected search path is unavailable: {error}"))
+        })?;
+    let mut directory = PathBuf::new();
+    for component in path.components() {
+        directory.push(component);
+        if directory == source
+            || is_reserved_sqlite_sidecar_name(&directory, &source)
+            || protected.contains(&directory)
+        {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "managed search directory aliases a protected source/control path {}",
+                directory.display()
+            )));
+        }
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "managed search directory component must be a non-symlink directory: {}",
+                    directory.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match fs::create_dir(&directory) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        return Err(WorkVcsError::StorageFailure(format!(
+                            "cannot create managed search directory {}: {error}",
+                            directory.display()
+                        )));
+                    }
+                }
+                let metadata = fs::symlink_metadata(&directory).map_err(|error| {
+                    WorkVcsError::StorageFailure(format!(
+                        "cannot verify managed directory: {error}"
+                    ))
+                })?;
+                if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "managed search directory component changed: {}",
+                        directory.display()
+                    )));
+                }
+            }
+            Err(error) => {
+                return Err(WorkVcsError::StorageFailure(format!(
+                    "cannot inspect managed search directory {}: {error}",
+                    directory.display()
+                )));
+            }
+        }
+    }
+    fs::canonicalize(directory).map_err(|error| WorkVcsError::StorageFailure(error.to_string()))
+}
+
+fn query_index_with_snapshot(
+    source: &StoreConnection,
+    source_path: &Path,
+    options: &SearchQueryOptions,
+    snapshot: &SourceSnapshot,
+    query_expression: &str,
+) -> Result<SearchQueryResult> {
     let index_path = match validate_query_destination(
         &options.index_path,
         source_path,
         &options.protected_paths,
     ) {
         Ok(path) => path,
-        Err(issue) => return Ok(refresh_required_result(options, &snapshot, issue, None)),
+        Err(issue) => return Ok(refresh_required_result(options, snapshot, issue, None)),
     };
     let connection = match open_index_readonly(&index_path) {
         Ok(connection) => connection,
-        Err(issue) => return Ok(refresh_required_result(options, &snapshot, issue, None)),
+        Err(issue) => return Ok(refresh_required_result(options, snapshot, issue, None)),
     };
     if let Err(error) = connection.execute_batch("BEGIN DEFERRED TRANSACTION") {
         return Ok(refresh_required_result(
             options,
-            &snapshot,
+            snapshot,
             DerivedIndexIssue::new(
                 "damaged_index",
                 format!("cannot hold one immutable derived-index read snapshot: {error}"),
@@ -570,10 +821,10 @@ pub(crate) fn query_index(
     let result = query_index_in_read_transaction(
         source,
         options,
-        &snapshot,
+        snapshot,
         &index_path,
         &connection,
-        &query_expression,
+        query_expression,
     );
     let completion = if result.is_ok() { "COMMIT" } else { "ROLLBACK" };
     if let Err(error) = connection.execute_batch(completion) {
@@ -677,6 +928,7 @@ fn query_index_in_read_transaction(
         omitted_results,
         items,
         canonical_readback_verified: true,
+        index_maintenance: None,
     })
 }
 
@@ -1689,6 +1941,7 @@ fn refresh_required_result(
         omitted_results: 0,
         items: Vec::new(),
         canonical_readback_verified: false,
+        index_maintenance: None,
     }
 }
 
@@ -1793,6 +2046,7 @@ fn atomic_publish_new_index(_temp_path: &Path, _destination: &Path) -> Result<()
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SearchTestPoint {
+    RefreshAfterPublish,
     QueryAfterIndexValidation,
     QueryBeforeFreshness,
     RefreshBeforeFreshness,
@@ -2450,6 +2704,159 @@ mod tests {
             resume: Arc::clone(&resume),
         });
         (reached, resume)
+    }
+
+    #[test]
+    fn managed_query_reports_generation_published_before_head_advance() {
+        let _serial = SEARCH_CONCURRENCY_TEST.lock().expect("search test lock");
+        let fixture = test_fixture("managed-post-publication-head-guard");
+        let directory = fs::canonicalize(fixture.source_path.parent().unwrap())
+            .unwrap()
+            .join("managed");
+        let (reached, resume) = install_pause(SearchTestPoint::RefreshAfterPublish);
+        let source = fixture.source_path.clone();
+        let identity = fixture.identity;
+        let query_directory = directory.clone();
+        let query = std::thread::spawn(move || {
+            Engine::open_readonly(&source)
+                .unwrap()
+                .search(
+                    SearchQueryOptions::managed(identity, query_directory, "initial_search_marker")
+                        .unwrap(),
+                )
+                .unwrap()
+        });
+        reached.wait();
+        let published: Vec<_> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(published.len(), 1, "complete publication already occurred");
+        let published_bytes = fs::read(&published[0]).unwrap();
+        Engine::open(&fixture.source_path)
+            .unwrap()
+            .create_record(
+                RecordCreateOptions::finding(
+                    fixture.workspace.initial_branch_id,
+                    fixture.head_commit_id,
+                    "head_advanced_after_managed_publication",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        resume.wait();
+        let result = query.join().unwrap();
+        assert_eq!(result.status, SearchDerivedStatus::RefreshRequired);
+        assert_eq!(
+            result.reason_code.as_deref(),
+            Some("source_changed_during_query")
+        );
+        assert_eq!(
+            result.index_maintenance,
+            Some(SearchRefreshOutcome::Refreshed)
+        );
+        assert_eq!(result.index_path, published[0]);
+        assert!(result.manifest.is_some());
+        assert_eq!(result.source_commit_id, fixture.head_commit_id);
+        assert!(result.items.is_empty());
+        assert!(!result.canonical_readback_verified);
+        assert_eq!(fs::read(&published[0]).unwrap(), published_bytes);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn healthy_managed_query_does_not_wait_for_publication_lock() {
+        let _serial = SEARCH_CONCURRENCY_TEST.lock().expect("search test lock");
+        let fixture = test_fixture("managed-lock-free-reuse");
+        let directory = fs::canonicalize(fixture.source_path.parent().unwrap())
+            .unwrap()
+            .join("managed");
+        Engine::open_readonly(&fixture.source_path)
+            .unwrap()
+            .search(
+                SearchQueryOptions::managed(fixture.identity, &directory, "initial_search_marker")
+                    .unwrap(),
+            )
+            .unwrap();
+        let publication_lock =
+            SearchPublicationLock::acquire(&directory.join("generation.sqlite")).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let source = fixture.source_path.clone();
+        let identity = fixture.identity;
+        let query = std::thread::spawn(move || {
+            let result = Engine::open_readonly(&source).unwrap().search(
+                SearchQueryOptions::managed(identity, directory, "initial_search_marker").unwrap(),
+            );
+            sender.send(result).unwrap();
+        });
+        let observed = receiver.recv_timeout(std::time::Duration::from_secs(10));
+        drop(publication_lock);
+        query.join().unwrap();
+        let result = observed
+            .expect("healthy reuse must complete while the publisher lock is held")
+            .unwrap();
+        assert_eq!(result.status, SearchDerivedStatus::Ready);
+        assert_eq!(result.index_maintenance, Some(SearchRefreshOutcome::Reused));
+    }
+
+    #[test]
+    fn managed_query_rejects_head_change_and_preserves_immutable_generation() {
+        let _serial = SEARCH_CONCURRENCY_TEST.lock().expect("search test lock");
+        let fixture = test_fixture("managed-final-head-guard");
+        let directory = fs::canonicalize(fixture.source_path.parent().unwrap())
+            .unwrap()
+            .join("managed");
+        let first = Engine::open_readonly(&fixture.source_path)
+            .unwrap()
+            .search(
+                SearchQueryOptions::managed(fixture.identity, &directory, "initial_search_marker")
+                    .unwrap(),
+            )
+            .unwrap();
+        let original = fs::read(&first.index_path).unwrap();
+        let (reached, resume) = install_pause(SearchTestPoint::QueryBeforeFreshness);
+        let source = fixture.source_path.clone();
+        let identity = fixture.identity;
+        let query_directory = directory.clone();
+        let query = std::thread::spawn(move || {
+            Engine::open_readonly(&source)
+                .unwrap()
+                .search(
+                    SearchQueryOptions::managed(identity, query_directory, "initial_search_marker")
+                        .unwrap(),
+                )
+                .unwrap()
+        });
+        reached.wait();
+        Engine::open(&fixture.source_path)
+            .unwrap()
+            .create_record(
+                RecordCreateOptions::finding(
+                    fixture.workspace.initial_branch_id,
+                    fixture.head_commit_id,
+                    "head_advanced_during_managed_query",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        resume.wait();
+        let result = query.join().unwrap();
+        assert_eq!(
+            result.reason_code.as_deref(),
+            Some("source_changed_during_query")
+        );
+        assert!(result.items.is_empty());
+        assert!(!result.canonical_readback_verified);
+        assert_eq!(fs::read(first.index_path).unwrap(), original);
+        let fresh = Engine::open_readonly(&fixture.source_path)
+            .unwrap()
+            .search(
+                SearchQueryOptions::managed(fixture.identity, directory, "initial_search_marker")
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(fresh.status, SearchDerivedStatus::Ready);
+        assert_ne!(fresh.source_commit_id, result.source_commit_id);
     }
 
     #[test]

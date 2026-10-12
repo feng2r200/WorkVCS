@@ -78,6 +78,194 @@ fn update_index(path: &Path, sql: &str, values: impl rusqlite::Params) {
         .expect("mutate derived index fixture");
 }
 
+#[test]
+fn managed_search_reuses_advances_and_recovers_without_replacing_generations() {
+    let (fixture, mut writer) = Fixture::new("managed-generations");
+    let first = writer
+        .create_record(
+            RecordCreateOptions::finding(
+                fixture.workspace.initial_branch_id,
+                fixture.workspace.genesis_commit_id,
+                "managed_search_marker initial canonical evidence",
+            )
+            .expect("first options"),
+        )
+        .expect("first record");
+    let directory = fs::canonicalize(fixture.source_path.parent().unwrap())
+        .expect("canonical parent")
+        .join("managed");
+    let options = || {
+        SearchQueryOptions::managed(fixture.identity(), &directory, "managed_search_marker")
+            .expect("managed options")
+    };
+    let readonly = Engine::open_readonly(&fixture.source_path).expect("readonly");
+    let before = fs::read(&fixture.source_path).unwrap();
+    let initial = readonly.search(options()).expect("initial managed query");
+    assert_eq!(
+        initial.index_maintenance,
+        Some(SearchRefreshOutcome::Refreshed)
+    );
+    assert_eq!(initial.status, SearchDerivedStatus::Ready);
+    assert_eq!(initial.items.len(), 1);
+    assert_eq!(initial.omitted_results, 0);
+    assert_eq!(fs::read(&fixture.source_path).unwrap(), before);
+    let initial_bytes = fs::read(&initial.index_path).unwrap();
+    let reused = readonly.search(options()).expect("reuse");
+    assert_eq!(reused.index_path, initial.index_path);
+    assert_eq!(reused.index_maintenance, Some(SearchRefreshOutcome::Reused));
+    assert_eq!(reused.items, initial.items);
+    let second = writer
+        .create_record(
+            RecordCreateOptions::finding(
+                fixture.workspace.initial_branch_id,
+                first.commit_id,
+                "managed_search_marker newly delivered evidence",
+            )
+            .expect("second options"),
+        )
+        .expect("second record");
+    let advanced = readonly.search(options()).expect("advanced source");
+    assert_eq!(advanced.source_commit_id, second.commit_id);
+    assert_ne!(advanced.index_path, initial.index_path);
+    assert_eq!(advanced.items.len(), 2);
+    assert_eq!(fs::read(&initial.index_path).unwrap(), initial_bytes);
+    let historical = readonly
+        .search(options().at_commit(first.commit_id))
+        .expect("historical");
+    assert_eq!(historical.temporal_scope, SearchTemporalScope::Historical);
+    assert_eq!(historical.items.len(), 1);
+    assert_ne!(historical.index_path, initial.index_path);
+    assert_ne!(historical.index_path, advanced.index_path);
+    update_index(&advanced.index_path, "DELETE FROM passage_fts", []);
+    let damaged_bytes = fs::read(&advanced.index_path).unwrap();
+    let source_before_repair = fs::read(&fixture.source_path).unwrap();
+    let repaired = readonly
+        .search(options())
+        .expect("repair by new generation");
+    assert_eq!(repaired.status, SearchDerivedStatus::Ready);
+    assert_eq!(
+        repaired.index_maintenance,
+        Some(SearchRefreshOutcome::Refreshed)
+    );
+    assert_ne!(repaired.index_path, advanced.index_path);
+    assert_eq!(repaired.items, advanced.items);
+    assert_eq!(fs::read(&advanced.index_path).unwrap(), damaged_bytes);
+    assert_eq!(
+        fs::read(&fixture.source_path).unwrap(),
+        source_before_repair
+    );
+    let again = readonly
+        .search(options())
+        .expect("reuse repaired generation");
+    assert_eq!(again.index_path, repaired.index_path);
+    assert_eq!(again.index_maintenance, Some(SearchRefreshOutcome::Reused));
+    let entries = fs::read_dir(&directory).unwrap().count();
+    assert_eq!(
+        entries, 4,
+        "current, advanced, historical and repair all preserved"
+    );
+}
+
+#[test]
+fn concurrent_managed_searches_publish_and_reuse_one_generation() {
+    let (fixture, mut writer) = Fixture::new("managed-concurrency");
+    writer
+        .create_record(
+            RecordCreateOptions::finding(
+                fixture.workspace.initial_branch_id,
+                fixture.workspace.genesis_commit_id,
+                "concurrent_managed_marker",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    drop(writer);
+    let before = fs::read(&fixture.source_path).unwrap();
+    let directory = fs::canonicalize(fixture.source_path.parent().unwrap())
+        .unwrap()
+        .join("managed");
+    let barrier = Arc::new(Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let source = fixture.source_path.clone();
+            let identity = fixture.identity();
+            let directory = directory.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let reader = Engine::open_readonly(&source).unwrap();
+                barrier.wait();
+                reader
+                    .search(
+                        SearchQueryOptions::managed(
+                            identity,
+                            directory,
+                            "concurrent_managed_marker",
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap()
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(results[0].index_path, results[1].index_path);
+    assert_eq!(results[0].items, results[1].items);
+    assert_ne!(results[0].index_maintenance, results[1].index_maintenance);
+    assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
+    assert_eq!(fs::read(&fixture.source_path).unwrap(), before);
+}
+
+#[test]
+fn managed_directory_rejects_source_sidecar_and_symlink_without_overwrite() {
+    let (fixture, _writer) = Fixture::new("managed-protection");
+    let reader = Engine::open_readonly(&fixture.source_path).unwrap();
+    let parent = fs::canonicalize(fixture.source_path.parent().unwrap()).unwrap();
+    let sidecar = parent.join("workvcs.sqlite-wal");
+    assert!(!sidecar.exists());
+    assert!(
+        reader
+            .search(
+                SearchQueryOptions::managed(fixture.identity(), &sidecar, "source_marker",)
+                    .unwrap()
+            )
+            .is_err()
+    );
+    assert!(!sidecar.exists());
+    let unknown = parent.join("unknown-file");
+    fs::write(&unknown, b"preserve unknown bytes").unwrap();
+    assert!(
+        reader
+            .search(
+                SearchQueryOptions::managed(fixture.identity(), &unknown, "source_marker",)
+                    .unwrap()
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read(&unknown).unwrap(), b"preserve unknown bytes");
+    #[cfg(unix)]
+    {
+        let alias = parent.join("directory-alias");
+        std::os::unix::fs::symlink(&parent, &alias).unwrap();
+        assert!(
+            reader
+                .search(
+                    SearchQueryOptions::managed(fixture.identity(), &alias, "source_marker",)
+                        .unwrap()
+                )
+                .is_err()
+        );
+        assert!(
+            fs::symlink_metadata(alias)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+}
+
 fn manifest_digest(manifest: &SearchIndexManifest) -> Digest {
     let payload = format!(
         "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",

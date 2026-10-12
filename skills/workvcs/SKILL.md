@@ -128,6 +128,13 @@ Records, Knowledge, Evidence metadata, and supported relations without a Plan.
 Use Goal, Plan, Task, Acceptance Criterion, and Verification Requirement only
 when their structure improves coordination, recovery, or acceptance.
 
+When a request needs supporting statements beyond bounded recovery and exact
+identifiers are unknown, use local derived search. Read
+[Evidence retrieval](references/evidence-retrieval.md) for the invocation,
+current versus historical scope, and native verification boundary. Search is
+supplemental evidence lookup; it does not replace ownership discovery or
+recovery, infer authorization, or automatically append results to ContextPacket.
+
 For a first write, ProjectRef bootstrap, CaptureGroup, journal recovery,
 Plan admission or evolution, or focused Handoff, read
 [Plan and capture workflows](references/workflows.md). A missing binding is a

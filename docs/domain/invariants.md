@@ -966,3 +966,6 @@ project ownership, fact correctness, lifecycle, authorization or runnable work.
 Derived refresh never mutates canonical Store state, replaces deterministic
 ContextPacket selection, or overwrites unrelated files. Unavailable, stale or
 invalid derived state remains visible and cannot silently become current fact.
+On-demand preparation under ADR-0526 may write a new derived generation during
+an explicit query, but retains the same canonical read-only boundary, complete
+source verification, immutable publication and final current-head check.

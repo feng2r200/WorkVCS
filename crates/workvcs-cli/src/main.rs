@@ -1785,7 +1785,7 @@ enum SearchCommand {
         #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
         format: SearchOutputFormatArg,
     },
-    #[command(about = "Query a derived FTS index with canonical source readback")]
+    #[command(about = "Query with canonical readback, preparing a local generation on demand")]
     Query {
         #[arg(long, value_name = "PATH")]
         cwd: PathBuf,
@@ -1796,8 +1796,11 @@ enum SearchCommand {
         #[command(flatten)]
         locator: ProjectLocatorArgs,
 
-        #[arg(long, value_name = "PATH")]
-        index: PathBuf,
+        #[arg(long, value_name = "PATH", conflicts_with = "index_dir")]
+        index: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH", conflicts_with = "index")]
+        index_dir: Option<PathBuf>,
 
         #[arg(long, value_name = "TEXT")]
         query: String,
@@ -28433,6 +28436,7 @@ fn run_search(command: SearchCommand) -> Result<String> {
             registry,
             locator,
             index,
+            index_dir,
             query,
             commit,
             limit,
@@ -28457,8 +28461,20 @@ fn run_search(command: SearchCommand) -> Result<String> {
                 discovery.binding.workspace_id,
                 discovery.binding.branch_id,
             );
-            let mut options = SearchQueryOptions::new(identity, index, query)?
-                .with_protected_path(discovery.registry_path.clone());
+            let mut options = if let Some(index) = index {
+                SearchQueryOptions::new(identity, index, query)?
+            } else {
+                let directory = match index_dir {
+                    Some(directory) => directory,
+                    None => {
+                        let mut sidecar = discovery.registry_path.as_os_str().to_os_string();
+                        sidecar.push(".d");
+                        PathBuf::from(sidecar).join("search-indexes")
+                    }
+                };
+                SearchQueryOptions::managed(identity, directory, query)?
+            }
+            .with_protected_path(discovery.registry_path.clone());
             if let Some(limit) = limit {
                 options = options.with_result_limit(limit)?;
             }
@@ -28546,11 +28562,16 @@ fn render_search_query(
             result: &'a SearchQueryResult,
             source_opened_readonly: bool,
             canonical_source_written: bool,
+            derived_index_written: bool,
         }
         let mut output = serde_json::to_string_pretty(&SearchQueryJsonOutput {
             result,
             source_opened_readonly: true,
             canonical_source_written: false,
+            derived_index_written: matches!(
+                result.index_maintenance,
+                Some(workvcs_core::SearchRefreshOutcome::Refreshed)
+            ),
         })
         .map_err(|error| {
             WorkVcsError::CanonicalEncodingInvalid(format!(
@@ -28642,6 +28663,23 @@ fn render_search_query(
     writeln!(output, "matched_objects={}", result.matched_objects).expect("write to String");
     writeln!(output, "source_opened_readonly=true").expect("write to String");
     writeln!(output, "canonical_source_written=false").expect("write to String");
+    if let Some(maintenance) = result.index_maintenance {
+        writeln!(
+            output,
+            "index_maintenance={}",
+            match maintenance {
+                workvcs_core::SearchRefreshOutcome::Refreshed => "refreshed",
+                workvcs_core::SearchRefreshOutcome::Reused => "reused",
+            }
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "derived_index_written={}",
+            matches!(maintenance, workvcs_core::SearchRefreshOutcome::Refreshed)
+        )
+        .expect("write to String");
+    }
     if let Some(manifest) = &result.manifest {
         writeln!(
             output,
@@ -91689,7 +91727,7 @@ mod tests {
                     ..
                 }
             } if cwd.as_path() == Path::new("/tmp/project")
-                && index.as_path() == Path::new("/tmp/search.sqlite")
+                && index.as_deref() == Some(Path::new("/tmp/search.sqlite"))
                 && query == "ProjectRef state_digest"
         ));
 
@@ -91738,6 +91776,45 @@ mod tests {
             } if cwd.as_path() == Path::new("/tmp/project")
                 && index.as_path() == Path::new("/tmp/search.sqlite")
         ));
+
+        let managed = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "query",
+            "--cwd",
+            "/tmp/project",
+            "--query",
+            "delivered evidence",
+        ])
+        .expect("managed query needs no index pathname");
+        assert!(matches!(
+            *managed.command,
+            Command::Search {
+                command: SearchCommand::Query {
+                    index: None,
+                    index_dir: None,
+                    limit: None,
+                    ..
+                }
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "workvcs",
+                "search",
+                "query",
+                "--cwd",
+                "/tmp/project",
+                "--query",
+                "evidence",
+                "--index",
+                "/tmp/explicit.sqlite",
+                "--index-dir",
+                "/tmp/managed",
+            ])
+            .is_err(),
+            "explicit read-only and managed derived-write modes are exclusive"
+        );
     }
 
     fn value(output: &str, key: &str) -> String {

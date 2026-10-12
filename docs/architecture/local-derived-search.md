@@ -5,6 +5,8 @@ Knowledge statements may be searched through a separate FTS5 index, while
 canonical source identity, version and currentness remain native read concerns.
 The initial capability is opt-in and does not change `context`, `recall`, exact
 Record list filters, Task readiness or mutation authorization.
+ADR-0526 extends the explicit search surface with on-demand local generation
+preparation; the canonical and full-output contracts remain the same.
 
 ## Authority and Data Flow
 
@@ -12,7 +14,7 @@ Record list filters, Task readiness or mutation authorization.
 flowchart LR
     R[Verified ProjectRef routing] --> S[Read-only canonical snapshot]
     S --> I[Derived SQLite FTS5 index]
-    Q[Bounded lexical query] --> I
+    Q[Explicit lexical query] --> I
     I --> C[Ranked candidate ranges]
     C --> V[Native snapshot and version readback]
     S --> V
@@ -55,6 +57,21 @@ external writer could have changed. Cooperative publishers use a directory
 lock and a final source guard. Old generations retain their explicit anchors;
 they do not become current after a branch head advance.
 
+Managed queries prepare or reuse generations in a local derived directory.
+Selection hashes the complete source identity, current/historical scope,
+commit/state and object-version basis, plus all search policy versions. A name
+only narrows the candidate set; full validation establishes whether a generation
+can be reused. Damaged or unknown entries are preserved and a unique new
+generation is published. There is no mutable current-generation pointer,
+automatic deletion, watcher or source-write hook. Prepare and query share one
+native snapshot rather than repeating canonical replay. This implementation
+rebuilds a changed generation; it does not claim incremental object updates.
+Healthy queries do not hold the publisher lock. On a miss, publication takes
+the directory lock and checks for a matching healthy generation again using
+the same source snapshot. After publication and complete index readback, a
+managed query's final freshness guard reports head drift with no items and
+retains the generation path and actual derived-write outcome.
+
 Destination validation rejects source Store paths, control-plane files, path
 aliases, reserved source SQLite sidecar names and unrelated existing files.
 Derived-file version mismatch requires an explicit rebuild at a new acceptable
@@ -94,8 +111,10 @@ diagnostics and model billing are separate measurements.
 
 Source identity/integrity/routing failures remain source errors. A derived
 failure does not authorize bypassing these checks. Missing, stale, incompatible
-or damaged index state reports its reason and a bounded native-read or refresh
-next step. No stale current candidates or unexplained empty-success response
+or damaged explicit-index state reports its reason and a native-read or refresh
+next step. Managed queries may create a new derived generation on demand,
+reporting its maintenance outcome separately from canonical writes.
+No stale current candidates or unexplained empty-success response
 may conceal an unavailable index.
 
 Changing tokenizer, snippet rules or source membership establishes a new

@@ -346,6 +346,13 @@ projection. Token/latency/memory are observations, not evidence-discard rules.
 Healthy same-basis indexes are reused; other existing generations are preserved
 and rebuilt at a new no-replace destination.
 
+ADR-0526 extends an explicit search request with on-demand derived-generation
+preparation and routine evidence-retrieval guidance. A matching healthy
+generation is reused; changed or damaged state creates a new immutable file.
+This does not add a background service, automatic cleanup, canonical mutation
+or semantic default. New embedding and reranking evaluation remains evidence
+for a later configuration choice.
+
 This first-stage contract was explicitly approved on 2026-10-12. Implementation
 and local acceptance evidence are tracked separately; approval does not assert
 stable installation, merge, Push, production use or completion of the deferred

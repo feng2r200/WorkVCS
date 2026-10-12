@@ -34,6 +34,41 @@ checkout, for example after `cargo build -p workvcs-cli`. That candidate is a
 separate runtime identity and does not replace the stable entrypoint for
 ordinary project work.
 
+## On-demand Generations in the 1.2.0 Candidate
+
+The next-stage source candidate implements ADR-0526. It has not replaced the
+stable 1.1.0 installation. In WorkVCS development validation, its query can
+omit `--index`:
+
+```sh
+workvcs search query --cwd /path/to/verified/project \
+  --query 'evidence question' --format json
+```
+
+This prepares or reuses a derived generation in the verified registry's
+`<registry-file>.d/search-indexes` directory. `--index-dir /absolute/directory`
+selects another local derived directory; directory components must be actual
+directories, without symlinks. `--index` selects the existing read-only mode
+and cannot be combined with `--index-dir`.
+
+`index_maintenance` reports `refreshed` or `reused`, while
+`derived_index_written` reports the local write effect. Canonical source,
+registry and routing marker remain read-only. A new source head, policy or
+historical scope selects another complete basis. Damaged or incompatible
+generations are preserved and a new file is built. There is no background
+service, mutable pointer, automatic cleanup or incremental-rebuild claim.
+
+Prepare and query use one native snapshot with the existing final freshness
+guard. Head advancement during verification yields no current items; repeat
+the request against a fresh source snapshot rather than trusting old hits.
+The source Skill now routes evidence questions to this supplemental read and
+documents the 1.1.0 versus 1.2.0 invocation boundary.
+If a complete generation was published before the head advanced, the
+`refresh_required` response reports that generation and
+`derived_index_written=true`, with no stale items. Publication/storage errors
+may also leave a generation named in the error; do not assume that any failed
+command had no local derived effect.
+
 The CLI resolves the normal read-only ProjectRef routing and exact existing
 Store/Workspace/Branch binding. An optional `--registry` is a one-command
 locator override, not authority to create a binding or activate a marker.

@@ -219,6 +219,13 @@ justify.
 - Strict formatting, compile, test and lint checks; release provenance,
   independent review, exact CI and installed-command probes before completion.
 
+The local implementation and real probes satisfy the pre-delivery parts of
+this strategy. Exact accuracy, resource, source-archive, federation and cache
+results are fixed in
+[the Phase-3 validation evidence](../../provenance/local-derived-search-phase3-validation.md).
+Remote CI and stable installation remain delivery evidence rather than inputs
+to this architecture decision.
+
 ## Consequences
 
 WorkVCS can search explicitly selected history, combine evidence from several

@@ -120,6 +120,7 @@ scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
 - [操作终态处置与全局清单分类（英文）](docs/decisions/adr/0520-operation-disposition-and-global-inventory-classification.md)——交付前显式终态、全量生命周期可见性和禁止自动历史清扫。
 - [Plan 清单校验与路由拒绝诊断（英文）](docs/decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md)——零写入内在校验、Capture 感知错误和保留的 journal-first 审计。
 - [本机证据检索架构（英文）](docs/architecture/local-derived-search.md)和 [ADR-0528（英文）](docs/decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)——原生回读全文与语义排序、显式历史档案、保留来源身份的联合检索，以及本机增量向量复用。
+- [阶段 3 本机检索验证（英文）](docs/provenance/local-derived-search-phase3-validation.md)——67 条真实问题、独立排名复算、完整资源观察、历史来源档案、联合检索和增量缓存证据。
 - [V1 就绪台账（英文）](docs/provenance/v1-readiness-ledger.md)和[发布门矩阵（英文）](docs/provenance/v1-release-gate-matrix.md)——支撑限定成熟度声明的证据。
 - [文档地图（英文）](docs/README.md)——完整的权威资料与证据索引。
 

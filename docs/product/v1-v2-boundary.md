@@ -368,8 +368,10 @@ mutation, Qdrant Server, watcher or resident service.
 
 The first lexical contract was explicitly approved on 2026-10-12, and the
 semantic and remaining retrieval capabilities were accepted and authorized on
-2026-10-13. Implementation, local acceptance, stable installation, merge, Push
-and CI remain separately evidenced states.
+2026-10-13. The complete local implementation and 67-question validation are
+recorded in [the Phase-3 evidence](../provenance/local-derived-search-phase3-validation.md).
+Stable installation, main integration, Push and exact CI remain separately
+evidenced delivery states.
 
 ## Explicitly deferred beyond V1
 

@@ -73,13 +73,15 @@ Store/Workspace/Branch binding. An optional `--registry` is a one-command
 locator override, not authority to create a binding or activate a marker.
 An unbound or unsafe route remains a routing error.
 
-The local candidate implementation and its frozen model comparison are
-complete. See
-[the phase-2 candidate evidence](../provenance/on-demand-local-search-phase2-candidate.md)
-for exact source, test, model and WorkVCS identities. The five known-positive
-questions show a narrow BGE reranking signal, while 45 questions remain
-unlabelled. The study therefore does not configure a semantic default or change
-the lexical command described here.
+The final local implementation has two independently verified real-question
+sets: 50 frozen questions with five known-positive targets and 45 coverage-only
+unknowns, plus 17 additional known-positive questions. Full-corpus BGE rerank
+reaches Hit@5 3/5 and 9/17; native FTS reaches 0/5 and 4/17; E5-large vector
+ranking reaches 0/5 and 2/17. Tested fusion does not improve on independent
+reranking. See [the Phase-3 validation](../provenance/local-derived-search-phase3-validation.md)
+for exact accuracy, Token, latency, memory, completeness and artifact evidence.
+Native FTS remains the ordinary default. Use explicit `rerank` for high-value
+recall when its observed local cost is acceptable; no semantic mode is implicit.
 
 Current mode captures the selected branch's native eligible cognition. Record
 status remains active/running/unverified/validated as applicable, and Knowledge

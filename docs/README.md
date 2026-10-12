@@ -28,6 +28,7 @@ remain separate evidence layers.
 - [Local Derived Search Operator Guide](operator/local-derived-search.md)
 - [Local Derived Search Candidate Evidence](provenance/local-derived-search-candidate.md)
 - [On-demand Local Search Phase-2 Candidate Evidence](provenance/on-demand-local-search-phase2-candidate.md)
+- [Local Derived Search Phase-3 Validation](provenance/local-derived-search-phase3-validation.md)
 - [Local Derived Search Local Adoption Evidence](provenance/local-derived-search-local-adoption.md)
 
 ## Accepted ProjectRef design and bounded implementation status

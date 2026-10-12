@@ -231,6 +231,9 @@ before using WorkVCS as durable project infrastructure.
   and [ADR-0528](docs/decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)
   — native-readback lexical and semantic ranking, explicit history,
   source-qualified federation, and incremental local vector reuse.
+- [Phase-3 local retrieval validation](docs/provenance/local-derived-search-phase3-validation.md)
+  — 67 real questions, independent ranking recomputation, full resource
+  observations, source archives, federation, and incremental-cache evidence.
 - [V1 readiness ledger](docs/provenance/v1-readiness-ledger.md) and
   [release gate matrix](docs/provenance/v1-release-gate-matrix.md) — evidence
   behind the bounded maturity claim.

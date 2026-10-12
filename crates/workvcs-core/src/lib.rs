@@ -218,6 +218,13 @@ pub use runtime::{
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
+pub use search::semantic::{
+    SemanticDerivedStatus, SemanticGenerationManifest, SemanticModelFileManifest,
+    SemanticModelKind, SemanticModelManifest, SemanticModelProfile, SemanticModelProvisionOptions,
+    SemanticModelProvisionOutcome, SemanticModelProvisionResult, SemanticPassageCatalogEntry,
+    SemanticPassageScore, SemanticQueryOptions, SemanticQueryResult, SemanticRankingMode,
+    SemanticResourceObservations, SemanticSearchItem,
+};
 pub use search::{
     SearchDerivedStatus, SearchIndexManifest, SearchItem, SearchQueryOptions, SearchQueryResult,
     SearchRangeRole, SearchRefreshOptions, SearchRefreshOutcome, SearchRefreshResult,

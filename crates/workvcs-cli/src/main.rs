@@ -135,8 +135,10 @@ use workvcs_core::{
     ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
     RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
     SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
-    SearchSourceIdentity, SemanticSnapshotOptions, SessionDiffId, SessionDiffSnapshot,
-    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
+    SearchSourceIdentity, SemanticModelProfile, SemanticModelProvisionOptions,
+    SemanticModelProvisionResult, SemanticQueryOptions, SemanticQueryResult, SemanticRankingMode,
+    SemanticSnapshotOptions, SessionDiffId, SessionDiffSnapshot, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
     SessionLifecycleState, SessionListOptions, SessionListResult, SessionMarkStaleOptions,
     SessionMarkStaleResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
     SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInfo, StoreInitOptions,
@@ -293,6 +295,44 @@ enum RecallProfileArg {
 enum SearchOutputFormatArg {
     Json,
     KeyValue,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SemanticModelProfileArg {
+    #[value(name = "multilingual-e5-large-fp32-v1")]
+    MultilingualE5LargeFp32V1,
+    #[value(name = "bge-reranker-v2-m3-fp32-v1")]
+    BgeRerankerV2M3Fp32V1,
+}
+
+impl From<SemanticModelProfileArg> for SemanticModelProfile {
+    fn from(value: SemanticModelProfileArg) -> Self {
+        match value {
+            SemanticModelProfileArg::MultilingualE5LargeFp32V1 => Self::MultilingualE5LargeFp32V1,
+            SemanticModelProfileArg::BgeRerankerV2M3Fp32V1 => Self::BgeRerankerV2M3Fp32V1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SemanticRankingModeArg {
+    Vector,
+    Rerank,
+    HybridRrf,
+    RerankVectorRrf,
+    RerankHybridRrf,
+}
+
+impl From<SemanticRankingModeArg> for SemanticRankingMode {
+    fn from(value: SemanticRankingModeArg) -> Self {
+        match value {
+            SemanticRankingModeArg::Vector => Self::Vector,
+            SemanticRankingModeArg::Rerank => Self::Rerank,
+            SemanticRankingModeArg::HybridRrf => Self::HybridRrf,
+            SemanticRankingModeArg::RerankVectorRrf => Self::RerankVectorRrf,
+            SemanticRankingModeArg::RerankHybridRrf => Self::RerankHybridRrf,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1765,6 +1805,20 @@ struct ProjectLocatorArgs {
 
 #[derive(Debug, Subcommand)]
 enum SearchCommand {
+    #[command(about = "Provision one pinned local semantic model from verified offline files")]
+    ModelProvision {
+        #[arg(long, value_enum)]
+        profile: SemanticModelProfileArg,
+
+        #[arg(long, value_name = "PATH")]
+        source: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        destination: PathBuf,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+    },
     #[command(about = "Atomically refresh a derived FTS index from one verified source snapshot")]
     Refresh {
         #[arg(long, value_name = "PATH")]
@@ -1801,6 +1855,58 @@ enum SearchCommand {
 
         #[arg(long, value_name = "PATH", conflicts_with = "index")]
         index_dir: Option<PathBuf>,
+
+        #[arg(long, value_name = "TEXT")]
+        query: String,
+
+        #[arg(long, value_name = "COMMIT")]
+        commit: Option<String>,
+
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+    },
+    #[command(about = "Query a complete native snapshot with local semantic and hybrid ranking")]
+    SemanticQuery {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
+
+        #[arg(long, value_name = "PATH")]
+        generation_dir: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        lexical_dir: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        embedding_model: PathBuf,
+
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = SemanticModelProfileArg::MultilingualE5LargeFp32V1
+        )]
+        embedding_profile: SemanticModelProfileArg,
+
+        #[arg(long, value_name = "PATH")]
+        reranker_model: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = SemanticModelProfileArg::BgeRerankerV2M3Fp32V1
+        )]
+        reranker_profile: SemanticModelProfileArg,
+
+        #[arg(long, value_enum)]
+        mode: SemanticRankingModeArg,
 
         #[arg(long, value_name = "TEXT")]
         query: String,
@@ -28393,6 +28499,19 @@ fn run_recall(
 
 fn run_search(command: SearchCommand) -> Result<String> {
     match command {
+        SearchCommand::ModelProvision {
+            profile,
+            source,
+            destination,
+            format,
+        } => {
+            let result = Engine::provision_semantic_model(SemanticModelProvisionOptions::new(
+                profile.into(),
+                source,
+                destination,
+            ))?;
+            render_semantic_model_provision(&result, format)
+        }
         SearchCommand::Refresh {
             cwd,
             registry,
@@ -28487,7 +28606,230 @@ fn run_search(command: SearchCommand) -> Result<String> {
             let result = engine.search(options)?;
             render_search_query(&result, format)
         }
+        SearchCommand::SemanticQuery {
+            cwd,
+            registry,
+            locator,
+            generation_dir,
+            lexical_dir,
+            embedding_model,
+            embedding_profile,
+            reranker_model,
+            reranker_profile,
+            mode,
+            query,
+            commit,
+            limit,
+            format,
+        } => {
+            let discovery = discover_project_readonly_with_locator(
+                cwd,
+                registry,
+                locator.project_ref,
+                locator.locator_context,
+                locator.locator_adapter_context,
+            )?;
+            let project_ref_id = discovery.project_ref_id.ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(
+                    "semantic search requires a verified registry-v2 ProjectRef read binding"
+                        .to_owned(),
+                )
+            })?;
+            let engine = Engine::open_readonly(Path::new(&discovery.binding.store_path))?;
+            let identity = SearchSourceIdentity::new(
+                project_ref_id,
+                discovery.binding.store_id,
+                discovery.binding.workspace_id,
+                discovery.binding.branch_id,
+            );
+            let mut sidecar = discovery.registry_path.as_os_str().to_os_string();
+            sidecar.push(".d");
+            let sidecar = PathBuf::from(sidecar);
+            let generation_dir =
+                generation_dir.unwrap_or_else(|| sidecar.join("semantic-generations"));
+            let ranking_mode: SemanticRankingMode = mode.into();
+            let mut options = SemanticQueryOptions::new(
+                identity,
+                generation_dir,
+                embedding_profile.into(),
+                embedding_model,
+                ranking_mode,
+                query,
+            )?
+            .with_protected_path(discovery.registry_path.clone());
+            if ranking_mode.needs_lexical() {
+                options = options.with_lexical_root(
+                    lexical_dir.unwrap_or_else(|| sidecar.join("search-indexes")),
+                );
+            }
+            if let Some(reranker_model) = reranker_model {
+                options = options.with_reranker_model(reranker_profile.into(), reranker_model);
+            }
+            if let Some(limit) = limit {
+                options = options.with_result_limit(limit)?;
+            }
+            if let Some(path) = discovery.routing_activation_path.clone() {
+                options = options.with_protected_path(path);
+            }
+            if let Some(commit) = commit {
+                options = options.at_commit(CommitId::parse_canonical(&commit)?);
+            }
+            let result = engine.semantic_search(options)?;
+            render_semantic_query(&result, format)
+        }
     }
+}
+
+fn render_semantic_model_provision(
+    result: &SemanticModelProvisionResult,
+    format: SearchOutputFormatArg,
+) -> Result<String> {
+    if format == SearchOutputFormatArg::Json {
+        let mut output = serde_json::to_string_pretty(result).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "semantic model provision result could not be rendered as JSON: {error}"
+            ))
+        })?;
+        output.push('\n');
+        return Ok(output);
+    }
+    Ok(format!(
+        "action=semantic_model_provision\noutcome={}\nprofile={}\nmodel_path={}\nmanifest_digest={}\ninference_canary_passed={}\nnetwork_access_used={}\n",
+        match result.outcome {
+            workvcs_core::SemanticModelProvisionOutcome::Provisioned => "provisioned",
+            workvcs_core::SemanticModelProvisionOutcome::Reused => "reused",
+        },
+        result.manifest.profile,
+        escape_key_value(&result.model_path.display().to_string()),
+        result.manifest.manifest_digest,
+        result.inference_canary_passed,
+        result.network_access_used,
+    ))
+}
+
+fn render_semantic_query(
+    result: &SemanticQueryResult,
+    format: SearchOutputFormatArg,
+) -> Result<String> {
+    if format == SearchOutputFormatArg::Json {
+        let mut output = serde_json::to_string_pretty(result).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "semantic query result could not be rendered as JSON: {error}"
+            ))
+        })?;
+        output.push('\n');
+        return Ok(output);
+    }
+    let mut output = String::new();
+    writeln!(
+        output,
+        "status={}",
+        match result.status {
+            workvcs_core::SemanticDerivedStatus::Ready => "ready",
+            workvcs_core::SemanticDerivedStatus::RefreshRequired => "refresh_required",
+        }
+    )
+    .expect("write to String");
+    writeln!(output, "ranking_mode={}", result.ranking_mode).expect("write to String");
+    writeln!(
+        output,
+        "reason_code={}",
+        result.reason_code.as_deref().unwrap_or("none")
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "reason={}",
+        escape_key_value(result.reason.as_deref().unwrap_or("none"))
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "guidance={}",
+        escape_key_value(result.guidance.as_deref().unwrap_or("none"))
+    )
+    .expect("write to String");
+    writeln!(output, "query={}", escape_key_value(&result.query)).expect("write to String");
+    writeln!(
+        output,
+        "generation_path={}",
+        escape_key_value(&result.generation_path.display().to_string())
+    )
+    .expect("write to String");
+    writeln!(output, "source_commit_id={}", result.source_commit_id).expect("write to String");
+    writeln!(output, "source_state_digest={}", result.source_state_digest)
+        .expect("write to String");
+    writeln!(
+        output,
+        "candidates_considered={}",
+        result.candidates_considered
+    )
+    .expect("write to String");
+    writeln!(output, "matched_objects={}", result.matched_objects).expect("write to String");
+    writeln!(output, "omitted_results={}", result.omitted_results).expect("write to String");
+    writeln!(
+        output,
+        "serialized_item_tokens={}",
+        result.serialized_item_tokens
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "canonical_readback_verified={}",
+        result.canonical_readback_verified
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "canonical_source_written={}",
+        result.canonical_source_written
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "derived_files_written={}",
+        result.derived_files_written
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "generation_maintenance={}",
+        match result.generation_maintenance {
+            workvcs_core::SearchRefreshOutcome::Refreshed => "refreshed",
+            workvcs_core::SearchRefreshOutcome::Reused => "reused",
+        }
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "generation_manifest_json={}",
+        semantic_json_field("semantic generation manifest", &result.generation_manifest)?
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "observations_json={}",
+        semantic_json_field("semantic resource observations", &result.observations)?
+    )
+    .expect("write to String");
+    for (index, item) in result.items.iter().enumerate() {
+        writeln!(
+            output,
+            "item.{index}.json={}",
+            semantic_json_field("semantic search item", item)?
+        )
+        .expect("write to String");
+    }
+    writeln!(output, "returned_items={}", result.items.len()).expect("write to String");
+    Ok(output)
+}
+
+fn semantic_json_field(label: &str, value: &impl Serialize) -> Result<String> {
+    serde_json::to_string(value).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "{label} could not be rendered as JSON: {error}"
+        ))
+    })
 }
 
 fn render_search_refresh(
@@ -91698,6 +92040,78 @@ mod tests {
 
     #[test]
     fn search_cli_contract_requires_routed_cwd_and_named_query_index_options() {
+        let provision = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "model-provision",
+            "--profile",
+            "bge-reranker-v2-m3-fp32-v1",
+            "--source",
+            "/tmp/model-source",
+            "--destination",
+            "/tmp/model-destination",
+            "--format",
+            "json",
+        ])
+        .expect("parse semantic model provision contract");
+        assert!(matches!(
+            *provision.command,
+            Command::Search {
+                command: SearchCommand::ModelProvision {
+                    profile: SemanticModelProfileArg::BgeRerankerV2M3Fp32V1,
+                    source,
+                    destination,
+                    format: SearchOutputFormatArg::Json,
+                }
+            } if source.as_path() == Path::new("/tmp/model-source")
+                && destination.as_path() == Path::new("/tmp/model-destination")
+        ));
+
+        let semantic = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "semantic-query",
+            "--cwd",
+            "/tmp/project",
+            "--generation-dir",
+            "/tmp/semantic-generations",
+            "--lexical-dir",
+            "/tmp/lexical-generations",
+            "--embedding-model",
+            "/tmp/e5",
+            "--reranker-model",
+            "/tmp/bge",
+            "--mode",
+            "rerank-hybrid-rrf",
+            "--query",
+            "完整语义查询",
+            "--commit",
+            "01a12969-4c45-73be-88c6-f2e0941782b8",
+            "--format",
+            "json",
+        ])
+        .expect("parse semantic query contract");
+        assert!(matches!(
+            *semantic.command,
+            Command::Search {
+                command: SearchCommand::SemanticQuery {
+                    cwd,
+                    generation_dir: Some(generation_dir),
+                    lexical_dir: Some(lexical_dir),
+                    embedding_model,
+                    reranker_model: Some(reranker_model),
+                    mode: SemanticRankingModeArg::RerankHybridRrf,
+                    limit: None,
+                    format: SearchOutputFormatArg::Json,
+                    ..
+                }
+            } if cwd.as_path() == Path::new("/tmp/project")
+                && generation_dir.as_path() == Path::new("/tmp/semantic-generations")
+                && lexical_dir.as_path() == Path::new("/tmp/lexical-generations")
+                && embedding_model.as_path() == Path::new("/tmp/e5")
+                && reranker_model.as_path() == Path::new("/tmp/bge")
+        ));
+
         let query = Cli::try_parse_from([
             "workvcs",
             "search",

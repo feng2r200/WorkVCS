@@ -111,6 +111,7 @@ use crate::runtime::{
     SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
     SessionSwitchResult, VerifyOptions, VerifyResult,
 };
+use crate::search::semantic::{SemanticQueryOptions, SemanticQueryResult};
 use crate::search::{
     SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
 };
@@ -406,6 +407,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         crate::search::query_index(&self.connection, &self.path, options)
+    }
+
+    pub(crate) fn semantic_search(
+        &self,
+        options: &SemanticQueryOptions,
+    ) -> Result<SemanticQueryResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        crate::search::semantic::query_semantic(&self.connection, &self.path, options)
     }
 
     pub(crate) fn create_workspace(

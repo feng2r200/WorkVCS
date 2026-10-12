@@ -1,3 +1,4 @@
+pub mod semantic;
 mod snippet;
 mod tokenizer;
 
@@ -13,7 +14,7 @@ use crate::identity::{
 };
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snippet::{SNIPPET_POLICY_VERSION, snippet_spans};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -34,7 +35,7 @@ pub fn search_o200k_ordinary_token_count(text: &str) -> usize {
     o200k_base_singleton().encode_ordinary(text).len()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchTemporalScope {
     Current,
@@ -61,14 +62,14 @@ impl SearchTemporalScope {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchSourceType {
     Record,
     Knowledge,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchRangeRole {
     QueryMatch,
@@ -132,7 +133,7 @@ impl SearchSourceType {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchSourceIdentity {
     pub project_ref_id: ProjectRefId,
     pub store_id: StoreId,
@@ -357,27 +358,27 @@ pub struct SearchQueryResult {
 }
 
 #[derive(Clone, Debug)]
-struct SourceDocument {
-    source_type: SearchSourceType,
-    entity_id: EntityId,
-    entity_version_id: EntityVersionId,
-    state_digest: Digest,
-    statement_digest: Digest,
-    status: String,
-    record_kind: Option<String>,
-    statement: String,
-    scope_json: String,
-    provenance_json: Option<String>,
+pub(super) struct SourceDocument {
+    pub(super) source_type: SearchSourceType,
+    pub(super) entity_id: EntityId,
+    pub(super) entity_version_id: EntityVersionId,
+    pub(super) state_digest: Digest,
+    pub(super) statement_digest: Digest,
+    pub(super) status: String,
+    pub(super) record_kind: Option<String>,
+    pub(super) statement: String,
+    pub(super) scope_json: String,
+    pub(super) provenance_json: Option<String>,
 }
 
 #[derive(Clone, Debug)]
-struct SourceSnapshot {
-    identity: SearchSourceIdentity,
-    temporal_scope: SearchTemporalScope,
-    source_commit_id: CommitId,
-    source_state_digest: Digest,
-    object_version_basis_digest: Digest,
-    documents: Vec<SourceDocument>,
+pub(super) struct SourceSnapshot {
+    pub(super) identity: SearchSourceIdentity,
+    pub(super) temporal_scope: SearchTemporalScope,
+    pub(super) source_commit_id: CommitId,
+    pub(super) source_state_digest: Digest,
+    pub(super) object_version_basis_digest: Digest,
+    pub(super) documents: Vec<SourceDocument>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

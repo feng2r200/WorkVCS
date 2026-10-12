@@ -113,6 +113,10 @@ use crate::history::{
     StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
+use crate::search::semantic::{
+    SemanticModelProvisionOptions, SemanticModelProvisionResult, SemanticQueryOptions,
+    SemanticQueryResult,
+};
 use crate::search::{
     SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
 };
@@ -1255,6 +1259,16 @@ impl Engine {
 
     pub fn search(&self, options: SearchQueryOptions) -> Result<SearchQueryResult> {
         self.store.search(&options)
+    }
+
+    pub fn provision_semantic_model(
+        options: SemanticModelProvisionOptions,
+    ) -> Result<SemanticModelProvisionResult> {
+        crate::search::semantic::provision_model(&options)
+    }
+
+    pub fn semantic_search(&self, options: SemanticQueryOptions) -> Result<SemanticQueryResult> {
+        self.store.semantic_search(&options)
     }
 
     pub fn save_context_packet(

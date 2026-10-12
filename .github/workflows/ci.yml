@@ -46,7 +46,10 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace --all-targets --locked
+        # Large semantic-search test binaries can exhaust a hosted runner when
+        # lld links several of them concurrently. Serialize linking without
+        # reducing the workspace, target, or test coverage.
+        run: cargo test --workspace --all-targets --locked --jobs 1
 
       - name: Validate schema
         run: scripts/validate-schema-v0.1.sh

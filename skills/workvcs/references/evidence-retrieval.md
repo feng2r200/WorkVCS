@@ -1,47 +1,101 @@
 # Evidence retrieval
 
 Use search for a specific evidence question when bounded Recall or an exact
-identifier is insufficient. It searches delivered native Record/Knowledge
-statements. It does not search arbitrary conversation history, admit semantic
-records, determine runnable work, or certify that a statement is true.
+identifier is insufficient. Search is supplemental evidence lookup. It does
+not determine runnable work, certify a statement as true, infer authorization,
+or replace ownership discovery and recovery.
 
-After normal stable-entry and project-ownership checks, on an installation
-supporting managed search generations (1.2.0 onward), invoke:
+After normal stable-entry and project-ownership checks, choose the narrowest
+source and ranking surface that can answer the question.
 
-```text
+## Canonical single-project evidence
+
+Start with the lower-cost complete lexical ranking unless the wording mismatch
+requires an explicitly requested semantic mode:
+
+~~~text
 workvcs search query --cwd <verified-project> --query <question> --format json
-```
 
-This explicit request may prepare a local derived generation in the verified
-registry's `<registry-file>.d/search-indexes` directory. `index_maintenance`
-reports `refreshed` or `reused`; `derived_index_written` distinguishes those
-effects from the always read-only canonical source. `--index-dir <absolute-dir>`
-selects another local derived directory. No daemon, binding/marker change,
-history cleanup, or canonical write is performed.
+workvcs search semantic-query --cwd <verified-project> \
+  --embedding-model <verified-local-e5-directory> \
+  --mode <vector|rerank|hybrid-rrf|rerank-vector-rrf|rerank-hybrid-rrf> \
+  --query <question> --format json
+~~~
 
-For an exact existing generation, use `--index <absolute-file>`. That mode
-reads only and reports `refresh_required` if its basis is stale, damaged or
-incompatible. On 1.1.0, `--index` is required; explicitly refresh a new pathname
-with `search refresh --cwd ... --index ...` before querying. Preserve an
-existing stale/damaged/unknown destination and choose a new one.
+Reranking modes require the verified local BGE directory. Ordinary semantic
+query is offline and must not download. There is no implicit semantic default.
+Do not represent the currently evaluated mode as broadly more accurate unless
+the applicable frozen labels support that claim.
 
-Current queries use the verified branch's current eligible native state. Add
-`--commit <exact-commit-id>` only for a deliberate historical question. Its
-result remains historical, including when an object's old status was active.
-Never use ranking to reactivate superseded conclusions or turn historical
-ownership names into a verified ProjectRef.
+Managed lexical and semantic requests prepare or reuse immutable local derived
+generations. Maintenance and derived-write fields describe that local effect;
+canonical source remains read-only. For an exact historical question, add
+--commit with a reachable commit in the selected workspace. Its result remains
+historical even when the old object status was active.
 
-`ready` results include native entity/version identity, state and statement
-digests, original scope/provenance, complete canonical statement, verified
-UTF-8 ranges and source commit/state. Use those fields for an exact follow-up
-read or citation; a separate per-hit source replay is unnecessary merely to
-repeat the already verified bytes. A current head change during verification
-returns no items and requires a fresh request. Do not silently use stale hits.
+Use --embedding-cache-dir only for an explicit private local cache. It reuses
+vectors for an exact model-manifest plus complete prefixed passage input; it
+does not reuse source currentness. A damaged selected cache entry causes a
+recorded complete recomputation. Use --full-rebuild on a missing generation
+when validation must bypass cache reads and writes.
 
-Default output includes all matching objects, full statements and all verified
-matching ranges with lead context. There is no default token or result budget.
-Use `--limit N` only when the user or a concrete comparison requests a ranking
-projection, and retain the reported omitted count. Large output is a resource
-observation, not authority to truncate evidence or change canonical context
-selection. Embedding and reranking remain separate evaluated candidates until
-explicitly supported by the installed release.
+## Explicit local history
+
+Conversation history is outside canonical WorkVCS. Import only sources selected
+for the current question:
+
+~~~text
+workvcs search source-import --cwd <verified-project> \
+  --source <absolute-rollout-jsonl> --archive-dir <private-directory> \
+  --format json
+
+workvcs search source-query --cwd <verified-project> \
+  --archive <published-archive> --query <question> --format json
+~~~
+
+Repeat --source for more selected files; --user-only excludes assistant text.
+Archive results are always historical_reference_only with unknown historical
+currentness and no action authority. Preserve their exact thread, message,
+role, line, path and digest provenance. Never promote archive wording into a
+current fact or permission without a separate semantic judgment and current
+evidence.
+
+## Explicit multi-project evidence
+
+Use federation only when the question deliberately spans named projects:
+
+~~~text
+workvcs search federated-query --cwd <verified-project> \
+  --source-project-ref <PROJECT_REF_ONE> \
+  --source-project-ref <PROJECT_REF_TWO> \
+  --query <question> --format json
+~~~
+
+Use federated-semantic-query only when the semantic capability is required.
+Every source ProjectRef must be explicit and unique. Each source completes its
+own ranking before the final source RRF; a caller limit applies only at the end.
+Keep each hit's ProjectRef, Store, Workspace, Branch, commit, state and temporal
+scope.
+
+Check status and complete before using the response. partial_failure preserves
+successful sources but proves that the requested evidence set is incomplete.
+Report the failed ProjectRef and error; do not silently present the remaining
+hits as a complete answer. Federation cannot authorize cross-Store writes.
+
+## Readback and output boundary
+
+Canonical ready results include entity/version identity, state and statement
+digests, original scope/provenance, complete statement, verified ranges,
+source commit/state and native readback. Use these fields for an exact follow-up
+read or citation. A current head change returns no items and requires a fresh
+request.
+
+Default canonical search has no Token, object, passage, reranker-pair or result
+ceiling. Semantic exact search and reranking cover the complete generation.
+Use --limit N only when the caller asks for a final ranking projection, and
+retain the omitted count. Large output, elapsed time and resident memory are
+resource observations, not authority to discard evidence or alter ContextPacket.
+
+Search never changes a Record or Knowledge lifecycle, Task readiness,
+ProjectRef ownership, authorization or external truth. An admitted Capture that
+was not delivered to the Store is absent from canonical search.

@@ -1,15 +1,15 @@
 # Local Derived Search
 
-This opt-in local surface is governed by ADR-0525. It searches delivered
-Record and Knowledge statements from one verified read binding. It produces
-source evidence; existing `context`, `recall`, Task readiness, exact Record
-filters and mutation authorization retain their own contracts.
+This opt-in local surface is governed by ADR-0525 through ADR-0528. It searches
+delivered Record and Knowledge statements from verified read bindings, and may
+also search an explicitly imported non-authoritative local history archive. It
+produces source evidence; existing `context`, `recall`, Task readiness,
+exact Record filters and mutation authorization retain their own contracts.
 
-The stable local entrypoint was adopted at version 1.1.0 under the user's
-separate merge/Push/install authorization. Exact local adoption is recorded in
-[the adoption evidence](../provenance/local-derived-search-local-adoption.md).
-Use `workvcs runtime status --require-stable` to inspect the actual installed
-path, commit and binary digest; version text alone does not identify a build.
+Stable adoption and each later upgrade have separate merge, Push, CI and
+installation evidence. Use `workvcs runtime status --require-stable` to
+inspect the actual installed path, commit and binary digest; version text alone
+does not identify a build.
 
 ## Query with the Stable Entrypoint
 
@@ -34,11 +34,9 @@ checkout, for example after `cargo build -p workvcs-cli`. That candidate is a
 separate runtime identity and does not replace the stable entrypoint for
 ordinary project work.
 
-## On-demand Generations in the 1.2.0 Candidate
+## On-demand Lexical Generations
 
-The next-stage source candidate implements ADR-0526. It has not replaced the
-stable 1.1.0 installation. In WorkVCS development validation, its query can
-omit `--index`:
+ADR-0526 queries can omit `--index`:
 
 ```sh
 workvcs search query --cwd /path/to/verified/project \
@@ -55,14 +53,15 @@ and cannot be combined with `--index-dir`.
 `derived_index_written` reports the local write effect. Canonical source,
 registry and routing marker remain read-only. A new source head, policy or
 historical scope selects another complete basis. Damaged or incompatible
-generations are preserved and a new file is built. There is no background
-service, mutable pointer, automatic cleanup or incremental-rebuild claim.
+generations are preserved and a new file is built. The lexical path has no
+incremental object-update claim. There is no background service, mutable
+pointer or automatic cleanup.
 
 Prepare and query use one native snapshot with the existing final freshness
 guard. Head advancement during verification yields no current items; repeat
 the request against a fresh source snapshot rather than trusting old hits.
-The source Skill now routes evidence questions to this supplemental read and
-documents the 1.1.0 versus 1.2.0 invocation boundary.
+The source Skill routes evidence questions to this supplemental read and keeps
+the installed-runtime provenance boundary explicit.
 If a complete generation was published before the head advanced, the
 `refresh_required` response reports that generation and
 `derived_index_written=true`, with no stale items. Publication/storage errors
@@ -90,6 +89,108 @@ and query. The commit must be in the selected workspace and reachable from
 its branch. The result remains labelled historical even when a statement was
 active at that commit. Use separate index paths for independently retained
 current and historical generations.
+
+## Explicit Semantic and Reranking Queries
+
+Provision the pinned E5 and optional BGE models separately, then name the local
+model directories and one explicit ranking mode:
+
+~~~sh
+workvcs search semantic-query \
+  --cwd /path/to/verified/project \
+  --embedding-model /private/models/multilingual-e5-large-fp32-v1 \
+  --reranker-model /private/models/bge-reranker-v2-m3-fp32-v1 \
+  --mode rerank-hybrid-rrf \
+  --query 'evidence question' \
+  --format json
+~~~
+
+Supported modes are `vector`, `rerank`, `hybrid-rrf`,
+`rerank-vector-rrf` and `rerank-hybrid-rrf`. Modes that use reranking
+require `--reranker-model`; hybrid modes also prepare or reuse a lexical
+generation. There is no implicit semantic mode. Ordinary query never downloads
+a model and fails before inference if the provisioned model manifest or any
+consumed file is missing, changed, linked or incompatible.
+
+The semantic result covers the complete eligible object and passage catalogue.
+It reports model, source and generation identity, exact ranking policy,
+generation maintenance, Token and resident-memory observations, and complete
+native readback. `--limit N` is applied only to final object delivery and
+reports the omitted count.
+
+Use `--embedding-cache-dir /absolute/private/path` to reuse exact unchanged
+passage vectors across new immutable source generations. The cache never
+replaces the new catalogue, Qdrant shard or final source-currentness check.
+Use `--full-rebuild` on a missing generation to bypass cache reads and writes.
+The manifest reports hits, computed vectors, writes, write failures and any
+complete-rebuild fallback. One damaged selected cache entry causes a recorded
+full passage recomputation; no partial untrusted cache is mixed into a result.
+
+## Explicit Historical Source Archives
+
+Import only rollout files the caller selected:
+
+~~~sh
+workvcs search source-import \
+  --cwd /path/to/verified/project \
+  --source /absolute/path/to/rollout.jsonl \
+  --archive-dir /absolute/private/source-archives \
+  --format json
+
+workvcs search source-query \
+  --cwd /path/to/verified/project \
+  --archive /absolute/private/source-archives/<basis> \
+  --query 'what was discussed' \
+  --format json
+~~~
+
+Repeat `--source` for more explicitly selected rollouts. Import includes user
+and assistant text by default; `--user-only` narrows it. Every result remains
+`historical_reference_only`, has `currentness=unknown_historical`, and has
+no action authority. Exact thread, message, role, line, file and content-digest
+provenance is returned. No source text becomes a canonical Record or Knowledge
+object.
+
+Same source bytes and identity reuse the archive. Changed bytes choose a new
+basis. If an original source later changes or disappears, query reports that
+state while retaining immutable archive readback. Preserve damaged or
+incompatible archives and diagnose the reported identity, digest or permission
+failure.
+
+## Explicit Multi-Project Federation
+
+Select every source ProjectRef explicitly:
+
+~~~sh
+workvcs search federated-query \
+  --cwd /path/to/one/verified/project \
+  --source-project-ref <PROJECT_REF_ONE> \
+  --source-project-ref <PROJECT_REF_TWO> \
+  --query 'cross-project evidence' \
+  --format json
+
+workvcs search federated-semantic-query \
+  --cwd /path/to/one/verified/project \
+  --source-project-ref <PROJECT_REF_ONE> \
+  --source-project-ref <PROJECT_REF_TWO> \
+  --embedding-model /private/models/multilingual-e5-large-fp32-v1 \
+  --mode vector \
+  --query 'cross-project evidence' \
+  --format json
+~~~
+
+At least two unique ProjectRefs are required. Each source is independently
+routed, opened and StoreId-checked, then completes its local ranking before
+source-level reciprocal-rank fusion. `--limit` applies only after federation.
+Semantic federation also accepts the reranker, cache and full-rebuild options
+from ordinary semantic query; cache directories are source-qualified.
+
+Inspect `status` and `complete`. A missing, stale or inaccessible source is
+reported with its requested ProjectRef and stable error code. Successful
+sources remain visible, but the overall result is `partial_failure` and
+`complete=false`; do not present it as complete evidence. Every hit retains
+its own ProjectRef, Store, Workspace, Branch, source commit, state and temporal
+scope. The command never writes across Stores.
 
 ## Complete Results and Observed Cost
 
@@ -151,8 +252,9 @@ correctness, permission to act or production readiness. Binding ProjectRef is
 the read anchor and does not reconstruct unknown legacy semantic ownership.
 An admitted Capture without Store delivery is absent from this index.
 
-No embeddings, Qdrant service, transcript import, automatic extraction,
-cross-branch search, semantic lifecycle inference or automatic action is
-included. The local adoption has its separate authorization and evidence;
-later source, installation, Push or release actions retain their own exact
-delivery boundary.
+Embedding and reranking use an in-process, per-generation Qdrant Edge shard and
+verified local model files. There is no Qdrant Server, network model lookup,
+resident search service, automatic transcript discovery, canonical extraction,
+semantic lifecycle inference or automatic action. Source archives and
+federation widen explicit evidence reads without widening authority. Source,
+installation, Push and release states retain their own exact delivery evidence.

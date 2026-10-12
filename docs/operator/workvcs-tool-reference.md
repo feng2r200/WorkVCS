@@ -705,6 +705,7 @@ The current top-level CLI exposes these command families:
 | Runtime coordination | `session`, `claim`, `handoff`, `next`, `runnable` | Agent Sessions, focus, exclusive/shared Claims, Claim transfer/takeover, focused Handoffs, runnable Task projection, and next-work selection. |
 | Authorization receipts | `receipt issue`, `receipt show`, `receipt list`, `receipt consume` | Current P0-3a/P0-3b mechanical AuthorizationReceipt issue, redacted inspection/listing, and branch-scoped single-use consume; revoke is not current. |
 | Entry, capture, and recall | `config`, `project`, `capture`, `record currentness-audit`, `record supersede-finding`, `record invalidate-finding`, `recall`, `resume` | Stable registry discovery, explicit idempotent first-use binding, binding audit, standalone cognition, bounded read-only semantic-currentness review, guarded Finding correction, profile-prioritized bounded project context, and Session-aware recovery. |
+| Local evidence search | `search refresh`, `search query`, `search model-provision`, `search semantic-query`, `search source-import`, `search source-query`, `search federated-query`, `search federated-semantic-query` | Immutable local lexical and semantic generations, verified local models, non-authoritative explicit history archives, request-scoped source-qualified federation, native readback, visible partial failures, and optional private exact-vector reuse. |
 | Query and explanation | `closeout inspect`, `context`, `context-packet`, `why`, `history`, `show-at`, `diff`, `changeset`, `commit`, `event` | Closeout summaries, bounded mechanical inspection, saved context snapshots, causal and structural explanations, historical inspection, WorkState diffs, ChangeSets, commit metadata, and events. |
 | Portability and branching | `checkpoint`, `bundle`, `restore`, `merge` | Checkpoints, local Bundle export/validate/apply flows, restore-as-new-commit semantics, and three-way Work Branch merge lifecycle. |
 | Error handling | `--error-format key-value|json` plus command stderr | Script-readable error code, category, retryability, optional JSON output, and actionable recovery boundaries. |
@@ -930,17 +931,18 @@ failed workflow.
 
 Do not use WorkVCS as if it currently provided:
 
-- transcript parsing or automatic extraction of Findings, Decisions, Risks, or
-  Knowledge;
+- automatic transcript discovery or extraction of Findings, Decisions, Risks,
+  or Knowledge;
 - LLM-generated semantic records without explicit Agent confirmation;
-- embeddings, vector search, semantic retrieval, LLM merge, or natural-language
-  conflict detection;
+- LLM merge or natural-language conflict detection;
 - automatic knowledge distillation;
 - hooks that infer and prompt for semantic records;
 - Agent launching, scheduling, orchestration, or automatic execution;
-- remote/cloud synchronization, distributed collaboration, or live cross-Store
-  federation;
+- remote/cloud synchronization, distributed collaboration, a global Knowledge
+  Space, live cross-Store state federation, or cross-Store mutation;
 - background Resource watchers, daemons, or automatic re-observation;
+- a resident search service, automatic history importer, or automatic derived
+  artifact cleanup;
 - destructive compaction of core Decision, Finding, Knowledge, ChangeSet, or
   WorkStateCommit history;
 - a required GUI, TUI, or human-first storage format;

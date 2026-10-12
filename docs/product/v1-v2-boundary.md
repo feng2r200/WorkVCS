@@ -329,7 +329,7 @@ mandatory guarded post-lock identity check, and rechecks the separate
 journal-admission marker while holding the lock. Registry replacement remains
 Unix-only; live rollback was not performed after v2 use.
 
-## Accepted Post-V1 Local Lexical Search
+## Accepted Post-V1 Local Evidence Search
 
 ADR-0525 accepts opt-in local FTS5 candidates for canonical Record/Knowledge
 statements with native identity, version, digest and snippet readback. Its
@@ -350,19 +350,31 @@ ADR-0526 extends an explicit search request with on-demand derived-generation
 preparation and routine evidence-retrieval guidance. A matching healthy
 generation is reused; changed or damaged state creates a new immutable file.
 This does not add a background service, automatic cleanup, canonical mutation
-or semantic default. New embedding and reranking evaluation remains evidence
-for a later configuration choice.
+or semantic default.
 
-This first-stage contract was explicitly approved on 2026-10-12. Implementation
-and local acceptance evidence are tracked separately; approval does not assert
-stable installation, merge, Push, production use or completion of the deferred
-vector/semantic retrieval capability below.
+ADR-0527 adds explicitly selected in-process Qdrant Edge vector, complete
+full-corpus BGE reranking and deterministic fusion modes using verified local
+models. These modes have no default Token, candidate, pair, result, time or
+resource cutoff and do not become an implicit default. Native source identity,
+currentness, readback and canonical-write separation remain mandatory.
+
+ADR-0528 adds three bounded derived-read capabilities: caller-selected local
+history archives fixed as non-authoritative historical references; explicit
+multi-ProjectRef lexical or semantic federation with source-qualified hits and
+visible partial failures; and a private exact passage-vector cache that reuses
+model work while every changed source basis still creates a complete immutable
+generation. It adds no automatic import, global Knowledge Space, cross-Store
+mutation, Qdrant Server, watcher or resident service.
+
+The first lexical contract was explicitly approved on 2026-10-12, and the
+semantic and remaining retrieval capabilities were accepted and authorized on
+2026-10-13. Implementation, local acceptance, stable installation, merge, Push
+and CI remain separately evidenced states.
 
 ## Explicitly deferred beyond V1
 
-- transcript parsing or automatic extraction of Findings and Decisions;
+- automatic transcript discovery or extraction of Findings and Decisions;
 - LLM-generated semantic records without explicit Agent confirmation;
-- embeddings, vector search, and semantic retrieval;
 - LLM-based semantic merge or natural-language conflict detection;
 - automatic knowledge distillation;
 - hooks that infer and prompt for possible semantic records;
@@ -371,7 +383,8 @@ vector/semantic retrieval capability below.
   protocol for branch refs and object exchange;
 - cross-Store live Knowledge federation, a global Knowledge Space service,
   remote subscriptions, and live semantic cross-Store references; ADR-0513's
-  immutable control-plane index references do not share Work-State;
+  immutable control-plane index references and ADR-0528 request-scoped read
+  federation do not share Work-State;
 - destructive compaction of core Decision, Finding, Knowledge, ChangeSet, or
   WorkStateCommit history;
 - a required TUI, GUI, or human-first storage format.

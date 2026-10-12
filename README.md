@@ -17,8 +17,8 @@ conversation. WorkVCS covers the missing layer between them: the evolving
 **Work & Knowledge State** an Agent needs to continue, explain, branch, merge,
 review, and restore work.
 
-> **Project status:** the repository contains a locally release-ready bounded
-> V1 implementation. The local source package version is `1.0.0`, and no public
+> **Project status:** the repository contains a locally validated bounded V1
+> implementation. The current source package version is `1.3.0`, and no public
 > release has been made. The source is licensed under Apache-2.0; selecting a
 > release version, publishing artifacts, and making release commitments remain
 > separate decisions.
@@ -31,13 +31,12 @@ contracts. Git commits, build timestamps, and binary digests identify a build;
 they do not replace the semantic version. CI enforces this rule for changes to
 the CLI, Skill, packaging, installation, and release workflow.
 
-The 1.0.0 implementation adds explicit Task-disposition assessment when a
-Plan is superseded or retired. An assessment can preserve an old Task exactly
-as it is; lifecycle status and execution currentness are separate. The
-local installation and stable adoption are evidenced in
-[the adoption record](docs/provenance/task-disposition-and-currentness-local-adoption.md);
-no public release has been made. See accepted
-[ADR-0524](docs/decisions/adr/0524-task-disposition-and-execution-currentness.md).
+The current source retains explicit Task-disposition assessment when a Plan is
+superseded or retired and adds opt-in local evidence retrieval. Lexical,
+semantic, historical-source and multi-ProjectRef queries remain derived reads:
+canonical lifecycle, currentness and authorization stay separate. See
+[ADR-0524](docs/decisions/adr/0524-task-disposition-and-execution-currentness.md)
+and the [local search architecture](docs/architecture/local-derived-search.md).
 
 ## What makes it different
 
@@ -58,6 +57,10 @@ no public release has been made. See accepted
 - **Logical-project routing.** ProjectRef keeps semantic project ownership
   separate from repository and directory location, so durable capture does
   not disappear merely because the ambient CWD is unbound.
+- **Evidence retrieval without authority creep.** Immutable local lexical and
+  semantic generations, explicit non-authoritative history archives, and
+  source-qualified federation expand evidence recall while native identity,
+  currentness, lifecycle, and permission remain authoritative.
 - **Local-first and portable.** SQLite-backed stores, BLAKE3-addressed objects,
   checkpoints, and bundles keep the system inspectable and movable.
 
@@ -224,6 +227,10 @@ before using WorkVCS as durable project infrastructure.
 - [Authorized existing-binding delivery and operation inventory](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
   — the locally adopted fast path, backlog visibility, and preserved
   authorization gates.
+- [Local evidence-search architecture](docs/architecture/local-derived-search.md)
+  and [ADR-0528](docs/decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)
+  — native-readback lexical and semantic ranking, explicit history,
+  source-qualified federation, and incremental local vector reuse.
 - [V1 readiness ledger](docs/provenance/v1-readiness-ledger.md) and
   [release gate matrix](docs/provenance/v1-release-gate-matrix.md) — evidence
   behind the bounded maturity claim.
@@ -235,7 +242,7 @@ WorkVCS is intentionally not:
 
 - a replacement for Git or a source-code remote;
 - an Agent launcher, planner, or orchestration framework;
-- a chain-of-thought recorder or transcript parser;
+- a chain-of-thought recorder or automatic semantic transcript importer;
 - an LLM-based semantic inference engine;
 - a cloud synchronization or hosted collaboration service.
 

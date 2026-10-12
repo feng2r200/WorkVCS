@@ -10,7 +10,7 @@ WorkVCS 为编码 Agent 提供可持久、可检查的状态，使工作可以�
 
 Git 对文件进行版本控制，任务管理工具描述工作分配，对话记录保存交流过程。WorkVCS 补上了三者之间缺失的一层：Agent 为了继续、解释、分支、合并、审查和恢复工作而需要持续演进的 **工作与知识状态（Work & Knowledge State）**。
 
-> **项目状态：** 本仓库包含一个在限定范围内已达到本地发布就绪状态的 V1 实现。本地源码包版本为 `1.0.0`，尚未进行公开发布。源码采用 Apache-2.0 许可证；选择发布版本、发布构建产物和作出发布承诺仍是彼此独立的决策。
+> **项目状态：** 本仓库包含一个经过本机验证、范围受限的 V1 实现。当前源码包版本为 `1.3.0`，尚未进行公开发布。源码采用 Apache-2.0 许可证；选择发布版本、发布构建产物和作出发布承诺仍是彼此独立的决策。
 
 凡是影响运行时、Skill、打包、安装或发布工作流的优化，都必须变更语义版本号。兼容性修复和运维改进递增 patch；新增且保持兼容的能力（例如运行时或安装保护）递增 minor；不兼容的 CLI、registry 或状态契约递增 major。Git commit、构建时间和二进制摘要只能标识构建，不能替代语义版本。CI 会对这些发布相关改动强制检查版本是否变化。
 
@@ -24,6 +24,7 @@ Git 对文件进行版本控制，任务管理工具描述工作分配，对话�
 - **协调而不负责编排。** Session、focus、claim、handoff 和合并进行中状态帮助多个 Agent 协作，同时 WorkVCS 保持独立于任何 Agent 运行时。
 - **携带证据的状态。** 不可变事件、变更集、证据、资源观测和验证记录让完成声明可以被审计。
 - **按逻辑项目路由。** ProjectRef 将语义项目归属与仓库、目录位置分离，因此不会仅仅因为当前 CWD 尚未绑定就遗漏本应持久化的内容。
+- **扩大证据检索而不扩大权威。** 不可变的本机全文和语义代际、显式非权威历史档案，以及保留来源身份的跨项目联合检索，可以扩大证据回忆范围；原生身份、当前性、生命周期和权限仍保持权威。
 - **本地优先且可移植。** 基于 SQLite 的存储、按 BLAKE3 寻址的对象、检查点和 bundle，让系统保持可检查、可迁移。
 
 ## 状态模型
@@ -118,6 +119,7 @@ scripts/package-workvcs.sh --install --bin-dir "$HOME/.local/bin"
 - [既有绑定授权交付与操作清单（英文）](docs/decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)——已完成本地安装采用的快速路径、积压可见性和保留的授权门。
 - [操作终态处置与全局清单分类（英文）](docs/decisions/adr/0520-operation-disposition-and-global-inventory-classification.md)——交付前显式终态、全量生命周期可见性和禁止自动历史清扫。
 - [Plan 清单校验与路由拒绝诊断（英文）](docs/decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md)——零写入内在校验、Capture 感知错误和保留的 journal-first 审计。
+- [本机证据检索架构（英文）](docs/architecture/local-derived-search.md)和 [ADR-0528（英文）](docs/decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)——原生回读全文与语义排序、显式历史档案、保留来源身份的联合检索，以及本机增量向量复用。
 - [V1 就绪台账（英文）](docs/provenance/v1-readiness-ledger.md)和[发布门矩阵（英文）](docs/provenance/v1-release-gate-matrix.md)——支撑限定成熟度声明的证据。
 - [文档地图（英文）](docs/README.md)——完整的权威资料与证据索引。
 
@@ -127,7 +129,7 @@ WorkVCS 有意不做以下事情：
 
 - 替代 Git 或源代码远端仓库；
 - 启动、规划或编排 Agent；
-- 记录思维链或解析对话；
+- 记录思维链，或自动把对话解析成语义对象；
 - 通过大语言模型进行语义推断；
 - 提供云同步或托管式协作服务。
 

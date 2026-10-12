@@ -3,7 +3,7 @@
 This directory is the repository-native source of truth for WorkVCS's
 confirmed product, domain, and architecture state.
 
-## Accepted Local Derived Search
+## Accepted Local Evidence Search
 
 The user approved the first-stage local lexical search boundary on 2026-10-12.
 It uses a separate SQLite FTS5 index for Record/Knowledge candidates and native
@@ -12,14 +12,18 @@ and all lifecycle and authorization semantics. Implementation and local
 acceptance are tracked separately from stable installation or remote delivery.
 The separately authorized local stable adoption of 1.1.0 is complete;
 exact installation and subsequent delivery are recorded independently.
-The current 1.2.0 source candidate adds on-demand generation preparation under
-ADR-0526 and routine Skill routing. Its local implementation, frozen
-50-question model study and independent review are complete; the evidence does
-not select a default semantic model. The candidate remains separate from the
-adopted 1.1.0 runtime.
+ADR-0526 adds on-demand lexical generation preparation and routine Skill
+routing. ADR-0527 accepts explicit verified-local semantic and full-corpus
+reranking modes without selecting a semantic default. ADR-0528 accepts explicit
+non-authoritative local history archives, source-qualified multi-ProjectRef read
+federation and private content-addressed passage-vector reuse without adding a
+daemon. Exact implementation, validation, merge, Push, CI and stable adoption
+remain separate evidence layers.
 
 - [ADR-0525: Local Derived FTS Search and Canonical Readback](decisions/adr/0525-local-derived-fts-search-and-canonical-readback.md)
 - [ADR-0526: On-demand Local Search Generations](decisions/adr/0526-on-demand-local-search-generations.md)
+- [ADR-0527: Native Local Semantic Search and Full-Corpus Reranking](decisions/adr/0527-native-local-semantic-search-and-reranking.md)
+- [ADR-0528: Explicit History, Federated Read, and Incremental Local Search](decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)
 - [Local Derived Search Architecture](architecture/local-derived-search.md)
 - [Local Derived Search Operator Guide](operator/local-derived-search.md)
 - [Local Derived Search Candidate Evidence](provenance/local-derived-search-candidate.md)

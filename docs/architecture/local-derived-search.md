@@ -7,18 +7,30 @@ The initial capability is opt-in and does not change `context`, `recall`, exact
 Record list filters, Task readiness or mutation authorization.
 ADR-0526 extends the explicit search surface with on-demand local generation
 preparation; the canonical and full-output contracts remain the same.
+ADR-0527 adds explicit native local vector, full-corpus reranking and fusion
+modes. ADR-0528 adds non-authoritative source archives, explicit multi-ProjectRef
+read federation and content-addressed incremental passage-vector reuse. None of
+these surfaces changes canonical Work-State or becomes an implicit default.
 
 ## Authority and Data Flow
 
 ```mermaid
 flowchart LR
     R[Verified ProjectRef routing] --> S[Read-only canonical snapshot]
-    S --> I[Derived SQLite FTS5 index]
-    Q[Explicit lexical query] --> I
-    I --> C[Ranked candidate ranges]
+    S --> I[Derived SQLite FTS5 generation]
+    S --> G[Immutable semantic generation]
+    M[Verified local models] --> G
+    E[Private exact passage-vector cache] --> G
+    Q[Explicit query and ranking mode] --> I
+    Q --> G
+    I --> C[Ranked native candidates]
+    G --> C
     C --> V[Native snapshot and version readback]
     S --> V
     V --> O[Provenance-bearing supplemental context]
+    H[Explicit local rollout files] --> A[Non-authoritative source archive]
+    F[Explicit ProjectRef set] --> R
+    V --> J[Source-qualified federated rank]
     S --> N[Existing deterministic context]
 ```
 
@@ -59,13 +71,15 @@ they do not become current after a branch head advance.
 
 Managed queries prepare or reuse generations in a local derived directory.
 Selection hashes the complete source identity, current/historical scope,
-commit/state and object-version basis, plus all search policy versions. A name
-only narrows the candidate set; full validation establishes whether a generation
-can be reused. Damaged or unknown entries are preserved and a unique new
-generation is published. There is no mutable current-generation pointer,
-automatic deletion, watcher or source-write hook. Prepare and query share one
-native snapshot rather than repeating canonical replay. This implementation
-rebuilds a changed generation; it does not claim incremental object updates.
+commit/state and object-version basis, plus all applicable search and model
+policy versions. A name only narrows the candidate set; full validation
+establishes whether a generation can be reused. Damaged or unknown entries are
+preserved and a unique new generation is published. There is no mutable
+current-generation pointer, automatic deletion, watcher or source-write hook.
+Prepare and query share one native snapshot rather than repeating canonical
+replay. Lexical generations are rebuilt as complete immutable files. Semantic
+generations are also rebuilt as complete immutable directories, while exact
+unchanged passage vectors may be reused from the separate ADR-0528 cache.
 Healthy queries do not hold the publisher lock. On a miss, publication takes
 the directory lock and checks for a matching healthy generation again using
 the same source snapshot. After publication and complete index readback, a
@@ -79,6 +93,71 @@ destination, not a canonical migration or an overwrite. Platforms lacking the
 required atomic-file guards reject publication. Refresh has no reason to write a WorkStateCommit,
 Event, branch ref, registry binding, marker, or new semantic object.
 
+## Semantic Generation and Incremental Vector Reuse
+
+A semantic generation binds the verified local embedding model, complete
+passage catalogue, source snapshot and runtime policy. Qdrant Edge is embedded
+in the process and private to the generation. Exact search requests the
+manifest's complete point count, quantization is disabled, and every returned
+point must correspond to one catalogue range before object aggregation. Modes
+that use BGE score the complete query-window and passage-window pair set; fusion
+uses complete one-based component ranks. Caller top-k is a final projection.
+
+Provisioned model manifests cover graph, external data, tokenizer and config
+bytes. Ordinary query uses only verified local user-defined model loaders and
+does not have a download fallback. Model context length creates deterministic
+overlapping windows; it is not a Token or work budget. Every window is
+processed.
+
+The optional embedding cache is outside every immutable generation. A cache key
+binds the model-manifest digest and complete prefixed passage input. Its binary
+record repeats the key and model, fixes the dimension and protects the complete
+vector bytes with a digest. Private permissions, no symbolic links and
+no-replace publication are mandatory. Concurrent publication accepts one
+complete winner.
+
+Cache misses are embedded in full. One invalid selected entry invalidates all
+hits in that build attempt and triggers a recorded complete recomputation, so a
+generation never contains a mixture that depends on untrusted partial cache
+state. Explicit full rebuild bypasses both reads and writes. The manifest's hit,
+computed, write and failure counts must reconcile with its complete point
+count.
+
+Cache reuse does not make a prior generation current. Every different source
+basis receives a new catalogue, shard and final native freshness guard. The
+cache only avoids repeating exact model work for byte-identical passage input.
+There is no resident model process or background builder in this delivery.
+
+## Explicit Historical Source Archives
+
+A source archive is a separate private derived directory created only from
+caller-selected local Codex rollout files. It contains extracted user and
+optionally assistant message text plus exact thread, message, role, line, path
+and byte-digest provenance. Developer, system, tool and non-text content is
+excluded and counted.
+
+Every archive result is fixed as historical reference with unknown currentness
+and no action authority. The archive does not create canonical Records or
+Knowledge, and archive rank never changes lifecycle, ownership or permission.
+Same bytes and identity reuse the same basis; changed bytes select another
+archive. Query reports whether the original source is still present and
+unchanged without making source availability a condition for immutable archive
+readback.
+
+## Explicit Multi-Project Read Federation
+
+Federation requires at least two unique ProjectRefs. Each is discovered and
+opened independently, and its opened StoreId must match its active read
+binding. Every source runs a complete lexical or semantic query before the
+federated layer combines source-local ranks with the versioned source RRF
+policy. Final output limits are applied only after that complete combination.
+
+Each hit and source report retains ProjectRef, Store, Workspace, Branch,
+commit, state and temporal scope. Identical entity IDs from different sources
+remain distinct. A source error is included as a partial failure, never omitted
+as if the request were complete. Federation is a request-scoped read and has no
+cross-Store mutation, replication or shared-state semantics.
+
 ## Candidate Readback and Output
 
 FTS5 ranks lexical candidates without a default cost-based prefetch ceiling.
@@ -91,6 +170,13 @@ statuses (active/running/unverified/validated) and active Knowledge; superseded
 and invalidated cognition cannot be
 ranked back into current state. The existing context resolver alone owns any
 causal-summary exception. Search does not project or infer Task runnable state.
+
+Semantic candidates pass the same native object, status, statement, range and
+freshness readback after complete vector, reranker or fusion ranking. A valid
+model score cannot compensate for a failed native check. Federation preserves
+that proof per source. Source-archive results instead carry their immutable
+rollout provenance and fixed non-authoritative labels; they are never presented
+as native canonical readback.
 
 The result exposes source/temporal scope, original status and provenance, native
 readback result, complete canonical statement and all matching source ranges.
@@ -125,14 +211,21 @@ live project authority.
 
 ## Scope and Validation
 
-The accepted scope is Record/Knowledge lexical candidates with native readback,
-not transcript extraction, vector retrieval, semantic merge, project
-federation, automatic execution or a background service. Current V1 exact reads
-and context resolution retain their existing contracts.
+The accepted scope is explicit local lexical and semantic Record/Knowledge
+retrieval with native readback, explicit non-authoritative history archives,
+explicit multi-ProjectRef read federation and foreground incremental vector
+reuse. Current exact reads, deterministic context resolution, lifecycle,
+runnable state and authorization retain their existing contracts.
 
-Implementation validation must separately prove normal retrieval, state and
-ancestry filtering, identity/version/range rejection, source byte stability,
-safe refresh and aliases, controlled concurrent head advance, truthful derived
-failure and complete source delivery without default cost limits. The candidate's measured
-cold/warm latency, token counts, binary size and resident memory are local
-evidence; installation and adoption remain a later delivery boundary.
+This scope does not include automatic transcript discovery or canonical
+extraction, semantic merge, a global Knowledge Space, replication, cross-Store
+mutation, automatic execution, a watcher or resident service.
+
+Implementation validation separately proves normal and historical retrieval,
+state and ancestry filtering, identity/version/range rejection, source byte
+stability, safe publication, controlled concurrent head advance, truthful
+derived and partial failure, complete source and candidate coverage, model
+offline behavior, cache damage and full-rebuild recovery, and final native
+freshness without default cost limits. Measured latency, token counts, binary
+size and resident memory are local evidence; they do not redefine coverage.
+Installation and adoption remain a separate delivery boundary.

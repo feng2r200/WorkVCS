@@ -18,7 +18,9 @@ needs. Required participation does not mean every capability must be used.
 | Work pauses or changes owner | focused `handoff`, optionally a saved `context-packet` | Bounded continuation state with stable identifiers |
 | A prior conclusion may now be stale | `record currentness-audit`, then guarded transition or correction | Explicit currentness decision without inventing changes |
 | Need to explain or reconstruct history | `why`, `history`, `diff`, `show-at`, `commit`, `changeset`, and `event` | Causal, structural, or historical evidence at a named state |
-| Need evidence statements but exact object identifiers are unknown | `search query`, then use returned native identity and scope; see `evidence-retrieval.md` | Ranked Record/Knowledge statements with verified complete text and ranges; no semantic write |
+| Need canonical evidence statements but exact object identifiers are unknown | `search query`, or explicit `search semantic-query` when lexical wording is insufficient; see `evidence-retrieval.md` | Complete ranked Record/Knowledge statements with native readback; no semantic write |
+| Need text from selected local conversation history | Explicit `search source-import`, then `search source-query` | Immutable historical-reference archive with exact provenance, unknown currentness, and no action authority |
+| One evidence question intentionally spans verified projects | `search federated-query` or explicit semantic federation over named ProjectRefs | Source-qualified combined rank with visible partial failures and no cross-Store write |
 | Explore an alternative route | Work Branch plus Attempt; later `merge`, `restore`, or abandon | Alternative state and outcome remain inspectable without contaminating the main branch |
 | Need portable or recoverable state | `checkpoint`, `bundle`, `doctor`, and Store inspection | Verified recovery or interchange boundary; no remote sync is implied |
 | One result concerns several projects | `capture --capture-group`, one primary delivery, immutable secondary references | One mutable semantic authority with discoverable cross-project association |
@@ -55,8 +57,10 @@ records.
 
 ## Do not claim absent capabilities
 
-WorkVCS does not currently parse transcripts, infer semantic records, perform
-embedding search, orchestrate Agents, watch Resources in the background,
-synchronize to a cloud service, or automatically activate guarded control-
-plane mutations. The calling Agent supplies meaning explicitly and retains the
-authorization boundary.
+WorkVCS does not automatically discover or parse transcripts into canonical
+Records, infer semantic objects, orchestrate Agents, watch Resources in the
+background, synchronize to a cloud service, run a resident search daemon, or
+automatically activate guarded control-plane mutations. Explicit source
+archives, semantic ranking and request-scoped federation remain derived reads.
+The calling Agent supplies meaning explicitly and retains the authorization
+boundary.

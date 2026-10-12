@@ -781,11 +781,8 @@ fn prepare_archive_root(root: &Path, sources: &[PathBuf]) -> Result<PathBuf> {
             ));
         }
     }
-    if root.exists() {
-        require_real_directory(&root)?;
-    } else {
-        fs::create_dir(&root).map_err(storage_error("create source archive root", &root))?;
-    }
+    fs::create_dir_all(&root).map_err(storage_error("create source archive root", &root))?;
+    require_real_directory(&root)?;
     Ok(root)
 }
 
@@ -1210,5 +1207,54 @@ mod tests {
                 "an explicit symlink source must fail closed"
             );
         }
+    }
+
+    #[test]
+    fn import_recovers_from_failed_input_and_serializes_concurrent_publish() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let source = temporary.path().join("rollout.jsonl");
+        let root = temporary.path().join("archives");
+        fs::write(&source, "not-json\n").expect("write invalid rollout");
+        let source = fs::canonicalize(source).expect("canonical source");
+        let identity = identity();
+        let failed = SourceArchiveImportOptions::new(identity, &root, vec![source.clone()])
+            .and_then(|options| import_source_archive(&options));
+        assert!(failed.is_err(), "invalid input must fail closed");
+
+        write_rollout(&source);
+        fs::create_dir_all(&root).expect("create archive root");
+        fs::create_dir(root.join(".workvcs-source-orphan.tmp"))
+            .expect("create orphan stage from an interrupted prior import");
+        let options =
+            SourceArchiveImportOptions::new(identity, &root, vec![source]).expect("import options");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles = (0..2)
+            .map(|_| {
+                let options = options.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    import_source_archive(&options).expect("concurrent source import")
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("join source import").outcome)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == SourceArchiveImportOutcome::Imported)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == SourceArchiveImportOutcome::Reused)
+                .count(),
+            1
+        );
     }
 }

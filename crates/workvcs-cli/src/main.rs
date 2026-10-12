@@ -3,6 +3,7 @@ mod locator_adapter;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::{MatchOptions, Pattern, glob_with};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -82,6 +83,8 @@ use workvcs_core::{
     ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
     ExternalObjectRefListResult, ExternalObjectRefRecordOptions, ExternalObjectRefRecordResult,
     ExternalObjectRefSnapshot, ExternalObjectReferenceScope, ExternalRefId, ExternalVersionId,
+    FederatedItemPayload, FederatedQueryOptions, FederatedQueryResult, FederatedRetrievalKind,
+    FederatedSearchStatus, FederatedSourceFailure, FederatedSourceInput, FederatedSourceReport,
     FindingRecordCorrectionCommit, FindingRecordCorrectionOptions, GoalCreateCommit,
     GoalCreateOptions, GoalSnapshot, GoalStatus, GoalTransitionCommit, GoalTransitionOptions,
     HistoryEntry, HistoryQueryOptions, ImportId, IntegrityReport, KnowledgeCreateCommit,
@@ -165,8 +168,8 @@ use workvcs_core::{
     WorkStateRestoreOptions, WorkVcsError, WorkspaceId, WorkspaceInfo, WorkspaceInitOptions,
     WorkspaceListOptions, WorkspaceListResult, WorkspaceResourceAssociationListOptions,
     WorkspaceResourceAssociationListResult, WorkspaceResourceAssociationOptions,
-    WorkspaceResourceAssociationResult, canonical_bytes, content_object_digest,
-    entity_version_digest, parse_canonical_json, relation_version_digest,
+    WorkspaceResourceAssociationResult, aggregate_federated_search, canonical_bytes,
+    content_object_digest, entity_version_digest, parse_canonical_json, relation_version_digest,
     work_state_mapping_digest,
 };
 
@@ -1861,6 +1864,85 @@ enum SearchCommand {
 
         #[arg(long, value_name = "PATH")]
         archive: PathBuf,
+
+        #[arg(long, value_name = "TEXT")]
+        query: String,
+
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+    },
+    #[command(about = "Query complete lexical rankings from explicit verified ProjectRefs")]
+    FederatedQuery {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long = "source-project-ref",
+            value_name = "PROJECT_REF",
+            required = true,
+            help = "Explicit verified source; repeat for every source"
+        )]
+        source_project_refs: Vec<String>,
+
+        #[arg(long, value_name = "PATH")]
+        derived_dir: Option<PathBuf>,
+
+        #[arg(long, value_name = "TEXT")]
+        query: String,
+
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+    },
+    #[command(about = "Query complete semantic rankings from explicit verified ProjectRefs")]
+    FederatedSemanticQuery {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[arg(
+            long = "source-project-ref",
+            value_name = "PROJECT_REF",
+            required = true,
+            help = "Explicit verified source; repeat for every source"
+        )]
+        source_project_refs: Vec<String>,
+
+        #[arg(long, value_name = "PATH")]
+        derived_dir: Option<PathBuf>,
+
+        #[arg(long, value_name = "PATH")]
+        embedding_model: PathBuf,
+
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = SemanticModelProfileArg::MultilingualE5LargeFp32V1
+        )]
+        embedding_profile: SemanticModelProfileArg,
+
+        #[arg(long, value_name = "PATH")]
+        reranker_model: Option<PathBuf>,
+
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = SemanticModelProfileArg::BgeRerankerV2M3Fp32V1
+        )]
+        reranker_profile: SemanticModelProfileArg,
+
+        #[arg(long, value_enum)]
+        mode: SemanticRankingModeArg,
 
         #[arg(long, value_name = "TEXT")]
         query: String,
@@ -28648,6 +28730,108 @@ fn run_search(command: SearchCommand) -> Result<String> {
             let result = Engine::query_source_archive(options)?;
             render_source_archive_query(&result, format)
         }
+        SearchCommand::FederatedQuery {
+            cwd,
+            registry,
+            source_project_refs,
+            derived_dir,
+            query,
+            limit,
+            format,
+        } => {
+            let project_refs = parse_federated_project_refs(&source_project_refs)?;
+            let mut inputs = Vec::with_capacity(project_refs.len());
+            for project_ref_id in project_refs {
+                let source = discover_project_readonly_with_locator(
+                    cwd.clone(),
+                    registry.clone(),
+                    Some(project_ref_id.to_string()),
+                    None,
+                    None,
+                )
+                .and_then(|discovery| {
+                    run_federated_lexical_source(
+                        project_ref_id,
+                        discovery,
+                        derived_dir.as_deref(),
+                        &query,
+                    )
+                });
+                inputs.push(match source {
+                    Ok(result) => FederatedSourceInput::Lexical(result),
+                    Err(error) => FederatedSourceInput::Failed(FederatedSourceFailure::new(
+                        project_ref_id,
+                        error.code().to_string(),
+                        error.to_string(),
+                    )?),
+                });
+            }
+            let mut options = FederatedQueryOptions::new(&query, FederatedRetrievalKind::Lexical)?;
+            if let Some(limit) = limit {
+                options = options.with_result_limit(limit)?;
+            }
+            let result = aggregate_federated_search(options, inputs)?;
+            render_federated_query(&result, format)
+        }
+        SearchCommand::FederatedSemanticQuery {
+            cwd,
+            registry,
+            source_project_refs,
+            derived_dir,
+            embedding_model,
+            embedding_profile,
+            reranker_model,
+            reranker_profile,
+            mode,
+            query,
+            limit,
+            format,
+        } => {
+            let project_refs = parse_federated_project_refs(&source_project_refs)?;
+            let ranking_mode: SemanticRankingMode = mode.into();
+            if ranking_mode.needs_reranker() && reranker_model.is_none() {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "federated semantic mode {ranking_mode} requires --reranker-model"
+                )));
+            }
+            let mut inputs = Vec::with_capacity(project_refs.len());
+            for project_ref_id in project_refs {
+                let source = discover_project_readonly_with_locator(
+                    cwd.clone(),
+                    registry.clone(),
+                    Some(project_ref_id.to_string()),
+                    None,
+                    None,
+                )
+                .and_then(|discovery| {
+                    run_federated_semantic_source(
+                        project_ref_id,
+                        discovery,
+                        derived_dir.as_deref(),
+                        embedding_model.as_path(),
+                        embedding_profile.into(),
+                        reranker_model.as_deref(),
+                        reranker_profile.into(),
+                        ranking_mode,
+                        &query,
+                    )
+                });
+                inputs.push(match source {
+                    Ok(result) => FederatedSourceInput::Semantic(result),
+                    Err(error) => FederatedSourceInput::Failed(FederatedSourceFailure::new(
+                        project_ref_id,
+                        error.code().to_string(),
+                        error.to_string(),
+                    )?),
+                });
+            }
+            let mut options = FederatedQueryOptions::new(&query, FederatedRetrievalKind::Semantic)?;
+            if let Some(limit) = limit {
+                options = options.with_result_limit(limit)?;
+            }
+            let result = aggregate_federated_search(options, inputs)?;
+            render_federated_query(&result, format)
+        }
         SearchCommand::Refresh {
             cwd,
             registry,
@@ -28814,6 +28998,325 @@ fn run_search(command: SearchCommand) -> Result<String> {
             render_semantic_query(&result, format)
         }
     }
+}
+
+fn parse_federated_project_refs(values: &[String]) -> Result<Vec<ProjectRefId>> {
+    if values.len() < 2 {
+        return Err(WorkVcsError::QueryInvalid(
+            "federated search requires at least two --source-project-ref values".to_owned(),
+        ));
+    }
+    let mut unique = BTreeSet::new();
+    let mut parsed = Vec::with_capacity(values.len());
+    for value in values {
+        let project_ref_id = ProjectRefId::parse_canonical(value)?;
+        if !unique.insert(project_ref_id) {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "federated source ProjectRef {project_ref_id} was selected more than once"
+            )));
+        }
+        parsed.push(project_ref_id);
+    }
+    Ok(parsed)
+}
+
+fn verified_federated_identity(
+    requested_project_ref_id: ProjectRefId,
+    discovery: &ProjectDiscovery,
+    engine: &Engine,
+) -> Result<SearchSourceIdentity> {
+    let store_info = engine.store_info()?;
+    checked_federated_identity(
+        requested_project_ref_id,
+        discovery.project_ref_id,
+        discovery.binding.store_id,
+        discovery.binding.workspace_id,
+        discovery.binding.branch_id,
+        store_info.store_id,
+    )
+}
+
+fn checked_federated_identity(
+    requested_project_ref_id: ProjectRefId,
+    resolved_project_ref_id: Option<ProjectRefId>,
+    binding_store_id: StoreId,
+    binding_workspace_id: WorkspaceId,
+    binding_branch_id: BranchId,
+    opened_store_id: StoreId,
+) -> Result<SearchSourceIdentity> {
+    if resolved_project_ref_id != Some(requested_project_ref_id) {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "federated source resolved to a different ProjectRef than explicitly requested {requested_project_ref_id}"
+        )));
+    }
+    if opened_store_id != binding_store_id {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "federated source {requested_project_ref_id} has a stale binding: registry Store {} does not match opened Store {}",
+            binding_store_id, opened_store_id
+        )));
+    }
+    Ok(SearchSourceIdentity::new(
+        requested_project_ref_id,
+        binding_store_id,
+        binding_workspace_id,
+        binding_branch_id,
+    ))
+}
+
+fn federated_source_root(
+    discovery: &ProjectDiscovery,
+    identity: SearchSourceIdentity,
+    explicit_root: Option<&Path>,
+) -> PathBuf {
+    let root = explicit_root.map(Path::to_path_buf).unwrap_or_else(|| {
+        let mut sidecar = discovery.registry_path.as_os_str().to_os_string();
+        sidecar.push(".d");
+        PathBuf::from(sidecar).join("federated-search")
+    });
+    root.join(format!(
+        "{}--{}--{}--{}",
+        identity.project_ref_id, identity.store_id, identity.workspace_id, identity.branch_id
+    ))
+}
+
+fn run_federated_lexical_source(
+    requested_project_ref_id: ProjectRefId,
+    discovery: ProjectDiscovery,
+    explicit_root: Option<&Path>,
+    query: &str,
+) -> Result<SearchQueryResult> {
+    let engine = Engine::open_readonly(Path::new(&discovery.binding.store_path))?;
+    let identity = verified_federated_identity(requested_project_ref_id, &discovery, &engine)?;
+    let source_root = federated_source_root(&discovery, identity, explicit_root);
+    let mut options = SearchQueryOptions::managed(identity, source_root.join("lexical"), query)?
+        .with_protected_path(discovery.registry_path.clone());
+    if let Some(path) = discovery.routing_activation_path.clone() {
+        options = options.with_protected_path(path);
+    }
+    engine.search(options)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_federated_semantic_source(
+    requested_project_ref_id: ProjectRefId,
+    discovery: ProjectDiscovery,
+    explicit_root: Option<&Path>,
+    embedding_model: &Path,
+    embedding_profile: SemanticModelProfile,
+    reranker_model: Option<&Path>,
+    reranker_profile: SemanticModelProfile,
+    ranking_mode: SemanticRankingMode,
+    query: &str,
+) -> Result<SemanticQueryResult> {
+    let engine = Engine::open_readonly(Path::new(&discovery.binding.store_path))?;
+    let identity = verified_federated_identity(requested_project_ref_id, &discovery, &engine)?;
+    let source_root = federated_source_root(&discovery, identity, explicit_root);
+    let mut options = SemanticQueryOptions::new(
+        identity,
+        source_root.join("semantic"),
+        embedding_profile,
+        embedding_model,
+        ranking_mode,
+        query,
+    )?
+    .with_protected_path(discovery.registry_path.clone());
+    if ranking_mode.needs_lexical() {
+        options = options.with_lexical_root(source_root.join("lexical"));
+    }
+    if let Some(reranker_model) = reranker_model {
+        options = options.with_reranker_model(reranker_profile, reranker_model);
+    }
+    if let Some(path) = discovery.routing_activation_path.clone() {
+        options = options.with_protected_path(path);
+    }
+    engine.semantic_search(options)
+}
+
+fn render_federated_query(
+    result: &FederatedQueryResult,
+    format: SearchOutputFormatArg,
+) -> Result<String> {
+    if format == SearchOutputFormatArg::Json {
+        let mut output = serde_json::to_string_pretty(result).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "federated query result could not be rendered as JSON: {error}"
+            ))
+        })?;
+        output.push('\n');
+        return Ok(output);
+    }
+    let mut output = String::new();
+    writeln!(
+        output,
+        "status={}",
+        match result.status {
+            FederatedSearchStatus::Ready => "ready",
+            FederatedSearchStatus::PartialFailure => "partial_failure",
+            FederatedSearchStatus::Failed => "failed",
+        }
+    )
+    .expect("write to String");
+    writeln!(output, "complete={}", result.complete).expect("write to String");
+    writeln!(output, "query={}", escape_key_value(&result.query)).expect("write to String");
+    writeln!(
+        output,
+        "retrieval_kind={}",
+        match result.retrieval_kind {
+            FederatedRetrievalKind::Lexical => "lexical",
+            FederatedRetrievalKind::Semantic => "semantic",
+        }
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "ranking_policy_version={}",
+        result.ranking_policy_version
+    )
+    .expect("write to String");
+    writeln!(output, "sources_requested={}", result.sources_requested).expect("write to String");
+    writeln!(output, "sources_succeeded={}", result.sources_succeeded).expect("write to String");
+    writeln!(output, "sources_failed={}", result.sources_failed).expect("write to String");
+    writeln!(
+        output,
+        "candidates_considered={}",
+        result.candidates_considered
+    )
+    .expect("write to String");
+    writeln!(output, "matched_objects={}", result.matched_objects).expect("write to String");
+    writeln!(output, "omitted_results={}", result.omitted_results).expect("write to String");
+    writeln!(
+        output,
+        "canonical_readback_verified={}",
+        result.canonical_readback_verified
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "canonical_source_written={}",
+        result.canonical_source_written
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "derived_files_written={}",
+        result.derived_files_written
+    )
+    .expect("write to String");
+    for (index, report) in result.source_reports.iter().enumerate() {
+        match report {
+            FederatedSourceReport::Ready {
+                source_identity,
+                temporal_scope,
+                source_commit_id,
+                candidates_considered,
+                matched_objects,
+                canonical_readback_verified,
+                ..
+            } => {
+                writeln!(output, "source.{index}.status=ready").expect("write to String");
+                writeln!(
+                    output,
+                    "source.{index}.project_ref_id={}",
+                    source_identity.project_ref_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "source.{index}.store_id={}",
+                    source_identity.store_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "source.{index}.branch_id={}",
+                    source_identity.branch_id
+                )
+                .expect("write to String");
+                writeln!(
+                    output,
+                    "source.{index}.temporal_scope={}",
+                    temporal_scope.as_str()
+                )
+                .expect("write to String");
+                writeln!(output, "source.{index}.source_commit_id={source_commit_id}")
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "source.{index}.candidates_considered={candidates_considered}"
+                )
+                .expect("write to String");
+                writeln!(output, "source.{index}.matched_objects={matched_objects}")
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "source.{index}.canonical_readback_verified={canonical_readback_verified}"
+                )
+                .expect("write to String");
+            }
+            FederatedSourceReport::Failed {
+                requested_project_ref_id,
+                error_code,
+                error,
+            } => {
+                writeln!(output, "source.{index}.status=failed").expect("write to String");
+                writeln!(
+                    output,
+                    "source.{index}.project_ref_id={requested_project_ref_id}"
+                )
+                .expect("write to String");
+                writeln!(output, "source.{index}.error_code={error_code}")
+                    .expect("write to String");
+                writeln!(output, "source.{index}.error={}", escape_key_value(error))
+                    .expect("write to String");
+            }
+        }
+    }
+    for (index, item) in result.items.iter().enumerate() {
+        let (retrieval_kind, source_type, entity_id, statement) = match &item.payload {
+            FederatedItemPayload::Lexical(value) => (
+                "lexical",
+                value.source_type.as_str(),
+                value.entity_id,
+                value.canonical_statement.as_str(),
+            ),
+            FederatedItemPayload::Semantic(value) => (
+                "semantic",
+                value.source_type.as_str(),
+                value.entity_id,
+                value.canonical_statement.as_str(),
+            ),
+        };
+        writeln!(
+            output,
+            "item.{index}.project_ref_id={}",
+            item.source_identity.project_ref_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.store_id={}",
+            item.source_identity.store_id
+        )
+        .expect("write to String");
+        writeln!(output, "item.{index}.retrieval_kind={retrieval_kind}").expect("write to String");
+        writeln!(output, "item.{index}.source_type={source_type}").expect("write to String");
+        writeln!(output, "item.{index}.entity_id={entity_id}").expect("write to String");
+        writeln!(output, "item.{index}.local_rank={}", item.local_rank).expect("write to String");
+        writeln!(output, "item.{index}.local_score={}", item.local_score).expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.federated_score={}",
+            item.federated_score
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.statement={}",
+            escape_key_value(statement)
+        )
+        .expect("write to String");
+    }
+    Ok(output)
 }
 
 fn render_semantic_model_provision(
@@ -92278,6 +92781,40 @@ mod tests {
     }
 
     #[test]
+    fn federated_identity_rejects_stale_binding_and_wrong_project_ref() {
+        let requested = ProjectRefId::new_v7();
+        let binding_store = StoreId::new_v7();
+        let workspace = WorkspaceId::new_v7();
+        let branch = BranchId::new_v7();
+        let stale = checked_federated_identity(
+            requested,
+            Some(requested),
+            binding_store,
+            workspace,
+            branch,
+            StoreId::new_v7(),
+        );
+        assert!(matches!(
+            stale,
+            Err(WorkVcsError::ControlPlaneInvalid(message)) if message.contains("stale binding")
+        ));
+
+        let wrong_project = checked_federated_identity(
+            requested,
+            Some(ProjectRefId::new_v7()),
+            binding_store,
+            workspace,
+            branch,
+            binding_store,
+        );
+        assert!(matches!(
+            wrong_project,
+            Err(WorkVcsError::ControlPlaneInvalid(message))
+                if message.contains("different ProjectRef")
+        ));
+    }
+
+    #[test]
     fn search_cli_contract_requires_routed_cwd_and_named_query_index_options() {
         let provision = Cli::try_parse_from([
             "workvcs",
@@ -92369,6 +92906,83 @@ mod tests {
             } if cwd.as_path() == Path::new("/tmp/project")
                 && archive.as_path() == Path::new("/tmp/source-archive")
                 && query == "历史证据"
+        ));
+
+        let federated = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "federated-query",
+            "--cwd",
+            "/tmp/project",
+            "--source-project-ref",
+            "01a12969-4c45-73be-88c6-f2e0941782b8",
+            "--source-project-ref",
+            "01a12969-4c45-73be-88c6-f2e0941782b9",
+            "--derived-dir",
+            "/tmp/federated",
+            "--query",
+            "跨项目证据",
+            "--format",
+            "json",
+        ])
+        .expect("parse federated lexical query contract");
+        assert!(matches!(
+            *federated.command,
+            Command::Search {
+                command: SearchCommand::FederatedQuery {
+                    cwd,
+                    source_project_refs,
+                    derived_dir: Some(derived_dir),
+                    query,
+                    limit: None,
+                    format: SearchOutputFormatArg::Json,
+                    ..
+                }
+            } if cwd.as_path() == Path::new("/tmp/project")
+                && source_project_refs.len() == 2
+                && derived_dir.as_path() == Path::new("/tmp/federated")
+                && query == "跨项目证据"
+        ));
+
+        let federated_semantic = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "federated-semantic-query",
+            "--cwd",
+            "/tmp/project",
+            "--source-project-ref",
+            "01a12969-4c45-73be-88c6-f2e0941782b8",
+            "--source-project-ref",
+            "01a12969-4c45-73be-88c6-f2e0941782b9",
+            "--embedding-model",
+            "/tmp/e5",
+            "--reranker-model",
+            "/tmp/bge",
+            "--mode",
+            "rerank-hybrid-rrf",
+            "--query",
+            "跨项目语义证据",
+            "--limit",
+            "9",
+            "--format",
+            "json",
+        ])
+        .expect("parse federated semantic query contract");
+        assert!(matches!(
+            *federated_semantic.command,
+            Command::Search {
+                command: SearchCommand::FederatedSemanticQuery {
+                    source_project_refs,
+                    embedding_model,
+                    reranker_model: Some(reranker_model),
+                    mode: SemanticRankingModeArg::RerankHybridRrf,
+                    limit: Some(9),
+                    format: SearchOutputFormatArg::Json,
+                    ..
+                }
+            } if source_project_refs.len() == 2
+                && embedding_model.as_path() == Path::new("/tmp/e5")
+                && reranker_model.as_path() == Path::new("/tmp/bge")
         ));
 
         let semantic = Cli::try_parse_from([

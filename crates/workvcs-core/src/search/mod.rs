@@ -1,3 +1,4 @@
+pub mod federated;
 pub mod semantic;
 mod snippet;
 pub mod source_archive;

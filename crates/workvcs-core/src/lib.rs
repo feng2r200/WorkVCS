@@ -218,6 +218,11 @@ pub use runtime::{
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
+pub use search::federated::{
+    FederatedItemPayload, FederatedQueryOptions, FederatedQueryResult, FederatedRetrievalKind,
+    FederatedSearchItem, FederatedSearchStatus, FederatedSourceFailure, FederatedSourceInput,
+    FederatedSourceReport, aggregate_federated_search,
+};
 pub use search::semantic::{
     SemanticDerivedStatus, SemanticGenerationManifest, SemanticModelFileManifest,
     SemanticModelKind, SemanticModelManifest, SemanticModelProfile, SemanticModelProvisionOptions,

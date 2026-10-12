@@ -10,11 +10,14 @@ It uses a separate SQLite FTS5 index for Record/Knowledge candidates and native
 source/version/snippet readback, while preserving deterministic current context
 and all lifecycle and authorization semantics. Implementation and local
 acceptance are tracked separately from stable installation or remote delivery.
+The separately authorized local stable adoption of 1.1.0 is complete;
+exact installation and subsequent delivery are recorded independently.
 
 - [ADR-0525: Local Derived FTS Search and Canonical Readback](decisions/adr/0525-local-derived-fts-search-and-canonical-readback.md)
 - [Local Derived Search Architecture](architecture/local-derived-search.md)
 - [Local Derived Search Operator Guide](operator/local-derived-search.md)
 - [Local Derived Search Candidate Evidence](provenance/local-derived-search-candidate.md)
+- [Local Derived Search Local Adoption Evidence](provenance/local-derived-search-local-adoption.md)
 
 ## Accepted ProjectRef design and bounded implementation status
 
@@ -394,10 +397,10 @@ These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is
 tracked in the V1 release gate matrix. The previously delivered `0.2.0` Rust
 implementation is locally release-ready and dogfood-complete for the bounded
-V1 scope. This branch's crate and CLI package version is `1.1.0`, the
-local-source candidate described by accepted ADR-0525. The prior maturity
-judgment does not establish stable installed adoption of this candidate;
-the stable entry remains separately identified by runtime provenance.
+V1 scope. This branch's crate and CLI package version is `1.1.0`, described by
+accepted ADR-0525. Its separately authorized stable local adoption is recorded
+in the focused adoption evidence; exact build and delivery identities remain
+separately identified by runtime and Git provenance.
 Public release, tag, push, deploy,
 remote, production, credential, and global installation actions remain separate
 authority decisions.

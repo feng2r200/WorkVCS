@@ -1,38 +1,38 @@
 # Local Derived Search
 
-This opt-in development surface is governed by ADR-0525. It searches delivered
+This opt-in local surface is governed by ADR-0525. It searches delivered
 Record and Knowledge statements from one verified read binding. It produces
 source evidence; existing `context`, `recall`, Task readiness, exact Record
 filters and mutation authorization retain their own contracts.
 
-The source candidate is version 1.1.0. Local candidate validation and stable
-installation are separate: an installed 1.0.1 CLI does not acquire these
-commands merely because the source worktree contains them.
+The stable local entrypoint was adopted at version 1.1.0 under the user's
+separate merge/Push/install authorization. Exact local adoption is recorded in
+[the adoption evidence](../provenance/local-derived-search-local-adoption.md).
+Use `workvcs runtime status --require-stable` to inspect the actual installed
+path, commit and binary digest; version text alone does not identify a build.
 
-## Build and Query
+## Query with the Stable Entrypoint
 
-Build the candidate from its WorkVCS checkout:
-
-```sh
-cargo build -p workvcs-cli
-```
-
-Run the resulting candidate only for bounded WorkVCS development validation.
-The examples assume the default Cargo target directory. Use an existing
-verified project binding and a new derived-file destination:
+Ordinary work uses `/Users/ld/.local/bin/workvcs`. Use an existing verified
+project binding and a new derived-file destination:
 
 ```sh
-./target/debug/workvcs search refresh \
+workvcs search refresh \
   --cwd /path/to/verified/project \
   --index /path/to/new-derived-search.sqlite \
   --format json
 
-./target/debug/workvcs search query \
+workvcs search query \
   --cwd /path/to/verified/project \
   --index /path/to/new-derived-search.sqlite \
   --query 'historical evidence or technical identifier' \
   --format json
 ```
+
+Only WorkVCS development validation may use a source candidate from its own
+checkout, for example after `cargo build -p workvcs-cli`. That candidate is a
+separate runtime identity and does not replace the stable entrypoint for
+ordinary project work.
 
 The CLI resolves the normal read-only ProjectRef routing and exact existing
 Store/Workspace/Branch binding. An optional `--registry` is a one-command
@@ -110,5 +110,6 @@ An admitted Capture without Store delivery is absent from this index.
 
 No embeddings, Qdrant service, transcript import, automatic extraction,
 cross-branch search, semantic lifecycle inference or automatic action is
-included. Merge, stable installation, Push and release require their separate
-delivery authorization and evidence.
+included. The local adoption has its separate authorization and evidence;
+later source, installation, Push or release actions retain their own exact
+delivery boundary.

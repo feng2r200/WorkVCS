@@ -1,6 +1,6 @@
 # ADR-0525: Local Derived FTS Search and Canonical Readback
 
-Status: Accepted; locally validated source candidate, stable adoption pending
+Status: Accepted; locally validated and separately authorized stable adoption complete
 Date: 2026-10-12
 Accepted by: The current user's explicit approval, “方案确认门通过，开始推动”,
 following the first-stage proposal in conversation
@@ -9,6 +9,11 @@ following the first-stage proposal in conversation
 Amended by the same user's subsequent instruction: “不要人为设定Token等的限制，
 先实现能力后再来考虑成本等”. This supersedes the proposed default token budget
 and cost-based query/result/snippet ceilings before the first release.
+
+The same user's later instruction, “合并、Push、安装”, separately authorizes
+integration, ordinary remote Push and local stable adoption. See the focused
+local adoption evidence; the original candidate scope and deferred vector/
+Qdrant behavior remain unchanged.
 
 ## Context
 

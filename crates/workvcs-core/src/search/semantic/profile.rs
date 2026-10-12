@@ -1,7 +1,7 @@
 use super::{SemanticModelKind, SemanticModelProfile};
 
 pub(super) const MODEL_MANIFEST_FORMAT_VERSION: u32 = 1;
-pub(super) const SEMANTIC_GENERATION_FORMAT_VERSION: u32 = 1;
+pub(super) const SEMANTIC_GENERATION_FORMAT_VERSION: u32 = 2;
 pub(super) const SEMANTIC_RANKING_POLICY_VERSION: &str = "workvcs-semantic-ranking-v1";
 pub(super) const SEMANTIC_WINDOW_POLICY_VERSION: &str = "workvcs-model-token-windows-v1-overlap-64";
 pub(super) const VECTOR_NAME: &str = "workvcs-e5-large";

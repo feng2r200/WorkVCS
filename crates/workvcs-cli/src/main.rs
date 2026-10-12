@@ -1934,6 +1934,9 @@ enum SearchCommand {
         #[arg(long, value_name = "PATH")]
         reranker_model: Option<PathBuf>,
 
+        #[arg(long, value_name = "PATH")]
+        embedding_cache_dir: Option<PathBuf>,
+
         #[arg(
             long,
             value_enum,
@@ -1949,6 +1952,12 @@ enum SearchCommand {
 
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+
+        #[arg(
+            long,
+            help = "Build a missing generation without reading or writing the embedding cache"
+        )]
+        full_rebuild: bool,
 
         #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
         format: SearchOutputFormatArg,
@@ -2032,6 +2041,9 @@ enum SearchCommand {
         #[arg(long, value_name = "PATH")]
         reranker_model: Option<PathBuf>,
 
+        #[arg(long, value_name = "PATH")]
+        embedding_cache_dir: Option<PathBuf>,
+
         #[arg(
             long,
             value_enum,
@@ -2050,6 +2062,12 @@ enum SearchCommand {
 
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+
+        #[arg(
+            long,
+            help = "Build a missing generation without reading or writing the embedding cache"
+        )]
+        full_rebuild: bool,
 
         #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
         format: SearchOutputFormatArg,
@@ -28758,7 +28776,7 @@ fn run_search(command: SearchCommand) -> Result<String> {
                     )
                 });
                 inputs.push(match source {
-                    Ok(result) => FederatedSourceInput::Lexical(result),
+                    Ok(result) => FederatedSourceInput::Lexical(Box::new(result)),
                     Err(error) => FederatedSourceInput::Failed(FederatedSourceFailure::new(
                         project_ref_id,
                         error.code().to_string(),
@@ -28781,10 +28799,12 @@ fn run_search(command: SearchCommand) -> Result<String> {
             embedding_model,
             embedding_profile,
             reranker_model,
+            embedding_cache_dir,
             reranker_profile,
             mode,
             query,
             limit,
+            full_rebuild,
             format,
         } => {
             let project_refs = parse_federated_project_refs(&source_project_refs)?;
@@ -28811,13 +28831,15 @@ fn run_search(command: SearchCommand) -> Result<String> {
                         embedding_model.as_path(),
                         embedding_profile.into(),
                         reranker_model.as_deref(),
+                        embedding_cache_dir.as_deref(),
                         reranker_profile.into(),
                         ranking_mode,
                         &query,
+                        full_rebuild,
                     )
                 });
                 inputs.push(match source {
-                    Ok(result) => FederatedSourceInput::Semantic(result),
+                    Ok(result) => FederatedSourceInput::Semantic(Box::new(result)),
                     Err(error) => FederatedSourceInput::Failed(FederatedSourceFailure::new(
                         project_ref_id,
                         error.code().to_string(),
@@ -28935,11 +28957,13 @@ fn run_search(command: SearchCommand) -> Result<String> {
             embedding_model,
             embedding_profile,
             reranker_model,
+            embedding_cache_dir,
             reranker_profile,
             mode,
             query,
             commit,
             limit,
+            full_rebuild,
             format,
         } => {
             let discovery = discover_project_readonly_with_locator(
@@ -28985,6 +29009,10 @@ fn run_search(command: SearchCommand) -> Result<String> {
             if let Some(reranker_model) = reranker_model {
                 options = options.with_reranker_model(reranker_profile.into(), reranker_model);
             }
+            if let Some(embedding_cache_dir) = embedding_cache_dir {
+                options = options.with_embedding_cache(embedding_cache_dir);
+            }
+            options = options.force_full_rebuild(full_rebuild);
             if let Some(limit) = limit {
                 options = options.with_result_limit(limit)?;
             }
@@ -29104,9 +29132,11 @@ fn run_federated_semantic_source(
     embedding_model: &Path,
     embedding_profile: SemanticModelProfile,
     reranker_model: Option<&Path>,
+    embedding_cache_root: Option<&Path>,
     reranker_profile: SemanticModelProfile,
     ranking_mode: SemanticRankingMode,
     query: &str,
+    force_full_rebuild: bool,
 ) -> Result<SemanticQueryResult> {
     let engine = Engine::open_readonly(Path::new(&discovery.binding.store_path))?;
     let identity = verified_federated_identity(requested_project_ref_id, &discovery, &engine)?;
@@ -29126,6 +29156,12 @@ fn run_federated_semantic_source(
     if let Some(reranker_model) = reranker_model {
         options = options.with_reranker_model(reranker_profile, reranker_model);
     }
+    if let Some(embedding_cache_root) = embedding_cache_root {
+        let source_cache_root =
+            federated_source_root(&discovery, identity, Some(embedding_cache_root));
+        options = options.with_embedding_cache(source_cache_root.join("embedding-cache"));
+    }
+    options = options.force_full_rebuild(force_full_rebuild);
     if let Some(path) = discovery.routing_activation_path.clone() {
         options = options.with_protected_path(path);
     }
@@ -92956,6 +92992,8 @@ mod tests {
             "01a12969-4c45-73be-88c6-f2e0941782b9",
             "--embedding-model",
             "/tmp/e5",
+            "--embedding-cache-dir",
+            "/tmp/federated-cache",
             "--reranker-model",
             "/tmp/bge",
             "--mode",
@@ -92964,6 +93002,7 @@ mod tests {
             "跨项目语义证据",
             "--limit",
             "9",
+            "--full-rebuild",
             "--format",
             "json",
         ])
@@ -92974,14 +93013,17 @@ mod tests {
                 command: SearchCommand::FederatedSemanticQuery {
                     source_project_refs,
                     embedding_model,
+                    embedding_cache_dir: Some(embedding_cache_dir),
                     reranker_model: Some(reranker_model),
                     mode: SemanticRankingModeArg::RerankHybridRrf,
                     limit: Some(9),
+                    full_rebuild: true,
                     format: SearchOutputFormatArg::Json,
                     ..
                 }
             } if source_project_refs.len() == 2
                 && embedding_model.as_path() == Path::new("/tmp/e5")
+                && embedding_cache_dir.as_path() == Path::new("/tmp/federated-cache")
                 && reranker_model.as_path() == Path::new("/tmp/bge")
         ));
 
@@ -92997,6 +93039,8 @@ mod tests {
             "/tmp/lexical-generations",
             "--embedding-model",
             "/tmp/e5",
+            "--embedding-cache-dir",
+            "/tmp/semantic-cache",
             "--reranker-model",
             "/tmp/bge",
             "--mode",
@@ -93005,6 +93049,7 @@ mod tests {
             "完整语义查询",
             "--commit",
             "01a12969-4c45-73be-88c6-f2e0941782b8",
+            "--full-rebuild",
             "--format",
             "json",
         ])
@@ -93017,9 +93062,11 @@ mod tests {
                     generation_dir: Some(generation_dir),
                     lexical_dir: Some(lexical_dir),
                     embedding_model,
+                    embedding_cache_dir: Some(embedding_cache_dir),
                     reranker_model: Some(reranker_model),
                     mode: SemanticRankingModeArg::RerankHybridRrf,
                     limit: None,
+                    full_rebuild: true,
                     format: SearchOutputFormatArg::Json,
                     ..
                 }
@@ -93027,6 +93074,7 @@ mod tests {
                 && generation_dir.as_path() == Path::new("/tmp/semantic-generations")
                 && lexical_dir.as_path() == Path::new("/tmp/lexical-generations")
                 && embedding_model.as_path() == Path::new("/tmp/e5")
+                && embedding_cache_dir.as_path() == Path::new("/tmp/semantic-cache")
                 && reranker_model.as_path() == Path::new("/tmp/bge")
         ));
 

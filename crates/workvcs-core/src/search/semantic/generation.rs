@@ -28,6 +28,9 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+
 const GENERATION_MANIFEST_FILE: &str = "manifest.json";
 const CATALOG_FILE: &str = "catalog.json";
 const GENERATION_LOCK_FILE: &str = "generation.lock";
@@ -35,6 +38,25 @@ const QDRANT_DIRECTORY: &str = "qdrant";
 const QDRANT_SEGMENT_MANIFEST: &str = "segments_manifest.json";
 const EMBEDDING_BATCH_SIZE: usize = 8;
 const RERANKER_BATCH_SIZE: usize = 8;
+const EMBEDDING_CACHE_POLICY_VERSION: &str = "workvcs-e5-vector-cache-v1";
+const EMBEDDING_CACHE_MAGIC: &[u8] = b"WORKVCS-E5-VECTOR-CACHE-V1\0";
+const EMBEDDING_DIMENSION: usize = 1024;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct EmbeddingBuildReport {
+    cache_enabled: bool,
+    cache_read_hits: usize,
+    vectors_computed: usize,
+    cache_writes: usize,
+    cache_write_failures: usize,
+    cache_fallback_reason: Option<String>,
+    full_rebuild: bool,
+}
+
+struct EmbeddingCache {
+    root: PathBuf,
+    model_digest: Digest,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ObjectKey {
@@ -89,17 +111,16 @@ struct GenerationLock {
 impl GenerationLock {
     fn create(directory: &Path) -> Result<Self> {
         let path = directory.join(GENERATION_LOCK_FILE);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| {
-                WorkVcsError::StorageFailure(format!(
-                    "cannot create semantic generation lock {}: {error}",
-                    path.display()
-                ))
-            })?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options.open(&path).map_err(|error| {
+            WorkVcsError::StorageFailure(format!(
+                "cannot create semantic generation lock {}: {error}",
+                path.display()
+            ))
+        })?;
         Self::lock(file, &path)
     }
 
@@ -208,6 +229,21 @@ pub(super) fn query_semantic(
         options.reranker_model_path.as_deref(),
     )?;
     let generation_path = generation_root.join(basis_digest.to_hex());
+    let embedding_cache = options
+        .embedding_cache_root
+        .as_deref()
+        .map(|root| {
+            prepare_embedding_cache(
+                root,
+                source_path,
+                &options.protected_paths,
+                &options.embedding_model_path,
+                options.reranker_model_path.as_deref(),
+                &generation_path,
+                embedding_manifest.manifest_digest,
+            )
+        })
+        .transpose()?;
     let publication_lock = super::super::SearchPublicationLock::acquire(&generation_path)?;
     let maintenance = if generation_path.exists() {
         SearchRefreshOutcome::Reused
@@ -220,6 +256,8 @@ pub(super) fn query_semantic(
             &embedding_manifest,
             &embedding_tokenizer,
             &mut embedding,
+            embedding_cache.as_ref(),
+            options.force_full_rebuild,
         )?;
         SearchRefreshOutcome::Refreshed
     };
@@ -313,7 +351,7 @@ pub(super) fn query_semantic(
             source_commit_id: snapshot.source_commit_id,
             source_state_digest: snapshot.source_state_digest,
             generation_path: generation_path.clone(),
-            generation_manifest,
+            generation_manifest: generation_manifest.clone(),
             embedding_model_path: options.embedding_model_path.clone(),
             reranker_model_path: options.reranker_model_path.clone(),
             generation_maintenance: maintenance,
@@ -338,6 +376,7 @@ pub(super) fn query_semantic(
                 reranker_pair_count,
                 &generation_path,
                 options.ranking_mode,
+                &generation_manifest,
             )?,
         });
     }
@@ -355,7 +394,7 @@ pub(super) fn query_semantic(
         source_commit_id: snapshot.source_commit_id,
         source_state_digest: snapshot.source_state_digest,
         generation_path: generation_path.clone(),
-        generation_manifest,
+        generation_manifest: generation_manifest.clone(),
         embedding_model_path: options.embedding_model_path.clone(),
         reranker_model_path: options.reranker_model_path.clone(),
         generation_maintenance: maintenance,
@@ -380,6 +419,7 @@ pub(super) fn query_semantic(
             reranker_pair_count,
             &generation_path,
             options.ranking_mode,
+            &generation_manifest,
         )?,
     })
 }
@@ -397,6 +437,7 @@ fn observations(
     reranker_pair_count: usize,
     generation_path: &Path,
     mode: SemanticRankingMode,
+    generation_manifest: &SemanticGenerationManifest,
 ) -> Result<SemanticResourceObservations> {
     Ok(SemanticResourceObservations {
         elapsed_millis: started.elapsed().as_millis(),
@@ -412,6 +453,15 @@ fn observations(
         generation_bytes: directory_bytes(generation_path)?,
         embedding_batch_size: EMBEDDING_BATCH_SIZE,
         reranker_batch_size: mode.needs_reranker().then_some(RERANKER_BATCH_SIZE),
+        embedding_cache_enabled: generation_manifest.embedding_cache_enabled,
+        embedding_cache_read_hits: generation_manifest.embedding_cache_read_hits,
+        embedding_vectors_computed: generation_manifest.embedding_vectors_computed,
+        embedding_cache_writes: generation_manifest.embedding_cache_writes,
+        embedding_cache_write_failures: generation_manifest.embedding_cache_write_failures,
+        embedding_cache_fallback_reason: generation_manifest
+            .embedding_cache_fallback_reason
+            .clone(),
+        full_rebuild: generation_manifest.full_rebuild,
     })
 }
 
@@ -422,15 +472,14 @@ fn validate_query_options(options: &SemanticQueryOptions) -> Result<()> {
             options.embedding_profile
         )));
     }
-    if options.ranking_mode.needs_reranker() {
-        if options.reranker_profile != Some(SemanticModelProfile::BgeRerankerV2M3Fp32V1)
-            || options.reranker_model_path.is_none()
-        {
-            return Err(WorkVcsError::QueryInvalid(
-                "selected ranking mode requires explicit bge-reranker-v2-m3-fp32-v1 profile and model path"
-                    .to_owned(),
-            ));
-        }
+    if options.ranking_mode.needs_reranker()
+        && (options.reranker_profile != Some(SemanticModelProfile::BgeRerankerV2M3Fp32V1)
+            || options.reranker_model_path.is_none())
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "selected ranking mode requires explicit bge-reranker-v2-m3-fp32-v1 profile and model path"
+                .to_owned(),
+        ));
     }
     if options.ranking_mode.needs_lexical() && options.lexical_root.is_none() {
         return Err(WorkVcsError::QueryInvalid(
@@ -471,7 +520,7 @@ fn generation_basis_digest(snapshot: &SourceSnapshot, model_digest: Digest) -> R
         object_count: snapshot.documents.len(),
         embedding_model_manifest_digest: model_digest,
         embedding_profile: SemanticModelProfile::MultilingualE5LargeFp32V1,
-        dimension: 1024,
+        dimension: EMBEDDING_DIMENSION,
         distance: "cosine",
         vector_name: VECTOR_NAME,
         exact_search: true,
@@ -570,6 +619,69 @@ fn prepare_generation_root(
     Ok(root)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn prepare_embedding_cache(
+    root: &Path,
+    source_path: &Path,
+    protected_paths: &[PathBuf],
+    embedding_model_path: &Path,
+    reranker_model_path: Option<&Path>,
+    generation_path: &Path,
+    model_digest: Digest,
+) -> Result<EmbeddingCache> {
+    if !root.is_absolute()
+        || root
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "embedding cache directory must be absolute without dot or parent components"
+                .to_owned(),
+        ));
+    }
+    let parent = root.parent().ok_or_else(|| {
+        WorkVcsError::QueryInvalid("embedding cache directory has no parent".to_owned())
+    })?;
+    fs::create_dir_all(parent).map_err(storage_error("create embedding cache parent", parent))?;
+    let parent = fs::canonicalize(parent)
+        .map_err(storage_error("canonicalize embedding cache parent", parent))?;
+    let root = parent.join(root.file_name().ok_or_else(|| {
+        WorkVcsError::QueryInvalid("embedding cache directory has no final name".to_owned())
+    })?);
+    let source =
+        fs::canonicalize(source_path).map_err(storage_error("canonicalize Store", source_path))?;
+    let embedding = fs::canonicalize(embedding_model_path).map_err(storage_error(
+        "canonicalize embedding model",
+        embedding_model_path,
+    ))?;
+    let mut incompatible = vec![source, embedding, generation_path.to_path_buf()];
+    if let Some(reranker) = reranker_model_path {
+        incompatible.push(
+            fs::canonicalize(reranker)
+                .map_err(storage_error("canonicalize reranker model", reranker))?,
+        );
+    }
+    for protected in protected_paths {
+        incompatible.push(
+            fs::canonicalize(protected)
+                .map_err(storage_error("canonicalize protected path", protected))?,
+        );
+    }
+    if incompatible
+        .iter()
+        .any(|path| root == *path || root.starts_with(path) || path.starts_with(&root))
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "embedding cache directory overlaps a Store, model, protected path, or immutable generation"
+                .to_owned(),
+        ));
+    }
+    create_private_directory_if_missing(&root)?;
+    create_private_directory_if_missing(&root.join(model_digest.to_hex()))?;
+    Ok(EmbeddingCache { root, model_digest })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_generation(
     source: &StoreConnection,
     snapshot: &SourceSnapshot,
@@ -578,10 +690,12 @@ fn build_generation(
     embedding_manifest: &super::SemanticModelManifest,
     tokenizer: &tokenizers::Tokenizer,
     embedding: &mut TextEmbedding,
+    embedding_cache: Option<&EmbeddingCache>,
+    force_full_rebuild: bool,
 ) -> Result<()> {
     let root = destination.parent().expect("generation destination parent");
     let stage = root.join(format!(".workvcs-semantic-{}.tmp", uuid::Uuid::now_v7()));
-    fs::create_dir(&stage).map_err(storage_error("create generation stage", &stage))?;
+    create_private_directory_if_missing(&stage)?;
     let result = (|| {
         let _lock = GenerationLock::create(&stage)?;
         let catalog = build_catalog(snapshot, tokenizer)?;
@@ -594,31 +708,13 @@ fn build_generation(
             Digest::domain_separated("workvcs-semantic-passage-catalog-v1", &catalog_bytes);
         write_file_new(&stage.join(CATALOG_FILE), &catalog_bytes)?;
 
-        let passage_inputs = catalog
-            .iter()
-            .map(|entry| format!("passage: {}", entry.text))
-            .collect::<Vec<_>>();
-        let vectors = if passage_inputs.is_empty() {
-            Vec::new()
-        } else {
-            embedding
-                .embed(&passage_inputs, Some(EMBEDDING_BATCH_SIZE))
-                .map_err(|error| {
-                    WorkVcsError::StorageFailure(format!(
-                        "cannot embed complete semantic passage catalog: {error}"
-                    ))
-                })?
-        };
-        if vectors.len() != catalog.len()
-            || vectors
-                .iter()
-                .any(|vector| vector.len() != 1024 || vector.iter().any(|value| !value.is_finite()))
-        {
-            return Err(WorkVcsError::StorageFailure(
-                "embedding output does not match the complete 1024-dimensional passage catalog"
-                    .to_owned(),
-            ));
-        }
+        let (vectors, embedding_report) = build_embedding_vectors(
+            &catalog,
+            embedding_manifest.manifest_digest,
+            embedding,
+            embedding_cache,
+            force_full_rebuild,
+        )?;
 
         let point_id_digest = point_id_digest(catalog.iter().map(|entry| entry.point_id));
         let (qdrant_config, qdrant_search_threads, optimized) = if catalog.is_empty() {
@@ -649,7 +745,15 @@ fn build_generation(
             point_count: catalog.len(),
             embedding_model_manifest_digest: embedding_manifest.manifest_digest,
             embedding_profile: embedding_manifest.profile,
-            dimension: 1024,
+            embedding_cache_policy_version: EMBEDDING_CACHE_POLICY_VERSION.to_owned(),
+            embedding_cache_enabled: embedding_report.cache_enabled,
+            embedding_cache_read_hits: embedding_report.cache_read_hits,
+            embedding_vectors_computed: embedding_report.vectors_computed,
+            embedding_cache_writes: embedding_report.cache_writes,
+            embedding_cache_write_failures: embedding_report.cache_write_failures,
+            embedding_cache_fallback_reason: embedding_report.cache_fallback_reason,
+            full_rebuild: embedding_report.full_rebuild,
+            dimension: EMBEDDING_DIMENSION,
             distance: "cosine".to_owned(),
             vector_name: VECTOR_NAME.to_owned(),
             exact_search: true,
@@ -731,6 +835,322 @@ fn build_catalog(
     Ok(catalog)
 }
 
+fn build_embedding_vectors(
+    catalog: &[SemanticPassageCatalogEntry],
+    model_digest: Digest,
+    embedding: &mut TextEmbedding,
+    cache: Option<&EmbeddingCache>,
+    force_full_rebuild: bool,
+) -> Result<(Vec<Vec<f32>>, EmbeddingBuildReport)> {
+    let passage_inputs = catalog
+        .iter()
+        .map(|entry| format!("passage: {}", entry.text))
+        .collect::<Vec<_>>();
+    let cache_enabled = cache.is_some();
+    if passage_inputs.is_empty() {
+        return Ok((
+            Vec::new(),
+            EmbeddingBuildReport {
+                cache_enabled,
+                full_rebuild: force_full_rebuild,
+                cache_fallback_reason: force_full_rebuild
+                    .then(|| "explicit_full_rebuild".to_owned()),
+                ..EmbeddingBuildReport::default()
+            },
+        ));
+    }
+    if force_full_rebuild || cache.is_none() {
+        let vectors = embed_complete(embedding, &passage_inputs)?;
+        return Ok((
+            vectors,
+            EmbeddingBuildReport {
+                cache_enabled,
+                vectors_computed: passage_inputs.len(),
+                cache_fallback_reason: force_full_rebuild
+                    .then(|| "explicit_full_rebuild".to_owned()),
+                full_rebuild: force_full_rebuild,
+                ..EmbeddingBuildReport::default()
+            },
+        ));
+    }
+
+    let cache = cache.expect("cache presence checked");
+    if cache.model_digest != model_digest {
+        return Err(WorkVcsError::StorageFailure(
+            "embedding cache model identity does not match the loaded model".to_owned(),
+        ));
+    }
+    let mut vectors = vec![None; passage_inputs.len()];
+    let mut missing = Vec::new();
+    let mut cache_read_hits = 0;
+    for (index, input) in passage_inputs.iter().enumerate() {
+        match cache.load(input) {
+            Ok(Some(vector)) => {
+                vectors[index] = Some(vector);
+                cache_read_hits += 1;
+            }
+            Ok(None) => missing.push(index),
+            Err(_) => {
+                let rebuilt = embed_complete(embedding, &passage_inputs)?;
+                return Ok((
+                    rebuilt,
+                    EmbeddingBuildReport {
+                        cache_enabled: true,
+                        vectors_computed: passage_inputs.len(),
+                        cache_fallback_reason: Some("cache_read_invalid".to_owned()),
+                        full_rebuild: true,
+                        ..EmbeddingBuildReport::default()
+                    },
+                ));
+            }
+        }
+    }
+
+    let missing_inputs = missing
+        .iter()
+        .map(|index| passage_inputs[*index].clone())
+        .collect::<Vec<_>>();
+    let computed = embed_complete(embedding, &missing_inputs)?;
+    let mut cache_writes = 0;
+    let mut cache_write_failures = 0;
+    for ((index, input), vector) in missing
+        .iter()
+        .copied()
+        .zip(missing_inputs.iter())
+        .zip(computed)
+    {
+        match cache.publish(input, &vector) {
+            Ok((authoritative, written)) => {
+                vectors[index] = Some(authoritative);
+                cache_writes += usize::from(written);
+            }
+            Err(_) => {
+                vectors[index] = Some(vector);
+                cache_write_failures += 1;
+            }
+        }
+    }
+    let vectors = vectors
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            WorkVcsError::StorageFailure(
+                "embedding cache assembly did not cover the complete passage catalog".to_owned(),
+            )
+        })?;
+    validate_embedding_vectors(&vectors, passage_inputs.len())?;
+    Ok((
+        vectors,
+        EmbeddingBuildReport {
+            cache_enabled: true,
+            cache_read_hits,
+            vectors_computed: missing_inputs.len(),
+            cache_writes,
+            cache_write_failures,
+            cache_fallback_reason: (cache_write_failures > 0)
+                .then(|| "cache_write_incomplete".to_owned()),
+            full_rebuild: false,
+        },
+    ))
+}
+
+fn embed_complete(embedding: &mut TextEmbedding, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let vectors = embedding
+        .embed(inputs, Some(EMBEDDING_BATCH_SIZE))
+        .map_err(|error| {
+            WorkVcsError::StorageFailure(format!(
+                "cannot embed complete semantic passage input: {error}"
+            ))
+        })?;
+    validate_embedding_vectors(&vectors, inputs.len())?;
+    Ok(vectors)
+}
+
+fn validate_embedding_vectors(vectors: &[Vec<f32>], expected: usize) -> Result<()> {
+    if vectors.len() != expected
+        || vectors.iter().any(|vector| {
+            vector.len() != EMBEDDING_DIMENSION || vector.iter().any(|value| !value.is_finite())
+        })
+    {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "embedding output does not match all {expected} complete {EMBEDDING_DIMENSION}-dimensional passage inputs"
+        )));
+    }
+    Ok(())
+}
+
+impl EmbeddingCache {
+    fn load(&self, input: &str) -> Result<Option<Vec<f32>>> {
+        let key = embedding_cache_key(self.model_digest, input);
+        let path = self.path(key);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(storage_error("inspect embedding cache vector", &path)(
+                    error,
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(WorkVcsError::StorageFailure(format!(
+                "embedding cache vector {} is not a regular file",
+                path.display()
+            )));
+        }
+        require_private_file(&path, &metadata)?;
+        let bytes = fs::read(&path).map_err(storage_error("read embedding cache vector", &path))?;
+        decode_embedding_cache_vector(&bytes, key, self.model_digest).map(Some)
+    }
+
+    fn publish(&self, input: &str, vector: &[f32]) -> Result<(Vec<f32>, bool)> {
+        validate_embedding_vectors(&[vector.to_vec()], 1)?;
+        if let Some(existing) = self.load(input)? {
+            return Ok((existing, false));
+        }
+        let key = embedding_cache_key(self.model_digest, input);
+        let destination = self.path(key);
+        let parent = destination
+            .parent()
+            .expect("embedding cache vector path has a parent");
+        create_private_directory_if_missing(parent)?;
+        let temporary = parent.join(format!(".{}.{}.tmp", key, uuid::Uuid::now_v7()));
+        let bytes = encode_embedding_cache_vector(key, self.model_digest, vector)?;
+        write_private_file_new(&temporary, &bytes)?;
+        let linked = match fs::hard_link(&temporary, &destination) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                return Err(storage_error(
+                    "publish embedding cache vector without replacement",
+                    &destination,
+                )(error));
+            }
+        };
+        let _ = fs::remove_file(&temporary);
+        sync_directory(parent)?;
+        if linked {
+            Ok((vector.to_vec(), true))
+        } else {
+            self.load(input)?
+                .map(|value| (value, false))
+                .ok_or_else(|| {
+                    WorkVcsError::StorageFailure(
+                        "embedding cache publication raced but no complete vector exists"
+                            .to_owned(),
+                    )
+                })
+        }
+    }
+
+    fn path(&self, key: Digest) -> PathBuf {
+        let hex = key.to_hex();
+        self.root
+            .join(self.model_digest.to_hex())
+            .join(&hex[..2])
+            .join(format!("{hex}.bin"))
+    }
+}
+
+fn embedding_cache_key(model_digest: Digest, input: &str) -> Digest {
+    let mut payload = Vec::with_capacity(Digest::BYTE_LEN + input.len());
+    payload.extend_from_slice(model_digest.as_bytes());
+    payload.extend_from_slice(input.as_bytes());
+    Digest::domain_separated(EMBEDDING_CACHE_POLICY_VERSION, &payload)
+}
+
+fn encode_embedding_cache_vector(
+    key: Digest,
+    model_digest: Digest,
+    vector: &[f32],
+) -> Result<Vec<u8>> {
+    validate_embedding_vectors(&[vector.to_vec()], 1)?;
+    let mut vector_bytes = Vec::with_capacity(std::mem::size_of_val(vector));
+    for value in vector {
+        vector_bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    let vector_digest =
+        Digest::domain_separated("workvcs-embedding-cache-vector-v1", &vector_bytes);
+    let mut bytes = Vec::with_capacity(
+        EMBEDDING_CACHE_MAGIC.len()
+            + Digest::BYTE_LEN * 3
+            + std::mem::size_of::<u32>()
+            + vector_bytes.len(),
+    );
+    bytes.extend_from_slice(EMBEDDING_CACHE_MAGIC);
+    bytes.extend_from_slice(key.as_bytes());
+    bytes.extend_from_slice(model_digest.as_bytes());
+    bytes.extend_from_slice(&(EMBEDDING_DIMENSION as u32).to_be_bytes());
+    bytes.extend_from_slice(&vector_bytes);
+    bytes.extend_from_slice(vector_digest.as_bytes());
+    Ok(bytes)
+}
+
+fn decode_embedding_cache_vector(
+    bytes: &[u8],
+    expected_key: Digest,
+    expected_model: Digest,
+) -> Result<Vec<f32>> {
+    let vector_bytes_len = EMBEDDING_DIMENSION * std::mem::size_of::<f32>();
+    let expected_len = EMBEDDING_CACHE_MAGIC.len()
+        + Digest::BYTE_LEN * 3
+        + std::mem::size_of::<u32>()
+        + vector_bytes_len;
+    if bytes.len() != expected_len || !bytes.starts_with(EMBEDDING_CACHE_MAGIC) {
+        return Err(WorkVcsError::StorageFailure(
+            "embedding cache vector has an invalid header or length".to_owned(),
+        ));
+    }
+    let mut offset = EMBEDDING_CACHE_MAGIC.len();
+    let key = Digest::from_bytes(
+        bytes[offset..offset + Digest::BYTE_LEN]
+            .try_into()
+            .expect("digest slice length"),
+    );
+    offset += Digest::BYTE_LEN;
+    let model = Digest::from_bytes(
+        bytes[offset..offset + Digest::BYTE_LEN]
+            .try_into()
+            .expect("digest slice length"),
+    );
+    offset += Digest::BYTE_LEN;
+    let dimension = u32::from_be_bytes(
+        bytes[offset..offset + std::mem::size_of::<u32>()]
+            .try_into()
+            .expect("dimension slice length"),
+    ) as usize;
+    offset += std::mem::size_of::<u32>();
+    let vector_bytes = &bytes[offset..offset + vector_bytes_len];
+    offset += vector_bytes_len;
+    let vector_digest = Digest::from_bytes(
+        bytes[offset..offset + Digest::BYTE_LEN]
+            .try_into()
+            .expect("digest slice length"),
+    );
+    if key != expected_key
+        || model != expected_model
+        || dimension != EMBEDDING_DIMENSION
+        || vector_digest
+            != Digest::domain_separated("workvcs-embedding-cache-vector-v1", vector_bytes)
+    {
+        return Err(WorkVcsError::StorageFailure(
+            "embedding cache vector identity, dimension, or digest mismatch".to_owned(),
+        ));
+    }
+    let vector = vector_bytes
+        .as_chunks::<{ std::mem::size_of::<f32>() }>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
+        .collect::<Vec<_>>();
+    validate_embedding_vectors(std::slice::from_ref(&vector), 1)?;
+    Ok(vector)
+}
+
 fn build_qdrant(
     path: &Path,
     catalog: &[SemanticPassageCatalogEntry],
@@ -747,7 +1167,7 @@ fn build_qdrant(
         .optimizers(optimizers.clone())
         .vector(
             VECTOR_NAME,
-            EdgeVectorParamsBuilder::new(1024, Distance::Cosine)
+            EdgeVectorParamsBuilder::new(EMBEDDING_DIMENSION, Distance::Cosine)
                 .on_disk(true)
                 .build(),
         )
@@ -785,7 +1205,7 @@ fn build_qdrant(
     let optimized = shard.optimize().map_err(qdrant_error("optimize shard"))?;
     shard.flush().map_err(qdrant_error("flush shard"))?;
 
-    let probe = vec![1.0_f32; 1024];
+    let probe = vec![1.0_f32; EMBEDDING_DIMENSION];
     let writable = shard
         .query(exact_query(probe.clone(), catalog.len()))
         .map_err(qdrant_error("query flushed writable shard"))?;
@@ -862,9 +1282,24 @@ fn validate_generation(
     expected_basis: Digest,
     expected_model: Digest,
 ) -> Result<(SemanticGenerationManifest, Vec<SemanticPassageCatalogEntry>)> {
-    let manifest_bytes = fs::read(path.join(GENERATION_MANIFEST_FILE)).map_err(storage_error(
+    require_private_directory(path)?;
+    let manifest_path = path.join(GENERATION_MANIFEST_FILE);
+    let catalog_path = path.join(CATALOG_FILE);
+    require_private_file(
+        &manifest_path,
+        &fs::symlink_metadata(&manifest_path).map_err(storage_error(
+            "inspect semantic generation manifest",
+            &manifest_path,
+        ))?,
+    )?;
+    require_private_file(
+        &catalog_path,
+        &fs::symlink_metadata(&catalog_path)
+            .map_err(storage_error("inspect semantic catalog", &catalog_path))?,
+    )?;
+    let manifest_bytes = fs::read(&manifest_path).map_err(storage_error(
         "read semantic generation manifest",
-        &path.join(GENERATION_MANIFEST_FILE),
+        &manifest_path,
     ))?;
     let manifest: SemanticGenerationManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|error| {
@@ -884,7 +1319,18 @@ fn validate_generation(
         || manifest.object_count != snapshot.documents.len()
         || manifest.embedding_model_manifest_digest != expected_model
         || manifest.embedding_profile != SemanticModelProfile::MultilingualE5LargeFp32V1
-        || manifest.dimension != 1024
+        || manifest.embedding_cache_policy_version != EMBEDDING_CACHE_POLICY_VERSION
+        || manifest.embedding_cache_read_hits + manifest.embedding_vectors_computed
+            != manifest.point_count
+        || manifest.embedding_cache_writes + manifest.embedding_cache_write_failures
+            > manifest.embedding_vectors_computed
+        || (!manifest.embedding_cache_enabled
+            && (manifest.embedding_cache_read_hits != 0
+                || manifest.embedding_cache_writes != 0
+                || manifest.embedding_cache_write_failures != 0))
+        || (manifest.full_rebuild
+            && (manifest.embedding_cache_read_hits != 0 || manifest.embedding_cache_writes != 0))
+        || manifest.dimension != EMBEDDING_DIMENSION
         || manifest.distance != "cosine"
         || manifest.vector_name != VECTOR_NAME
         || !manifest.exact_search
@@ -900,10 +1346,8 @@ fn validate_generation(
             path.display()
         )));
     }
-    let catalog_bytes = fs::read(path.join(CATALOG_FILE)).map_err(storage_error(
-        "read semantic catalog",
-        &path.join(CATALOG_FILE),
-    ))?;
+    let catalog_bytes =
+        fs::read(&catalog_path).map_err(storage_error("read semantic catalog", &catalog_path))?;
     if Digest::domain_separated("workvcs-semantic-passage-catalog-v1", &catalog_bytes)
         != manifest.catalog_digest
     {
@@ -1023,9 +1467,9 @@ fn exact_vector_scores(
             ))
         })?;
     if query_vectors.len() != query_inputs.len()
-        || query_vectors
-            .iter()
-            .any(|vector| vector.len() != 1024 || vector.iter().any(|value| !value.is_finite()))
+        || query_vectors.iter().any(|vector| {
+            vector.len() != EMBEDDING_DIMENSION || vector.iter().any(|value| !value.is_finite())
+        })
     {
         return Err(WorkVcsError::StorageFailure(
             "semantic query embedding output is incomplete, wrong-dimensional, or non-finite"
@@ -1436,15 +1880,80 @@ fn write_json_new(path: &Path, value: &impl Serialize) -> Result<()> {
 }
 
 fn write_file_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    write_private_file_new(path, bytes)
+}
+
+fn write_private_file_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
         .open(path)
         .map_err(storage_error("create derived file", path))?;
     file.write_all(bytes)
         .map_err(storage_error("write derived file", path))?;
     file.sync_all()
         .map_err(storage_error("sync derived file", path))
+}
+
+fn create_private_directory_if_missing(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => require_private_directory(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            match builder.create(path) {
+                Ok(()) => require_private_directory(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    require_private_directory(path)
+                }
+                Err(error) => Err(storage_error("create private derived directory", path)(
+                    error,
+                )),
+            }
+        }
+        Err(error) => Err(storage_error("inspect private derived directory", path)(
+            error,
+        )),
+    }
+}
+
+fn require_private_directory(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(storage_error("inspect private derived directory", path))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "private derived directory {} is not a real directory",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "private derived directory {} exposes group or other permissions",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn require_private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "private derived file {} is not a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(WorkVcsError::StorageFailure(format!(
+            "private derived file {} exposes group or other permissions",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn sync_directory(path: &Path) -> Result<()> {
@@ -1673,5 +2182,175 @@ mod tests {
             validate_catalog_readback(&snapshot, &entries[..1]).is_err(),
             "a catalog missing one eligible native object must fail"
         );
+    }
+
+    fn test_embedding_cache(root: &Path, model_digest: Digest) -> EmbeddingCache {
+        create_private_directory_if_missing(root).expect("private cache root");
+        create_private_directory_if_missing(&root.join(model_digest.to_hex()))
+            .expect("private model cache root");
+        EmbeddingCache {
+            root: root.to_path_buf(),
+            model_digest,
+        }
+    }
+
+    #[test]
+    fn embedding_cache_binary_roundtrip_rejects_damage_and_wrong_identity() {
+        let model_digest = Digest::domain_separated("test-model", b"cache-model");
+        let input = "passage: 完整 UTF-8 passage";
+        let key = embedding_cache_key(model_digest, input);
+        let vector = (0..EMBEDDING_DIMENSION)
+            .map(|index| index as f32 / EMBEDDING_DIMENSION as f32)
+            .collect::<Vec<_>>();
+        let bytes =
+            encode_embedding_cache_vector(key, model_digest, &vector).expect("encode cache vector");
+        assert_eq!(
+            decode_embedding_cache_vector(&bytes, key, model_digest).expect("decode cache vector"),
+            vector
+        );
+
+        let mut damaged = bytes.clone();
+        let last = damaged.last_mut().expect("cache bytes");
+        *last ^= 0xff;
+        assert!(
+            decode_embedding_cache_vector(&damaged, key, model_digest).is_err(),
+            "damaged cache payload must fail closed"
+        );
+        assert!(
+            decode_embedding_cache_vector(
+                &bytes,
+                Digest::domain_separated("test-key", b"wrong"),
+                model_digest,
+            )
+            .is_err(),
+            "a cache vector cannot be reused for another passage"
+        );
+        assert!(
+            decode_embedding_cache_vector(
+                &bytes,
+                key,
+                Digest::domain_separated("test-model", b"wrong"),
+            )
+            .is_err(),
+            "a cache vector cannot be reused for another model"
+        );
+    }
+
+    #[test]
+    fn embedding_cache_publication_is_private_immutable_and_ignores_orphan_stage() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let model_digest = Digest::domain_separated("test-model", b"cache-model");
+        let cache = test_embedding_cache(&directory.path().join("cache"), model_digest);
+        let input = "passage: one";
+        let first = vec![0.25_f32; EMBEDDING_DIMENSION];
+        let changed = vec![0.75_f32; EMBEDDING_DIMENSION];
+
+        let (published, written) = cache.publish(input, &first).expect("publish cache vector");
+        assert!(written);
+        assert_eq!(published, first);
+        let destination = cache.path(embedding_cache_key(model_digest, input));
+        let prefix = destination.parent().expect("cache prefix");
+        write_private_file_new(&prefix.join(".orphan.tmp"), b"incomplete")
+            .expect("write orphan stage");
+
+        let (reused, rewritten) = cache
+            .publish(input, &changed)
+            .expect("reuse authoritative cache vector");
+        assert!(!rewritten);
+        assert_eq!(reused, first);
+        assert_eq!(cache.load(input).expect("load cache vector"), Some(first));
+
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                fs::symlink_metadata(&destination)
+                    .expect("cache vector metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::symlink_metadata(prefix)
+                    .expect("cache prefix metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+    }
+
+    #[test]
+    fn embedding_cache_concurrent_publication_has_one_authoritative_winner() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let model_digest = Digest::domain_separated("test-model", b"cache-model");
+        let cache = std::sync::Arc::new(test_embedding_cache(
+            &directory.path().join("cache"),
+            model_digest,
+        ));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut workers = Vec::new();
+        for value in [0.125_f32, 0.875_f32] {
+            let cache = std::sync::Arc::clone(&cache);
+            let barrier = std::sync::Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                let vector = vec![value; EMBEDDING_DIMENSION];
+                barrier.wait();
+                cache
+                    .publish("passage: concurrent", &vector)
+                    .expect("concurrent cache publication")
+            }));
+        }
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("cache worker"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results.iter().filter(|(_, written)| *written).count(),
+            1,
+            "exactly one no-replace publication must win"
+        );
+        assert_eq!(
+            results[0].0, results[1].0,
+            "all publishers must accept the same authoritative vector"
+        );
+        assert_eq!(
+            cache
+                .load("passage: concurrent")
+                .expect("read authoritative vector"),
+            Some(results[0].0.clone())
+        );
+    }
+
+    #[test]
+    fn embedding_cache_rejects_corrupt_and_exposed_vectors() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let model_digest = Digest::domain_separated("test-model", b"cache-model");
+        let cache = test_embedding_cache(&directory.path().join("cache"), model_digest);
+        let input = "passage: protected";
+        cache
+            .publish(input, &vec![0.5_f32; EMBEDDING_DIMENSION])
+            .expect("publish cache vector");
+        let destination = cache.path(embedding_cache_key(model_digest, input));
+        fs::write(&destination, b"corrupt").expect("damage cache vector");
+        assert!(
+            cache.load(input).is_err(),
+            "a corrupt cache vector must fail closed"
+        );
+
+        cache
+            .publish("passage: exposed", &vec![0.5_f32; EMBEDDING_DIMENSION])
+            .expect("publish exposed vector fixture");
+        let exposed = cache.path(embedding_cache_key(model_digest, "passage: exposed"));
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&exposed, fs::Permissions::from_mode(0o644))
+                .expect("expose cache fixture");
+            assert!(
+                cache.load("passage: exposed").is_err(),
+                "a group- or world-readable cache vector must fail closed"
+            );
+        }
     }
 }

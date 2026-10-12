@@ -211,6 +211,14 @@ pub struct SemanticGenerationManifest {
     pub point_count: usize,
     pub embedding_model_manifest_digest: Digest,
     pub embedding_profile: SemanticModelProfile,
+    pub embedding_cache_policy_version: String,
+    pub embedding_cache_enabled: bool,
+    pub embedding_cache_read_hits: usize,
+    pub embedding_vectors_computed: usize,
+    pub embedding_cache_writes: usize,
+    pub embedding_cache_write_failures: usize,
+    pub embedding_cache_fallback_reason: Option<String>,
+    pub full_rebuild: bool,
     pub dimension: usize,
     pub distance: String,
     pub vector_name: String,
@@ -240,6 +248,8 @@ pub struct SemanticQueryOptions {
     embedding_model_path: PathBuf,
     reranker_profile: Option<SemanticModelProfile>,
     reranker_model_path: Option<PathBuf>,
+    embedding_cache_root: Option<PathBuf>,
+    force_full_rebuild: bool,
     query: String,
     ranking_mode: SemanticRankingMode,
     commit_id: Option<CommitId>,
@@ -266,6 +276,8 @@ impl SemanticQueryOptions {
             embedding_model_path: embedding_model_path.into(),
             reranker_profile: None,
             reranker_model_path: None,
+            embedding_cache_root: None,
+            force_full_rebuild: false,
             query,
             ranking_mode,
             commit_id: None,
@@ -301,6 +313,16 @@ impl SemanticQueryOptions {
 
     pub fn with_lexical_root(mut self, path: impl Into<PathBuf>) -> Self {
         self.lexical_root = Some(path.into());
+        self
+    }
+
+    pub fn with_embedding_cache(mut self, path: impl Into<PathBuf>) -> Self {
+        self.embedding_cache_root = Some(path.into());
+        self
+    }
+
+    pub fn force_full_rebuild(mut self, force: bool) -> Self {
+        self.force_full_rebuild = force;
         self
     }
 
@@ -361,6 +383,13 @@ pub struct SemanticResourceObservations {
     pub generation_bytes: u64,
     pub embedding_batch_size: usize,
     pub reranker_batch_size: Option<usize>,
+    pub embedding_cache_enabled: bool,
+    pub embedding_cache_read_hits: usize,
+    pub embedding_vectors_computed: usize,
+    pub embedding_cache_writes: usize,
+    pub embedding_cache_write_failures: usize,
+    pub embedding_cache_fallback_reason: Option<String>,
+    pub full_rebuild: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

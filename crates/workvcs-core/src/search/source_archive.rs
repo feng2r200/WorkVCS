@@ -426,14 +426,13 @@ fn extract_codex_rollout(
                 offset + 1
             ))
         })?;
-        if value.get("type").and_then(serde_json::Value::as_str) == Some("session_meta") {
-            if let Some(id) = value
+        if value.get("type").and_then(serde_json::Value::as_str) == Some("session_meta")
+            && let Some(id) = value
                 .get("payload")
                 .and_then(|payload| payload.get("id"))
                 .and_then(serde_json::Value::as_str)
-            {
-                source_thread_id.get_or_insert_with(|| id.to_owned());
-            }
+        {
+            source_thread_id.get_or_insert_with(|| id.to_owned());
         }
         parsed.push((offset + 1, value));
     }
@@ -482,10 +481,10 @@ fn extract_codex_rollout(
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("unknown");
                 if matches!(block_type, "input_text" | "output_text") {
-                    if let Some(text) = block.get("text").and_then(serde_json::Value::as_str) {
-                        if !text.is_empty() {
-                            text_parts.push(text);
-                        }
+                    if let Some(text) = block.get("text").and_then(serde_json::Value::as_str)
+                        && !text.is_empty()
+                    {
+                        text_parts.push(text);
                     }
                 } else {
                     *ignored_content_blocks

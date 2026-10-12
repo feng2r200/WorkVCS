@@ -85,8 +85,8 @@ impl FederatedSourceFailure {
 
 #[derive(Clone, Debug)]
 pub enum FederatedSourceInput {
-    Lexical(SearchQueryResult),
-    Semantic(SemanticQueryResult),
+    Lexical(Box<SearchQueryResult>),
+    Semantic(Box<SemanticQueryResult>),
     Failed(FederatedSourceFailure),
 }
 
@@ -298,13 +298,13 @@ pub fn aggregate_federated_search(
     for input in inputs {
         match input {
             FederatedSourceInput::Lexical(result) => {
-                let ready = ReadySource::from_lexical(result)?;
+                let ready = ReadySource::from_lexical(*result)?;
                 require_ready_source(&options, &ready, &mut project_refs)?;
                 source_reports.push(ready_report(&ready));
                 ready_sources.push(ready);
             }
             FederatedSourceInput::Semantic(result) => {
-                let ready = ReadySource::from_semantic(result)?;
+                let ready = ReadySource::from_semantic(*result)?;
                 require_ready_source(&options, &ready, &mut project_refs)?;
                 source_reports.push(ready_report(&ready));
                 ready_sources.push(ready);
@@ -503,7 +503,7 @@ mod tests {
         identity: SearchSourceIdentity,
         items: Vec<FederatedItemPayload>,
     ) -> FederatedSourceInput {
-        FederatedSourceInput::Lexical(SearchQueryResult {
+        FederatedSourceInput::Lexical(Box::new(SearchQueryResult {
             status: SearchDerivedStatus::Ready,
             reason_code: None,
             reason: None,
@@ -530,7 +530,7 @@ mod tests {
                 .collect(),
             canonical_readback_verified: true,
             index_maintenance: None,
-        })
+        }))
     }
 
     #[test]

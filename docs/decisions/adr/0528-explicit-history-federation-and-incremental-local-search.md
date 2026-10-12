@@ -7,6 +7,9 @@ capabilities, including the explicit confirmations “授权，并授权推动�
 and “确认接受，并授权推动实现”. The admitted Phase 3 Plan
 01a130ee-f1ab-75bd-a127-818b90208670 fixes the source-ingestion,
 cross-store-search and incremental-local-runtime acceptance boundaries.
+The decision is persisted as WorkVCS Record
+01a1317c-45a9-74be-852c-540035fdb39e at commit
+01a1317c-4616-75ff-9ede-bfa7a629e6c6.
 
 ## Context
 

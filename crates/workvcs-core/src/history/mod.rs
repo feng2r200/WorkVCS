@@ -255,10 +255,10 @@ pub(crate) use evidence::{create_evidence, evidence, evidences};
 pub(crate) use external::{external_object_ref, external_object_refs, record_external_object_ref};
 pub(crate) use genesis::{create_workspace, load_workspace_info, workspaces};
 pub(crate) use goal::{create_goal, goal_at, goals_at, transition_goal};
-pub(crate) use integrity::validate_integrity;
+pub(crate) use integrity::{validate_integrity, validate_integrity_with_cache};
 pub(crate) use knowledge::{
     create_knowledge, knowledge_at, knowledge_version_state, knowledge_version_state_digest,
-    knowledges_at, transition_knowledge,
+    knowledges_at, knowledges_at_with_cache, transition_knowledge,
 };
 pub(crate) use knowledge_exposure::{
     adopt_knowledge_exposure, create_knowledge_exposure_derived_from_relation,
@@ -286,10 +286,10 @@ pub(crate) use record::{
     correct_finding_record, create_knowledge_relation, create_record,
     create_record_knowledge_relation, create_record_relation, knowledge_relation_at,
     knowledge_relations_at, record_at, record_knowledge_relation_at, record_knowledge_relations_at,
-    record_relation_at, record_relations_at, records_at, remove_knowledge_relation,
-    remove_record_knowledge_relation, remove_record_relation, restore_knowledge_relation,
-    restore_record_knowledge_relation, restore_record_relation, supersede_decision_record,
-    transition_record,
+    record_relation_at, record_relations_at, records_at, records_at_with_cache,
+    remove_knowledge_relation, remove_record_knowledge_relation, remove_record_relation,
+    restore_knowledge_relation, restore_record_knowledge_relation, restore_record_relation,
+    supersede_decision_record, transition_record,
 };
 pub(crate) use reference::{create_structural_reference, structural_references_at};
 pub(crate) use replay::{ReplayCache, state_at, state_at_with_cache};

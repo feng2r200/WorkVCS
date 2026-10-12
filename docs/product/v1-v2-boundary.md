@@ -329,6 +329,28 @@ mandatory guarded post-lock identity check, and rechecks the separate
 journal-admission marker while holding the lock. Registry replacement remains
 Unix-only; live rollback was not performed after v2 use.
 
+## Accepted Post-V1 Local Lexical Search
+
+ADR-0525 accepts opt-in local FTS5 candidates for canonical Record/Knowledge
+statements with native identity, version, digest and snippet readback. Its
+derived index is separate from the canonical Store and preserves deterministic
+`context`, exact Record filters, Task/runnable semantics and authorization.
+Current results are anchored to the verified branch head; historical search is
+explicit. Derived failure remains visible and never supplies stale current
+facts. See [the architecture contract](../architecture/local-derived-search.md).
+
+The user's subsequent capability-first instruction cancels proposed default
+Token and cost ceilings: normal search returns complete canonical statements,
+all matching objects and verified ranges. Explicit caller top-k is a query
+projection. Token/latency/memory are observations, not evidence-discard rules.
+Healthy same-basis indexes are reused; other existing generations are preserved
+and rebuilt at a new no-replace destination.
+
+This first-stage contract was explicitly approved on 2026-10-12. Implementation
+and local acceptance evidence are tracked separately; approval does not assert
+stable installation, merge, Push, production use or completion of the deferred
+vector/semantic retrieval capability below.
+
 ## Explicitly deferred beyond V1
 
 - transcript parsing or automatic extraction of Findings and Decisions;

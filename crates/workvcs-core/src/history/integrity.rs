@@ -15,6 +15,14 @@ pub struct IntegrityReport {
 }
 
 pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<IntegrityReport> {
+    let mut replay_cache = super::ReplayCache::default();
+    validate_integrity_with_cache(connection, &mut replay_cache)
+}
+
+pub(crate) fn validate_integrity_with_cache(
+    connection: &StoreConnection,
+    replay_cache: &mut super::ReplayCache,
+) -> Result<IntegrityReport> {
     connection
         .verify_foreign_keys()
         .map_err(|error| integrity_error("foreign-key enforcement is unavailable", error))?;
@@ -23,7 +31,8 @@ pub(crate) fn validate_integrity(connection: &StoreConnection) -> Result<Integri
 
     let branch_ids = load_branch_ids(connection)?;
     let commit_ids = load_commit_ids(connection)?;
-    let replayed_commits = validate_replay_integrity(connection, &branch_ids, &commit_ids)?;
+    let replayed_commits =
+        validate_replay_integrity(connection, &branch_ids, &commit_ids, replay_cache)?;
     debug_assert_eq!(replayed_commits, commit_ids.len());
 
     let changeset_ids = load_changeset_ids(connection)?;
@@ -91,23 +100,22 @@ fn validate_replay_integrity(
     connection: &StoreConnection,
     branch_ids: &[BranchId],
     commit_ids: &[CommitId],
+    replay_cache: &mut super::ReplayCache,
 ) -> Result<usize> {
-    let mut replay_cache = super::ReplayCache::default();
     for branch_id in branch_ids {
         let head = super::branch_head(connection, *branch_id).map_err(|error| {
             integrity_error(format!("Branch {branch_id} head is invalid"), error)
         })?;
-        let replayed =
-            super::state_at_with_cache(connection, head.head_commit_id, &mut replay_cache)
-                .map_err(|error| {
-                    integrity_error(
-                        format!(
-                            "Branch {branch_id} head {} cannot be replayed",
-                            head.head_commit_id
-                        ),
-                        error,
-                    )
-                })?;
+        let replayed = super::state_at_with_cache(connection, head.head_commit_id, replay_cache)
+            .map_err(|error| {
+                integrity_error(
+                    format!(
+                        "Branch {branch_id} head {} cannot be replayed",
+                        head.head_commit_id
+                    ),
+                    error,
+                )
+            })?;
         if replayed.workspace_id != head.workspace_id {
             return Err(WorkVcsError::IntegrityInvalid(format!(
                 "Branch {branch_id} head {} replays workspace {}, not {}",
@@ -124,9 +132,9 @@ fn validate_replay_integrity(
 
     for commit_id in commit_ids {
         if !replay_cache.contains(*commit_id) {
-            super::state_at_with_cache(connection, *commit_id, &mut replay_cache).map_err(
-                |error| integrity_error(format!("Commit {commit_id} cannot be replayed"), error),
-            )?;
+            super::state_at_with_cache(connection, *commit_id, replay_cache).map_err(|error| {
+                integrity_error(format!("Commit {commit_id} cannot be replayed"), error)
+            })?;
         }
     }
     Ok(replay_cache.len())
@@ -333,10 +341,12 @@ fn integrity_error(context: impl AsRef<str>, error: WorkVcsError) -> WorkVcsErro
 
 #[cfg(test)]
 mod tests {
-    use super::{load_branch_ids, load_commit_ids, validate_replay_integrity};
+    use super::validate_integrity_with_cache;
     use crate::Engine;
     use crate::canonical::CanonicalValue;
-    use crate::history::{EntityTransitionOptions, WorkspaceInitOptions};
+    use crate::history::{
+        EntityTransitionOptions, ReplayCache, WorkspaceInitOptions, state_at_with_cache,
+    };
     use crate::store::{StoreConnection, StoreInitOptions};
 
     fn record_state(revision: usize) -> CanonicalValue {
@@ -397,12 +407,15 @@ mod tests {
         drop(engine);
 
         let connection = StoreConnection::open_readonly(&path).expect("readonly Store");
-        let branch_ids = load_branch_ids(&connection).expect("branch ids");
-        let commit_ids = load_commit_ids(&connection).expect("commit ids");
-        let replayed_commits =
-            validate_replay_integrity(&connection, &branch_ids, &commit_ids).expect("replay");
+        let mut replay_cache = ReplayCache::default();
+        let report = validate_integrity_with_cache(&connection, &mut replay_cache)
+            .expect("full integrity with reusable cache");
 
-        assert_eq!(commit_ids.len(), 65);
-        assert_eq!(replayed_commits, commit_ids.len());
+        assert_eq!(report.checked_commits, 65);
+        assert_eq!(replay_cache.len(), report.checked_commits);
+        let cached_before = replay_cache.len();
+        state_at_with_cache(&connection, head_commit_id, &mut replay_cache)
+            .expect("selected head from integrity cache");
+        assert_eq!(replay_cache.len(), cached_before);
     }
 }

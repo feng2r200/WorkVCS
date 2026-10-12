@@ -954,3 +954,15 @@ with unequal content is an integrity conflict and is never updated in place.
 Cross-Store complete reference semantics are `(store_id, local_id)`. Ordinary
 movement preserves Store identity; explicit Store fork creates a new Store
 namespace while retaining internal local IDs by default and recording lineage.
+
+### INV-081 — Derived search cannot establish canonical authority
+
+Opt-in lexical search under ADR-0525 derives candidates only from an explicitly
+anchored, verified read-only Record/Knowledge snapshot. A returned source must
+match canonical membership, version, digest, statement and snippet bytes;
+current scope additionally requires the selected branch's current head.
+Historical scope is explicit. Index metadata and ranking cannot establish
+project ownership, fact correctness, lifecycle, authorization or runnable work.
+Derived refresh never mutates canonical Store state, replaces deterministic
+ContextPacket selection, or overwrites unrelated files. Unavailable, stale or
+invalid derived state remains visible and cannot silently become current fact.

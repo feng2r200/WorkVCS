@@ -13,11 +13,16 @@ rust-version.workspace = true
 [dependencies]
 blake3.workspace = true
 hex.workspace = true
+jieba-rs.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tiktoken-rs.workspace = true
 uuid.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustix.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

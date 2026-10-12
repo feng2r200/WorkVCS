@@ -134,8 +134,9 @@ use workvcs_core::{
     ResourceObservationListOptions, ResourceObservationListResult, ResourceObservationSnapshot,
     ResourceSnapshot, Result, RunnableTaskBlockedReason, RunnableTaskCandidate,
     RunnableTaskClaimCoordination, RunnableTasksOptions, RunnableTasksProjection,
-    SemanticSnapshotOptions, SessionDiffId, SessionDiffSnapshot, SessionEndOptions,
-    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
+    SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
+    SearchSourceIdentity, SemanticSnapshotOptions, SessionDiffId, SessionDiffSnapshot,
+    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionId,
     SessionLifecycleState, SessionListOptions, SessionListResult, SessionMarkStaleOptions,
     SessionMarkStaleResult, SessionSnapshot, SessionStartOptions, SessionStartResult,
     SessionSwitchOptions, SessionSwitchResult, StoreId, StoreInfo, StoreInitOptions,
@@ -210,6 +211,7 @@ Commands:
   resume        Show compact read-only recovery context
   capture       Atomically record standalone cognition without requiring a Session or Plan
   recall        Read bounded project context without requiring a Session or Plan
+  search        Refresh and query the routed local derived FTS index
   context-packet  Save and inspect context packet snapshots
   next          Select next runnable work for a session
   runnable      Inspect runnable task projections
@@ -285,6 +287,12 @@ enum RecallProfileArg {
     Brief,
     Handoff,
     Retrospective,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SearchOutputFormatArg {
+    Json,
+    KeyValue,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -848,6 +856,11 @@ enum Command {
             help = "Maximum projected items to return (1..=200)"
         )]
         budget_items: usize,
+    },
+    #[command(about = "Refresh or query the routed local derived FTS index")]
+    Search {
+        #[command(subcommand)]
+        command: SearchCommand,
     },
     ContextPacket {
         #[command(subcommand)]
@@ -1748,6 +1761,56 @@ struct ProjectLocatorArgs {
         help = "Strict adapter-dispatch envelope for bounded semantic Project context"
     )]
     locator_adapter_context: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum SearchCommand {
+    #[command(about = "Atomically refresh a derived FTS index from one verified source snapshot")]
+    Refresh {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
+
+        #[arg(long, value_name = "PATH")]
+        index: PathBuf,
+
+        #[arg(long, value_name = "COMMIT")]
+        commit: Option<String>,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+    },
+    #[command(about = "Query a derived FTS index with canonical source readback")]
+    Query {
+        #[arg(long, value_name = "PATH")]
+        cwd: PathBuf,
+
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
+
+        #[arg(long, value_name = "PATH")]
+        index: PathBuf,
+
+        #[arg(long, value_name = "TEXT")]
+        query: String,
+
+        #[arg(long, value_name = "COMMIT")]
+        commit: Option<String>,
+
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -13352,6 +13415,7 @@ fn run(cli: Cli) -> Result<String> {
             profile,
             budget_items,
         } => run_recall(cwd, registry, locator, profile, budget_items),
+        Command::Search { command } => run_search(command),
         Command::ContextPacket { command } => match command {
             ContextPacketCommand::Save {
                 store,
@@ -28324,6 +28388,409 @@ fn run_recall(
     Ok(output)
 }
 
+fn run_search(command: SearchCommand) -> Result<String> {
+    match command {
+        SearchCommand::Refresh {
+            cwd,
+            registry,
+            locator,
+            index,
+            commit,
+            format,
+        } => {
+            let discovery = discover_project_readonly_with_locator(
+                cwd,
+                registry,
+                locator.project_ref,
+                locator.locator_context,
+                locator.locator_adapter_context,
+            )?;
+            let project_ref_id = discovery.project_ref_id.ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(
+                    "search requires a verified registry-v2 ProjectRef read binding".to_owned(),
+                )
+            })?;
+            let engine = Engine::open_readonly(Path::new(&discovery.binding.store_path))?;
+            let identity = SearchSourceIdentity::new(
+                project_ref_id,
+                discovery.binding.store_id,
+                discovery.binding.workspace_id,
+                discovery.binding.branch_id,
+            );
+            let mut options = SearchRefreshOptions::new(identity, index)
+                .with_protected_path(discovery.registry_path.clone());
+            if let Some(path) = discovery.routing_activation_path.clone() {
+                options = options.with_protected_path(path);
+            }
+            if let Some(commit) = commit {
+                options = options.at_commit(CommitId::parse_canonical(&commit)?);
+            }
+            let result = engine.refresh_search_index(options)?;
+            render_search_refresh(&result, format)
+        }
+        SearchCommand::Query {
+            cwd,
+            registry,
+            locator,
+            index,
+            query,
+            commit,
+            limit,
+            format,
+        } => {
+            let discovery = discover_project_readonly_with_locator(
+                cwd,
+                registry,
+                locator.project_ref,
+                locator.locator_context,
+                locator.locator_adapter_context,
+            )?;
+            let project_ref_id = discovery.project_ref_id.ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(
+                    "search requires a verified registry-v2 ProjectRef read binding".to_owned(),
+                )
+            })?;
+            let engine = Engine::open_readonly(Path::new(&discovery.binding.store_path))?;
+            let identity = SearchSourceIdentity::new(
+                project_ref_id,
+                discovery.binding.store_id,
+                discovery.binding.workspace_id,
+                discovery.binding.branch_id,
+            );
+            let mut options = SearchQueryOptions::new(identity, index, query)?
+                .with_protected_path(discovery.registry_path.clone());
+            if let Some(limit) = limit {
+                options = options.with_result_limit(limit)?;
+            }
+            if let Some(path) = discovery.routing_activation_path.clone() {
+                options = options.with_protected_path(path);
+            }
+            if let Some(commit) = commit {
+                options = options.at_commit(CommitId::parse_canonical(&commit)?);
+            }
+            let result = engine.search(options)?;
+            render_search_query(&result, format)
+        }
+    }
+}
+
+fn render_search_refresh(
+    result: &SearchRefreshResult,
+    format: SearchOutputFormatArg,
+) -> Result<String> {
+    if format == SearchOutputFormatArg::Json {
+        let mut value = serde_json::to_value(result).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "search refresh result could not be rendered as JSON: {error}"
+            ))
+        })?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert("source_opened_readonly".to_owned(), serde_json::json!(true));
+            object.insert(
+                "derived_index_written".to_owned(),
+                serde_json::json!(matches!(
+                    result.outcome,
+                    workvcs_core::SearchRefreshOutcome::Refreshed
+                )),
+            );
+        }
+        let mut output = serde_json::to_string_pretty(&value).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "search refresh result could not be rendered as JSON: {error}"
+            ))
+        })?;
+        output.push('\n');
+        return Ok(output);
+    }
+    let manifest = &result.manifest;
+    Ok(format!(
+        "action=search_refresh\noutcome={}\nindex_path={}\nindex_format_version={}\ntokenizer_version={}\nsnippet_policy_version={}\ntoken_count_encoding={}\nproject_ref_id={}\nstore_id={}\nworkspace_id={}\nbranch_id={}\ntemporal_scope={}\nsource_commit_id={}\nsource_state_digest={}\nobject_version_basis_digest={}\nobject_count={}\nsnippet_count={}\nmanifest_digest={}\nrecords_indexed={}\nknowledge_indexed={}\nsource_opened_readonly=true\ncanonical_source_written={}\nderived_index_written={}\n",
+        match result.outcome {
+            workvcs_core::SearchRefreshOutcome::Refreshed => "refreshed",
+            workvcs_core::SearchRefreshOutcome::Reused => "reused",
+        },
+        escape_key_value(&result.index_path.display().to_string()),
+        manifest.index_format_version,
+        escape_key_value(&manifest.tokenizer_version),
+        escape_key_value(&manifest.snippet_policy_version),
+        escape_key_value(&manifest.token_count_encoding),
+        manifest.identity.project_ref_id,
+        manifest.identity.store_id,
+        manifest.identity.workspace_id,
+        manifest.identity.branch_id,
+        manifest.temporal_scope.as_str(),
+        manifest.source_commit_id,
+        manifest.source_state_digest,
+        manifest.object_version_basis_digest,
+        manifest.object_count,
+        manifest.snippet_count,
+        manifest.manifest_digest,
+        result.records_indexed,
+        result.knowledge_indexed,
+        result.canonical_source_written,
+        matches!(
+            result.outcome,
+            workvcs_core::SearchRefreshOutcome::Refreshed
+        ),
+    ))
+}
+
+fn render_search_query(
+    result: &SearchQueryResult,
+    format: SearchOutputFormatArg,
+) -> Result<String> {
+    if format == SearchOutputFormatArg::Json {
+        #[derive(Serialize)]
+        struct SearchQueryJsonOutput<'a> {
+            #[serde(flatten)]
+            result: &'a SearchQueryResult,
+            source_opened_readonly: bool,
+            canonical_source_written: bool,
+        }
+        let mut output = serde_json::to_string_pretty(&SearchQueryJsonOutput {
+            result,
+            source_opened_readonly: true,
+            canonical_source_written: false,
+        })
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "search query result could not be rendered as JSON: {error}"
+            ))
+        })?;
+        output.push('\n');
+        return Ok(output);
+    }
+    let mut output = String::new();
+    writeln!(
+        output,
+        "status={}",
+        match result.status {
+            workvcs_core::SearchDerivedStatus::Ready => "ready",
+            workvcs_core::SearchDerivedStatus::RefreshRequired => "refresh_required",
+        }
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "reason_code={}",
+        result.reason_code.as_deref().unwrap_or("none")
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "reason={}",
+        escape_key_value(result.reason.as_deref().unwrap_or("none"))
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "guidance={}",
+        escape_key_value(result.guidance.as_deref().unwrap_or("none"))
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "index_path={}",
+        escape_key_value(&result.index_path.display().to_string())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "project_ref_id={}",
+        result.source_identity.project_ref_id
+    )
+    .expect("write to String");
+    writeln!(output, "store_id={}", result.source_identity.store_id).expect("write to String");
+    writeln!(
+        output,
+        "workspace_id={}",
+        result.source_identity.workspace_id
+    )
+    .expect("write to String");
+    writeln!(output, "branch_id={}", result.source_identity.branch_id).expect("write to String");
+    writeln!(output, "temporal_scope={}", result.temporal_scope.as_str()).expect("write to String");
+    writeln!(output, "source_commit_id={}", result.source_commit_id).expect("write to String");
+    writeln!(output, "source_state_digest={}", result.source_state_digest)
+        .expect("write to String");
+    writeln!(output, "query={}", escape_key_value(&result.query)).expect("write to String");
+    writeln!(
+        output,
+        "result_limit={}",
+        result
+            .result_limit
+            .map_or_else(|| "none".to_owned(), |limit| limit.to_string())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "token_count_encoding={}",
+        result.token_count_encoding
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "serialized_item_tokens={}",
+        result.serialized_item_tokens
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "candidates_considered={}",
+        result.candidates_considered
+    )
+    .expect("write to String");
+    writeln!(output, "matched_objects={}", result.matched_objects).expect("write to String");
+    writeln!(output, "source_opened_readonly=true").expect("write to String");
+    writeln!(output, "canonical_source_written=false").expect("write to String");
+    if let Some(manifest) = &result.manifest {
+        writeln!(
+            output,
+            "index_format_version={}",
+            manifest.index_format_version
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "tokenizer_version={}",
+            escape_key_value(&manifest.tokenizer_version)
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "snippet_policy_version={}",
+            escape_key_value(&manifest.snippet_policy_version)
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "object_version_basis_digest={}",
+            manifest.object_version_basis_digest
+        )
+        .expect("write to String");
+        writeln!(output, "manifest_digest={}", manifest.manifest_digest).expect("write to String");
+    }
+    writeln!(output, "returned_results={}", result.items.len()).expect("write to String");
+    writeln!(output, "omitted_results={}", result.omitted_results).expect("write to String");
+    writeln!(
+        output,
+        "canonical_readback_verified={}",
+        result.canonical_readback_verified
+    )
+    .expect("write to String");
+    for (index, item) in result.items.iter().enumerate() {
+        writeln!(output, "item.{index}.source_id={}", item.source_id).expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.source_type={}",
+            item.source_type.as_str()
+        )
+        .expect("write to String");
+        writeln!(output, "item.{index}.entity_id={}", item.entity_id).expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.entity_version_id={}",
+            item.entity_version_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.entity_state_digest={}",
+            item.entity_state_digest
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.statement_digest={}",
+            item.statement_digest
+        )
+        .expect("write to String");
+        writeln!(output, "item.{index}.status={}", item.status).expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.record_kind={}",
+            item.record_kind.as_deref().unwrap_or("none")
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.scope_json={}",
+            escape_key_value(&item.scope_json)
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.provenance_json={}",
+            escape_key_value(item.provenance_json.as_deref().unwrap_or("none"))
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.source_commit_id={}",
+            item.source_commit_id
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.temporal_scope={}",
+            item.temporal_scope.as_str()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.canonical_statement={}",
+            escape_key_value(&item.canonical_statement)
+        )
+        .expect("write to String");
+        writeln!(output, "item.{index}.ranges={}", item.ranges.len()).expect("write to String");
+        for (range_index, range) in item.ranges.iter().enumerate() {
+            writeln!(
+                output,
+                "item.{index}.range.{range_index}.role={}",
+                range.role.as_str()
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "item.{index}.range.{range_index}.snippet_byte_start={}",
+                range.snippet_byte_start
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "item.{index}.range.{range_index}.snippet_byte_end={}",
+                range.snippet_byte_end
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "item.{index}.range.{range_index}.snippet={}",
+                escape_key_value(&range.snippet)
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "item.{index}.range.{range_index}.readback_verified={}",
+                range.readback_verified
+            )
+            .expect("write to String");
+        }
+        writeln!(output, "item.{index}.score={}", item.score).expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.serialized_tokens={}",
+            item.serialized_tokens
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "item.{index}.readback_verified={}",
+            item.readback_verified
+        )
+        .expect("write to String");
+    }
+    Ok(output)
+}
+
 fn record_status_is_current(status: RecordStatus) -> bool {
     matches!(
         status,
@@ -42444,6 +42911,7 @@ mod tests {
                 "resume",
                 "capture",
                 "recall",
+                "search",
                 "context-packet",
                 "next",
                 "runnable",
@@ -91187,6 +91655,88 @@ mod tests {
         assert!(matches!(
             drift,
             Err(WorkVcsError::QueryInvalid(message)) if message.contains("invalid binding")
+        ));
+    }
+
+    #[test]
+    fn search_cli_contract_requires_routed_cwd_and_named_query_index_options() {
+        let query = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "query",
+            "--cwd",
+            "/tmp/project",
+            "--index",
+            "/tmp/search.sqlite",
+            "--query",
+            "ProjectRef state_digest",
+            "--commit",
+            "01a12969-4c45-73be-88c6-f2e0941782b8",
+            "--format",
+            "json",
+        ])
+        .expect("parse search query contract");
+        assert!(matches!(
+            *query.command,
+            Command::Search {
+                command: SearchCommand::Query {
+                    cwd,
+                    index,
+                    query,
+                    commit: Some(_),
+                    limit: None,
+                    format: SearchOutputFormatArg::Json,
+                    ..
+                }
+            } if cwd.as_path() == Path::new("/tmp/project")
+                && index.as_path() == Path::new("/tmp/search.sqlite")
+                && query == "ProjectRef state_digest"
+        ));
+
+        let limited = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "query",
+            "--cwd",
+            "/tmp/project",
+            "--index",
+            "/tmp/search.sqlite",
+            "--query",
+            "ProjectRef",
+            "--limit",
+            "5",
+        ])
+        .expect("parse explicit search result limit");
+        assert!(matches!(
+            *limited.command,
+            Command::Search {
+                command: SearchCommand::Query { limit: Some(5), .. }
+            }
+        ));
+
+        let refresh = Cli::try_parse_from([
+            "workvcs",
+            "search",
+            "refresh",
+            "--cwd",
+            "/tmp/project",
+            "--index",
+            "/tmp/search.sqlite",
+            "--format",
+            "key-value",
+        ])
+        .expect("parse search refresh contract");
+        assert!(matches!(
+            *refresh.command,
+            Command::Search {
+                command: SearchCommand::Refresh {
+                    cwd,
+                    index,
+                    format: SearchOutputFormatArg::KeyValue,
+                    ..
+                }
+            } if cwd.as_path() == Path::new("/tmp/project")
+                && index.as_path() == Path::new("/tmp/search.sqlite")
         ));
     }
 

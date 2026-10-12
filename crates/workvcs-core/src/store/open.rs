@@ -111,6 +111,9 @@ use crate::runtime::{
     SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
     SessionSwitchResult, VerifyOptions, VerifyResult,
 };
+use crate::search::{
+    SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
+};
 use crate::store::bootstrap::{
     STORE_FORMAT_VERSION, StoreInfo, StoreInitOptions, current_epoch_micros, ensure_empty_database,
     initialize_manifest, load_store_info, validate_application_id, validate_bootstrap,
@@ -388,6 +391,21 @@ impl Store {
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn refresh_search_index(
+        &self,
+        options: &SearchRefreshOptions,
+    ) -> Result<SearchRefreshResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        crate::search::refresh_index(&self.connection, &self.path, options)
+    }
+
+    pub(crate) fn search(&self, options: &SearchQueryOptions) -> Result<SearchQueryResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        crate::search::query_index(&self.connection, &self.path, options)
     }
 
     pub(crate) fn create_workspace(

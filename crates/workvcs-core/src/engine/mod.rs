@@ -113,6 +113,9 @@ use crate::history::{
     StoreMigrationAttemptSnapshot, StoreMigrationListOptions, StoreMigrationListResult,
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
+use crate::search::{
+    SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
+};
 use crate::store::{
     ContextPacketSnapshotSchemaMigrationResult, Store, StoreInfo, StoreInitOptions,
 };
@@ -1241,6 +1244,17 @@ impl Engine {
 
     pub fn context_packet(&self, options: ContextPacketOptions) -> Result<ContextPacket> {
         self.store.context_packet(&options)
+    }
+
+    pub fn refresh_search_index(
+        &self,
+        options: SearchRefreshOptions,
+    ) -> Result<SearchRefreshResult> {
+        self.store.refresh_search_index(&options)
+    }
+
+    pub fn search(&self, options: SearchQueryOptions) -> Result<SearchQueryResult> {
+        self.store.search(&options)
     }
 
     pub fn save_context_packet(

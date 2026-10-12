@@ -3,6 +3,19 @@
 This directory is the repository-native source of truth for WorkVCS's
 confirmed product, domain, and architecture state.
 
+## Accepted Local Derived Search
+
+The user approved the first-stage local lexical search boundary on 2026-10-12.
+It uses a separate SQLite FTS5 index for Record/Knowledge candidates and native
+source/version/snippet readback, while preserving deterministic current context
+and all lifecycle and authorization semantics. Implementation and local
+acceptance are tracked separately from stable installation or remote delivery.
+
+- [ADR-0525: Local Derived FTS Search and Canonical Readback](decisions/adr/0525-local-derived-fts-search-and-canonical-readback.md)
+- [Local Derived Search Architecture](architecture/local-derived-search.md)
+- [Local Derived Search Operator Guide](operator/local-derived-search.md)
+- [Local Derived Search Candidate Evidence](provenance/local-derived-search-candidate.md)
+
 ## Accepted ProjectRef design and bounded implementation status
 
 The following material is confirmed project authority. Core registry,
@@ -381,9 +394,10 @@ These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is
 tracked in the V1 release gate matrix. The previously delivered `0.2.0` Rust
 implementation is locally release-ready and dogfood-complete for the bounded
-V1 scope. This branch's crate and CLI package version is `1.0.0`, the
-local-source implementation described by accepted ADR-0524; the prior maturity
-judgment does not establish stable installed adoption of this implementation.
+V1 scope. This branch's crate and CLI package version is `1.1.0`, the
+local-source candidate described by accepted ADR-0525. The prior maturity
+judgment does not establish stable installed adoption of this candidate;
+the stable entry remains separately identified by runtime provenance.
 Public release, tag, push, deploy,
 remote, production, credential, and global installation actions remain separate
 authority decisions.

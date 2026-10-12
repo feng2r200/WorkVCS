@@ -6,6 +6,7 @@ pub mod error;
 mod history;
 pub mod identity;
 mod runtime;
+pub mod search;
 pub mod store;
 
 pub use canonical::{
@@ -217,6 +218,12 @@ pub use runtime::{
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
 };
 pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
+pub use search::{
+    SearchDerivedStatus, SearchIndexManifest, SearchItem, SearchQueryOptions, SearchQueryResult,
+    SearchRangeRole, SearchRefreshOptions, SearchRefreshOutcome, SearchRefreshResult,
+    SearchSnippetRange, SearchSourceIdentity, SearchSourceType, SearchTemporalScope,
+    search_item_context_json, search_lexical_terms, search_o200k_ordinary_token_count,
+};
 pub use store::{
     ContextPacketSnapshotSchemaMigrationResult, StoreInfo, StoreInitOptions, StoreManifest,
 };
